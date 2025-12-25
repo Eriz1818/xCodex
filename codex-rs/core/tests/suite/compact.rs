@@ -8,6 +8,7 @@ use codex_core::compact::SUMMARIZATION_PROMPT;
 use codex_core::compact::SUMMARY_PREFIX;
 use codex_core::config::Config;
 use codex_core::features::Feature;
+use codex_core::protocol::CodexErrorInfo;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::Op;
 use codex_core::protocol::RolloutItem;
@@ -475,6 +476,11 @@ async fn multiple_auto_compact_per_task_runs_after_token_limit_hit() {
         .await
         .expect("build codex")
         .codex;
+
+    codex
+        .submit(Op::SetAutoCompact { enabled: true })
+        .await
+        .unwrap();
 
     // user message
     let user_message = "create an app";
@@ -1077,6 +1083,11 @@ async fn auto_compact_runs_after_token_limit_hit() {
         .conversation;
 
     codex
+        .submit(Op::SetAutoCompact { enabled: true })
+        .await
+        .unwrap();
+
+    codex
         .submit(Op::UserInput {
             items: vec![UserInput::Text {
                 text: FIRST_AUTO_MSG.into(),
@@ -1229,6 +1240,90 @@ async fn auto_compact_runs_after_token_limit_hit() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn auto_compact_disabled_by_default_stops_when_context_is_full() {
+    skip_if_no_network!();
+
+    let server = start_mock_server().await;
+
+    let context_window = 100;
+    let over_limit_tokens = context_window * 95 / 100 + 1;
+
+    let sse1 = sse(vec![
+        ev_assistant_message("m1", FIRST_REPLY),
+        ev_completed_with_tokens("r1", 50),
+    ]);
+    let sse2 = sse(vec![
+        ev_assistant_message("m2", SECOND_LARGE_REPLY),
+        ev_completed_with_tokens("r2", over_limit_tokens),
+    ]);
+    mount_sse_sequence(&server, vec![sse1, sse2]).await;
+
+    let model_provider = non_openai_model_provider(&server);
+
+    let home = TempDir::new().unwrap();
+    let mut config = load_default_config_for_test(&home).await;
+    config.model_provider = model_provider;
+    config.model_context_window = Some(context_window);
+    config.model_auto_compact_token_limit = Some(90);
+
+    let codex = ConversationManager::with_models_provider(
+        CodexAuth::from_api_key("dummy"),
+        config.model_provider.clone(),
+    )
+    .new_conversation(config)
+    .await
+    .unwrap()
+    .conversation;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "first turn".into(),
+            }],
+        })
+        .await
+        .unwrap();
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "second turn".into(),
+            }],
+        })
+        .await
+        .unwrap();
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
+
+    // Auto-compact is disabled by default, so once we hit a full context window the next turn
+    // should short-circuit without issuing a request.
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "third turn".into(),
+            }],
+        })
+        .await
+        .unwrap();
+
+    let event = wait_for_event(&codex, |ev| matches!(ev, EventMsg::Error(_))).await;
+    let EventMsg::Error(err) = event else {
+        unreachable!();
+    };
+    assert_eq!(
+        err.codex_error_info,
+        Some(CodexErrorInfo::ContextWindowExceeded)
+    );
+
+    let requests = get_responses_requests(&server).await;
+    assert_eq!(
+        requests.len(),
+        2,
+        "expected only the first two turns to hit the model"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn auto_compact_persists_rollout_entries() {
     skip_if_no_network!();
 
@@ -1298,6 +1393,11 @@ async fn auto_compact_persists_rollout_entries() {
         session_configured,
         ..
     } = conversation_manager.new_conversation(config).await.unwrap();
+
+    codex
+        .submit(Op::SetAutoCompact { enabled: true })
+        .await
+        .unwrap();
 
     codex
         .submit(Op::UserInput {
@@ -1747,6 +1847,11 @@ async fn auto_compact_allows_multiple_attempts_when_interleaved_with_other_turn_
         .unwrap()
         .conversation;
 
+    codex
+        .submit(Op::SetAutoCompact { enabled: true })
+        .await
+        .unwrap();
+
     let mut auto_compact_lifecycle_events = Vec::new();
     for user in [MULTI_AUTO_MSG, follow_up_user, final_user] {
         codex
@@ -1858,6 +1963,11 @@ async fn auto_compact_triggers_after_function_call_over_95_percent_usage() {
     .await
     .unwrap()
     .conversation;
+
+    codex
+        .submit(Op::SetAutoCompact { enabled: true })
+        .await
+        .unwrap();
 
     codex
         .submit(Op::UserInput {
@@ -1981,6 +2091,11 @@ async fn auto_compact_counts_encrypted_reasoning_before_last_user() {
         .await
         .expect("build codex")
         .codex;
+
+    codex
+        .submit(Op::SetAutoCompact { enabled: true })
+        .await
+        .unwrap();
 
     for (idx, user) in [first_user, second_user, third_user]
         .into_iter()
