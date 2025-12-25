@@ -14,8 +14,7 @@ use codex_protocol::protocol::SessionSource;
 use tracing_subscriber::fmt::writer::MakeWriter;
 
 const DEFAULT_MAX_BYTES: usize = 4 * 1024 * 1024; // 4 MiB
-const SENTRY_DSN: &str =
-    "https://ae32ed50620d7a7792c1ce5df38b3e3e@o33249.ingest.us.sentry.io/4510195390611458";
+const CODEX_FEEDBACK_SENTRY_DSN_ENV_VAR: &str = "CODEX_FEEDBACK_SENTRY_DSN";
 const UPLOAD_TIMEOUT_SECS: u64 = 10;
 
 #[derive(Clone)]
@@ -192,9 +191,16 @@ impl CodexLogSnapshot {
         use sentry::transports::DefaultTransportFactory;
         use sentry::types::Dsn;
 
+        let dsn = std::env::var(CODEX_FEEDBACK_SENTRY_DSN_ENV_VAR).ok();
+        let Some(dsn) = dsn.as_deref().filter(|dsn| !dsn.trim().is_empty()) else {
+            return Err(anyhow!(
+                "feedback upload is disabled (set {CODEX_FEEDBACK_SENTRY_DSN_ENV_VAR} to enable)"
+            ));
+        };
+
         // Build Sentry client
         let client = Client::from_config(ClientOptions {
-            dsn: Some(Dsn::from_str(SENTRY_DSN).map_err(|e| anyhow!("invalid DSN: {e}"))?),
+            dsn: Some(Dsn::from_str(dsn).map_err(|e| anyhow!("invalid DSN: {e}"))?),
             transport: Some(Arc::new(DefaultTransportFactory {})),
             ..Default::default()
         });

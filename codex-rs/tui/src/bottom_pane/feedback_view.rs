@@ -19,7 +19,6 @@ use crate::app_event::FeedbackCategory;
 use crate::app_event_sender::AppEventSender;
 use crate::history_cell;
 use crate::render::renderable::Renderable;
-use codex_core::protocol::SessionSource;
 
 use super::CancellationEvent;
 use super::bottom_pane_view::BottomPaneView;
@@ -27,11 +26,8 @@ use super::popup_consts::standard_popup_hint_line;
 use super::textarea::TextArea;
 use super::textarea::TextAreaState;
 
-const BASE_BUG_ISSUE_URL: &str =
-    "https://github.com/openai/codex/issues/new?template=2-bug-report.yml";
-
-/// Minimal input overlay to collect an optional feedback note, then upload
-/// both logs and rollout with classification + metadata.
+/// Minimal input overlay to collect an optional feedback note, then save
+/// a local report for troubleshooting.
 pub(crate) struct FeedbackNoteView {
     category: FeedbackCategory,
     snapshot: codex_feedback::CodexLogSnapshot,
@@ -67,70 +63,83 @@ impl FeedbackNoteView {
 
     fn submit(&mut self) {
         let note = self.textarea.text().trim().to_string();
-        let reason_opt = if note.is_empty() {
-            None
-        } else {
-            Some(note.as_str())
-        };
-        let rollout_path_ref = self.rollout_path.as_deref();
         let classification = feedback_classification(self.category);
 
         let mut thread_id = self.snapshot.thread_id.clone();
 
-        let result = self.snapshot.upload_feedback(
-            classification,
-            reason_opt,
-            self.include_logs,
-            if self.include_logs {
-                rollout_path_ref
-            } else {
-                None
-            },
-            Some(SessionSource::Cli),
-        );
-
-        match result {
-            Ok(()) => {
-                let prefix = if self.include_logs {
-                    "• Feedback uploaded."
-                } else {
-                    "• Feedback recorded (no logs)."
-                };
-                let issue_url = issue_url_for_category(self.category, &thread_id);
-                let mut lines = vec![Line::from(match issue_url.as_ref() {
-                    Some(_) => format!("{prefix} Please open an issue using the following URL:"),
-                    None => format!("{prefix} Thanks for the feedback!"),
-                })];
-                if let Some(url) = issue_url {
-                    lines.extend([
-                        "".into(),
-                        Line::from(vec!["  ".into(), url.cyan().underlined()]),
-                        "".into(),
-                        Line::from(vec![
-                            "  Or mention your thread ID ".into(),
-                            std::mem::take(&mut thread_id).bold(),
-                            " in an existing issue.".into(),
-                        ]),
-                    ]);
-                } else {
-                    lines.extend([
-                        "".into(),
-                        Line::from(vec![
-                            "  Thread ID: ".into(),
-                            std::mem::take(&mut thread_id).bold(),
-                        ]),
-                    ]);
+        let note_path = if note.is_empty() {
+            None
+        } else {
+            match save_feedback_note(&thread_id, classification, &note) {
+                Ok(path) => Some(path),
+                Err(err) => {
+                    self.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
+                        history_cell::new_error_event(format!(
+                            "Failed to save feedback note: {err}"
+                        )),
+                    )));
+                    self.complete = true;
+                    return;
                 }
-                self.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
-                    history_cell::PlainHistoryCell::new(lines),
-                )));
             }
-            Err(e) => {
-                self.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
-                    history_cell::new_error_event(format!("Failed to upload feedback: {e}")),
-                )));
+        };
+
+        let log_path = if self.include_logs {
+            match self.snapshot.save_to_temp_file() {
+                Ok(path) => Some(path),
+                Err(err) => {
+                    self.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
+                        history_cell::new_error_event(format!("Failed to save logs: {err}")),
+                    )));
+                    self.complete = true;
+                    return;
+                }
             }
+        } else {
+            None
+        };
+
+        let mut lines = vec![Line::from(if self.include_logs {
+            "• Feedback saved locally (no network upload)."
+        } else {
+            "• Feedback saved locally (no network upload, no logs)."
+        })];
+
+        lines.extend([
+            "".into(),
+            Line::from(vec![
+                "  Thread ID: ".into(),
+                std::mem::take(&mut thread_id).bold(),
+            ]),
+        ]);
+
+        if let Some(path) = note_path {
+            lines.push(Line::from(vec![
+                "  Note: ".into(),
+                path.display().to_string().cyan().underlined(),
+            ]));
         }
+        if let Some(path) = log_path {
+            lines.push(Line::from(vec![
+                "  Logs: ".into(),
+                path.display().to_string().cyan().underlined(),
+            ]));
+        }
+        if let Some(path) = self.rollout_path.as_deref() {
+            lines.push(Line::from(vec![
+                "  Rollout: ".into(),
+                path.display().to_string().cyan().underlined(),
+            ]));
+        }
+
+        lines.extend([
+            "".into(),
+            Line::from("  Attach these files when filing an issue in your fork.".dim()),
+        ]);
+
+        self.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
+            history_cell::PlainHistoryCell::new(lines),
+        )));
         self.complete = true;
     }
 }
@@ -335,13 +344,16 @@ fn feedback_classification(category: FeedbackCategory) -> &'static str {
     }
 }
 
-fn issue_url_for_category(category: FeedbackCategory, thread_id: &str) -> Option<String> {
-    match category {
-        FeedbackCategory::Bug | FeedbackCategory::BadResult | FeedbackCategory::Other => Some(
-            format!("{BASE_BUG_ISSUE_URL}&steps=Uploaded%20thread:%20{thread_id}"),
-        ),
-        FeedbackCategory::GoodResult => None,
-    }
+fn save_feedback_note(
+    thread_id: &str,
+    classification: &str,
+    note: &str,
+) -> std::io::Result<PathBuf> {
+    let dir = std::env::temp_dir();
+    let path = dir.join(format!("codex-feedback-{thread_id}.txt"));
+    let contents = format!("thread_id={thread_id}\nclassification={classification}\n\n{note}\n");
+    std::fs::write(&path, contents)?;
+    Ok(path)
 }
 
 // Build the selection popup params for feedback categories.
@@ -427,12 +439,12 @@ pub(crate) fn feedback_upload_consent_params(
         }
     });
 
-    // Build header listing files that would be sent if user consents.
+    // Build header listing files that would be saved if user consents.
     let mut header_lines: Vec<Box<dyn crate::render::renderable::Renderable>> = vec![
-        Line::from("Upload logs?".bold()).into(),
+        Line::from("Save logs?".bold()).into(),
         Line::from("").into(),
-        Line::from("The following files will be sent:".dim()).into(),
-        Line::from(vec!["  • ".into(), "codex-logs.log".into()]).into(),
+        Line::from("The following files will be saved locally:".dim()).into(),
+        Line::from(vec!["  • ".into(), "codex-feedback-<thread-id>.log".into()]).into(),
     ];
     if let Some(path) = rollout_path.as_deref()
         && let Some(name) = path.file_name().map(|s| s.to_string_lossy().to_string())
@@ -446,8 +458,7 @@ pub(crate) fn feedback_upload_consent_params(
             super::SelectionItem {
                 name: "Yes".to_string(),
                 description: Some(
-                    "Share the current Codex session logs with the team for troubleshooting."
-                        .to_string(),
+                    "Save the current Codex session logs for troubleshooting.".to_string(),
                 ),
                 actions: vec![yes_action],
                 dismiss_on_select: true,
@@ -540,20 +551,12 @@ mod tests {
     }
 
     #[test]
-    fn issue_url_available_for_bug_bad_result_and_other() {
-        let bug_url = issue_url_for_category(FeedbackCategory::Bug, "thread-1");
-        assert!(
-            bug_url
-                .as_deref()
-                .is_some_and(|url| url.contains("template=2-bug-report"))
-        );
-
-        let bad_result_url = issue_url_for_category(FeedbackCategory::BadResult, "thread-2");
-        assert!(bad_result_url.is_some());
-
-        let other_url = issue_url_for_category(FeedbackCategory::Other, "thread-3");
-        assert!(other_url.is_some());
-
-        assert!(issue_url_for_category(FeedbackCategory::GoodResult, "t").is_none());
+    fn save_feedback_note_writes_file() {
+        let path = save_feedback_note("thread-1", "bug", "hello").expect("save note");
+        let contents = std::fs::read_to_string(&path).expect("read note");
+        assert!(contents.contains("thread_id=thread-1"));
+        assert!(contents.contains("classification=bug"));
+        assert!(contents.contains("hello"));
+        let _ = std::fs::remove_file(path);
     }
 }

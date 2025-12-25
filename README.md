@@ -78,6 +78,10 @@ See the [Execpolicy quickstart](./docs/execpolicy.md) to set up rules that gover
 - Use `/compact` to summarize the conversation and free up context.
 - Use `/autocompact` to automatically compact when the conversation gets close to the model’s context limit (supports `on|off|toggle|status` and persists across sessions).
 
+### Fork notes (xcodex)
+
+- `/feedback` saves a local report for troubleshooting (no network upload); attach the files it prints when filing an issue in your fork.
+
 ### Docs & FAQ
 
 - [**Getting started**](./docs/getting-started.md)

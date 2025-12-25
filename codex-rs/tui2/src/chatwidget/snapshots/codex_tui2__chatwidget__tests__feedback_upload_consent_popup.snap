@@ -2,13 +2,12 @@
 source: tui2/src/chatwidget/tests.rs
 expression: popup
 ---
-  Upload logs?
+  Save logs?
 
-  The following files will be sent:
-    • codex-logs.log
+  The following files will be saved locally:
+    • codex-feedback-<thread-id>.log
 
-› 1. Yes  Share the current Codex session logs with the team for
-          troubleshooting.
+› 1. Yes  Save the current Codex session logs for troubleshooting.
   2. No
 
   Press enter to confirm or esc to go back

@@ -1,7 +1,7 @@
 Use /compact when the conversation gets long to summarize history and free up context.
 Use /autocompact (or /autocompact on|off) to control automatic compaction.
 Start a fresh idea with /new; the previous session stays in history.
-Use /feedback to send logs to the maintainers when something looks off.
+Use /feedback to save a local report you can attach to an issue.
 Switch models or reasoning effort quickly with /model.
 You can run any shell command from Codex using `!` (e.g. `!ls`)
 Type / to open the command popup; Tab autocompletes slash commands and saved prompts.

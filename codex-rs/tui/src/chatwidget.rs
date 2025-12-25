@@ -812,7 +812,7 @@ impl ChatWidget {
 
         if reason != TurnAbortReason::ReviewEnded {
             self.add_to_history(history_cell::new_error_event(
-                "Conversation interrupted - tell the model what to do differently. Something went wrong? Hit `/feedback` to report the issue.".to_owned(),
+                "Conversation interrupted - tell the model what to do differently. Something went wrong? Hit `/feedback` to save a report.".to_owned(),
             ));
         }
 

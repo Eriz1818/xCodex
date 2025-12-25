@@ -29,6 +29,6 @@ Control Codex’s behavior during an interactive session with slash commands.
 | `/logout`       | log out of Codex                                                           |
 | `/quit`         | exit Codex                                                                 |
 | `/exit`         | exit Codex                                                                 |
-| `/feedback`     | send logs to maintainers                                                   |
+| `/feedback`     | save a local report for troubleshooting                                    |
 
 ---
