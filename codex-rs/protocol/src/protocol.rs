@@ -952,9 +952,6 @@ pub struct CreditsSnapshot {
     pub balance: Option<String>,
 }
 
-// Includes prompts, tools and space to call compact.
-const BASELINE_TOKENS: i64 = 12000;
-
 impl TokenUsage {
     pub fn is_zero(&self) -> bool {
         self.total_tokens == 0
@@ -977,25 +974,17 @@ impl TokenUsage {
         self.total_tokens
     }
 
-    /// Estimate the remaining user-controllable percentage of the model's context window.
+    /// Calculate the remaining percentage of the model's context window.
     ///
     /// `context_window` is the total size of the model's context window.
-    /// `BASELINE_TOKENS` should capture tokens that are always present in
-    /// the context (e.g., system prompt and fixed tool instructions) so that
-    /// the percentage reflects the portion the user can influence.
-    ///
-    /// This normalizes both the numerator and denominator by subtracting the
-    /// baseline, so immediately after the first prompt the UI shows 100% left
-    /// and trends toward 0% as the user fills the effective window.
+    /// Uses the actual token count from API responses for accurate display.
     pub fn percent_of_context_window_remaining(&self, context_window: i64) -> i64 {
-        if context_window <= BASELINE_TOKENS {
+        if context_window <= 0 {
             return 0;
         }
 
-        let effective_window = context_window - BASELINE_TOKENS;
-        let used = (self.tokens_in_context_window() - BASELINE_TOKENS).max(0);
-        let remaining = (effective_window - used).max(0);
-        ((remaining as f64 / effective_window as f64) * 100.0)
+        let remaining = (context_window - self.total_tokens).max(0);
+        ((remaining as f64 / context_window as f64) * 100.0)
             .clamp(0.0, 100.0)
             .round() as i64
     }
