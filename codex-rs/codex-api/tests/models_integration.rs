@@ -11,6 +11,7 @@ use codex_protocol::openai_models::ModelsResponse;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::openai_models::ReasoningEffortPreset;
 use codex_protocol::openai_models::TruncationPolicyConfig;
+use core_test_support::skip_if_no_network;
 use http::HeaderMap;
 use http::Method;
 use wiremock::Mock;
@@ -48,6 +49,8 @@ fn provider(base_url: &str) -> Provider {
 
 #[tokio::test]
 async fn models_client_hits_models_endpoint() {
+    skip_if_no_network!();
+
     let server = MockServer::start().await;
     let base_url = format!("{}/api/codex", server.uri());
 

@@ -519,11 +519,12 @@ pub(crate) fn new_unified_exec_wait_live(
 #[derive(Debug)]
 struct UnifiedExecSessionsCell {
     sessions: Vec<String>,
+    hooks: Vec<String>,
 }
 
 impl UnifiedExecSessionsCell {
-    fn new(sessions: Vec<String>) -> Self {
-        Self { sessions }
+    fn new(sessions: Vec<String>, hooks: Vec<String>) -> Self {
+        Self { sessions, hooks }
     }
 }
 
@@ -534,14 +535,13 @@ impl HistoryCell for UnifiedExecSessionsCell {
         }
 
         let wrap_width = width as usize;
-        let max_sessions = 16usize;
+        let max_entries = 16usize;
         let mut out: Vec<Line<'static>> = Vec::new();
         out.push(vec!["Background terminals".bold()].into());
         out.push("".into());
 
         if self.sessions.is_empty() {
             out.push("  • No background terminals running.".italic().into());
-            return out;
         }
 
         let prefix = "  • ";
@@ -550,7 +550,7 @@ impl HistoryCell for UnifiedExecSessionsCell {
         let truncation_suffix_width = UnicodeWidthStr::width(truncation_suffix);
         let mut shown = 0usize;
         for command in &self.sessions {
-            if shown >= max_sessions {
+            if shown >= max_entries {
                 break;
             }
             let (snippet, snippet_truncated) = {
@@ -602,6 +602,69 @@ impl HistoryCell for UnifiedExecSessionsCell {
             }
         }
 
+        out.push("".into());
+        out.push(vec!["Hooks".bold()].into());
+        out.push("".into());
+
+        if self.hooks.is_empty() {
+            out.push("  • No hooks running.".italic().into());
+            return out;
+        }
+
+        let mut shown = 0usize;
+        for command in &self.hooks {
+            if shown >= max_entries {
+                break;
+            }
+            let (snippet, snippet_truncated) = {
+                let (first_line, has_more_lines) = match command.split_once('\n') {
+                    Some((first, _)) => (first, true),
+                    None => (command.as_str(), false),
+                };
+                let max_graphemes = 80;
+                let mut graphemes = first_line.grapheme_indices(true);
+                if let Some((byte_index, _)) = graphemes.nth(max_graphemes) {
+                    (first_line[..byte_index].to_string(), true)
+                } else {
+                    (first_line.to_string(), has_more_lines)
+                }
+            };
+            if wrap_width <= prefix_width {
+                out.push(Line::from(prefix.dim()));
+                shown += 1;
+                continue;
+            }
+            let budget = wrap_width.saturating_sub(prefix_width);
+            let mut needs_suffix = snippet_truncated;
+            if !needs_suffix {
+                let (_, remainder, _) = take_prefix_by_width(&snippet, budget);
+                if !remainder.is_empty() {
+                    needs_suffix = true;
+                }
+            }
+            if needs_suffix && budget > truncation_suffix_width {
+                let available = budget.saturating_sub(truncation_suffix_width);
+                let (truncated, _, _) = take_prefix_by_width(&snippet, available);
+                out.push(vec![prefix.dim(), truncated.cyan(), truncation_suffix.dim()].into());
+            } else {
+                let (truncated, _, _) = take_prefix_by_width(&snippet, budget);
+                out.push(vec![prefix.dim(), truncated.cyan()].into());
+            }
+            shown += 1;
+        }
+
+        let remaining = self.hooks.len().saturating_sub(shown);
+        if remaining > 0 {
+            let more_text = format!("... and {remaining} more running");
+            if wrap_width <= prefix_width {
+                out.push(Line::from(prefix.dim()));
+            } else {
+                let budget = wrap_width.saturating_sub(prefix_width);
+                let (truncated, _, _) = take_prefix_by_width(&more_text, budget);
+                out.push(vec![prefix.dim(), truncated.dim()].into());
+            }
+        }
+
         out
     }
 
@@ -610,9 +673,12 @@ impl HistoryCell for UnifiedExecSessionsCell {
     }
 }
 
-pub(crate) fn new_unified_exec_sessions_output(sessions: Vec<String>) -> CompositeHistoryCell {
+pub(crate) fn new_unified_exec_sessions_output(
+    sessions: Vec<String>,
+    hooks: Vec<String>,
+) -> CompositeHistoryCell {
     let command = PlainHistoryCell::new(vec!["/ps".magenta().into()]);
-    let summary = UnifiedExecSessionsCell::new(sessions);
+    let summary = UnifiedExecSessionsCell::new(sessions, hooks);
     CompositeHistoryCell::new(vec![Box::new(command), Box::new(summary)])
 }
 
@@ -1819,34 +1885,42 @@ mod tests {
 
     #[test]
     fn ps_output_empty_snapshot() {
-        let cell = new_unified_exec_sessions_output(Vec::new());
+        let cell = new_unified_exec_sessions_output(Vec::new(), Vec::new());
         let rendered = render_lines(&cell.display_lines(60)).join("\n");
         insta::assert_snapshot!(rendered);
     }
 
     #[test]
     fn ps_output_multiline_snapshot() {
-        let cell = new_unified_exec_sessions_output(vec![
-            "echo hello\nand then some extra text".to_string(),
-            "rg \"foo\" src".to_string(),
-        ]);
+        let cell = new_unified_exec_sessions_output(
+            vec![
+                "echo hello\nand then some extra text".to_string(),
+                "rg \"foo\" src".to_string(),
+            ],
+            Vec::new(),
+        );
         let rendered = render_lines(&cell.display_lines(40)).join("\n");
         insta::assert_snapshot!(rendered);
     }
 
     #[test]
     fn ps_output_long_command_snapshot() {
-        let cell = new_unified_exec_sessions_output(vec![String::from(
-            "rg \"foo\" src --glob '**/*.rs' --max-count 1000 --no-ignore --hidden --follow --glob '!target/**'",
-        )]);
+        let cell = new_unified_exec_sessions_output(
+            vec![String::from(
+                "rg \"foo\" src --glob '**/*.rs' --max-count 1000 --no-ignore --hidden --follow --glob '!target/**'",
+            )],
+            Vec::new(),
+        );
         let rendered = render_lines(&cell.display_lines(36)).join("\n");
         insta::assert_snapshot!(rendered);
     }
 
     #[test]
     fn ps_output_many_sessions_snapshot() {
-        let cell =
-            new_unified_exec_sessions_output((0..20).map(|idx| format!("command {idx}")).collect());
+        let cell = new_unified_exec_sessions_output(
+            (0..20).map(|idx| format!("command {idx}")).collect(),
+            Vec::new(),
+        );
         let rendered = render_lines(&cell.display_lines(32)).join("\n");
         insta::assert_snapshot!(rendered);
     }

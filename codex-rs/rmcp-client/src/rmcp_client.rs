@@ -60,6 +60,7 @@ use crate::oauth::StoredOAuthTokens;
 use crate::program_resolver;
 use crate::utils::apply_default_headers;
 use crate::utils::build_default_headers;
+use crate::utils::build_reqwest_client;
 use crate::utils::convert_call_tool_result;
 use crate::utils::convert_to_mcp;
 use crate::utils::convert_to_rmcp;
@@ -200,7 +201,7 @@ impl RmcpClient {
             }
 
             let http_client =
-                apply_default_headers(reqwest::Client::builder(), &default_headers).build()?;
+                build_reqwest_client(|builder| apply_default_headers(builder, &default_headers))?;
 
             let transport = StreamableHttpClientTransport::with_client(http_client, http_config);
             PendingTransport::StreamableHttp { transport }
@@ -446,7 +447,7 @@ async fn create_oauth_transport_and_runtime(
     OAuthPersistor,
 )> {
     let http_client =
-        apply_default_headers(reqwest::Client::builder(), &default_headers).build()?;
+        build_reqwest_client(|builder| apply_default_headers(builder, &default_headers))?;
     let mut oauth_state = OAuthState::new(url.to_string(), Some(http_client.clone())).await?;
 
     oauth_state

@@ -740,16 +740,47 @@ if __name__ == "__main__":
     sys.exit(main())
 ```
 
-To have Codex use this script for notifications, you would configure it via `notify` in `~/.codex/config.toml` using the appropriate path to `notify.py` on your computer:
+In xcodex, `notify` is deprecated. To run an external program after each completed turn, configure a hook in `~/.codex/config.toml`:
 
 ```toml
-notify = ["python3", "/Users/mbolin/.codex/notify.py"]
+[hooks]
+agent_turn_complete = [["python3", "/Users/mbolin/.codex/notify.py"]]
 ```
 
 > [!NOTE]
-> Use `notify` for automation and integrations: Codex invokes your external program with a single JSON argument for each event, independent of the TUI. If you only want lightweight desktop notifications while using the TUI, prefer `tui.notifications`, which uses terminal escape codes and requires no external program. You can enable both; `tui.notifications` covers in‑TUI alerts (e.g., approval prompts), while `notify` is best for system‑level hooks or custom notifiers. Currently, `notify` emits only `agent-turn-complete`, whereas `tui.notifications` supports `agent-turn-complete` and `approval-requested` with optional filtering.
+> `notify` is deprecated in xcodex. Use `hooks` (below) for automation and integrations. If you only want lightweight desktop notifications while using the TUI, prefer `tui.notifications`, which uses terminal escape codes and requires no external program.
 
-When Codex detects WSL 2 inside Windows Terminal (the session exports `WT_SESSION`), `tui.notifications` automatically switches to a Windows toast backend by spawning `powershell.exe`. This ensures both approval prompts and completed turns trigger native toasts even though Windows Terminal ignores OSC 9 escape sequences. Terminals that advertise OSC 9 support (iTerm2, WezTerm, kitty, etc.) continue to use the existing escape-sequence backend, and the `notify` hook remains unchanged.
+When Codex detects WSL 2 inside Windows Terminal (the session exports `WT_SESSION`), `tui.notifications` automatically switches to a Windows toast backend by spawning `powershell.exe`. This ensures both approval prompts and completed turns trigger native toasts even though Windows Terminal ignores OSC 9 escape sequences. Terminals that advertise OSC 9 support (iTerm2, WezTerm, kitty, etc.) continue to use the existing escape-sequence backend.
+
+### hooks
+
+`hooks` lets you run one or more external programs when Codex emits specific lifecycle events. Hooks are fire-and-forget: failures are logged and do not affect the session.
+
+Hook commands are configured as argv arrays. Codex writes event JSON to hook stdin. For large payloads, Codex writes the full payload to a file under CODEX_HOME and writes a small JSON envelope to stdin containing `payload-path`.
+
+Hook stdout/stderr are redirected to log files under CODEX_HOME so hooks do not interfere with the interactive TUI.
+
+```toml
+[hooks]
+agent_turn_complete = [["python3", "/Users/alice/.codex/hook.py"]]
+approval_requested = [["python3", "/Users/alice/.codex/hook.py"]]
+```
+
+To disable external hooks for a single run, pass `--no-hooks`:
+
+```sh
+codex --no-hooks
+codex exec --no-hooks "…"
+```
+
+Hook payloads include `"schema-version": 1`, a `"type"` field, `"event-id"`, and `"timestamp"`.
+
+Supported events:
+
+- `agent-turn-complete`
+- `approval-requested` (with `"kind"` set to `"exec"`, `"apply-patch"`, or `"elicitation"`)
+
+If `notify` is configured, Codex emits a deprecation notice and ignores it; migrate to `hooks.agent_turn_complete`.
 
 ### hide_agent_reasoning
 
@@ -1008,7 +1039,11 @@ Valid values:
 | `sandbox_workspace_write.network_access`         | boolean                                                           | Allow network in workspace‑write (default: false).                                                                              |
 | `sandbox_workspace_write.exclude_tmpdir_env_var` | boolean                                                           | Exclude `$TMPDIR` from writable roots (default: false).                                                                         |
 | `sandbox_workspace_write.exclude_slash_tmp`      | boolean                                                           | Exclude `/tmp` from writable roots (default: false).                                                                            |
-| `notify`                                         | array<string>                                                     | External program for notifications.                                                                                             |
+| `notify`                                         | array<string>                                                     | Deprecated (xcodex): ignored; use `hooks.agent_turn_complete`.                                                                  |
+| `hooks.agent_turn_complete`                      | array<array<string>>                                              | External programs to spawn after each completed turn.                                                                           |
+| `hooks.approval_requested`                       | array<array<string>>                                              | External programs to spawn when Codex requests approvals (exec/apply_patch/MCP elicitation).                                     |
+| `hooks.max_stdin_payload_bytes`                  | integer                                                           | Max payload size (bytes) to send directly via stdin (default: 16384); above this uses `payload-path` file delivery.             |
+| `hooks.keep_last_n_payloads`                     | integer                                                           | Keep only the most recent N payload/log files under CODEX_HOME (default: 50).                                                   |
 | `tui.animations`                                 | boolean                                                           | Enable terminal animations (welcome screen, shimmer, spinner). Defaults to true; set to `false` to disable visual motion.       |
 | `instructions`                                   | string                                                            | Currently ignored; use `experimental_instructions_file` or `AGENTS.md`.                                                         |
 | `developer_instructions`                         | string                                                            | The additional developer instructions.                                                                                          |

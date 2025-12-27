@@ -18,6 +18,7 @@ use rmcp::transport::ConfigureCommandExt;
 use rmcp::transport::TokioChildProcess;
 use serde_json::json;
 use std::collections::HashSet;
+use std::io::ErrorKind;
 use std::path::Path;
 use std::path::PathBuf;
 use std::process::Stdio;
@@ -36,7 +37,7 @@ where
     let execve_wrapper = codex_utils_cargo_bin::cargo_bin("codex-execve-wrapper")?;
     // `bash` requires a special lookup when running under Buck because it is a
     // _resource_ rather than a binary target.
-    let bash = if let Some(root) = codex_utils_cargo_bin::buck_project_root()? {
+    let bash_dotslash = if let Some(root) = codex_utils_cargo_bin::buck_project_root()? {
         root.join("codex-rs/exec-server/tests/suite/bash")
     } else {
         Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -47,14 +48,25 @@ where
 
     // Need to ensure the artifact associated with the bash DotSlash file is
     // available before it is run in a read-only sandbox.
-    let status = Command::new("dotslash")
+    let mut bash = bash_dotslash.clone();
+    let status = match Command::new("dotslash")
         .arg("--")
         .arg("fetch")
-        .arg(bash.clone())
+        .arg(bash_dotslash)
         .env("DOTSLASH_CACHE", dotslash_cache.as_ref())
         .status()
-        .await?;
-    assert!(status.success(), "dotslash fetch failed: {status:?}");
+        .await
+    {
+        Ok(status) => Some(status),
+        Err(err) if err.kind() == ErrorKind::NotFound => {
+            bash = PathBuf::from("/bin/bash");
+            None
+        }
+        Err(err) => return Err(err.into()),
+    };
+    if let Some(status) = status {
+        assert!(status.success(), "dotslash fetch failed: {status:?}");
+    }
 
     let transport = TokioChildProcess::new(Command::new(&mcp_executable).configure(|cmd| {
         cmd.arg("--bash").arg(bash);

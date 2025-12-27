@@ -1,5 +1,6 @@
 ---
 source: tui/src/history_cell.rs
+assertion_line: 1890
 expression: rendered
 ---
 /ps
@@ -7,3 +8,7 @@ expression: rendered
 Background terminals
 
   • No background terminals running.
+
+Hooks
+
+  • No hooks running.

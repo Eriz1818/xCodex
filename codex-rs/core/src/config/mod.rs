@@ -171,8 +171,18 @@ pub struct Config {
     /// notify-send Codex '{"type":"agent-turn-complete","turn-id":"12345"}'
     /// ```
     ///
+    /// Deprecated (xcodex): use `hooks.agent_turn_complete` instead.
+    ///
     /// If unset the feature is disabled.
     pub notify: Option<Vec<String>>,
+
+    /// Optional external hook commands to spawn on specific lifecycle events.
+    ///
+    /// Hooks are fire-and-forget: failures are logged and do not affect the
+    /// session. Hook commands receive event JSON on stdin. For large payloads,
+    /// stdin contains a small JSON envelope including `payload-path` pointing
+    /// at the full payload under CODEX_HOME.
+    pub hooks: HooksConfig,
 
     /// TUI notifications preference. When set, the TUI will send OSC 9 notifications on approvals
     /// and turn completions when not focused.
@@ -694,9 +704,13 @@ pub struct ConfigToml {
     /// Sandbox configuration to apply if `sandbox` is `WorkspaceWrite`.
     pub sandbox_workspace_write: Option<SandboxWorkspaceWrite>,
 
-    /// Optional external command to spawn for end-user notifications.
+    /// Deprecated (xcodex): legacy external command to spawn for notifications.
     #[serde(default)]
     pub notify: Option<Vec<String>>,
+
+    /// Optional external hook commands to spawn on specific lifecycle events.
+    #[serde(default)]
+    pub hooks: HooksConfig,
 
     /// System instructions.
     pub instructions: Option<String>,
@@ -1030,6 +1044,51 @@ pub struct ConfigOverrides {
     pub additional_writable_roots: Vec<PathBuf>,
 }
 
+/// Hook configuration loaded from `config.toml`.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub struct HooksConfig {
+    /// Hooks invoked after each completed turn.
+    #[serde(default)]
+    pub agent_turn_complete: Vec<Vec<String>>,
+
+    /// Hooks invoked when Codex requests an approval (exec/apply_patch/MCP elicitation).
+    #[serde(default)]
+    pub approval_requested: Vec<Vec<String>>,
+
+    /// Maximum payload size (in bytes) to send directly via stdin.
+    ///
+    /// When the serialized payload exceeds this threshold, Codex writes it to a
+    /// file under CODEX_HOME and writes a small JSON envelope to stdin that
+    /// includes `payload-path`.
+    #[serde(default = "HooksConfig::default_max_stdin_payload_bytes")]
+    pub max_stdin_payload_bytes: usize,
+
+    /// Keep only the most recent N payload/log files (global) under CODEX_HOME.
+    #[serde(default = "HooksConfig::default_keep_last_n_payloads")]
+    pub keep_last_n_payloads: usize,
+}
+
+impl HooksConfig {
+    fn default_max_stdin_payload_bytes() -> usize {
+        16_384
+    }
+
+    fn default_keep_last_n_payloads() -> usize {
+        50
+    }
+}
+
+impl Default for HooksConfig {
+    fn default() -> Self {
+        Self {
+            agent_turn_complete: Vec::new(),
+            approval_requested: Vec::new(),
+            max_stdin_payload_bytes: Self::default_max_stdin_payload_bytes(),
+            keep_last_n_payloads: Self::default_keep_last_n_payloads(),
+        }
+    }
+}
+
 /// Resolves the OSS provider from CLI override, profile config, or global config.
 /// Returns `None` if no provider is configured at any level.
 pub fn resolve_oss_provider(
@@ -1326,6 +1385,7 @@ impl Config {
             forced_auto_mode_downgraded_on_windows,
             shell_environment_policy,
             notify: cfg.notify,
+            hooks: cfg.hooks,
             user_instructions,
             base_instructions,
             developer_instructions,
@@ -3163,6 +3223,7 @@ model_verbosity = "high"
                 shell_environment_policy: ShellEnvironmentPolicy::default(),
                 user_instructions: None,
                 notify: None,
+                hooks: HooksConfig::default(),
                 cwd: fixture.cwd(),
                 cli_auth_credentials_store_mode: Default::default(),
                 mcp_servers: HashMap::new(),
@@ -3246,6 +3307,7 @@ model_verbosity = "high"
             shell_environment_policy: ShellEnvironmentPolicy::default(),
             user_instructions: None,
             notify: None,
+            hooks: HooksConfig::default(),
             cwd: fixture.cwd(),
             cli_auth_credentials_store_mode: Default::default(),
             mcp_servers: HashMap::new(),
@@ -3344,6 +3406,7 @@ model_verbosity = "high"
             shell_environment_policy: ShellEnvironmentPolicy::default(),
             user_instructions: None,
             notify: None,
+            hooks: HooksConfig::default(),
             cwd: fixture.cwd(),
             cli_auth_credentials_store_mode: Default::default(),
             mcp_servers: HashMap::new(),
@@ -3428,6 +3491,7 @@ model_verbosity = "high"
             shell_environment_policy: ShellEnvironmentPolicy::default(),
             user_instructions: None,
             notify: None,
+            hooks: HooksConfig::default(),
             cwd: fixture.cwd(),
             cli_auth_credentials_store_mode: Default::default(),
             mcp_servers: HashMap::new(),

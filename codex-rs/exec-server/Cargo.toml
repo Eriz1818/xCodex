@@ -57,6 +57,7 @@ tracing-subscriber = { workspace = true, features = ["env-filter", "fmt"] }
 
 [dev-dependencies]
 codex-utils-cargo-bin = { workspace = true }
+core_test_support = { workspace = true }
 exec_server_test_support = { workspace = true }
 maplit = { workspace = true }
 pretty_assertions = { workspace = true }

@@ -35,6 +35,8 @@ use codex_core::protocol::ExecCommandBeginEvent;
 use codex_core::protocol::ExecCommandEndEvent;
 use codex_core::protocol::ExecCommandSource;
 use codex_core::protocol::ExitedReviewModeEvent;
+use codex_core::protocol::HookProcessBeginEvent;
+use codex_core::protocol::HookProcessEndEvent;
 use codex_core::protocol::ListCustomPromptsResponseEvent;
 use codex_core::protocol::ListSkillsResponseEvent;
 use codex_core::protocol::McpListToolsResponseEvent;
@@ -157,6 +159,11 @@ struct RunningCommand {
 }
 
 struct UnifiedExecSessionSummary {
+    key: String,
+    command_display: String,
+}
+
+struct HookProcessSummary {
     key: String,
     command_display: String,
 }
@@ -336,6 +343,7 @@ pub(crate) struct ChatWidget {
     last_unified_wait: Option<UnifiedExecWaitState>,
     task_complete_pending: bool,
     unified_exec_sessions: Vec<UnifiedExecSessionSummary>,
+    hook_processes: Vec<HookProcessSummary>,
     mcp_startup_status: Option<HashMap<String, McpStartupStatus>>,
     // Queue of interruptive UI events deferred during an active write cycle
     interrupts: InterruptManager,
@@ -1019,7 +1027,37 @@ impl ChatWidget {
             .iter()
             .map(|session| session.command_display.clone())
             .collect();
-        self.bottom_pane.set_unified_exec_sessions(sessions);
+        let hooks = self
+            .hook_processes
+            .iter()
+            .map(|hook| hook.command_display.clone())
+            .collect();
+        self.bottom_pane.set_background_activity(sessions, hooks);
+    }
+
+    fn on_hook_process_begin(&mut self, ev: HookProcessBeginEvent) {
+        let key = ev.hook_id.to_string();
+        let command_display = strip_bash_lc_and_escape(&ev.command);
+        let event_type = ev.event_type;
+        let command_display = format!("{event_type} · {command_display}");
+        if let Some(existing) = self.hook_processes.iter_mut().find(|hook| hook.key == key) {
+            existing.command_display = command_display;
+        } else {
+            self.hook_processes.push(HookProcessSummary {
+                key,
+                command_display,
+            });
+        }
+        self.sync_unified_exec_footer();
+    }
+
+    fn on_hook_process_end(&mut self, ev: HookProcessEndEvent) {
+        let key = ev.hook_id.to_string();
+        let before = self.hook_processes.len();
+        self.hook_processes.retain(|hook| hook.key != key);
+        if self.hook_processes.len() != before {
+            self.sync_unified_exec_footer();
+        }
     }
 
     fn on_mcp_tool_call_begin(&mut self, ev: McpToolCallBeginEvent) {
@@ -1470,6 +1508,7 @@ impl ChatWidget {
             last_unified_wait: None,
             task_complete_pending: false,
             unified_exec_sessions: Vec::new(),
+            hook_processes: Vec::new(),
             mcp_startup_status: None,
             interrupts: InterruptManager::new(),
             reasoning_buffer: String::new(),
@@ -1560,6 +1599,7 @@ impl ChatWidget {
             last_unified_wait: None,
             task_complete_pending: false,
             unified_exec_sessions: Vec::new(),
+            hook_processes: Vec::new(),
             mcp_startup_status: None,
             interrupts: InterruptManager::new(),
             reasoning_buffer: String::new(),
@@ -2138,6 +2178,8 @@ impl ChatWidget {
             }
             EventMsg::ExecCommandBegin(ev) => self.on_exec_command_begin(ev),
             EventMsg::TerminalInteraction(delta) => self.on_terminal_interaction(delta),
+            EventMsg::HookProcessBegin(ev) => self.on_hook_process_begin(ev),
+            EventMsg::HookProcessEnd(ev) => self.on_hook_process_end(ev),
             EventMsg::ExecCommandOutputDelta(delta) => self.on_exec_command_output_delta(delta),
             EventMsg::PatchApplyBegin(ev) => self.on_patch_apply_begin(ev),
             EventMsg::PatchApplyEnd(ev) => self.on_patch_apply_end(ev),
@@ -2338,7 +2380,14 @@ impl ChatWidget {
             .iter()
             .map(|session| session.command_display.clone())
             .collect();
-        self.add_to_history(history_cell::new_unified_exec_sessions_output(sessions));
+        let hooks = self
+            .hook_processes
+            .iter()
+            .map(|hook| hook.command_display.clone())
+            .collect();
+        self.add_to_history(history_cell::new_unified_exec_sessions_output(
+            sessions, hooks,
+        ));
     }
 
     fn stop_rate_limit_poller(&mut self) {

@@ -18,6 +18,10 @@ exec *args:
 tui *args:
     cargo run --bin codex -- tui "$@"
 
+# Build and install the CLI as `xcodex` (defaults to ~/.local/bin/xcodex).
+xcodex-install *args:
+    bash ../scripts/install-xcodex.sh "$@"
+
 # Run the CLI version of the file-search crate.
 file-search *args:
     cargo run --bin codex-file-search -- "$@"

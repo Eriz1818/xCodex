@@ -1,0 +1,173 @@
+#![cfg(not(target_os = "windows"))]
+
+use std::os::unix::fs::PermissionsExt;
+use std::time::Duration;
+
+use anyhow::Result;
+use anyhow::anyhow;
+use codex_core::config::Constrained;
+use codex_core::protocol::AskForApproval;
+use codex_core::protocol::EventMsg;
+use codex_core::protocol::Op;
+use codex_protocol::protocol::ReviewDecision;
+use codex_protocol::user_input::UserInput;
+use core_test_support::fs_wait;
+use core_test_support::responses;
+use core_test_support::skip_if_no_network;
+use core_test_support::test_codex::TestCodex;
+use core_test_support::test_codex::test_codex;
+use core_test_support::wait_for_event;
+use pretty_assertions::assert_eq;
+use serde_json::Value;
+use serde_json::json;
+use tempfile::TempDir;
+
+use responses::ev_assistant_message;
+use responses::ev_completed;
+use responses::ev_function_call;
+use responses::ev_response_created;
+use responses::mount_sse_sequence;
+use responses::sse;
+use responses::start_mock_server;
+
+fn write_hook_script(dir: &TempDir, filename: &str, output_name: &str) -> Result<String> {
+    let script = dir.path().join(filename);
+    std::fs::write(
+        &script,
+        format!(
+            r#"#!/bin/bash
+set -euo pipefail
+out_dir="$(dirname "$0")"
+tmp="$out_dir/{output_name}.tmp.$$"
+stdin_payload="$(cat)"
+python3 - "$stdin_payload" "$tmp" <<'PY'
+import json
+import pathlib
+import sys
+
+payload = json.loads(sys.argv[1])
+payload_path = payload.get("payload-path")
+if payload_path:
+    payload = json.loads(pathlib.Path(payload_path).read_text())
+
+pathlib.Path(sys.argv[2]).write_text(json.dumps(payload))
+PY
+mv "$tmp" "$out_dir/{output_name}""#
+        ),
+    )?;
+    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755))?;
+    Ok(script
+        .to_str()
+        .ok_or_else(|| anyhow!("hook script path is not valid utf-8"))?
+        .to_string())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn hooks_agent_turn_complete_invoked() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    responses::mount_sse_once(
+        &server,
+        sse(vec![ev_assistant_message("m1", "Done"), ev_completed("r1")]),
+    )
+    .await;
+
+    let hook_dir = TempDir::new()?;
+    let hook_script = write_hook_script(&hook_dir, "hook.sh", "turn.json")?;
+    let hook_file = hook_dir.path().join("turn.json");
+
+    let TestCodex { codex, .. } = test_codex()
+        .with_config(move |cfg| {
+            cfg.hooks.agent_turn_complete = vec![vec![hook_script]];
+        })
+        .build(&server)
+        .await?;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "hello world".into(),
+            }],
+        })
+        .await?;
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
+
+    fs_wait::wait_for_path_exists(&hook_file, Duration::from_secs(5)).await?;
+    let hook_payload_raw = tokio::fs::read_to_string(&hook_file).await?;
+    let payload: Value = serde_json::from_str(&hook_payload_raw)?;
+
+    assert_eq!(payload["schema-version"], json!(1));
+    assert_eq!(payload["type"], json!("agent-turn-complete"));
+    assert_eq!(payload["input-messages"], json!(["hello world"]));
+    assert_eq!(payload["last-assistant-message"], json!("Done"));
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn hooks_approval_requested_invoked_for_exec() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+
+    let call_id = "hooks-approval-requested";
+    let args = json!({
+        "command": ["/bin/sh", "-c", "echo hook-test"],
+        "timeout_ms": 1_000,
+    });
+
+    let responses = vec![
+        sse(vec![
+            ev_response_created("resp-1"),
+            ev_function_call(call_id, "shell", &serde_json::to_string(&args)?),
+            ev_completed("resp-1"),
+        ]),
+        sse(vec![
+            ev_assistant_message("m1", "Done"),
+            ev_completed("resp-2"),
+        ]),
+    ];
+    mount_sse_sequence(&server, responses).await;
+
+    let hook_dir = TempDir::new()?;
+    let hook_script = write_hook_script(&hook_dir, "hook.sh", "approval.json")?;
+    let hook_file = hook_dir.path().join("approval.json");
+
+    let TestCodex { codex, .. } = test_codex()
+        .with_config(move |cfg| {
+            cfg.hooks.approval_requested = vec![vec![hook_script]];
+            cfg.approval_policy = Constrained::allow_any(AskForApproval::UnlessTrusted);
+        })
+        .build(&server)
+        .await?;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "run a shell command".into(),
+            }],
+        })
+        .await?;
+
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::ExecApprovalRequest(_))).await;
+    fs_wait::wait_for_path_exists(&hook_file, Duration::from_secs(5)).await?;
+
+    let hook_payload_raw = tokio::fs::read_to_string(&hook_file).await?;
+    let payload: Value = serde_json::from_str(&hook_payload_raw)?;
+    assert_eq!(payload["schema-version"], json!(1));
+    assert_eq!(payload["type"], json!("approval-requested"));
+    assert_eq!(payload["kind"], json!("exec"));
+    assert_eq!(payload["call-id"], json!(call_id));
+    assert_eq!(payload["command"], args["command"]);
+
+    codex
+        .submit(Op::ExecApproval {
+            id: "0".into(),
+            decision: ReviewDecision::Approved,
+        })
+        .await?;
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
+
+    Ok(())
+}

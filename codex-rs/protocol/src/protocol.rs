@@ -37,6 +37,7 @@ use serde_with::serde_as;
 use strum_macros::Display;
 use tracing::error;
 use ts_rs::TS;
+use uuid::Uuid;
 
 pub use crate::approvals::ApplyPatchApprovalRequestEvent;
 pub use crate::approvals::ElicitationAction;
@@ -601,6 +602,12 @@ pub enum EventMsg {
 
     /// Terminal interaction for an in-progress command (stdin sent and stdout observed).
     TerminalInteraction(TerminalInteractionEvent),
+
+    /// Notification that an external hook process has started.
+    HookProcessBegin(HookProcessBeginEvent),
+
+    /// Notification that an external hook process has finished.
+    HookProcessEnd(HookProcessEndEvent),
 
     ExecCommandEnd(ExecCommandEndEvent),
 
@@ -1553,6 +1560,33 @@ pub struct TerminalInteractionEvent {
     pub process_id: String,
     /// Stdin sent to the running session.
     pub stdin: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
+pub struct HookProcessBeginEvent {
+    /// Unique identifier for this hook process.
+    #[schemars(with = "String")]
+    #[ts(type = "string")]
+    pub hook_id: Uuid,
+    /// Identifier for the originating hook payload event.
+    #[schemars(with = "String")]
+    #[ts(type = "string")]
+    pub payload_event_id: Uuid,
+    /// Hook event type (e.g., `agent-turn-complete`, `approval-requested`).
+    pub event_type: String,
+    /// The hook command that was spawned.
+    pub command: Vec<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
+pub struct HookProcessEndEvent {
+    /// Unique identifier for the hook process that finished.
+    #[schemars(with = "String")]
+    #[ts(type = "string")]
+    pub hook_id: Uuid,
+    /// Exit code if available.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub exit_code: Option<i32>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]

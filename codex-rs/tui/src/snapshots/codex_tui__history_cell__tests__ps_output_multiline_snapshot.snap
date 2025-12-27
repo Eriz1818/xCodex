@@ -1,5 +1,6 @@
 ---
 source: tui/src/history_cell.rs
+assertion_line: 1903
 expression: rendered
 ---
 /ps
@@ -8,3 +9,7 @@ Background terminals
 
   • echo hello [...]
   • rg "foo" src
+
+Hooks
+
+  • No hooks running.

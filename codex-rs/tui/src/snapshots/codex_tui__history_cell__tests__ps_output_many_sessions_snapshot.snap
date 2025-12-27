@@ -1,5 +1,6 @@
 ---
 source: tui/src/history_cell.rs
+assertion_line: 1925
 expression: rendered
 ---
 /ps
@@ -23,3 +24,7 @@ Background terminals
   • command 14
   • command 15
   • ... and 4 more running
+
+Hooks
+
+  • No hooks running.

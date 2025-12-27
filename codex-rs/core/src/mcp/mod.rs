@@ -53,6 +53,7 @@ pub async fn collect_mcp_snapshot(config: &Config) -> McpListToolsResponseEvent 
             tx_event,
             cancel_token.clone(),
             sandbox_state,
+            None,
         )
         .await;
 

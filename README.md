@@ -1,65 +1,15 @@
-<p align="center"><code>npm i -g @openai/codex</code><br />or <code>brew install --cask codex</code></p>
-
-<p align="center"><strong>Codex CLI</strong> is a coding agent from OpenAI that runs locally on your computer.
-</br>
-</br>If you want Codex in your code editor (VS Code, Cursor, Windsurf), <a href="https://developers.openai.com/codex/ide">install in your IDE</a>
-</br>If you are looking for the <em>cloud-based agent</em> from OpenAI, <strong>Codex Web</strong>, go to <a href="https://chatgpt.com/codex">chatgpt.com/codex</a></p>
-
-<p align="center">
-  <img src="./.github/codex-cli-splash.png" alt="Codex CLI splash" width="80%" />
-  </p>
+<p align="center"><strong>xcodex (xtreme-codex)</strong> is an effort to add features to upstream Codex CLI.</p>
 
 ---
 
+## Highlights
+
+- Slash commands: `/compact` and `/autocompact` are working.
+- Hooks: a basic automation hooks system is in place (see `docs/xcodex/hooks.md`).
+
 ## Quickstart
 
-### Installing and running Codex CLI
-
-Install globally with your preferred package manager. If you use npm:
-
-```shell
-npm install -g @openai/codex
-```
-
-Alternatively, if you use Homebrew:
-
-```shell
-brew install --cask codex
-```
-
-Then simply run `codex` to get started:
-
-```shell
-codex
-```
-
-If you're running into upgrade issues with Homebrew, see the [FAQ entry on brew upgrade codex](./docs/faq.md#brew-upgrade-codex-isnt-upgrading-me).
-
-<details>
-<summary>You can also go to the <a href="https://github.com/openai/codex/releases/latest">latest GitHub Release</a> and download the appropriate binary for your platform.</summary>
-
-Each GitHub Release contains many executables, but in practice, you likely want one of these:
-
-- macOS
-  - Apple Silicon/arm64: `codex-aarch64-apple-darwin.tar.gz`
-  - x86_64 (older Mac hardware): `codex-x86_64-apple-darwin.tar.gz`
-- Linux
-  - x86_64: `codex-x86_64-unknown-linux-musl.tar.gz`
-  - arm64: `codex-aarch64-unknown-linux-musl.tar.gz`
-
-Each archive contains a single entry with the platform baked into the name (e.g., `codex-x86_64-unknown-linux-musl`), so you likely want to rename it to `codex` after extracting it.
-
-</details>
-
-### Using Codex with your ChatGPT plan
-
-<p align="center">
-  <img src="./.github/codex-cli-login.png" alt="Codex CLI login" width="80%" />
-  </p>
-
-Run `codex` and select **Sign in with ChatGPT**. We recommend signing into your ChatGPT account to use Codex as part of your Plus, Pro, Team, Edu, or Enterprise plan. [Learn more about what's included in your ChatGPT plan](https://help.openai.com/en/articles/11369540-codex-in-chatgpt).
-
-You can also use Codex with an API key, but this requires [additional setup](./docs/authentication.md#usage-based-billing-alternative-use-an-openai-api-key). If you previously used an API key for usage-based billing, see the [migration steps](./docs/authentication.md#migrating-from-usage-based-billing-api-key). If you're having trouble with login, please comment on [this issue](https://github.com/openai/codex/issues/1243).
+This fork does not use the upstream npm/Homebrew installation flow. Build from source using the instructions in `docs/install.md`, then run the resulting `codex` binary.
 
 ### Model Context Protocol (MCP)
 
@@ -78,9 +28,10 @@ See the [Execpolicy quickstart](./docs/execpolicy.md) to set up rules that gover
 - Use `/compact` to summarize the conversation and free up context.
 - Use `/autocompact` to automatically compact when the conversation gets close to the model’s context limit (supports `on|off|toggle|status` and persists across sessions).
 
-### Fork notes (xcodex)
+### xcodex notes
 
 - `/feedback` saves a local report for troubleshooting (no network upload); attach the files it prints when filing an issue in your fork.
+- xcodex docs live in `docs/xcodex/`.
 
 ### Docs & FAQ
 

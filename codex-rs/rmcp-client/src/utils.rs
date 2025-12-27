@@ -6,6 +6,7 @@ use anyhow::Context;
 use anyhow::Result;
 use anyhow::anyhow;
 use mcp_types::CallToolResult;
+use reqwest::Client;
 use reqwest::ClientBuilder;
 use reqwest::header::HeaderMap;
 use reqwest::header::HeaderName;
@@ -151,6 +152,17 @@ pub(crate) fn apply_default_headers(
         builder
     } else {
         builder.default_headers(default_headers.clone())
+    }
+}
+
+pub(crate) fn build_reqwest_client<F>(configure: F) -> reqwest::Result<Client>
+where
+    F: Fn(ClientBuilder) -> ClientBuilder,
+{
+    let build = |builder| configure(builder).build();
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| build(Client::builder()))) {
+        Ok(result) => result,
+        Err(_) => build(Client::builder().no_proxy()),
     }
 }
 

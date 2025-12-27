@@ -8,7 +8,7 @@ use crate::models_manager::manager::ModelsManager;
 use crate::skills::SkillsManager;
 use crate::tools::sandboxing::ApprovalStore;
 use crate::unified_exec::UnifiedExecSessionManager;
-use crate::user_notification::UserNotifier;
+use crate::user_notification::UserHooks;
 use codex_otel::otel_manager::OtelManager;
 use tokio::sync::Mutex;
 use tokio::sync::RwLock;
@@ -18,7 +18,7 @@ pub(crate) struct SessionServices {
     pub(crate) mcp_connection_manager: Arc<RwLock<McpConnectionManager>>,
     pub(crate) mcp_startup_cancellation_token: CancellationToken,
     pub(crate) unified_exec_manager: UnifiedExecSessionManager,
-    pub(crate) notifier: UserNotifier,
+    pub(crate) user_hooks: UserHooks,
     pub(crate) rollout: Mutex<Option<RolloutRecorder>>,
     pub(crate) user_shell: Arc<crate::shell::Shell>,
     pub(crate) show_raw_agent_reasoning: bool,

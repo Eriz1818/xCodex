@@ -68,6 +68,13 @@ struct MultitoolCli {
     #[clap(flatten)]
     pub feature_toggles: FeatureToggles,
 
+    /// Disable external hooks for this run.
+    ///
+    /// This is useful when running Codex from within a hook script to avoid
+    /// recursive hook execution.
+    #[arg(long = "no-hooks", default_value_t = false, global = true)]
+    pub no_hooks: bool,
+
     #[clap(flatten)]
     interactive: TuiCli,
 
@@ -437,6 +444,7 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
     let MultitoolCli {
         config_overrides: mut root_config_overrides,
         feature_toggles,
+        no_hooks,
         mut interactive,
         subcommand,
     } = MultitoolCli::parse();
@@ -444,6 +452,16 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
     // Fold --enable/--disable into config overrides so they flow to all subcommands.
     let toggle_overrides = feature_toggles.to_overrides()?;
     root_config_overrides.raw_overrides.extend(toggle_overrides);
+
+    if no_hooks {
+        root_config_overrides.raw_overrides.extend(
+            [
+                "hooks.agent_turn_complete=[]",
+                "hooks.approval_requested=[]",
+            ]
+            .map(ToString::to_string),
+        );
+    }
 
     match subcommand {
         None => {
@@ -795,6 +813,7 @@ mod tests {
             config_overrides: root_overrides,
             subcommand,
             feature_toggles: _,
+            no_hooks: _,
         } = cli;
 
         let Subcommand::Resume(ResumeCommand {

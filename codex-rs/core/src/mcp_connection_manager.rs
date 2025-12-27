@@ -15,6 +15,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use crate::mcp::auth::McpAuthStatusEntry;
+use crate::user_notification::UserHooks;
 use anyhow::Context;
 use anyhow::Result;
 use anyhow::anyhow;
@@ -58,6 +59,23 @@ use tokio::sync::Mutex;
 use tokio::sync::oneshot;
 use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
+
+#[derive(Clone)]
+pub(crate) struct McpHookContext {
+    user_hooks: UserHooks,
+    thread_id: String,
+    cwd: String,
+}
+
+impl McpHookContext {
+    pub(crate) fn new(user_hooks: UserHooks, thread_id: String, cwd: String) -> Self {
+        Self {
+            user_hooks,
+            thread_id,
+            cwd,
+        }
+    }
+}
 use tracing::instrument;
 use tracing::warn;
 
@@ -144,17 +162,36 @@ impl ElicitationRequestManager {
             .map_err(|e| anyhow!("failed to send elicitation response: {e:?}"))
     }
 
-    fn make_sender(&self, server_name: String, tx_event: Sender<Event>) -> SendElicitation {
+    fn make_sender(
+        &self,
+        server_name: String,
+        tx_event: Sender<Event>,
+        hook_context: Option<McpHookContext>,
+    ) -> SendElicitation {
         let elicitation_requests = self.requests.clone();
         Box::new(move |id, elicitation| {
             let elicitation_requests = elicitation_requests.clone();
             let tx_event = tx_event.clone();
             let server_name = server_name.clone();
+            let hook_context = hook_context.clone();
             async move {
                 let (tx, rx) = oneshot::channel();
                 {
                     let mut lock = elicitation_requests.lock().await;
                     lock.insert((server_name.clone(), id.clone()), tx);
+                }
+                if let Some(hook_context) = &hook_context {
+                    let request_id = match &id {
+                        RequestId::String(id) => id.clone(),
+                        RequestId::Integer(id) => id.to_string(),
+                    };
+                    hook_context.user_hooks.approval_requested_elicitation(
+                        hook_context.thread_id.clone(),
+                        hook_context.cwd.clone(),
+                        server_name.clone(),
+                        request_id,
+                        elicitation.message.clone(),
+                    );
                 }
                 let _ = tx_event
                     .send(Event {
@@ -214,6 +251,7 @@ impl AsyncManagedClient {
         cancel_token: CancellationToken,
         tx_event: Sender<Event>,
         elicitation_requests: ElicitationRequestManager,
+        hook_context: Option<McpHookContext>,
     ) -> Self {
         let tool_filter = ToolFilter::from_config(&config);
         let fut = async move {
@@ -231,6 +269,7 @@ impl AsyncManagedClient {
                 tool_filter,
                 tx_event,
                 elicitation_requests,
+                hook_context,
             )
             .or_cancel(&cancel_token)
             .await
@@ -276,6 +315,7 @@ pub(crate) struct McpConnectionManager {
 }
 
 impl McpConnectionManager {
+    #[allow(clippy::too_many_arguments)]
     pub async fn initialize(
         &mut self,
         mcp_servers: HashMap<String, McpServerConfig>,
@@ -284,6 +324,7 @@ impl McpConnectionManager {
         tx_event: Sender<Event>,
         cancel_token: CancellationToken,
         initial_sandbox_state: SandboxState,
+        hook_context: Option<McpHookContext>,
     ) {
         if cancel_token.is_cancelled() {
             return;
@@ -293,6 +334,7 @@ impl McpConnectionManager {
         let elicitation_requests = ElicitationRequestManager::default();
         for (server_name, cfg) in mcp_servers.into_iter().filter(|(_, cfg)| cfg.enabled) {
             let cancel_token = cancel_token.child_token();
+            let hook_context = hook_context.clone();
             let _ = emit_update(
                 &tx_event,
                 McpStartupUpdateEvent {
@@ -308,6 +350,7 @@ impl McpConnectionManager {
                 cancel_token.clone(),
                 tx_event.clone(),
                 elicitation_requests.clone(),
+                hook_context,
             );
             clients.insert(server_name.clone(), async_managed_client.clone());
             let tx_event = tx_event.clone();
@@ -756,6 +799,7 @@ impl From<anyhow::Error> for StartupOutcomeError {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn start_server_task(
     server_name: String,
     client: Arc<RmcpClient>,
@@ -764,6 +808,7 @@ async fn start_server_task(
     tool_filter: ToolFilter,
     tx_event: Sender<Event>,
     elicitation_requests: ElicitationRequestManager,
+    hook_context: Option<McpHookContext>,
 ) -> Result<ManagedClient, StartupOutcomeError> {
     let params = mcp_types::InitializeRequestParams {
         capabilities: ClientCapabilities {
@@ -786,7 +831,8 @@ async fn start_server_task(
         protocol_version: mcp_types::MCP_SCHEMA_VERSION.to_owned(),
     };
 
-    let send_elicitation = elicitation_requests.make_sender(server_name.clone(), tx_event);
+    let send_elicitation =
+        elicitation_requests.make_sender(server_name.clone(), tx_event, hook_context);
 
     let initialize_result = client
         .initialize(params, startup_timeout, send_elicitation)

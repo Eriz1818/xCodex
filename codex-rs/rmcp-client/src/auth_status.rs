@@ -4,7 +4,6 @@ use std::time::Duration;
 use anyhow::Error;
 use anyhow::Result;
 use codex_protocol::protocol::McpAuthStatus;
-use reqwest::Client;
 use reqwest::StatusCode;
 use reqwest::Url;
 use reqwest::header::HeaderMap;
@@ -15,6 +14,7 @@ use crate::OAuthCredentialsStoreMode;
 use crate::oauth::has_oauth_tokens;
 use crate::utils::apply_default_headers;
 use crate::utils::build_default_headers;
+use crate::utils::build_reqwest_client;
 
 const DISCOVERY_TIMEOUT: Duration = Duration::from_secs(5);
 const OAUTH_DISCOVERY_HEADER: &str = "MCP-Protocol-Version";
@@ -58,8 +58,9 @@ pub async fn supports_oauth_login(url: &str) -> Result<bool> {
 
 async fn supports_oauth_login_with_headers(url: &str, default_headers: &HeaderMap) -> Result<bool> {
     let base_url = Url::parse(url)?;
-    let builder = Client::builder().timeout(DISCOVERY_TIMEOUT);
-    let client = apply_default_headers(builder, default_headers).build()?;
+    let client = build_reqwest_client(|builder| {
+        apply_default_headers(builder.timeout(DISCOVERY_TIMEOUT), default_headers)
+    })?;
 
     let mut last_error: Option<Error> = None;
     for candidate_path in discovery_paths(base_url.path()) {

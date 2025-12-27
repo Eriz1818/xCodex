@@ -390,6 +390,7 @@ async fn make_chatwidget_manual(
         last_unified_wait: None,
         task_complete_pending: false,
         unified_exec_sessions: Vec::new(),
+        hook_processes: Vec::new(),
         mcp_startup_status: None,
         interrupts: InterruptManager::new(),
         reasoning_buffer: String::new(),

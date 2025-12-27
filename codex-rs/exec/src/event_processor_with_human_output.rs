@@ -222,6 +222,9 @@ impl EventProcessor for EventProcessorWithHumanOutput {
             EventMsg::BackgroundEvent(BackgroundEventEvent { message }) => {
                 ts_msg!(self, "{}", message.style(self.dimmed));
             }
+            EventMsg::HookProcessBegin(_) | EventMsg::HookProcessEnd(_) => {
+                // Ignore hook lifecycle notifications in exec output.
+            }
             EventMsg::StreamError(StreamErrorEvent {
                 message,
                 additional_details,

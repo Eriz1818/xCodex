@@ -25,7 +25,7 @@ use crate::stream_events_utils::handle_non_tool_response_item;
 use crate::stream_events_utils::handle_output_item_done;
 use crate::terminal;
 use crate::truncate::TruncationPolicy;
-use crate::user_notification::UserNotifier;
+use crate::user_notification::UserHooks;
 use crate::util::error_or_panic;
 use async_channel::Receiver;
 use async_channel::Sender;
@@ -145,7 +145,6 @@ use crate::turn_diff_tracker::TurnDiffTracker;
 use crate::unified_exec::UnifiedExecSessionManager;
 use crate::user_instructions::DeveloperInstructions;
 use crate::user_instructions::UserInstructions;
-use crate::user_notification::UserNotification;
 use crate::util::backoff;
 use codex_async_utils::OrCancelExt;
 use codex_otel::otel_manager::OtelManager;
@@ -616,6 +615,18 @@ impl Session {
             });
         }
         maybe_push_chat_wire_api_deprecation(&config, &mut post_session_configured_events);
+        if matches!(config.notify.as_ref(), Some(notify) if !notify.is_empty()) {
+            post_session_configured_events.push(Event {
+                id: INITIAL_SUBMIT_ID.to_owned(),
+                msg: EventMsg::DeprecationNotice(DeprecationNoticeEvent {
+                    summary: "`notify` is deprecated. Use `[hooks].agent_turn_complete` instead."
+                        .to_string(),
+                    details: Some(
+                        "See docs/xcodex/hooks.md for the hooks contract and examples.".to_string(),
+                    ),
+                }),
+            });
+        }
 
         // todo(aibrahim): why are we passing model here while it can change?
         let otel_manager = OtelManager::new(
@@ -658,7 +669,11 @@ impl Session {
             mcp_connection_manager: Arc::new(RwLock::new(McpConnectionManager::default())),
             mcp_startup_cancellation_token: CancellationToken::new(),
             unified_exec_manager: UnifiedExecSessionManager::default(),
-            notifier: UserNotifier::new(config.notify.clone()),
+            user_hooks: UserHooks::new(
+                config.codex_home.clone(),
+                config.hooks.clone(),
+                Some(tx_event.clone()),
+            ),
             rollout: Mutex::new(Some(rollout_recorder)),
             user_shell: Arc::new(default_shell),
             show_raw_agent_reasoning: config.show_raw_agent_reasoning,
@@ -722,6 +737,11 @@ impl Session {
                 tx_event.clone(),
                 sess.services.mcp_startup_cancellation_token.clone(),
                 sandbox_state,
+                Some(crate::mcp_connection_manager::McpHookContext::new(
+                    sess.services.user_hooks.clone(),
+                    sess.conversation_id.to_string(),
+                    session_configuration.cwd.display().to_string(),
+                )),
             )
             .await;
 
@@ -1078,6 +1098,15 @@ impl Session {
         reason: Option<String>,
         proposed_execpolicy_amendment: Option<ExecPolicyAmendment>,
     ) -> ReviewDecision {
+        self.user_hooks().approval_requested_exec(
+            self.conversation_id.to_string(),
+            turn_context.sub_id.clone(),
+            call_id.clone(),
+            cwd.display().to_string(),
+            command.clone(),
+            reason.clone(),
+        );
+
         let sub_id = turn_context.sub_id.clone();
         // Add the tx_approve callback to the map before sending the request.
         let (tx_approve, rx_approve) = oneshot::channel();
@@ -1118,6 +1147,22 @@ impl Session {
         reason: Option<String>,
         grant_root: Option<PathBuf>,
     ) -> oneshot::Receiver<ReviewDecision> {
+        let mut paths = changes
+            .keys()
+            .map(|path| path.display().to_string())
+            .collect::<Vec<_>>();
+        paths.sort();
+
+        self.user_hooks().approval_requested_apply_patch(
+            self.conversation_id.to_string(),
+            turn_context.sub_id.clone(),
+            call_id.clone(),
+            turn_context.cwd.display().to_string(),
+            paths,
+            reason.clone(),
+            grant_root.as_ref().map(|path| path.display().to_string()),
+        );
+
         let sub_id = turn_context.sub_id.clone();
         // Add the tx_approve callback to the map before sending the request.
         let (tx_approve, rx_approve) = oneshot::channel();
@@ -1579,8 +1624,8 @@ impl Session {
         }
     }
 
-    pub(crate) fn notifier(&self) -> &UserNotifier {
-        &self.services.notifier
+    pub(crate) fn user_hooks(&self) -> &UserHooks {
+        &self.services.user_hooks
     }
 
     pub(crate) fn user_shell(&self) -> Arc<shell::Shell> {
@@ -2377,14 +2422,13 @@ pub(crate) async fn run_task(
 
                 if !needs_follow_up {
                     last_agent_message = turn_last_agent_message;
-                    sess.notifier()
-                        .notify(&UserNotification::AgentTurnComplete {
-                            thread_id: sess.conversation_id.to_string(),
-                            turn_id: turn_context.sub_id.clone(),
-                            cwd: turn_context.cwd.display().to_string(),
-                            input_messages: turn_input_messages,
-                            last_assistant_message: last_agent_message.clone(),
-                        });
+                    sess.user_hooks().agent_turn_complete(
+                        sess.conversation_id.to_string(),
+                        turn_context.sub_id.clone(),
+                        turn_context.cwd.display().to_string(),
+                        turn_input_messages,
+                        last_agent_message.clone(),
+                    );
                     break;
                 }
                 continue;
@@ -3200,7 +3244,11 @@ mod tests {
             mcp_connection_manager: Arc::new(RwLock::new(McpConnectionManager::default())),
             mcp_startup_cancellation_token: CancellationToken::new(),
             unified_exec_manager: UnifiedExecSessionManager::default(),
-            notifier: UserNotifier::new(None),
+            user_hooks: UserHooks::new(
+                config.codex_home.clone(),
+                crate::config::HooksConfig::default(),
+                None,
+            ),
             rollout: Mutex::new(None),
             user_shell: Arc::new(default_user_shell()),
             show_raw_agent_reasoning: config.show_raw_agent_reasoning,
@@ -3287,7 +3335,11 @@ mod tests {
             mcp_connection_manager: Arc::new(RwLock::new(McpConnectionManager::default())),
             mcp_startup_cancellation_token: CancellationToken::new(),
             unified_exec_manager: UnifiedExecSessionManager::default(),
-            notifier: UserNotifier::new(None),
+            user_hooks: UserHooks::new(
+                config.codex_home.clone(),
+                crate::config::HooksConfig::default(),
+                None,
+            ),
             rollout: Mutex::new(None),
             user_shell: Arc::new(default_user_shell()),
             show_raw_agent_reasoning: config.show_raw_agent_reasoning,

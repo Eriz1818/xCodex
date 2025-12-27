@@ -8,6 +8,8 @@ use anyhow::Context;
 use anyhow::Result;
 use anyhow::ensure;
 use codex_exec_server::ExecResult;
+use core_test_support::skip_if_no_network;
+use core_test_support::skip_if_sandbox;
 use exec_server_test_support::InteractiveClient;
 use exec_server_test_support::create_transport;
 use exec_server_test_support::notify_readable_sandbox;
@@ -32,6 +34,9 @@ use tokio::process::Command;
 /// command should be run privileged outside the sandbox.
 #[tokio::test(flavor = "current_thread")]
 async fn accept_elicitation_for_prompt_rule() -> Result<()> {
+    skip_if_sandbox!(Ok(()));
+    skip_if_no_network!(Ok(()));
+
     // Configure a stdio transport that will launch the MCP server using
     // $CODEX_HOME with an execpolicy that prompts for `git init` commands.
     let codex_home = TempDir::new()?;
