@@ -4,8 +4,11 @@
 
 ## Highlights
 
-- Slash commands: `/compact` and `/autocompact` are working.
-- Hooks: a basic automation hooks system is in place (see `docs/xcodex/hooks.md`).
+**New in this fork**
+
+- Keep context under control with `/compact` and `/autocompact` (see `docs/xcodex/compact.md`).
+- Automate Codex with `hooks` (turn-complete + approval-requested; see `docs/xcodex/hooks.md`).
+- More features are in progress; expect rough edges and some churn.
 
 ## Quickstart
 
@@ -28,10 +31,10 @@ See the [Execpolicy quickstart](./docs/execpolicy.md) to set up rules that gover
 - Use `/compact` to summarize the conversation and free up context.
 - Use `/autocompact` to automatically compact when the conversation gets close to the model’s context limit (supports `on|off|toggle|status` and persists across sessions).
 
-### xcodex notes
+### Fork notes
 
 - `/feedback` saves a local report for troubleshooting (no network upload); attach the files it prints when filing an issue in your fork.
-- xcodex docs live in `docs/xcodex/`.
+- Fork-specific docs live in `docs/xcodex/`.
 
 ### Docs & FAQ
 
