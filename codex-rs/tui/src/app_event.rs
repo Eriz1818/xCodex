@@ -64,11 +64,17 @@ pub(crate) enum AppEvent {
     /// Update the current model slug in the running app and widget.
     UpdateModel(String),
 
+    /// Update whether agent reasoning is displayed in the TUI.
+    UpdateHideAgentReasoning(bool),
+
     /// Persist the selected model and reasoning effort to the appropriate config.
     PersistModelSelection {
         model: String,
         effort: Option<ReasoningEffort>,
     },
+
+    /// Persist the agent reasoning visibility preference to the appropriate config.
+    PersistHideAgentReasoning(bool),
 
     /// Open the reasoning selection popup after picking a model.
     OpenReasoningPopup {

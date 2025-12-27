@@ -20,6 +20,7 @@ Control Codex’s behavior during an interactive session with slash commands.
 | `/init`         | create an AGENTS.md file with instructions for Codex                       |
 | `/compact`      | summarize conversation to prevent hitting the context limit                |
 | `/autocompact`  | toggle automatic conversation compaction (supports `on|off|toggle|status`) |
+| `/thoughts`     | toggle showing agent thoughts/reasoning (supports `on|off|toggle|status`)  |
 | `/diff`         | show git diff (including untracked files)                                  |
 | `/mention`      | mention a file                                                             |
 | `/status`       | show current session configuration and token usage                         |

@@ -22,6 +22,7 @@ pub enum SlashCommand {
     Init,
     Compact,
     Autocompact,
+    Thoughts,
     // Undo,
     Diff,
     Mention,
@@ -46,6 +47,7 @@ impl SlashCommand {
             SlashCommand::Init => "create an AGENTS.md file with instructions for Codex",
             SlashCommand::Compact => "summarize conversation to prevent hitting the context limit",
             SlashCommand::Autocompact => "toggle automatic conversation compaction (persists)",
+            SlashCommand::Thoughts => "toggle showing agent thoughts/reasoning (persists)",
             SlashCommand::Review => "review my current changes and find issues",
             SlashCommand::Resume => "resume a saved chat",
             // SlashCommand::Undo => "ask Codex to undo a turn",
@@ -96,6 +98,7 @@ impl SlashCommand {
             | SlashCommand::Feedback
             | SlashCommand::Quit
             | SlashCommand::Exit => true,
+            SlashCommand::Thoughts => true,
             SlashCommand::Rollout => true,
             SlashCommand::TestApproval => true,
         }

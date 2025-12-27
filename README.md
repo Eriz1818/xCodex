@@ -7,6 +7,7 @@
 **New in this fork**
 
 - Keep context under control with `/compact` and `/autocompact` (see [`docs/xcodex/compact.md`](docs/xcodex/compact.md)).
+- Hide/show agent thoughts in the TUI with `/thoughts` (see [`docs/xcodex/thoughts.md`](docs/xcodex/thoughts.md)).
 - Automate Codex with hooks (turn-complete + approval-requested; see [`docs/xcodex/hooks.md`](docs/xcodex/hooks.md)).
 - Manage background terminals with `/ps` (list) and `/ps-kill` (terminate) (see [`docs/xcodex/background-terminals.md`](docs/xcodex/background-terminals.md)).
 - More features are in progress; expect rough edges and some churn.
@@ -31,6 +32,10 @@ See the [Execpolicy quickstart](./docs/execpolicy.md) to set up rules that gover
 
 - Use `/compact` to summarize the conversation and free up context.
 - Use `/autocompact` to automatically compact when the conversation gets close to the model’s context limit (supports `on|off|toggle|status` and persists across sessions).
+
+### Hiding thoughts (`/thoughts`)
+
+- Use `/thoughts` to toggle whether agent thoughts/reasoning are shown in the chat transcript (supports `on|off|toggle|status` and persists across sessions).
 
 ### Fork notes
 

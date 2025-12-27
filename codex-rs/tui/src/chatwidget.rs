@@ -537,21 +537,23 @@ impl ChatWidget {
         // (between **/**) as the chunk header. Show this header as status.
         self.reasoning_buffer.push_str(&delta);
 
-        if let Some(header) = extract_first_bold(&self.reasoning_buffer) {
+        if !self.config.hide_agent_reasoning
+            && let Some(header) = extract_first_bold(&self.reasoning_buffer)
+        {
             // Update the shimmer header to the extracted reasoning chunk header.
             self.set_status_header(header);
-        } else {
-            // Fallback while we don't yet have a bold header: leave existing header as-is.
+            self.request_redraw();
         }
-        self.request_redraw();
     }
 
     fn on_agent_reasoning_final(&mut self) {
         // At the end of a reasoning block, record transcript-only content.
         self.full_reasoning_buffer.push_str(&self.reasoning_buffer);
         if !self.full_reasoning_buffer.is_empty() {
-            let cell =
-                history_cell::new_reasoning_summary_block(self.full_reasoning_buffer.clone());
+            let cell = history_cell::new_reasoning_summary_block(
+                self.full_reasoning_buffer.clone(),
+                self.config.hide_agent_reasoning,
+            );
             self.add_boxed_history(cell);
         }
         self.reasoning_buffer.clear();
@@ -1789,6 +1791,17 @@ impl ChatWidget {
                 self.app_event_tx
                     .send(AppEvent::CodexOp(Op::SetAutoCompact { enabled }));
             }
+            SlashCommand::Thoughts => {
+                let hide = !self.config.hide_agent_reasoning;
+                self.set_hide_agent_reasoning(hide);
+                let status = if hide { "hidden" } else { "shown" };
+                self.add_info_message(format!("Thoughts {status}."), None);
+                self.app_event_tx
+                    .send(AppEvent::UpdateHideAgentReasoning(hide));
+                self.app_event_tx
+                    .send(AppEvent::PersistHideAgentReasoning(hide));
+                self.request_redraw();
+            }
             SlashCommand::Review => {
                 self.open_review_popup();
             }
@@ -2045,6 +2058,56 @@ impl ChatWidget {
                 };
                 self.add_info_message(format!("Auto-compact is currently {status}."), None);
             }
+            return;
+        }
+
+        if image_paths.is_empty()
+            && text.lines().count() == 1
+            && let Some((name, rest)) = parse_slash_name(text.as_str())
+            && name == "thoughts"
+        {
+            let args: Vec<&str> = rest.split_whitespace().collect();
+            let next_hide = match args.as_slice() {
+                [] => Some(!self.config.hide_agent_reasoning),
+                [arg] => match arg.to_ascii_lowercase().as_str() {
+                    "on" | "show" | "true" => Some(false),
+                    "off" | "hide" | "false" => Some(true),
+                    "toggle" => Some(!self.config.hide_agent_reasoning),
+                    "status" => None,
+                    _ => {
+                        self.add_info_message(
+                            "Usage: /thoughts [on|off|toggle|status]".to_string(),
+                            None,
+                        );
+                        return;
+                    }
+                },
+                _ => {
+                    self.add_info_message(
+                        "Usage: /thoughts [on|off|toggle|status]".to_string(),
+                        None,
+                    );
+                    return;
+                }
+            };
+
+            if let Some(hide) = next_hide {
+                self.set_hide_agent_reasoning(hide);
+                let status = if hide { "hidden" } else { "shown" };
+                self.add_info_message(format!("Thoughts {status}."), None);
+                self.app_event_tx
+                    .send(AppEvent::UpdateHideAgentReasoning(hide));
+                self.app_event_tx
+                    .send(AppEvent::PersistHideAgentReasoning(hide));
+            } else {
+                let status = if self.config.hide_agent_reasoning {
+                    "hidden"
+                } else {
+                    "shown"
+                };
+                self.add_info_message(format!("Thoughts are currently {status}."), None);
+            }
+            self.request_redraw();
             return;
         }
 
@@ -3436,6 +3499,10 @@ impl ChatWidget {
     /// Set the reasoning effort in the widget's config copy.
     pub(crate) fn set_reasoning_effort(&mut self, effort: Option<ReasoningEffortConfig>) {
         self.config.model_reasoning_effort = effort;
+    }
+
+    pub(crate) fn set_hide_agent_reasoning(&mut self, hide: bool) {
+        self.config.hide_agent_reasoning = hide;
     }
 
     /// Set the model in the widget's config copy.
