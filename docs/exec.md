@@ -6,6 +6,15 @@ Use Codex in non-interactive mode to automate common workflows.
 codex exec "count the total number of lines of code in this project"
 ```
 
+### Providing large prompts
+
+For large prompts, you can read the prompt from a file or stdin:
+
+```shell
+codex exec --file PROMPT.md
+cat PROMPT.md | codex exec
+```
+
 In non-interactive mode, Codex does not ask for command or edit approvals. By default it runs in `read-only` mode, so it cannot edit files or run commands that require network access.
 
 Use `codex exec --full-auto` to allow file edits. Use `codex exec --sandbox danger-full-access` to allow edits and networked commands.

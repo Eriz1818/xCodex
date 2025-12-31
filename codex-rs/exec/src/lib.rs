@@ -89,6 +89,7 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         last_message_file,
         json: json_mode,
         sandbox_mode: sandbox_mode_cli_arg,
+        prompt_file,
         prompt,
         output_schema: output_schema_path,
         config_overrides,
@@ -331,13 +332,13 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
             .new_conversation(config.clone())
             .await?
     };
-    let (initial_operation, prompt_summary) = match (command, prompt, images) {
-        (Some(ExecCommand::Review(review_cli)), _, _) => {
+    let (initial_operation, prompt_summary) = match (command, prompt_file, prompt, images) {
+        (Some(ExecCommand::Review(review_cli)), _, _, _) => {
             let review_request = build_review_request(review_cli)?;
             let summary = codex_core::review_prompts::user_facing_hint(&review_request.target);
             (InitialOperation::Review { review_request }, summary)
         }
-        (Some(ExecCommand::Resume(args)), root_prompt, imgs) => {
+        (Some(ExecCommand::Resume(args)), root_prompt_file, root_prompt, imgs) => {
             let prompt_arg = args
                 .prompt
                 .clone()
@@ -349,7 +350,8 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
                     }
                 })
                 .or(root_prompt);
-            let prompt_text = resolve_prompt(prompt_arg);
+            let prompt_text =
+                resolve_prompt(prompt_arg, args.prompt_file.clone().or(root_prompt_file));
             let mut items: Vec<UserInput> = imgs
                 .into_iter()
                 .map(|path| UserInput::LocalImage { path })
@@ -366,8 +368,8 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
                 prompt_text,
             )
         }
-        (None, root_prompt, imgs) => {
-            let prompt_text = resolve_prompt(root_prompt);
+        (None, root_prompt_file, root_prompt, imgs) => {
+            let prompt_text = resolve_prompt(root_prompt, root_prompt_file);
             let mut items: Vec<UserInput> = imgs
                 .into_iter()
                 .map(|path| UserInput::LocalImage { path })
@@ -572,31 +574,71 @@ fn load_output_schema(path: Option<PathBuf>) -> Option<Value> {
     }
 }
 
-fn resolve_prompt(prompt_arg: Option<String>) -> String {
+fn resolve_prompt(prompt_arg: Option<String>, prompt_file: Option<PathBuf>) -> String {
+    let should_announce_stdin_read =
+        prompt_file.is_none() && prompt_arg.is_none() && !std::io::stdin().is_terminal();
+    if should_announce_stdin_read {
+        eprintln!("Reading prompt from stdin...");
+    }
+
+    match resolve_prompt_inner(
+        prompt_arg,
+        prompt_file,
+        || std::io::stdin().is_terminal(),
+        || {
+            let mut buffer = String::new();
+            std::io::stdin().read_to_string(&mut buffer)?;
+            Ok(buffer)
+        },
+    ) {
+        Ok(prompt) => prompt,
+        Err(err) => {
+            eprintln!("{err}");
+            std::process::exit(1);
+        }
+    }
+}
+
+fn resolve_prompt_inner(
+    prompt_arg: Option<String>,
+    prompt_file: Option<PathBuf>,
+    stdin_is_terminal: impl FnOnce() -> bool,
+    read_stdin_to_string: impl FnOnce() -> std::io::Result<String>,
+) -> anyhow::Result<String> {
+    if let Some(path) = prompt_file {
+        if path.as_os_str() == "-" {
+            let buffer = read_stdin_to_string()?;
+            if buffer.trim().is_empty() {
+                anyhow::bail!("No prompt provided via stdin.");
+            }
+            return Ok(buffer);
+        }
+
+        let buffer = std::fs::read_to_string(&path).map_err(|err| {
+            anyhow::anyhow!("Failed to read prompt file {}: {err}", path.display())
+        })?;
+        if buffer.trim().is_empty() {
+            anyhow::bail!("Prompt file {} is empty.", path.display());
+        }
+        return Ok(buffer);
+    }
+
     match prompt_arg {
-        Some(p) if p != "-" => p,
+        Some(p) if p != "-" => Ok(p),
         maybe_dash => {
             let force_stdin = matches!(maybe_dash.as_deref(), Some("-"));
-
-            if std::io::stdin().is_terminal() && !force_stdin {
-                eprintln!(
-                    "No prompt provided. Either specify one as an argument or pipe the prompt into stdin."
+            if stdin_is_terminal() && !force_stdin {
+                anyhow::bail!(
+                    "No prompt provided. Either specify one as an argument, pass --file, or pipe the prompt into stdin."
                 );
-                std::process::exit(1);
             }
 
-            if !force_stdin {
-                eprintln!("Reading prompt from stdin...");
+            let buffer = read_stdin_to_string()
+                .map_err(|err| anyhow::anyhow!("Failed to read prompt from stdin: {err}"))?;
+            if buffer.trim().is_empty() {
+                anyhow::bail!("No prompt provided via stdin.");
             }
-            let mut buffer = String::new();
-            if let Err(e) = std::io::stdin().read_to_string(&mut buffer) {
-                eprintln!("Failed to read prompt from stdin: {e}");
-                std::process::exit(1);
-            } else if buffer.trim().is_empty() {
-                eprintln!("No prompt provided via stdin.");
-                std::process::exit(1);
-            }
-            buffer
+            Ok(buffer)
         }
     }
 }
@@ -611,8 +653,10 @@ fn build_review_request(args: ReviewArgs) -> anyhow::Result<ReviewRequest> {
             sha,
             title: args.commit_title,
         }
-    } else if let Some(prompt_arg) = args.prompt {
-        let prompt = resolve_prompt(Some(prompt_arg)).trim().to_string();
+    } else if args.prompt.is_some() || args.prompt_file.is_some() {
+        let prompt = resolve_prompt(args.prompt, args.prompt_file)
+            .trim()
+            .to_string();
         if prompt.is_empty() {
             anyhow::bail!("Review prompt cannot be empty");
         }
@@ -635,6 +679,54 @@ fn build_review_request(args: ReviewArgs) -> anyhow::Result<ReviewRequest> {
 mod tests {
     use super::*;
     use pretty_assertions::assert_eq;
+    use std::io::Write as _;
+
+    #[test]
+    fn resolves_prompt_from_file() {
+        let mut tmp = tempfile::NamedTempFile::new().expect("temp file");
+        write!(tmp, "prompt from file").expect("write prompt");
+        let prompt = resolve_prompt_inner(
+            None,
+            Some(tmp.path().to_path_buf()),
+            || true,
+            || Ok("should not be read".to_string()),
+        )
+        .expect("resolve prompt");
+
+        assert_eq!(prompt, "prompt from file");
+    }
+
+    #[test]
+    fn resolves_prompt_from_stdin_when_forced() {
+        let prompt = resolve_prompt_inner(
+            Some("-".to_string()),
+            None,
+            || true,
+            || Ok("stdin".to_string()),
+        )
+        .expect("resolve prompt");
+
+        assert_eq!(prompt, "stdin");
+    }
+
+    #[test]
+    fn resolves_prompt_from_stdin_when_piped() {
+        let prompt = resolve_prompt_inner(None, None, || false, || Ok("piped".to_string()))
+            .expect("resolve");
+
+        assert_eq!(prompt, "piped");
+    }
+
+    #[test]
+    fn errors_when_no_prompt_and_tty_stdin() {
+        let err = resolve_prompt_inner(None, None, || true, || Ok("".to_string()))
+            .expect_err("should error");
+
+        assert_eq!(
+            err.to_string(),
+            "No prompt provided. Either specify one as an argument, pass --file, or pipe the prompt into stdin."
+        );
+    }
 
     #[test]
     fn builds_uncommitted_review_request() {
@@ -643,6 +735,7 @@ mod tests {
             base: None,
             commit: None,
             commit_title: None,
+            prompt_file: None,
             prompt: None,
         })
         .expect("builds uncommitted review request");
@@ -662,6 +755,7 @@ mod tests {
             base: None,
             commit: Some("123456789".to_string()),
             commit_title: Some("Add review command".to_string()),
+            prompt_file: None,
             prompt: None,
         })
         .expect("builds commit review request");
@@ -684,6 +778,7 @@ mod tests {
             base: None,
             commit: None,
             commit_title: None,
+            prompt_file: None,
             prompt: Some("  custom review instructions  ".to_string()),
         })
         .expect("builds custom review request");

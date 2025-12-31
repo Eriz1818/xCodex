@@ -56,6 +56,15 @@ scripts/install-xcodex.sh --release
 
 Codex can access MCP servers. To configure them, refer to the [config docs](./docs/config.md#mcp_servers).
 
+### Large prompts (stdin / file)
+
+For large prompts, avoid putting the prompt on the command line. Read it from a file or stdin instead:
+
+```bash
+xcodex --file PROMPT.md
+cat PROMPT.md | xcodex
+```
+
 ### Hooks (automation)
 
 Hooks can receive event payloads containing metadata like `cwd`, and may include truncated tool output previews. Treat hook payloads/logs as potentially sensitive.

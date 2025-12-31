@@ -388,19 +388,6 @@ async fn run_ratatui_app(
     let mut tui = Tui::new(terminal);
     let mut initial_config = initial_config;
 
-    match xcodex_first_run_wizard::run_xcodex_first_run_wizard_if_needed(
-        &mut tui,
-        &cli,
-        &initial_config,
-    )
-    .await?
-    {
-        xcodex_first_run_wizard::WizardOutcome::Continue => {}
-        xcodex_first_run_wizard::WizardOutcome::ReloadConfig => {
-            initial_config = load_config_or_exit(cli_kv_overrides.clone(), overrides.clone()).await;
-        }
-    }
-
     #[cfg(not(debug_assertions))]
     {
         use crate::update_prompt::UpdatePromptOutcome;
@@ -418,6 +405,19 @@ async fn run_ratatui_app(
                     });
                 }
             }
+        }
+    }
+
+    match xcodex_first_run_wizard::run_xcodex_first_run_wizard_if_needed(
+        &mut tui,
+        &cli,
+        &initial_config,
+    )
+    .await?
+    {
+        xcodex_first_run_wizard::WizardOutcome::Continue => {}
+        xcodex_first_run_wizard::WizardOutcome::ReloadConfig => {
+            initial_config = load_config_or_exit(cli_kv_overrides.clone(), overrides.clone()).await;
         }
     }
 

@@ -54,7 +54,7 @@ pub struct Cli {
     #[clap(long = "cd", short = 'C', value_name = "DIR")]
     pub cwd: Option<PathBuf>,
 
-    /// Allow running Codex outside a Git repository.
+    /// Allow running xcodex outside a Git repository.
     #[arg(long = "skip-git-repo-check", default_value_t = false)]
     pub skip_git_repo_check: bool,
 
@@ -80,6 +80,10 @@ pub struct Cli {
     /// Specifies file where the last message from the agent should be written.
     #[arg(long = "output-last-message", short = 'o', value_name = "FILE")]
     pub last_message_file: Option<PathBuf>,
+
+    /// Read the initial prompt from a file (useful for large prompts).
+    #[arg(long = "file", value_name = "FILE", value_hint = clap::ValueHint::FilePath, conflicts_with = "prompt")]
+    pub prompt_file: Option<PathBuf>,
 
     /// Initial instructions for the agent. If not provided as an argument (or
     /// if `-` is used), instructions are read from stdin.
@@ -107,6 +111,10 @@ pub struct ResumeArgs {
     #[arg(long = "last", default_value_t = false)]
     pub last: bool,
 
+    /// Read the prompt to send after resuming from a file (useful for large prompts).
+    #[arg(long = "file", value_name = "FILE", value_hint = clap::ValueHint::FilePath, conflicts_with = "prompt")]
+    pub prompt_file: Option<PathBuf>,
+
     /// Prompt to send after resuming the session. If `-` is used, read from stdin.
     #[arg(value_name = "PROMPT", value_hint = clap::ValueHint::Other)]
     pub prompt: Option<String>,
@@ -118,7 +126,7 @@ pub struct ReviewArgs {
     #[arg(
         long = "uncommitted",
         default_value_t = false,
-        conflicts_with_all = ["base", "commit", "prompt"]
+        conflicts_with_all = ["base", "commit", "prompt_file", "prompt"]
     )]
     pub uncommitted: bool,
 
@@ -126,7 +134,7 @@ pub struct ReviewArgs {
     #[arg(
         long = "base",
         value_name = "BRANCH",
-        conflicts_with_all = ["uncommitted", "commit", "prompt"]
+        conflicts_with_all = ["uncommitted", "commit", "prompt_file", "prompt"]
     )]
     pub base: Option<String>,
 
@@ -134,13 +142,22 @@ pub struct ReviewArgs {
     #[arg(
         long = "commit",
         value_name = "SHA",
-        conflicts_with_all = ["uncommitted", "base", "prompt"]
+        conflicts_with_all = ["uncommitted", "base", "prompt_file", "prompt"]
     )]
     pub commit: Option<String>,
 
     /// Optional commit title to display in the review summary.
     #[arg(long = "title", value_name = "TITLE", requires = "commit")]
     pub commit_title: Option<String>,
+
+    /// Read custom review instructions from a file (useful for large prompts).
+    #[arg(
+        long = "file",
+        value_name = "FILE",
+        value_hint = clap::ValueHint::FilePath,
+        conflicts_with_all = ["uncommitted", "base", "commit", "prompt"]
+    )]
+    pub prompt_file: Option<PathBuf>,
 
     /// Custom review instructions. If `-` is used, read from stdin.
     #[arg(value_name = "PROMPT", value_hint = clap::ValueHint::Other)]

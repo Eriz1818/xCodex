@@ -45,6 +45,16 @@ You can also run Codex CLI with a prompt as input:
 codex "explain this codebase to me"
 ```
 
+For large prompts, you can read the prompt from a file or stdin:
+
+```shell
+# Read the initial prompt from a file
+codex --file PROMPT.md
+
+# Read the initial prompt from stdin (runs non-interactive `codex exec`)
+cat PROMPT.md | codex
+```
+
 ### Example prompts
 
 Below are a few bite-size examples you can copy-paste. Replace the text in quotes with your own task.

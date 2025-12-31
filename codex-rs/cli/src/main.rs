@@ -27,6 +27,7 @@ use codex_tui::Cli as TuiCli;
 use codex_tui::update_action::UpdateAction;
 use codex_tui2 as tui2;
 use owo_colors::OwoColorize;
+use std::io::IsTerminal;
 use std::path::PathBuf;
 use std::time::Duration;
 use supports_color::Stream;
@@ -516,6 +517,31 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
 
     match subcommand {
         None => {
+            if !std::io::stdin().is_terminal() {
+                let mut exec_cli = ExecCli::try_parse_from(["codex", "exec"])?;
+                exec_cli.images = interactive.images;
+                exec_cli.model = interactive.model;
+                exec_cli.oss = interactive.oss;
+                exec_cli.oss_provider = interactive.oss_provider;
+                exec_cli.sandbox_mode = interactive.sandbox_mode;
+                exec_cli.config_profile = interactive.config_profile;
+                exec_cli.full_auto = interactive.full_auto;
+                exec_cli.dangerously_bypass_approvals_and_sandbox =
+                    interactive.dangerously_bypass_approvals_and_sandbox;
+                exec_cli.cwd = interactive.cwd;
+                exec_cli.skip_git_repo_check = false;
+                exec_cli.add_dir = interactive.add_dir;
+                exec_cli.prompt_file = interactive.prompt_file;
+                exec_cli.prompt = interactive.prompt;
+
+                prepend_config_flags(
+                    &mut exec_cli.config_overrides,
+                    root_config_overrides.clone(),
+                );
+                codex_exec::run_main(exec_cli, codex_linux_sandbox_exe).await?;
+                return Ok(());
+            }
+
             prepend_config_flags(
                 &mut interactive.config_overrides,
                 root_config_overrides.clone(),
@@ -914,6 +940,9 @@ fn merge_resume_cli_flags(interactive: &mut TuiCli, resume_cli: TuiCli) {
     }
     if let Some(prompt) = resume_cli.prompt {
         interactive.prompt = Some(prompt);
+    }
+    if let Some(prompt_file) = resume_cli.prompt_file {
+        interactive.prompt_file = Some(prompt_file);
     }
 
     interactive
