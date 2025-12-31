@@ -28,6 +28,7 @@ use codex_tui::update_action::UpdateAction;
 use codex_tui2 as tui2;
 use owo_colors::OwoColorize;
 use std::path::PathBuf;
+use std::time::Duration;
 use supports_color::Stream;
 
 mod mcp_cmd;
@@ -138,6 +139,50 @@ enum Subcommand {
 
     /// Inspect feature flags.
     Features(FeaturesCli),
+
+    /// Utilities for exercising external hooks.
+    Hooks(HooksCommand),
+}
+
+#[derive(Debug, Parser)]
+struct HooksCommand {
+    #[command(subcommand)]
+    sub: HooksSubcommand,
+}
+
+#[derive(Debug, clap::Subcommand)]
+enum HooksSubcommand {
+    /// Invoke configured hook commands with synthetic payloads.
+    Test(HooksTestCommand),
+}
+
+#[derive(Debug, Parser)]
+struct HooksTestCommand {
+    /// Which hook events to test. If omitted, tests all events.
+    #[arg(long = "event", value_enum)]
+    events: Vec<HooksTestEventCli>,
+
+    /// Test only events that have hook commands configured.
+    #[arg(long = "configured-only", default_value_t = false)]
+    configured_only: bool,
+
+    /// Per-hook timeout.
+    #[arg(long = "timeout-seconds", default_value_t = 10)]
+    timeout_seconds: u64,
+}
+
+#[derive(Debug, Clone, Copy, clap::ValueEnum)]
+enum HooksTestEventCli {
+    AgentTurnComplete,
+    ApprovalRequestedExec,
+    ApprovalRequestedApplyPatch,
+    ApprovalRequestedElicitation,
+    SessionStart,
+    SessionEnd,
+    ModelRequestStarted,
+    ModelResponseCompleted,
+    ToolCallStarted,
+    ToolCallFinished,
 }
 
 #[derive(Debug, Parser)]
@@ -533,6 +578,85 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
             let exit_info = run_interactive_tui(interactive, codex_linux_sandbox_exe).await?;
             handle_app_exit(exit_info)?;
         }
+        Some(Subcommand::Hooks(cmd)) => match cmd.sub {
+            HooksSubcommand::Test(args) => {
+                let codex_home = find_codex_home()?;
+                let resolved_cwd = AbsolutePathBuf::current_dir()?;
+                let cli_overrides = root_config_overrides
+                    .parse_overrides()
+                    .map_err(|e| anyhow::anyhow!(e))?;
+                let config_toml = load_config_as_toml_with_cli_overrides(
+                    &codex_home,
+                    &resolved_cwd,
+                    cli_overrides,
+                )
+                .await?;
+
+                let target = if args.configured_only {
+                    codex_core::hooks_test::HooksTestTarget::Configured
+                } else {
+                    codex_core::hooks_test::HooksTestTarget::All
+                };
+                let events = args
+                    .events
+                    .into_iter()
+                    .map(|event| match event {
+                        HooksTestEventCli::AgentTurnComplete => {
+                            codex_core::hooks_test::HooksTestEvent::AgentTurnComplete
+                        }
+                        HooksTestEventCli::ApprovalRequestedExec => {
+                            codex_core::hooks_test::HooksTestEvent::ApprovalRequestedExec
+                        }
+                        HooksTestEventCli::ApprovalRequestedApplyPatch => {
+                            codex_core::hooks_test::HooksTestEvent::ApprovalRequestedApplyPatch
+                        }
+                        HooksTestEventCli::ApprovalRequestedElicitation => {
+                            codex_core::hooks_test::HooksTestEvent::ApprovalRequestedElicitation
+                        }
+                        HooksTestEventCli::SessionStart => {
+                            codex_core::hooks_test::HooksTestEvent::SessionStart
+                        }
+                        HooksTestEventCli::SessionEnd => {
+                            codex_core::hooks_test::HooksTestEvent::SessionEnd
+                        }
+                        HooksTestEventCli::ModelRequestStarted => {
+                            codex_core::hooks_test::HooksTestEvent::ModelRequestStarted
+                        }
+                        HooksTestEventCli::ModelResponseCompleted => {
+                            codex_core::hooks_test::HooksTestEvent::ModelResponseCompleted
+                        }
+                        HooksTestEventCli::ToolCallStarted => {
+                            codex_core::hooks_test::HooksTestEvent::ToolCallStarted
+                        }
+                        HooksTestEventCli::ToolCallFinished => {
+                            codex_core::hooks_test::HooksTestEvent::ToolCallFinished
+                        }
+                    })
+                    .collect();
+
+                let report = codex_core::hooks_test::run_hooks_test(
+                    codex_home.clone(),
+                    config_toml.hooks,
+                    target,
+                    events,
+                    Duration::from_secs(args.timeout_seconds),
+                )
+                .await?;
+
+                let total = report.invocations.len();
+                println!("Invoked {total} hook command(s).");
+                println!("Logs: {}", report.logs_dir.display());
+                println!("Payloads: {}", report.payloads_dir.display());
+                for inv in report.invocations {
+                    let cmd = inv.command.join(" ");
+                    let exit = inv
+                        .exit_code
+                        .map(|c| c.to_string())
+                        .unwrap_or_else(|| "timeout/error".to_string());
+                    println!("- {} exit={exit}: {cmd}", inv.event_type);
+                }
+            }
+        },
         Some(Subcommand::Login(mut login_cli)) => {
             prepend_config_flags(
                 &mut login_cli.config_overrides,

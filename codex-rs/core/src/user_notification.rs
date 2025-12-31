@@ -18,10 +18,13 @@ use tracing::warn;
 use uuid::Uuid;
 
 use crate::config::HooksConfig;
+use crate::protocol::AskForApproval;
 use crate::protocol::Event;
 use crate::protocol::EventMsg;
+use crate::protocol::ExecPolicyAmendment;
 use crate::protocol::HookProcessBeginEvent;
 use crate::protocol::HookProcessEndEvent;
+use crate::protocol::SandboxPolicy;
 use crate::protocol::TokenUsage;
 
 const MAX_CONCURRENT_HOOKS: usize = 8;
@@ -74,8 +77,11 @@ impl UserHooks {
         turn_id: String,
         call_id: String,
         cwd: String,
+        approval_policy: AskForApproval,
+        sandbox_policy: SandboxPolicy,
         command: Vec<String>,
         reason: Option<String>,
+        proposed_execpolicy_amendment: Option<ExecPolicyAmendment>,
     ) {
         self.invoke_hook_commands(
             &self.hooks.approval_requested,
@@ -86,6 +92,9 @@ impl UserHooks {
                 kind: ApprovalKind::Exec,
                 call_id: Some(call_id),
                 reason,
+                approval_policy: Some(approval_policy),
+                sandbox_policy: Some(sandbox_policy),
+                proposed_execpolicy_amendment,
                 command: Some(command),
                 paths: None,
                 grant_root: None,
@@ -103,6 +112,8 @@ impl UserHooks {
         turn_id: String,
         call_id: String,
         cwd: String,
+        approval_policy: AskForApproval,
+        sandbox_policy: SandboxPolicy,
         paths: Vec<String>,
         reason: Option<String>,
         grant_root: Option<String>,
@@ -116,6 +127,9 @@ impl UserHooks {
                 kind: ApprovalKind::ApplyPatch,
                 call_id: Some(call_id),
                 reason,
+                approval_policy: Some(approval_policy),
+                sandbox_policy: Some(sandbox_policy),
+                proposed_execpolicy_amendment: None,
                 command: None,
                 paths: Some(paths),
                 grant_root,
@@ -143,6 +157,9 @@ impl UserHooks {
                 kind: ApprovalKind::Elicitation,
                 call_id: None,
                 reason: None,
+                approval_policy: None,
+                sandbox_policy: None,
+                proposed_execpolicy_amendment: None,
                 command: None,
                 paths: None,
                 grant_root: None,
@@ -753,6 +770,12 @@ enum HookNotification {
         call_id: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
         reason: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        approval_policy: Option<AskForApproval>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        sandbox_policy: Option<SandboxPolicy>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        proposed_execpolicy_amendment: Option<ExecPolicyAmendment>,
 
         #[serde(skip_serializing_if = "Option::is_none")]
         command: Option<Vec<String>>,
@@ -856,10 +879,314 @@ impl HookNotification {
     }
 }
 
+pub(crate) mod hooks_test {
+    use super::*;
+    use std::time::Duration;
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub enum HooksTestTarget {
+        Configured,
+        All,
+    }
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub enum HooksTestEvent {
+        AgentTurnComplete,
+        ApprovalRequestedExec,
+        ApprovalRequestedApplyPatch,
+        ApprovalRequestedElicitation,
+        SessionStart,
+        SessionEnd,
+        ModelRequestStarted,
+        ModelResponseCompleted,
+        ToolCallStarted,
+        ToolCallFinished,
+    }
+
+    #[derive(Debug, Clone)]
+    pub struct HooksTestReport {
+        pub invocations: Vec<HooksTestInvocation>,
+        pub codex_home: PathBuf,
+        pub logs_dir: PathBuf,
+        pub payloads_dir: PathBuf,
+    }
+
+    #[derive(Debug, Clone)]
+    pub struct HooksTestInvocation {
+        pub event_type: &'static str,
+        pub command: Vec<String>,
+        pub exit_code: Option<i32>,
+    }
+
+    pub async fn run_hooks_test(
+        codex_home: PathBuf,
+        hooks: HooksConfig,
+        target: HooksTestTarget,
+        requested_events: Vec<HooksTestEvent>,
+        timeout: Duration,
+    ) -> anyhow::Result<HooksTestReport> {
+        let logs_dir = codex_home.join("tmp").join("hooks").join("logs");
+        let payloads_dir = codex_home.join("tmp").join("hooks").join("payloads");
+
+        let events = resolve_events(target, requested_events);
+        let mut invocations = Vec::new();
+
+        for event in events {
+            let commands = commands_for_event(&hooks, event, target);
+            if commands.is_empty() {
+                continue;
+            }
+
+            let notification = build_notification_for_test(event);
+            let payload = HookPayload::new(notification);
+            let payload_json = serde_json::to_vec(&payload)?;
+            let stdin_payload = prepare_hook_stdin_payload(
+                &payload,
+                &payload_json,
+                hooks.max_stdin_payload_bytes,
+                hooks.keep_last_n_payloads,
+                &codex_home,
+            );
+
+            for command in commands {
+                let exit_code = tokio::time::timeout(
+                    timeout,
+                    run_hook_command_for_test(
+                        command.clone(),
+                        hooks.keep_last_n_payloads,
+                        &codex_home,
+                        &stdin_payload,
+                    ),
+                )
+                .await
+                .ok()
+                .and_then(|res| res.ok())
+                .flatten();
+
+                invocations.push(HooksTestInvocation {
+                    event_type: payload.event_type(),
+                    command,
+                    exit_code,
+                });
+            }
+        }
+
+        Ok(HooksTestReport {
+            invocations,
+            codex_home,
+            logs_dir,
+            payloads_dir,
+        })
+    }
+
+    fn resolve_events(
+        target: HooksTestTarget,
+        requested: Vec<HooksTestEvent>,
+    ) -> Vec<HooksTestEvent> {
+        if !requested.is_empty() {
+            return requested;
+        }
+        match target {
+            HooksTestTarget::All | HooksTestTarget::Configured => vec![
+                HooksTestEvent::SessionStart,
+                HooksTestEvent::SessionEnd,
+                HooksTestEvent::ModelRequestStarted,
+                HooksTestEvent::ModelResponseCompleted,
+                HooksTestEvent::ToolCallStarted,
+                HooksTestEvent::ToolCallFinished,
+                HooksTestEvent::AgentTurnComplete,
+                HooksTestEvent::ApprovalRequestedExec,
+                HooksTestEvent::ApprovalRequestedApplyPatch,
+                HooksTestEvent::ApprovalRequestedElicitation,
+            ],
+        }
+    }
+
+    fn commands_for_event(
+        hooks: &HooksConfig,
+        event: HooksTestEvent,
+        target: HooksTestTarget,
+    ) -> Vec<Vec<String>> {
+        let configured = match event {
+            HooksTestEvent::AgentTurnComplete => hooks.agent_turn_complete.clone(),
+            HooksTestEvent::ApprovalRequestedExec
+            | HooksTestEvent::ApprovalRequestedApplyPatch
+            | HooksTestEvent::ApprovalRequestedElicitation => hooks.approval_requested.clone(),
+            HooksTestEvent::SessionStart => hooks.session_start.clone(),
+            HooksTestEvent::SessionEnd => hooks.session_end.clone(),
+            HooksTestEvent::ModelRequestStarted => hooks.model_request_started.clone(),
+            HooksTestEvent::ModelResponseCompleted => hooks.model_response_completed.clone(),
+            HooksTestEvent::ToolCallStarted => hooks.tool_call_started.clone(),
+            HooksTestEvent::ToolCallFinished => hooks.tool_call_finished.clone(),
+        };
+
+        match target {
+            HooksTestTarget::Configured => configured,
+            HooksTestTarget::All => configured,
+        }
+    }
+
+    fn build_notification_for_test(event: HooksTestEvent) -> HookNotification {
+        let thread_id = format!("hooks-test-{}", Uuid::new_v4());
+        let turn_id = format!("turn-{}", Uuid::new_v4());
+        let cwd = std::env::current_dir()
+            .unwrap_or_else(|_| PathBuf::from("."))
+            .display()
+            .to_string();
+
+        match event {
+            HooksTestEvent::AgentTurnComplete => HookNotification::AgentTurnComplete {
+                thread_id,
+                turn_id,
+                cwd,
+                input_messages: vec!["hooks test".to_string()],
+                last_assistant_message: Some("hooks test".to_string()),
+            },
+            HooksTestEvent::ApprovalRequestedExec => HookNotification::ApprovalRequested {
+                thread_id,
+                turn_id: Some(turn_id),
+                cwd: Some(cwd),
+                kind: ApprovalKind::Exec,
+                call_id: Some(format!("call-{}", Uuid::new_v4())),
+                reason: Some("hooks test".to_string()),
+                approval_policy: None,
+                sandbox_policy: None,
+                proposed_execpolicy_amendment: None,
+                command: Some(vec!["echo".to_string(), "hooks-test".to_string()]),
+                paths: None,
+                grant_root: None,
+                server_name: None,
+                request_id: None,
+                message: None,
+            },
+            HooksTestEvent::ApprovalRequestedApplyPatch => HookNotification::ApprovalRequested {
+                thread_id,
+                turn_id: Some(turn_id),
+                cwd: Some(cwd),
+                kind: ApprovalKind::ApplyPatch,
+                call_id: Some(format!("call-{}", Uuid::new_v4())),
+                reason: Some("hooks test".to_string()),
+                approval_policy: None,
+                sandbox_policy: None,
+                proposed_execpolicy_amendment: None,
+                command: None,
+                paths: Some(vec!["/tmp/hooks-test.txt".to_string()]),
+                grant_root: Some("/tmp".to_string()),
+                server_name: None,
+                request_id: None,
+                message: None,
+            },
+            HooksTestEvent::ApprovalRequestedElicitation => HookNotification::ApprovalRequested {
+                thread_id,
+                turn_id: None,
+                cwd: Some(cwd),
+                kind: ApprovalKind::Elicitation,
+                call_id: None,
+                reason: None,
+                approval_policy: None,
+                sandbox_policy: None,
+                proposed_execpolicy_amendment: None,
+                command: None,
+                paths: None,
+                grant_root: None,
+                server_name: Some("hooks-test".to_string()),
+                request_id: Some("hooks-test".to_string()),
+                message: Some("hooks test".to_string()),
+            },
+            HooksTestEvent::SessionStart => HookNotification::SessionStart {
+                thread_id,
+                cwd,
+                session_source: "hooks-test".to_string(),
+            },
+            HooksTestEvent::SessionEnd => HookNotification::SessionEnd {
+                thread_id,
+                cwd,
+                session_source: "hooks-test".to_string(),
+            },
+            HooksTestEvent::ModelRequestStarted => HookNotification::ModelRequestStarted {
+                thread_id,
+                turn_id,
+                cwd,
+                model_request_id: Uuid::new_v4(),
+                attempt: 1,
+                model: "hooks-test".to_string(),
+                provider: "hooks-test".to_string(),
+                input_item_count: 1,
+                tool_count: 0,
+                parallel_tool_calls: false,
+                has_output_schema: false,
+            },
+            HooksTestEvent::ModelResponseCompleted => HookNotification::ModelResponseCompleted {
+                thread_id,
+                turn_id,
+                cwd,
+                model_request_id: Uuid::new_v4(),
+                attempt: 1,
+                response_id: "hooks-test".to_string(),
+                token_usage: None,
+                needs_follow_up: false,
+            },
+            HooksTestEvent::ToolCallStarted => HookNotification::ToolCallStarted {
+                thread_id,
+                turn_id,
+                cwd,
+                model_request_id: Uuid::new_v4(),
+                attempt: 1,
+                tool_name: "hooks-test".to_string(),
+                call_id: format!("call-{}", Uuid::new_v4()),
+            },
+            HooksTestEvent::ToolCallFinished => HookNotification::ToolCallFinished {
+                thread_id,
+                turn_id,
+                cwd,
+                model_request_id: Uuid::new_v4(),
+                attempt: 1,
+                tool_name: "hooks-test".to_string(),
+                call_id: format!("call-{}", Uuid::new_v4()),
+                status: ToolCallStatus::Completed,
+                duration_ms: 0,
+                success: true,
+                output_bytes: 0,
+                output_preview: None,
+            },
+        }
+    }
+
+    async fn run_hook_command_for_test(
+        command: Vec<String>,
+        keep_last_n_payloads: usize,
+        codex_home: &Path,
+        stdin_payload: &[u8],
+    ) -> anyhow::Result<Option<i32>> {
+        if command.is_empty() {
+            return Ok(None);
+        }
+
+        let (stdout, stderr) =
+            open_hook_log_files(codex_home, Uuid::new_v4(), keep_last_n_payloads);
+
+        let mut cmd = tokio::process::Command::new(&command[0]);
+        if command.len() > 1 {
+            cmd.args(&command[1..]);
+        }
+        cmd.stdin(Stdio::piped());
+        cmd.stdout(stdout);
+        cmd.stderr(stderr);
+
+        let mut child = cmd.spawn()?;
+        if let Some(mut stdin) = child.stdin.take() {
+            stdin.write_all(stdin_payload).await?;
+        }
+
+        Ok(child.wait().await?.code())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use anyhow::Result;
+    use tempfile::TempDir;
 
     #[test]
     fn test_hook_payload_includes_version_and_ids() -> Result<()> {
@@ -870,6 +1197,9 @@ mod tests {
             kind: ApprovalKind::Exec,
             call_id: Some("call-1".to_string()),
             reason: None,
+            approval_policy: None,
+            sandbox_policy: None,
+            proposed_execpolicy_amendment: None,
             command: Some(vec!["echo".to_string(), "hi".to_string()]),
             paths: None,
             grant_root: None,
@@ -890,6 +1220,31 @@ mod tests {
             serialized.contains(r#""timestamp":"#),
             "payload must include timestamp: {serialized}"
         );
+        Ok(())
+    }
+
+    #[cfg(not(windows))]
+    #[tokio::test]
+    async fn hooks_test_runs_configured_hook() -> Result<()> {
+        let codex_home = TempDir::new()?;
+        let mut hooks = HooksConfig::default();
+        hooks.session_start = vec![vec![
+            "bash".to_string(),
+            "-lc".to_string(),
+            "true".to_string(),
+        ]];
+
+        let report = hooks_test::run_hooks_test(
+            codex_home.path().to_path_buf(),
+            hooks,
+            hooks_test::HooksTestTarget::All,
+            vec![hooks_test::HooksTestEvent::SessionStart],
+            std::time::Duration::from_secs(5),
+        )
+        .await?;
+
+        assert_eq!(report.invocations.len(), 1);
+        assert_eq!(report.invocations[0].exit_code, Some(0));
         Ok(())
     }
 

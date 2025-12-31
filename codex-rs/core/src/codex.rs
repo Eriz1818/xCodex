@@ -1106,8 +1106,11 @@ impl Session {
             turn_context.sub_id.clone(),
             call_id.clone(),
             cwd.display().to_string(),
+            turn_context.approval_policy,
+            turn_context.sandbox_policy.clone(),
             command.clone(),
             reason.clone(),
+            proposed_execpolicy_amendment.clone(),
         );
 
         let sub_id = turn_context.sub_id.clone();
@@ -1161,6 +1164,8 @@ impl Session {
             turn_context.sub_id.clone(),
             call_id.clone(),
             turn_context.cwd.display().to_string(),
+            turn_context.approval_policy,
+            turn_context.sandbox_policy.clone(),
             paths,
             reason.clone(),
             grant_root.as_ref().map(|path| path.display().to_string()),
