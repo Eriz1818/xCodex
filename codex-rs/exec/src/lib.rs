@@ -31,6 +31,7 @@ use codex_core::protocol::AskForApproval;
 use codex_core::protocol::Event;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::Op;
+use codex_core::protocol::ReviewDecision;
 use codex_core::protocol::ReviewRequest;
 use codex_core::protocol::ReviewTarget;
 use codex_core::protocol::SessionSource;
@@ -139,6 +140,10 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         None => AbsolutePathBuf::current_dir()?,
     };
 
+    let approval_policy_set_via_cli = cli_kv_overrides
+        .iter()
+        .any(|(key, _value)| key == "approval_policy");
+
     // we load config.toml here to determine project state.
     #[allow(clippy::print_stderr)]
     let config_toml = {
@@ -196,12 +201,24 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
     };
 
     // Load configuration and determine approval policy
+    //
+    // In headless mode, default to never asking for approvals unless the user
+    // explicitly opts in via config/CLI overrides (or `--full-auto`).
+    let approval_policy = if full_auto {
+        Some(AskForApproval::OnRequest)
+    } else if dangerously_bypass_approvals_and_sandbox {
+        Some(AskForApproval::Never)
+    } else if approval_policy_set_via_cli {
+        None
+    } else {
+        Some(AskForApproval::Never)
+    };
+
     let overrides = ConfigOverrides {
         model,
         review_model: None,
         config_profile,
-        // Default to never ask for approvals in headless mode. Feature flags can override.
-        approval_policy: Some(AskForApproval::Never),
+        approval_policy,
         sandbox_mode,
         cwd: resolved_cwd,
         model_provider: model_provider.clone(),
@@ -446,15 +463,36 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
     // exit with a non-zero status for automation-friendly signaling.
     let mut error_seen = false;
     while let Some(event) = rx.recv().await {
-        if let EventMsg::ElicitationRequest(ev) = &event.msg {
-            // Automatically cancel elicitation requests in exec mode.
-            conversation
-                .submit(Op::ResolveElicitation {
-                    server_name: ev.server_name.clone(),
-                    request_id: ev.id.clone(),
-                    decision: ElicitationAction::Cancel,
-                })
-                .await?;
+        match &event.msg {
+            EventMsg::ElicitationRequest(ev) => {
+                // Automatically cancel elicitation requests in exec mode.
+                conversation
+                    .submit(Op::ResolveElicitation {
+                        server_name: ev.server_name.clone(),
+                        request_id: ev.id.clone(),
+                        decision: ElicitationAction::Cancel,
+                    })
+                    .await?;
+            }
+            EventMsg::ExecApprovalRequest(ev) => {
+                // Exec mode does not support interactive approvals.
+                conversation
+                    .submit(Op::ExecApproval {
+                        id: ev.call_id.clone(),
+                        decision: ReviewDecision::Denied,
+                    })
+                    .await?;
+            }
+            EventMsg::ApplyPatchApprovalRequest(ev) => {
+                // Exec mode does not support interactive approvals.
+                conversation
+                    .submit(Op::PatchApproval {
+                        id: ev.call_id.clone(),
+                        decision: ReviewDecision::Denied,
+                    })
+                    .await?;
+            }
+            _ => {}
         }
         if matches!(event.msg, EventMsg::Error(_)) {
             error_seen = true;
