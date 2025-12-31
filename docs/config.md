@@ -773,6 +773,12 @@ codex --no-hooks
 codex exec --no-hooks "…"
 ```
 
+To exercise your configured hook commands with synthetic payloads (without running a full session), use:
+
+```sh
+codex hooks test
+```
+
 Hook payloads include `"schema-version": 1`, a `"type"` field, `"event-id"`, and `"timestamp"`.
 
 Supported events:
