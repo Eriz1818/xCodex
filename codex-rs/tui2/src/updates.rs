@@ -14,7 +14,12 @@ use std::path::PathBuf;
 
 use crate::version::CODEX_CLI_VERSION;
 
+const UPDATE_CHECK_ENABLED: bool = false;
+
 pub fn get_upgrade_version(config: &Config) -> Option<String> {
+    if !UPDATE_CHECK_ENABLED {
+        return None;
+    }
     if !config.check_for_update_on_startup {
         return None;
     }
@@ -145,6 +150,9 @@ fn extract_version_from_latest_tag(latest_tag_name: &str) -> anyhow::Result<Stri
 /// Returns the latest version to show in a popup, if it should be shown.
 /// This respects the user's dismissal choice for the current latest version.
 pub fn get_upgrade_version_for_popup(config: &Config) -> Option<String> {
+    if !UPDATE_CHECK_ENABLED {
+        return None;
+    }
     if !config.check_for_update_on_startup {
         return None;
     }
@@ -163,6 +171,9 @@ pub fn get_upgrade_version_for_popup(config: &Config) -> Option<String> {
 /// Persist a dismissal for the current latest version so we don't show
 /// the update popup again for this version.
 pub async fn dismiss_version(config: &Config, version: &str) -> anyhow::Result<()> {
+    if !UPDATE_CHECK_ENABLED {
+        return Ok(());
+    }
     let version_file = version_filepath(config);
     let mut info = match read_version_info(&version_file) {
         Ok(info) => info,
