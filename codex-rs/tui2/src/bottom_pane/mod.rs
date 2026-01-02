@@ -382,6 +382,22 @@ impl BottomPane {
         self.request_redraw();
     }
 
+    pub(crate) fn set_status_bar_git_options(&mut self, show_branch: bool, show_worktree: bool) {
+        self.composer
+            .set_status_bar_git_options(show_branch, show_worktree);
+        self.request_redraw();
+    }
+
+    pub(crate) fn set_status_bar_git_context(
+        &mut self,
+        git_branch: Option<String>,
+        worktree_root: Option<String>,
+    ) {
+        self.composer
+            .set_status_bar_git_context(git_branch, worktree_root);
+        self.request_redraw();
+    }
+
     pub(crate) fn set_transcript_ui_state(
         &mut self,
         scrolled: bool,

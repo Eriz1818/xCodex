@@ -1,5 +1,7 @@
+#[cfg(test)]
 use crate::history_cell::CompositeHistoryCell;
 use crate::history_cell::HistoryCell;
+#[cfg(test)]
 use crate::history_cell::PlainHistoryCell;
 use crate::history_cell::with_border_with_inner_width;
 use crate::version::CODEX_CLI_VERSION;
@@ -70,6 +72,7 @@ struct StatusHistoryCell {
 }
 
 #[allow(clippy::too_many_arguments)]
+#[cfg(test)]
 pub(crate) fn new_status_output(
     config: &Config,
     auth_manager: &AuthManager,
@@ -99,6 +102,96 @@ pub(crate) fn new_status_output(
     );
 
     CompositeHistoryCell::new(vec![Box::new(command), Box::new(card)])
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn new_status_card(
+    config: &Config,
+    auth_manager: &AuthManager,
+    model_family: &ModelFamily,
+    auto_compact_enabled: bool,
+    total_usage: &TokenUsage,
+    context_usage: Option<&TokenUsage>,
+    session_id: &Option<ConversationId>,
+    rate_limits: Option<&RateLimitSnapshotDisplay>,
+    plan_type: Option<PlanType>,
+    now: DateTime<Local>,
+    model_name: &str,
+) -> Box<dyn HistoryCell> {
+    Box::new(StatusHistoryCell::new(
+        config,
+        auth_manager,
+        model_family,
+        auto_compact_enabled,
+        total_usage,
+        context_usage,
+        session_id,
+        rate_limits,
+        plan_type,
+        now,
+        model_name,
+    ))
+}
+
+pub(crate) fn new_settings_card(
+    show_git_branch: bool,
+    show_worktree: bool,
+) -> Box<dyn HistoryCell> {
+    Box::new(SettingsHistoryCell {
+        show_git_branch,
+        show_worktree,
+    })
+}
+
+#[derive(Debug)]
+struct SettingsHistoryCell {
+    show_git_branch: bool,
+    show_worktree: bool,
+}
+
+impl HistoryCell for SettingsHistoryCell {
+    fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
+        let available_inner_width = usize::from(width.saturating_sub(4));
+        if available_inner_width == 0 {
+            return Vec::new();
+        }
+
+        let mut lines: Vec<Line<'static>> = Vec::new();
+        lines.push(Line::from(vec![
+            Span::from(format!("{}>_ ", FieldFormatter::INDENT)).dim(),
+            "xtreme-Codex".bold(),
+            " ".dim(),
+            format!("(v{CODEX_CLI_VERSION})").dim(),
+        ]));
+        lines.push(Line::from(Vec::<Span<'static>>::new()));
+
+        lines.push("Status bar items".bold().into());
+        for (label, enabled) in [
+            ("Git branch", self.show_git_branch),
+            ("Active worktree path", self.show_worktree),
+        ] {
+            let checkbox = if enabled { "[x]" } else { "[ ]" };
+            lines.push(Line::from(format!("  {checkbox} {label}")));
+        }
+
+        lines.push(Line::from(Vec::<Span<'static>>::new()));
+        lines.push(
+            vec![
+                "Usage: ".dim(),
+                "/settings status-bar <git-branch|worktree> [on|off|toggle|status]".cyan(),
+            ]
+            .into(),
+        );
+
+        let content_width = lines.iter().map(line_display_width).max().unwrap_or(0);
+        let inner_width = content_width.min(available_inner_width);
+        let truncated_lines: Vec<Line<'static>> = lines
+            .into_iter()
+            .map(|line| truncate_line_to_width(line, inner_width))
+            .collect();
+
+        with_border_with_inner_width(truncated_lines, inner_width)
+    }
 }
 
 impl StatusHistoryCell {

@@ -15,7 +15,7 @@ use ratatui::widgets::Paragraph;
 use ratatui::widgets::Widget;
 
 #[derive(Clone, Copy, Debug)]
-pub(crate) struct FooterProps {
+pub(crate) struct FooterProps<'a> {
     pub(crate) mode: FooterMode,
     pub(crate) esc_backtrack_hint: bool,
     pub(crate) use_shift_enter_hint: bool,
@@ -26,6 +26,10 @@ pub(crate) struct FooterProps {
     pub(crate) transcript_selection_active: bool,
     pub(crate) transcript_scroll_position: Option<(usize, usize)>,
     pub(crate) transcript_copy_selection_key: KeyBinding,
+    pub(crate) status_bar_git_branch: Option<&'a str>,
+    pub(crate) status_bar_worktree: Option<&'a str>,
+    pub(crate) show_status_bar_git_branch: bool,
+    pub(crate) show_status_bar_worktree: bool,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -66,11 +70,11 @@ pub(crate) fn reset_mode_after_activity(current: FooterMode) -> FooterMode {
     }
 }
 
-pub(crate) fn footer_height(props: FooterProps) -> u16 {
+pub(crate) fn footer_height(props: FooterProps<'_>) -> u16 {
     footer_lines(props).len() as u16
 }
 
-pub(crate) fn render_footer(area: Rect, buf: &mut Buffer, props: FooterProps) {
+pub(crate) fn render_footer(area: Rect, buf: &mut Buffer, props: FooterProps<'_>) {
     Paragraph::new(prefix_lines(
         footer_lines(props),
         " ".repeat(FOOTER_INDENT_COLS).into(),
@@ -79,15 +83,19 @@ pub(crate) fn render_footer(area: Rect, buf: &mut Buffer, props: FooterProps) {
     .render(area, buf);
 }
 
-fn footer_lines(props: FooterProps) -> Vec<Line<'static>> {
+fn footer_lines(props: FooterProps<'_>) -> Vec<Line<'static>> {
     // Show the context indicator on the left, appended after the primary hint
     // (e.g., "? for shortcuts"). Keep it visible even when typing (i.e., when
     // the shortcut hint is hidden). Hide it only for the multi-line
     // ShortcutOverlay.
     match props.mode {
-        FooterMode::CtrlCReminder => vec![ctrl_c_reminder_line(CtrlCReminderState {
-            is_task_running: props.is_task_running,
-        })],
+        FooterMode::CtrlCReminder => {
+            let mut line = ctrl_c_reminder_line(CtrlCReminderState {
+                is_task_running: props.is_task_running,
+            });
+            append_status_bar_items(&mut line, props);
+            vec![line]
+        }
         FooterMode::ShortcutSummary => {
             let mut line = context_window_line(
                 props.context_window_percent,
@@ -119,6 +127,7 @@ fn footer_lines(props: FooterProps) -> Vec<Line<'static>> {
                 line.push_span(props.transcript_copy_selection_key);
                 line.push_span(" copy selection".dim());
             }
+            append_status_bar_items(&mut line, props);
             vec![line]
         }
         FooterMode::ShortcutOverlay => {
@@ -134,11 +143,37 @@ fn footer_lines(props: FooterProps) -> Vec<Line<'static>> {
             };
             shortcut_overlay_lines(state)
         }
-        FooterMode::EscHint => vec![esc_hint_line(props.esc_backtrack_hint)],
-        FooterMode::ContextOnly => vec![context_window_line(
-            props.context_window_percent,
-            props.context_window_used_tokens,
-        )],
+        FooterMode::EscHint => {
+            let mut line = esc_hint_line(props.esc_backtrack_hint);
+            append_status_bar_items(&mut line, props);
+            vec![line]
+        }
+        FooterMode::ContextOnly => {
+            let mut line = context_window_line(
+                props.context_window_percent,
+                props.context_window_used_tokens,
+            );
+            append_status_bar_items(&mut line, props);
+            vec![line]
+        }
+    }
+}
+
+fn append_status_bar_items(line: &mut Line<'static>, props: FooterProps<'_>) {
+    if props.show_status_bar_git_branch
+        && let Some(branch) = props.status_bar_git_branch
+    {
+        line.push_span(" · ".dim());
+        line.push_span("branch: ".dim());
+        line.push_span(Span::from(branch.to_string()).cyan());
+    }
+
+    if props.show_status_bar_worktree
+        && let Some(worktree) = props.status_bar_worktree
+    {
+        line.push_span(" · ".dim());
+        line.push_span("wt: ".dim());
+        line.push_span(Span::from(worktree.to_string()).dim());
     }
 }
 
@@ -469,6 +504,10 @@ mod tests {
                 transcript_selection_active: false,
                 transcript_scroll_position: None,
                 transcript_copy_selection_key: key_hint::ctrl_shift(KeyCode::Char('c')),
+                status_bar_git_branch: None,
+                status_bar_worktree: None,
+                show_status_bar_git_branch: false,
+                show_status_bar_worktree: false,
             },
         );
 
@@ -485,6 +524,10 @@ mod tests {
                 transcript_selection_active: true,
                 transcript_scroll_position: Some((3, 42)),
                 transcript_copy_selection_key: key_hint::ctrl_shift(KeyCode::Char('c')),
+                status_bar_git_branch: None,
+                status_bar_worktree: None,
+                show_status_bar_git_branch: false,
+                show_status_bar_worktree: false,
             },
         );
 
@@ -501,6 +544,10 @@ mod tests {
                 transcript_selection_active: false,
                 transcript_scroll_position: None,
                 transcript_copy_selection_key: key_hint::ctrl_shift(KeyCode::Char('c')),
+                status_bar_git_branch: None,
+                status_bar_worktree: None,
+                show_status_bar_git_branch: false,
+                show_status_bar_worktree: false,
             },
         );
 
@@ -517,6 +564,10 @@ mod tests {
                 transcript_selection_active: false,
                 transcript_scroll_position: None,
                 transcript_copy_selection_key: key_hint::ctrl_shift(KeyCode::Char('c')),
+                status_bar_git_branch: None,
+                status_bar_worktree: None,
+                show_status_bar_git_branch: false,
+                show_status_bar_worktree: false,
             },
         );
 
@@ -533,6 +584,10 @@ mod tests {
                 transcript_selection_active: false,
                 transcript_scroll_position: None,
                 transcript_copy_selection_key: key_hint::ctrl_shift(KeyCode::Char('c')),
+                status_bar_git_branch: None,
+                status_bar_worktree: None,
+                show_status_bar_git_branch: false,
+                show_status_bar_worktree: false,
             },
         );
 
@@ -549,6 +604,10 @@ mod tests {
                 transcript_selection_active: false,
                 transcript_scroll_position: None,
                 transcript_copy_selection_key: key_hint::ctrl_shift(KeyCode::Char('c')),
+                status_bar_git_branch: None,
+                status_bar_worktree: None,
+                show_status_bar_git_branch: false,
+                show_status_bar_worktree: false,
             },
         );
 
@@ -565,6 +624,10 @@ mod tests {
                 transcript_selection_active: false,
                 transcript_scroll_position: None,
                 transcript_copy_selection_key: key_hint::ctrl_shift(KeyCode::Char('c')),
+                status_bar_git_branch: None,
+                status_bar_worktree: None,
+                show_status_bar_git_branch: false,
+                show_status_bar_worktree: false,
             },
         );
 
@@ -581,6 +644,10 @@ mod tests {
                 transcript_selection_active: false,
                 transcript_scroll_position: None,
                 transcript_copy_selection_key: key_hint::ctrl_shift(KeyCode::Char('c')),
+                status_bar_git_branch: None,
+                status_bar_worktree: None,
+                show_status_bar_git_branch: false,
+                show_status_bar_worktree: false,
             },
         );
 
@@ -597,6 +664,10 @@ mod tests {
                 transcript_selection_active: false,
                 transcript_scroll_position: None,
                 transcript_copy_selection_key: key_hint::ctrl_shift(KeyCode::Char('c')),
+                status_bar_git_branch: None,
+                status_bar_worktree: None,
+                show_status_bar_git_branch: false,
+                show_status_bar_worktree: false,
             },
         );
     }
