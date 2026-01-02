@@ -754,6 +754,24 @@ impl App {
                 ));
                 tui.frame_requester().schedule_frame();
             }
+            AppEvent::UpdateStatusBarGitContext {
+                git_branch,
+                worktree_root,
+            } => {
+                self.chat_widget
+                    .set_status_bar_git_context(git_branch, worktree_root);
+                tui.frame_requester().schedule_frame();
+            }
+            AppEvent::UpdateStatusBarGitOptions {
+                show_git_branch,
+                show_worktree,
+            } => {
+                self.config.tui_status_bar_show_git_branch = show_git_branch;
+                self.config.tui_status_bar_show_worktree = show_worktree;
+                self.chat_widget
+                    .set_status_bar_git_options(show_git_branch, show_worktree);
+                tui.frame_requester().schedule_frame();
+            }
             AppEvent::StartFileSearch(query) => {
                 if !query.is_empty() {
                     self.file_search.on_user_query(query);
@@ -943,6 +961,50 @@ impl App {
                         } else {
                             self.chat_widget.add_error_message(format!(
                                 "Failed to save thoughts preference: {err}"
+                            ));
+                        }
+                    }
+                }
+            }
+            AppEvent::PersistStatusBarGitOptions {
+                show_git_branch,
+                show_worktree,
+            } => {
+                let profile = self.active_profile.as_deref();
+                match ConfigEditsBuilder::new(&self.config.codex_home)
+                    .with_profile(profile)
+                    .with_edits([
+                        ConfigEdit::SetPath {
+                            segments: vec![
+                                "tui".to_string(),
+                                "status_bar_show_git_branch".to_string(),
+                            ],
+                            value: toml_edit::value(show_git_branch),
+                        },
+                        ConfigEdit::SetPath {
+                            segments: vec![
+                                "tui".to_string(),
+                                "status_bar_show_worktree".to_string(),
+                            ],
+                            value: toml_edit::value(show_worktree),
+                        },
+                    ])
+                    .apply()
+                    .await
+                {
+                    Ok(()) => {}
+                    Err(err) => {
+                        tracing::error!(
+                            error = %err,
+                            "failed to persist status bar git options"
+                        );
+                        if let Some(profile) = profile {
+                            self.chat_widget.add_error_message(format!(
+                                "Failed to save status bar options for profile `{profile}`: {err}"
+                            ));
+                        } else {
+                            self.chat_widget.add_error_message(format!(
+                                "Failed to save status bar options: {err}"
                             ));
                         }
                     }

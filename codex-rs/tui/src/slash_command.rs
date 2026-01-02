@@ -27,6 +27,7 @@ pub enum SlashCommand {
     Diff,
     Mention,
     Status,
+    Settings,
     Mcp,
     Logout,
     Quit,
@@ -56,6 +57,7 @@ impl SlashCommand {
             SlashCommand::Mention => "mention a file",
             SlashCommand::Skills => "use skills to improve how xcodex performs specific tasks",
             SlashCommand::Status => "show current session configuration and token usage",
+            SlashCommand::Settings => "configure UI and session behavior",
             SlashCommand::Ps => "list background terminals",
             SlashCommand::PsKill => "terminate background terminals",
             SlashCommand::Model => "choose what model and reasoning effort to use",
@@ -92,6 +94,7 @@ impl SlashCommand {
             | SlashCommand::Mention
             | SlashCommand::Skills
             | SlashCommand::Status
+            | SlashCommand::Settings
             | SlashCommand::Ps
             | SlashCommand::PsKill
             | SlashCommand::Mcp

@@ -4,6 +4,9 @@ mod format;
 mod helpers;
 mod rate_limits;
 
+pub(crate) use card::new_settings_card;
+pub(crate) use card::new_status_card;
+#[cfg(test)]
 pub(crate) use card::new_status_output;
 pub(crate) use helpers::format_tokens_compact;
 pub(crate) use rate_limits::RateLimitSnapshotDisplay;
