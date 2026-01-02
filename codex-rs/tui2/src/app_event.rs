@@ -51,6 +51,18 @@ pub(crate) enum AppEvent {
     /// Result of computing a `/diff` command.
     DiffResult(String),
 
+    /// Update git context shown in the bottom status bar (if enabled).
+    UpdateStatusBarGitContext {
+        git_branch: Option<String>,
+        worktree_root: Option<PathBuf>,
+    },
+
+    /// Update status bar item toggles (runtime).
+    UpdateStatusBarGitOptions {
+        show_git_branch: bool,
+        show_worktree: bool,
+    },
+
     InsertHistoryCell(Box<dyn HistoryCell>),
 
     StartCommitAnimation,
@@ -67,6 +79,12 @@ pub(crate) enum AppEvent {
     PersistModelSelection {
         model: String,
         effort: Option<ReasoningEffort>,
+    },
+
+    /// Persist status bar item toggles to the appropriate config.
+    PersistStatusBarGitOptions {
+        show_git_branch: bool,
+        show_worktree: bool,
     },
 
     /// Open the reasoning selection popup after picking a model.

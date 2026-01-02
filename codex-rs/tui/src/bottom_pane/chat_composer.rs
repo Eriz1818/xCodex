@@ -118,6 +118,10 @@ pub(crate) struct ChatComposer {
     footer_hint_override: Option<Vec<(String, String)>>,
     context_window_percent: Option<i64>,
     context_window_used_tokens: Option<i64>,
+    status_bar_git_branch: Option<String>,
+    status_bar_worktree: Option<String>,
+    show_status_bar_git_branch: bool,
+    show_status_bar_worktree: bool,
     skills: Option<Vec<SkillMetadata>>,
     dismissed_skill_popup_token: Option<String>,
 }
@@ -166,6 +170,10 @@ impl ChatComposer {
             footer_hint_override: None,
             context_window_percent: None,
             context_window_used_tokens: None,
+            status_bar_git_branch: None,
+            status_bar_worktree: None,
+            show_status_bar_git_branch: false,
+            show_status_bar_worktree: false,
             skills: None,
             dismissed_skill_popup_token: None,
         };
@@ -176,6 +184,20 @@ impl ChatComposer {
 
     pub fn set_skill_mentions(&mut self, skills: Option<Vec<SkillMetadata>>) {
         self.skills = skills;
+    }
+
+    pub(crate) fn set_status_bar_git_options(&mut self, show_branch: bool, show_worktree: bool) {
+        self.show_status_bar_git_branch = show_branch;
+        self.show_status_bar_worktree = show_worktree;
+    }
+
+    pub(crate) fn set_status_bar_git_context(
+        &mut self,
+        git_branch: Option<String>,
+        worktree_root: Option<String>,
+    ) {
+        self.status_bar_git_branch = git_branch.filter(|branch| !branch.is_empty());
+        self.status_bar_worktree = worktree_root.filter(|path| !path.is_empty());
     }
 
     fn layout_areas(&self, area: Rect) -> [Rect; 3] {
@@ -1620,7 +1642,7 @@ impl ChatComposer {
         changed
     }
 
-    fn footer_props(&self) -> FooterProps {
+    fn footer_props(&self) -> FooterProps<'_> {
         FooterProps {
             mode: self.footer_mode(),
             esc_backtrack_hint: self.esc_backtrack_hint,
@@ -1628,6 +1650,10 @@ impl ChatComposer {
             is_task_running: self.is_task_running,
             context_window_percent: self.context_window_percent,
             context_window_used_tokens: self.context_window_used_tokens,
+            status_bar_git_branch: self.status_bar_git_branch.as_deref(),
+            status_bar_worktree: self.status_bar_worktree.as_deref(),
+            show_status_bar_git_branch: self.show_status_bar_git_branch,
+            show_status_bar_worktree: self.show_status_bar_worktree,
         }
     }
 

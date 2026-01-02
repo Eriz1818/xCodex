@@ -139,6 +139,10 @@ notifications = false
 # Enables welcome/status/spinner animations. Default: true
 animations = true
 
+# Footer status bar items. Defaults: false
+status_bar_show_git_branch = false
+status_bar_show_worktree = false
+
 # Suppress internal reasoning events from output. Default: false
 hide_agent_reasoning = false
 

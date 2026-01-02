@@ -250,6 +250,16 @@ pub struct Config {
     /// consistently to both mouse wheels and trackpads.
     pub tui_scroll_invert: bool,
 
+    /// Show the current git branch in the bottom status bar.
+    ///
+    /// This is the same `tui.status_bar_show_git_branch` value from `config.toml` (see [`Tui`]).
+    pub tui_status_bar_show_git_branch: bool,
+
+    /// Show the active git worktree root (repo root) in the bottom status bar.
+    ///
+    /// This is the same `tui.status_bar_show_worktree` value from `config.toml` (see [`Tui`]).
+    pub tui_status_bar_show_worktree: bool,
+
     /// The directory that should be treated as the current working directory
     /// for the session. All relative paths inside the business-logic layer are
     /// resolved against this path.
@@ -1517,6 +1527,16 @@ impl Config {
                 .as_ref()
                 .and_then(|t| t.scroll_wheel_like_max_duration_ms),
             tui_scroll_invert: cfg.tui.as_ref().map(|t| t.scroll_invert).unwrap_or(false),
+            tui_status_bar_show_git_branch: cfg
+                .tui
+                .as_ref()
+                .map(|t| t.status_bar_show_git_branch)
+                .unwrap_or(false),
+            tui_status_bar_show_worktree: cfg
+                .tui
+                .as_ref()
+                .map(|t| t.status_bar_show_worktree)
+                .unwrap_or(false),
             otel: {
                 let t: OtelConfigToml = cfg.otel.unwrap_or_default();
                 let log_user_prompt = t.log_user_prompt.unwrap_or(false);
@@ -1810,6 +1830,8 @@ persistence = "none"
                 notifications: Notifications::Enabled(true),
                 animations: true,
                 show_tooltips: true,
+                status_bar_show_git_branch: false,
+                status_bar_show_worktree: false,
                 confirm_exit_with_running_hooks: true,
                 scroll_events_per_tick: None,
                 scroll_wheel_lines: None,
@@ -3428,6 +3450,8 @@ model_verbosity = "high"
                 tui_scroll_wheel_tick_detect_max_ms: None,
                 tui_scroll_wheel_like_max_duration_ms: None,
                 tui_scroll_invert: false,
+                tui_status_bar_show_git_branch: false,
+                tui_status_bar_show_worktree: false,
                 otel: OtelConfig::default(),
             },
             o3_profile_config
@@ -3513,6 +3537,8 @@ model_verbosity = "high"
             tui_scroll_wheel_tick_detect_max_ms: None,
             tui_scroll_wheel_like_max_duration_ms: None,
             tui_scroll_invert: false,
+            tui_status_bar_show_git_branch: false,
+            tui_status_bar_show_worktree: false,
             otel: OtelConfig::default(),
         };
 
@@ -3613,6 +3639,8 @@ model_verbosity = "high"
             tui_scroll_wheel_tick_detect_max_ms: None,
             tui_scroll_wheel_like_max_duration_ms: None,
             tui_scroll_invert: false,
+            tui_status_bar_show_git_branch: false,
+            tui_status_bar_show_worktree: false,
             otel: OtelConfig::default(),
         };
 
@@ -3699,6 +3727,8 @@ model_verbosity = "high"
             tui_scroll_wheel_tick_detect_max_ms: None,
             tui_scroll_wheel_like_max_duration_ms: None,
             tui_scroll_invert: false,
+            tui_status_bar_show_git_branch: false,
+            tui_status_bar_show_worktree: false,
             otel: OtelConfig::default(),
         };
 

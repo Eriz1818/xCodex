@@ -40,41 +40,55 @@ impl App {
         tui: &mut tui::Tui,
         event: TuiEvent,
     ) -> Result<bool> {
+        let overlay_is_transcript = matches!(&self.overlay, Some(Overlay::Transcript(_)));
+
         if self.backtrack.overlay_preview_active {
+            if overlay_is_transcript {
+                match event {
+                    TuiEvent::Key(KeyEvent {
+                        code: KeyCode::Esc,
+                        kind: KeyEventKind::Press | KeyEventKind::Repeat,
+                        ..
+                    }) => {
+                        self.overlay_step_backtrack(tui, event)?;
+                        Ok(true)
+                    }
+                    TuiEvent::Key(KeyEvent {
+                        code: KeyCode::Enter,
+                        kind: KeyEventKind::Press,
+                        ..
+                    }) => {
+                        self.overlay_confirm_backtrack(tui);
+                        Ok(true)
+                    }
+                    // Catchall: forward any other events to the overlay widget.
+                    _ => {
+                        self.overlay_forward_event(tui, event)?;
+                        Ok(true)
+                    }
+                }
+            } else {
+                self.backtrack.overlay_preview_active = false;
+                self.overlay_forward_event(tui, event)?;
+                Ok(true)
+            }
+        } else if overlay_is_transcript {
             match event {
                 TuiEvent::Key(KeyEvent {
                     code: KeyCode::Esc,
                     kind: KeyEventKind::Press | KeyEventKind::Repeat,
                     ..
                 }) => {
-                    self.overlay_step_backtrack(tui, event)?;
+                    // First Esc in transcript overlay: begin backtrack preview at latest user message.
+                    self.begin_overlay_backtrack_preview(tui);
                     Ok(true)
                 }
-                TuiEvent::Key(KeyEvent {
-                    code: KeyCode::Enter,
-                    kind: KeyEventKind::Press,
-                    ..
-                }) => {
-                    self.overlay_confirm_backtrack(tui);
-                    Ok(true)
-                }
-                // Catchall: forward any other events to the overlay widget.
                 _ => {
                     self.overlay_forward_event(tui, event)?;
                     Ok(true)
                 }
             }
-        } else if let TuiEvent::Key(KeyEvent {
-            code: KeyCode::Esc,
-            kind: KeyEventKind::Press | KeyEventKind::Repeat,
-            ..
-        }) = event
-        {
-            // First Esc in transcript overlay: begin backtrack preview at latest user message.
-            self.begin_overlay_backtrack_preview(tui);
-            Ok(true)
         } else {
-            // Not in backtrack mode: forward events to the overlay widget.
             self.overlay_forward_event(tui, event)?;
             Ok(true)
         }

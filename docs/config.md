@@ -936,6 +936,10 @@ notifications = [ "agent-turn-complete", "approval-requested" ]
 # Defaults to true.
 animations = false
 
+# Footer status bar items. Defaults to false.
+status_bar_show_git_branch = false
+status_bar_show_worktree = false
+
 # TUI2 mouse scrolling (wheel + trackpad)
 #
 # Terminals emit different numbers of raw scroll events per physical wheel notch (commonly 1, 3,

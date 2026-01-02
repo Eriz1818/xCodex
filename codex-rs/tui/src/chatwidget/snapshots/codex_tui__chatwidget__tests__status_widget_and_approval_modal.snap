@@ -1,5 +1,6 @@
 ---
 source: tui/src/chatwidget/tests.rs
+assertion_line: 2723
 expression: terminal.backend()
 ---
 "                                                                                                    "
@@ -14,4 +15,4 @@ expression: terminal.backend()
 "  2. Yes, and don't ask again for commands that start with `echo 'hello world'` (p)                 "
 "  3. No, and tell xcodex what to do differently (esc)                                               "
 "                                                                                                    "
-"  Press enter to confirm or esc to cancel                                                           "
+"  Press enter to confirm, esc to cancel, or ctrl + y to copy command                                "

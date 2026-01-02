@@ -27,6 +27,7 @@ use tokio_stream::StreamExt;
 use tokio_stream::wrappers::UnboundedReceiverStream;
 use unicode_width::UnicodeWidthStr;
 
+use crate::clipboard_copy;
 use crate::diff_render::display_path_for;
 use crate::key_hint;
 use crate::text_formatting::truncate_text;
@@ -38,6 +39,12 @@ use codex_protocol::protocol::SessionMetaLine;
 
 const PAGE_SIZE: usize = 25;
 const LOAD_NEAR_THRESHOLD: usize = 5;
+
+#[derive(Debug, Clone)]
+enum CopyFeedback {
+    Copied,
+    Error(String),
+}
 
 #[derive(Debug, Clone)]
 pub enum ResumeSelection {
@@ -78,11 +85,7 @@ pub async fn run_resume_picker(
     let (bg_tx, bg_rx) = mpsc::unbounded_channel();
 
     let default_provider = default_provider.to_string();
-    let filter_cwd = if show_all {
-        None
-    } else {
-        std::env::current_dir().ok()
-    };
+    let filter_cwd = std::env::current_dir().ok();
 
     let loader_tx = bg_tx.clone();
     let page_loader: PageLoader = Arc::new(move |request: PageLoadRequest| {
@@ -190,6 +193,7 @@ struct PickerState {
     default_provider: String,
     show_all: bool,
     filter_cwd: Option<PathBuf>,
+    copy_feedback: Option<CopyFeedback>,
 }
 
 struct PaginationState {
@@ -283,6 +287,41 @@ impl PickerState {
             default_provider,
             show_all,
             filter_cwd,
+            copy_feedback: None,
+        }
+    }
+
+    fn copy_selected_resume_command(&self) -> CopyFeedback {
+        let Some(row) = self.filtered_rows.get(self.selected) else {
+            return CopyFeedback::Error("No session selected".to_string());
+        };
+
+        let Some(session_id) = session_id_from_rollout_path(&row.path) else {
+            return CopyFeedback::Error("Could not determine session id".to_string());
+        };
+
+        let resume_cmd = format!("xcodex resume {session_id}");
+        match clipboard_copy::copy_text(resume_cmd) {
+            Ok(()) => CopyFeedback::Copied,
+            Err(err) => CopyFeedback::Error(format!("Failed to copy command: {err}")),
+        }
+    }
+
+    fn toggle_show_all(&mut self) {
+        let selected_path = self
+            .filtered_rows
+            .get(self.selected)
+            .map(|row| row.path.clone());
+
+        self.show_all = !self.show_all;
+        self.apply_filter();
+
+        if let Some(path) = selected_path
+            && let Some(idx) = self.filtered_rows.iter().position(|row| row.path == path)
+        {
+            self.selected = idx;
+            self.ensure_selected_visible();
+            self.request_frame();
         }
     }
 
@@ -291,6 +330,17 @@ impl PickerState {
     }
 
     async fn handle_key(&mut self, key: KeyEvent) -> Result<Option<ResumeSelection>> {
+        if !matches!(
+            key,
+            KeyEvent {
+                code: KeyCode::Char('y'),
+                modifiers,
+                ..
+            } if modifiers.contains(crossterm::event::KeyModifiers::CONTROL)
+        ) {
+            self.copy_feedback = None;
+        }
+
         match key.code {
             KeyCode::Esc => return Ok(Some(ResumeSelection::StartFresh)),
             KeyCode::Char('c')
@@ -299,6 +349,14 @@ impl PickerState {
                     .contains(crossterm::event::KeyModifiers::CONTROL) =>
             {
                 return Ok(Some(ResumeSelection::Exit));
+            }
+            KeyCode::Char('y')
+                if key
+                    .modifiers
+                    .contains(crossterm::event::KeyModifiers::CONTROL) =>
+            {
+                self.copy_feedback = Some(self.copy_selected_resume_command());
+                self.request_frame();
             }
             KeyCode::Enter => {
                 if let Some(row) = self.filtered_rows.get(self.selected) {
@@ -337,6 +395,9 @@ impl PickerState {
                     self.maybe_load_more_for_scroll();
                     self.request_frame();
                 }
+            }
+            KeyCode::Tab => {
+                self.toggle_show_all();
             }
             KeyCode::Backspace => {
                 let mut new_query = self.query.clone();
@@ -670,6 +731,35 @@ fn extract_session_meta_from_head(head: &[serde_json::Value]) -> (Option<PathBuf
     (None, None)
 }
 
+fn session_id_from_rollout_path(path: &Path) -> Option<String> {
+    // Expected: rollout-YYYY-MM-DDThh-mm-ss-<uuid>.jsonl
+    let name = path.file_name()?.to_str()?;
+    let core = name.strip_prefix("rollout-")?.strip_suffix(".jsonl")?;
+
+    fn looks_like_uuid(candidate: &str) -> bool {
+        // 8-4-4-4-12 hex
+        let bytes = candidate.as_bytes();
+        if bytes.len() != 36 {
+            return false;
+        }
+        for (idx, &b) in bytes.iter().enumerate() {
+            if matches!(idx, 8 | 13 | 18 | 23) {
+                if b != b'-' {
+                    return false;
+                }
+            } else if !b.is_ascii_hexdigit() {
+                return false;
+            }
+        }
+        true
+    }
+
+    core.match_indices('-').rev().find_map(|(idx, _)| {
+        let candidate = &core[idx + 1..];
+        looks_like_uuid(candidate).then(|| candidate.to_string())
+    })
+}
+
 fn paths_match(a: &Path, b: &Path) -> bool {
     if let (Ok(ca), Ok(cb)) = (
         path_utils::normalize_for_path_comparison(a),
@@ -703,6 +793,40 @@ fn preview_from_head(head: &[serde_json::Value]) -> Option<String> {
         })
 }
 
+fn hint_line(state: &PickerState) -> Line<'static> {
+    let mut hint_spans: Vec<Span<'static>> = vec![
+        key_hint::plain(KeyCode::Enter).into(),
+        " resume ".dim(),
+        "  ".into(),
+        key_hint::plain(KeyCode::Esc).into(),
+        " new ".dim(),
+        "  ".into(),
+        key_hint::plain(KeyCode::Tab).into(),
+        " all/dir ".dim(),
+        "  ".into(),
+        key_hint::ctrl(KeyCode::Char('y')).into(),
+        " copy ".dim(),
+        "  ".into(),
+        key_hint::ctrl(KeyCode::Char('c')).into(),
+        " quit ".dim(),
+        "  ".into(),
+        key_hint::plain(KeyCode::Up).into(),
+        "/".dim(),
+        key_hint::plain(KeyCode::Down).into(),
+        " to browse".dim(),
+    ];
+
+    if let Some(feedback) = state.copy_feedback.as_ref() {
+        hint_spans.extend(["    ".into(), "•".dim(), " ".into()]);
+        match feedback {
+            CopyFeedback::Copied => hint_spans.push("Copied.".green().bold()),
+            CopyFeedback::Error(msg) => hint_spans.push(Span::from(msg.clone()).red().bold()),
+        }
+    }
+
+    hint_spans.into()
+}
+
 fn draw_picker(tui: &mut Tui, state: &PickerState) -> std::io::Result<()> {
     // Render full-screen overlay
     let height = tui.terminal.size()?.height;
@@ -718,8 +842,17 @@ fn draw_picker(tui: &mut Tui, state: &PickerState) -> std::io::Result<()> {
         .areas(area);
 
         // Header
+        let scope: &'static str = if state.show_all {
+            "all dirs"
+        } else {
+            "this dir"
+        };
         frame.render_widget_ref(
-            Line::from(vec!["Resume a previous session".bold().cyan()]),
+            Line::from(vec![
+                "Resume session".bold().cyan(),
+                " — ".dim(),
+                scope.dim(),
+            ]),
             header,
         );
 
@@ -738,23 +871,7 @@ fn draw_picker(tui: &mut Tui, state: &PickerState) -> std::io::Result<()> {
         render_list(frame, list, state, &metrics);
 
         // Hint line
-        let hint_line: Line = vec![
-            key_hint::plain(KeyCode::Enter).into(),
-            " to resume ".dim(),
-            "    ".dim(),
-            key_hint::plain(KeyCode::Esc).into(),
-            " to start new ".dim(),
-            "    ".dim(),
-            key_hint::ctrl(KeyCode::Char('c')).into(),
-            " to quit ".dim(),
-            "    ".dim(),
-            key_hint::plain(KeyCode::Up).into(),
-            "/".dim(),
-            key_hint::plain(KeyCode::Down).into(),
-            " to browse".dim(),
-        ]
-        .into();
-        frame.render_widget_ref(hint_line, hint);
+        frame.render_widget_ref(hint_line(state), hint);
     })
 }
 
@@ -897,6 +1014,15 @@ fn render_empty_state_line(state: &PickerState) -> Line<'static> {
 
     if state.pagination.loading.is_pending() {
         return vec!["Loading older sessions…".italic().dim()].into();
+    }
+
+    if !state.show_all {
+        return Line::from(vec![
+            "No sessions in this directory".italic().dim(),
+            " (".into(),
+            key_hint::plain(KeyCode::Tab).into(),
+            " to show all)".italic().dim(),
+        ]);
     }
 
     vec!["No sessions yet".italic().dim()].into()
@@ -1089,6 +1215,19 @@ mod tests {
     fn cursor_from_str(repr: &str) -> Cursor {
         serde_json::from_str::<Cursor>(&format!("\"{repr}\""))
             .expect("cursor format should deserialize")
+    }
+
+    #[test]
+    fn session_id_from_rollout_path_extracts_id_from_filename() {
+        let id = "123e4567-e89b-12d3-a456-426614174000".to_string();
+        let path = PathBuf::from(
+            "/tmp/rollout-2025-01-01T00-00-00-123e4567-e89b-12d3-a456-426614174000.jsonl",
+        );
+        assert_eq!(session_id_from_rollout_path(&path), Some(id));
+        assert_eq!(
+            session_id_from_rollout_path(&PathBuf::from("/tmp/not-a-rollout.jsonl")),
+            None
+        );
     }
 
     fn page(
@@ -1391,7 +1530,11 @@ mod tests {
             .areas(area);
 
             frame.render_widget_ref(
-                Line::from(vec!["Resume a previous session".bold().cyan()]),
+                Line::from(vec![
+                    "Resume session".bold().cyan(),
+                    " — ".dim(),
+                    "all dirs".dim(),
+                ]),
                 header,
             );
 
@@ -1400,18 +1543,7 @@ mod tests {
             render_column_headers(&mut frame, columns, &metrics);
             render_list(&mut frame, list, &state, &metrics);
 
-            let hint_line: Line = vec![
-                key_hint::plain(KeyCode::Enter).into(),
-                " to resume ".dim(),
-                "    ".dim(),
-                key_hint::plain(KeyCode::Esc).into(),
-                " to start new ".dim(),
-                "    ".dim(),
-                key_hint::ctrl(KeyCode::Char('c')).into(),
-                " to quit ".dim(),
-            ]
-            .into();
-            frame.render_widget_ref(hint_line, hint);
+            frame.render_widget_ref(hint_line(&state), hint);
         }
         terminal.flush().expect("flush");
 

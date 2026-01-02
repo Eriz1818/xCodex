@@ -124,6 +124,10 @@ pub(crate) struct ChatComposer {
     transcript_selection_active: bool,
     transcript_scroll_position: Option<(usize, usize)>,
     transcript_copy_selection_key: KeyBinding,
+    status_bar_git_branch: Option<String>,
+    status_bar_worktree: Option<String>,
+    show_status_bar_git_branch: bool,
+    show_status_bar_worktree: bool,
     skills: Option<Vec<SkillMetadata>>,
     dismissed_skill_popup_token: Option<String>,
 }
@@ -176,6 +180,10 @@ impl ChatComposer {
             transcript_selection_active: false,
             transcript_scroll_position: None,
             transcript_copy_selection_key: key_hint::ctrl_shift(KeyCode::Char('c')),
+            status_bar_git_branch: None,
+            status_bar_worktree: None,
+            show_status_bar_git_branch: false,
+            show_status_bar_worktree: false,
             skills: None,
             dismissed_skill_popup_token: None,
         };
@@ -186,6 +194,20 @@ impl ChatComposer {
 
     pub fn set_skill_mentions(&mut self, skills: Option<Vec<SkillMetadata>>) {
         self.skills = skills;
+    }
+
+    pub(crate) fn set_status_bar_git_options(&mut self, show_branch: bool, show_worktree: bool) {
+        self.show_status_bar_git_branch = show_branch;
+        self.show_status_bar_worktree = show_worktree;
+    }
+
+    pub(crate) fn set_status_bar_git_context(
+        &mut self,
+        git_branch: Option<String>,
+        worktree_root: Option<String>,
+    ) {
+        self.status_bar_git_branch = git_branch.filter(|branch| !branch.is_empty());
+        self.status_bar_worktree = worktree_root.filter(|path| !path.is_empty());
     }
 
     fn layout_areas(&self, area: Rect) -> [Rect; 3] {
@@ -1533,7 +1555,7 @@ impl ChatComposer {
         changed
     }
 
-    fn footer_props(&self) -> FooterProps {
+    fn footer_props(&self) -> FooterProps<'_> {
         FooterProps {
             mode: self.footer_mode(),
             esc_backtrack_hint: self.esc_backtrack_hint,
@@ -1545,6 +1567,10 @@ impl ChatComposer {
             transcript_selection_active: self.transcript_selection_active,
             transcript_scroll_position: self.transcript_scroll_position,
             transcript_copy_selection_key: self.transcript_copy_selection_key,
+            status_bar_git_branch: self.status_bar_git_branch.as_deref(),
+            status_bar_worktree: self.status_bar_worktree.as_deref(),
+            show_status_bar_git_branch: self.show_status_bar_git_branch,
+            show_status_bar_worktree: self.show_status_bar_worktree,
         }
     }
 

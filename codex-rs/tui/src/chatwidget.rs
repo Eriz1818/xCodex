@@ -112,6 +112,7 @@ use crate::exec_command::strip_bash_lc_and_escape;
 use crate::get_git_diff::get_git_diff;
 use crate::history_cell;
 use crate::history_cell::AgentMessageCell;
+use crate::history_cell::CompositeHistoryCell;
 use crate::history_cell::HistoryCell;
 use crate::history_cell::McpToolCallCell;
 use crate::history_cell::PlainHistoryCell;
@@ -1659,6 +1660,12 @@ impl ChatWidget {
             external_editor_state: ExternalEditorState::Closed,
         };
 
+        widget.bottom_pane.set_status_bar_git_options(
+            widget.config.tui_status_bar_show_git_branch,
+            widget.config.tui_status_bar_show_worktree,
+        );
+        widget.spawn_status_bar_git_context_probe();
+
         widget.prefetch_rate_limits();
 
         widget
@@ -1758,6 +1765,12 @@ impl ChatWidget {
             current_rollout_path: None,
             external_editor_state: ExternalEditorState::Closed,
         };
+
+        widget.bottom_pane.set_status_bar_git_options(
+            widget.config.tui_status_bar_show_git_branch,
+            widget.config.tui_status_bar_show_worktree,
+        );
+        widget.spawn_status_bar_git_context_probe();
 
         widget.prefetch_rate_limits();
 
@@ -1991,6 +2004,12 @@ impl ChatWidget {
             }
             SlashCommand::Status => {
                 self.add_status_output();
+            }
+            SlashCommand::Settings => {
+                self.add_settings_output_with_values(
+                    self.config.tui_status_bar_show_git_branch,
+                    self.config.tui_status_bar_show_worktree,
+                );
             }
             SlashCommand::Ps => {
                 self.add_ps_output();
@@ -2245,6 +2264,81 @@ impl ChatWidget {
                 self.add_info_message(format!("Thoughts are currently {status}."), None);
             }
             self.request_redraw();
+            return;
+        }
+
+        if image_paths.is_empty()
+            && text.lines().count() == 1
+            && let Some((name, rest)) = parse_slash_name(text.as_str())
+            && name == "settings"
+        {
+            let args: Vec<&str> = rest.split_whitespace().collect();
+            let current_git_branch = self.config.tui_status_bar_show_git_branch;
+            let current_worktree = self.config.tui_status_bar_show_worktree;
+
+            let (item, action) = match args.as_slice() {
+                [] | ["status-bar"] => {
+                    self.add_settings_output_with_values(current_git_branch, current_worktree);
+                    return;
+                }
+                ["status-bar", item] => (*item, None),
+                ["status-bar", item, action] => (*item, Some(*action)),
+                _ => {
+                    self.add_info_message(
+                        "Usage: /settings status-bar <git-branch|worktree> [on|off|toggle|status]"
+                            .to_string(),
+                        None,
+                    );
+                    return;
+                }
+            };
+
+            let mut next_git_branch = current_git_branch;
+            let mut next_worktree = current_worktree;
+            let item = item.to_ascii_lowercase();
+            let action = action.map(str::to_ascii_lowercase);
+
+            let (selected, current) = match item.as_str() {
+                "git-branch" | "branch" => (&mut next_git_branch, current_git_branch),
+                "worktree" | "worktree-path" => (&mut next_worktree, current_worktree),
+                _ => {
+                    self.add_info_message(
+                        "Unknown setting. Use: git-branch | worktree".to_string(),
+                        None,
+                    );
+                    return;
+                }
+            };
+
+            let next = match action.as_deref() {
+                None | Some("toggle") => Some(!current),
+                Some("on") | Some("enable") | Some("true") => Some(true),
+                Some("off") | Some("disable") | Some("false") => Some(false),
+                Some("status") | Some("show") => None,
+                Some(_) => {
+                    self.add_info_message(
+                        "Usage: /settings status-bar <git-branch|worktree> [on|off|toggle|status]"
+                            .to_string(),
+                        None,
+                    );
+                    return;
+                }
+            };
+
+            if let Some(value) = next {
+                *selected = value;
+                self.app_event_tx.send(AppEvent::UpdateStatusBarGitOptions {
+                    show_git_branch: next_git_branch,
+                    show_worktree: next_worktree,
+                });
+                self.app_event_tx
+                    .send(AppEvent::PersistStatusBarGitOptions {
+                        show_git_branch: next_git_branch,
+                        show_worktree: next_worktree,
+                    });
+            }
+
+            self.add_settings_output_with_values(next_git_branch, next_worktree);
             return;
         }
 
@@ -2557,14 +2651,14 @@ impl ChatWidget {
         self.request_redraw();
     }
 
-    pub(crate) fn add_status_output(&mut self) {
+    pub(crate) fn status_output_cell(&self) -> Box<dyn HistoryCell> {
         let default_usage = TokenUsage::default();
         let (total_usage, context_usage) = if let Some(ti) = &self.token_info {
             (&ti.total_token_usage, Some(&ti.last_token_usage))
         } else {
             (&default_usage, Some(&default_usage))
         };
-        self.add_to_history(crate::status::new_status_output(
+        crate::status::new_status_card(
             &self.config,
             self.auth_manager.as_ref(),
             &self.model_family,
@@ -2576,7 +2670,23 @@ impl ChatWidget {
             self.plan_type,
             Local::now(),
             self.model_family.get_model_slug(),
-        ));
+        )
+    }
+
+    pub(crate) fn add_status_output(&mut self) {
+        let command = PlainHistoryCell::new(vec![Line::from(vec!["/status".magenta()])]);
+        let card = self.status_output_cell();
+        self.add_to_history(CompositeHistoryCell::new(vec![Box::new(command), card]));
+    }
+
+    pub(crate) fn add_settings_output_with_values(
+        &mut self,
+        show_git_branch: bool,
+        show_worktree: bool,
+    ) {
+        let command = PlainHistoryCell::new(vec![Line::from(vec!["/settings".magenta()])]);
+        let card = crate::status::new_settings_card(show_git_branch, show_worktree);
+        self.add_to_history(CompositeHistoryCell::new(vec![Box::new(command), card]));
     }
 
     pub(crate) fn add_ps_output(&mut self) {
@@ -2676,6 +2786,65 @@ impl ChatWidget {
         if let Some(handle) = self.rate_limit_poller.take() {
             handle.abort();
         }
+    }
+
+    fn spawn_status_bar_git_context_probe(&self) {
+        let show_branch = self.config.tui_status_bar_show_git_branch;
+        let show_worktree = self.config.tui_status_bar_show_worktree;
+        if !show_branch && !show_worktree {
+            return;
+        }
+
+        let cwd = self.config.cwd.clone();
+        let tx = self.app_event_tx.clone();
+
+        tokio::spawn(async move {
+            let worktree_root = show_worktree
+                .then(|| codex_core::git_info::get_git_repo_root(&cwd))
+                .flatten();
+            let git_branch = if show_branch {
+                codex_core::git_info::current_branch_name(&cwd).await
+            } else {
+                None
+            };
+            tx.send(AppEvent::UpdateStatusBarGitContext {
+                git_branch,
+                worktree_root,
+            });
+        });
+    }
+
+    pub(crate) fn set_status_bar_git_context(
+        &mut self,
+        git_branch: Option<String>,
+        worktree_root: Option<PathBuf>,
+    ) {
+        let worktree_display = worktree_root.map(|path| {
+            if let Some(rel) = crate::exec_command::relativize_to_home(&path) {
+                if rel.as_os_str().is_empty() {
+                    String::from("~")
+                } else {
+                    format!("~/{}", rel.display())
+                }
+            } else {
+                path.display().to_string()
+            }
+        });
+        self.bottom_pane
+            .set_status_bar_git_context(git_branch, worktree_display);
+    }
+
+    pub(crate) fn set_status_bar_git_options(
+        &mut self,
+        show_git_branch: bool,
+        show_worktree: bool,
+    ) {
+        self.config.tui_status_bar_show_git_branch = show_git_branch;
+        self.config.tui_status_bar_show_worktree = show_worktree;
+        self.bottom_pane
+            .set_status_bar_git_options(show_git_branch, show_worktree);
+        self.spawn_status_bar_git_context_probe();
+        self.request_redraw();
     }
 
     fn prefetch_rate_limits(&mut self) {

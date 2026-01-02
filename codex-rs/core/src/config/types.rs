@@ -403,6 +403,16 @@ pub struct Tui {
     #[serde(default = "default_true")]
     pub show_tooltips: bool,
 
+    /// Show the current git branch in the bottom status bar.
+    /// Defaults to `false`.
+    #[serde(default)]
+    pub status_bar_show_git_branch: bool,
+
+    /// Show the active git worktree root (repo root) in the bottom status bar.
+    /// Defaults to `false`.
+    #[serde(default)]
+    pub status_bar_show_worktree: bool,
+
     /// When true, the TUI asks for confirmation before exiting if external hooks are still running.
     /// Defaults to `true`.
     #[serde(default = "default_true")]
