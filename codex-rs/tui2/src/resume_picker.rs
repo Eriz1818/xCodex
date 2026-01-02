@@ -85,11 +85,7 @@ pub async fn run_resume_picker(
     let (bg_tx, bg_rx) = mpsc::unbounded_channel();
 
     let default_provider = default_provider.to_string();
-    let filter_cwd = if show_all {
-        None
-    } else {
-        std::env::current_dir().ok()
-    };
+    let filter_cwd = std::env::current_dir().ok();
 
     let loader_tx = bg_tx.clone();
     let page_loader: PageLoader = Arc::new(move |request: PageLoadRequest| {
@@ -311,6 +307,24 @@ impl PickerState {
         }
     }
 
+    fn toggle_show_all(&mut self) {
+        let selected_path = self
+            .filtered_rows
+            .get(self.selected)
+            .map(|row| row.path.clone());
+
+        self.show_all = !self.show_all;
+        self.apply_filter();
+
+        if let Some(path) = selected_path {
+            if let Some(idx) = self.filtered_rows.iter().position(|row| row.path == path) {
+                self.selected = idx;
+                self.ensure_selected_visible();
+                self.request_frame();
+            }
+        }
+    }
+
     fn request_frame(&self) {
         self.requester.schedule_frame();
     }
@@ -381,6 +395,9 @@ impl PickerState {
                     self.maybe_load_more_for_scroll();
                     self.request_frame();
                 }
+            }
+            KeyCode::Tab => {
+                self.toggle_show_all();
             }
             KeyCode::Backspace => {
                 let mut new_query = self.query.clone();
@@ -779,17 +796,20 @@ fn preview_from_head(head: &[serde_json::Value]) -> Option<String> {
 fn hint_line(state: &PickerState) -> Line<'static> {
     let mut hint_spans: Vec<Span<'static>> = vec![
         key_hint::plain(KeyCode::Enter).into(),
-        " to resume ".dim(),
-        "    ".into(),
+        " resume ".dim(),
+        "  ".into(),
         key_hint::plain(KeyCode::Esc).into(),
-        " to start new ".dim(),
-        "    ".into(),
+        " new ".dim(),
+        "  ".into(),
+        key_hint::plain(KeyCode::Tab).into(),
+        " all/dir ".dim(),
+        "  ".into(),
         key_hint::ctrl(KeyCode::Char('y')).into(),
         " copy ".dim(),
-        "    ".into(),
+        "  ".into(),
         key_hint::ctrl(KeyCode::Char('c')).into(),
-        " to quit ".dim(),
-        "    ".into(),
+        " quit ".dim(),
+        "  ".into(),
         key_hint::plain(KeyCode::Up).into(),
         "/".dim(),
         key_hint::plain(KeyCode::Down).into(),
@@ -822,8 +842,17 @@ fn draw_picker(tui: &mut Tui, state: &PickerState) -> std::io::Result<()> {
         .areas(area);
 
         // Header
+        let scope: &'static str = if state.show_all {
+            "all dirs"
+        } else {
+            "this dir"
+        };
         frame.render_widget_ref(
-            Line::from(vec!["Resume a previous session".bold().cyan()]),
+            Line::from(vec![
+                "Resume session".bold().cyan(),
+                " — ".dim(),
+                scope.dim(),
+            ]),
             header,
         );
 
@@ -985,6 +1014,15 @@ fn render_empty_state_line(state: &PickerState) -> Line<'static> {
 
     if state.pagination.loading.is_pending() {
         return vec!["Loading older sessions…".italic().dim()].into();
+    }
+
+    if !state.show_all {
+        return Line::from(vec![
+            "No sessions in this directory".italic().dim(),
+            " (".into(),
+            key_hint::plain(KeyCode::Tab).into(),
+            " to show all)".italic().dim(),
+        ]);
     }
 
     vec!["No sessions yet".italic().dim()].into()
@@ -1492,7 +1530,11 @@ mod tests {
             .areas(area);
 
             frame.render_widget_ref(
-                Line::from(vec!["Resume a previous session".bold().cyan()]),
+                Line::from(vec![
+                    "Resume session".bold().cyan(),
+                    " — ".dim(),
+                    "all dirs".dim(),
+                ]),
                 header,
             );
 
