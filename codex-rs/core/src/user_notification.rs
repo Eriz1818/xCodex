@@ -325,8 +325,8 @@ impl UserHooks {
 
         let commands: Vec<Vec<String>> = commands
             .iter()
+            .filter(|&command| !command.is_empty())
             .cloned()
-            .filter(|command| !command.is_empty())
             .collect();
         if commands.is_empty() {
             return;
@@ -960,7 +960,7 @@ pub(crate) mod hooks_test {
                 )
                 .await
                 .ok()
-                .and_then(|res| res.ok())
+                .and_then(std::result::Result::ok)
                 .flatten();
 
                 invocations.push(HooksTestInvocation {

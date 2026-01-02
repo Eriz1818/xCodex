@@ -74,16 +74,13 @@ impl ApplyPatchRuntime {
                     let abs = req.cwd.join(&path);
                     if let Some(parent) = abs.parent()
                         && !parent.as_os_str().is_empty()
+                        && let Err(err) = std::fs::create_dir_all(parent)
                     {
-                        if let Err(err) = std::fs::create_dir_all(parent) {
-                            let display = path.display();
-                            return Self::error_output(
-                                start.elapsed(),
-                                format!(
-                                    "Failed to create parent directories for {display}: {err}\n"
-                                ),
-                            );
-                        }
+                        let display = path.display();
+                        return Self::error_output(
+                            start.elapsed(),
+                            format!("Failed to create parent directories for {display}: {err}\n"),
+                        );
                     }
                     if let Err(err) = std::fs::write(&abs, contents) {
                         let display = path.display();
@@ -124,16 +121,15 @@ impl ApplyPatchRuntime {
                         let abs_dest = req.cwd.join(&dest);
                         if let Some(parent) = abs_dest.parent()
                             && !parent.as_os_str().is_empty()
+                            && let Err(err) = std::fs::create_dir_all(parent)
                         {
-                            if let Err(err) = std::fs::create_dir_all(parent) {
-                                let display = dest.display();
-                                return Self::error_output(
-                                    start.elapsed(),
-                                    format!(
-                                        "Failed to create parent directories for {display}: {err}\n"
-                                    ),
-                                );
-                            }
+                            let display = dest.display();
+                            return Self::error_output(
+                                start.elapsed(),
+                                format!(
+                                    "Failed to create parent directories for {display}: {err}\n"
+                                ),
+                            );
                         }
                         if let Err(err) = std::fs::write(&abs_dest, update.content()) {
                             let display = dest.display();
