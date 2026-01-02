@@ -350,8 +350,7 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
                     }
                 })
                 .or(root_prompt);
-            let prompt_text =
-                resolve_prompt(prompt_arg, args.prompt_file.or(root_prompt_file));
+            let prompt_text = resolve_prompt(prompt_arg, args.prompt_file.or(root_prompt_file));
             let mut items: Vec<UserInput> = imgs
                 .into_iter()
                 .map(|path| UserInput::LocalImage { path })

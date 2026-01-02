@@ -56,13 +56,13 @@ use codex_utils_absolute_path::AbsolutePathBuf;
 #[clap(
     author,
     version,
+    name = "xcodex",
     // If a sub‑command is given, ignore requirements of the default args.
     subcommand_negates_reqs = true,
-    // The executable is sometimes invoked via a platform‑specific name like
-    // `codex-x86_64-unknown-linux-musl`, but the help output should always use
-    // the generic `codex` command name that users run.
-    bin_name = "codex",
-    override_usage = "codex [OPTIONS] [PROMPT]\n       codex [OPTIONS] <COMMAND> [ARGS]"
+    // This fork installs the CLI as `xcodex`. The underlying Rust binary is
+    // still built as `codex`, but help and usage should match what users type.
+    bin_name = "xcodex",
+    override_usage = "xcodex [OPTIONS] [PROMPT]\n       xcodex [OPTIONS] <COMMAND> [ARGS]"
 )]
 struct MultitoolCli {
     #[clap(flatten)]
@@ -1024,7 +1024,7 @@ fn merge_resume_cli_flags(interactive: &mut TuiCli, resume_cli: TuiCli) {
 
 fn print_completion(cmd: CompletionCommand) {
     let mut app = MultitoolCli::command();
-    let name = "codex";
+    let name = "xcodex";
     generate(cmd.shell, &mut app, name, &mut std::io::stdout());
 }
 
