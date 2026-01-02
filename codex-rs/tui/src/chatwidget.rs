@@ -2011,6 +2011,9 @@ impl ChatWidget {
                     self.config.tui_status_bar_show_worktree,
                 );
             }
+            SlashCommand::Hooks => {
+                self.add_hooks_output();
+            }
             SlashCommand::Ps => {
                 self.add_ps_output();
             }
@@ -2687,6 +2690,51 @@ impl ChatWidget {
         let command = PlainHistoryCell::new(vec![Line::from(vec!["/settings".magenta()])]);
         let card = crate::status::new_settings_card(show_git_branch, show_worktree);
         self.add_to_history(CompositeHistoryCell::new(vec![Box::new(command), card]));
+    }
+
+    pub(crate) fn add_hooks_output(&mut self) {
+        let command = PlainHistoryCell::new(vec![Line::from(vec!["/hooks".magenta()])]);
+        let codex_home = self.config.codex_home.clone();
+        let logs_dir = codex_home.join("tmp").join("hooks").join("logs");
+        let payloads_dir = codex_home.join("tmp").join("hooks").join("payloads");
+
+        let lines: Vec<Line<'static>> = vec![
+            Line::from(vec![
+                "Automation hooks run external programs on lifecycle events. ".into(),
+                "Treat hook payloads/logs as potentially sensitive.".dim(),
+            ]),
+            Line::from(""),
+            Line::from(vec!["Quickstart:".magenta().bold()]),
+            Line::from(vec!["  xcodex hooks init".cyan()]),
+            Line::from(vec!["  xcodex hooks test --configured-only".cyan()]),
+            Line::from(vec!["  xcodex hooks list".cyan()]),
+            Line::from(vec!["  xcodex hooks paths".cyan()]),
+            Line::from(""),
+            Line::from(vec![
+                "Config: ".dim(),
+                format!("{}/config.toml", codex_home.display()).into(),
+            ]),
+            Line::from(vec![
+                "Logs: ".dim(),
+                format!("{}", logs_dir.display()).into(),
+            ]),
+            Line::from(vec![
+                "Payloads: ".dim(),
+                format!("{}", payloads_dir.display()).into(),
+            ]),
+            Line::from(""),
+            Line::from(vec![
+                "Docs: ".dim(),
+                "docs/xcodex/hooks.md".cyan(),
+                " and ".dim(),
+                "docs/xcodex/hooks-gallery.md".cyan(),
+            ]),
+        ];
+
+        self.add_to_history(CompositeHistoryCell::new(vec![
+            Box::new(command),
+            Box::new(PlainHistoryCell::new(lines)),
+        ]));
     }
 
     pub(crate) fn add_ps_output(&mut self) {

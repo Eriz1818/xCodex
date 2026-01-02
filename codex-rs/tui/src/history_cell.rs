@@ -1053,6 +1053,11 @@ pub(crate) fn new_session_info(
             ]),
             Line::from(vec![
                 "  ".into(),
+                "/hooks".into(),
+                " - automate xcodex with hooks".dim(),
+            ]),
+            Line::from(vec![
+                "  ".into(),
                 "/resume".into(),
                 " - resume a saved chat".dim(),
             ]),
