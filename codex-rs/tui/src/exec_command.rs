@@ -16,6 +16,23 @@ pub(crate) fn strip_bash_lc_and_escape(command: &[String]) -> String {
     escape_command(command)
 }
 
+pub(crate) fn build_copy_command_snippet(pretty_command: &str) -> String {
+    let trimmed = pretty_command.trim_end_matches('\n');
+    if !trimmed.contains('\n') {
+        return trimmed.to_string();
+    }
+
+    let delimiter_base = "XCXCODEX_EOF";
+    let mut delimiter = delimiter_base.to_string();
+    let mut suffix = 0usize;
+    while trimmed.lines().any(|line| line == delimiter) {
+        suffix += 1;
+        delimiter = format!("{delimiter_base}_{suffix}");
+    }
+
+    format!("bash -lc \"$(cat <<'{delimiter}'\n{trimmed}\n{delimiter}\n)\"")
+}
+
 /// If `path` is absolute and inside $HOME, return the part *after* the home
 /// directory; otherwise, return the path as-is. Note if `path` is the homedir,
 /// this will return and empty path.
@@ -66,5 +83,20 @@ mod tests {
         let args = vec!["/bin/bash".into(), "-lc".into(), "echo hello".into()];
         let cmdline = strip_bash_lc_and_escape(&args);
         assert_eq!(cmdline, "echo hello");
+    }
+
+    #[test]
+    fn build_copy_command_snippet_wraps_multiline_script() {
+        let snippet = build_copy_command_snippet("echo one\necho two\n");
+        assert!(snippet.contains("bash -lc"));
+        assert!(snippet.contains("echo one"));
+        assert!(snippet.contains("echo two"));
+        assert!(snippet.contains("XCXCODEX_EOF"));
+    }
+
+    #[test]
+    fn build_copy_command_snippet_avoids_delimiter_collision() {
+        let snippet = build_copy_command_snippet("echo one\nXCXCODEX_EOF\n");
+        assert!(snippet.contains("XCXCODEX_EOF_1"));
     }
 }

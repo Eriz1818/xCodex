@@ -1,5 +1,6 @@
 ---
 source: tui2/src/chatwidget/tests.rs
+assertion_line: 755
 expression: "format!(\"{buf:?}\")"
 ---
 Buffer {
@@ -17,7 +18,7 @@ Buffer {
         "› 1. Yes, proceed (y)                                                           ",
         "  2. No, and tell xcodex what to do differently (esc)                           ",
         "                                                                                ",
-        "  Press enter to confirm or esc to cancel                                       ",
+        "  Press enter to confirm, esc to cancel, or ctrl + y to copy command            ",
     ],
     styles: [
         x: 0, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,

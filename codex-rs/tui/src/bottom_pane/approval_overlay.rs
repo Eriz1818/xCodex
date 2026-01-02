@@ -8,7 +8,9 @@ use crate::bottom_pane::CancellationEvent;
 use crate::bottom_pane::list_selection_view::ListSelectionView;
 use crate::bottom_pane::list_selection_view::SelectionItem;
 use crate::bottom_pane::list_selection_view::SelectionViewParams;
+use crate::clipboard_copy;
 use crate::diff_render::DiffSummary;
+use crate::exec_command::build_copy_command_snippet;
 use crate::exec_command::strip_bash_lc_and_escape;
 use crate::history_cell;
 use crate::key_hint;
@@ -131,6 +133,25 @@ impl ApprovalOverlay {
             header,
         ]));
 
+        let footer_hint = match &variant {
+            ApprovalVariant::Exec { .. } => Some(Line::from(vec![
+                "Press ".into(),
+                key_hint::plain(KeyCode::Enter).into(),
+                " to confirm, ".into(),
+                key_hint::plain(KeyCode::Esc).into(),
+                " to cancel, or ".into(),
+                key_hint::ctrl(KeyCode::Char('y')).into(),
+                " to copy command".into(),
+            ])),
+            _ => Some(Line::from(vec![
+                "Press ".into(),
+                key_hint::plain(KeyCode::Enter).into(),
+                " to confirm or ".into(),
+                key_hint::plain(KeyCode::Esc).into(),
+                " to cancel".into(),
+            ])),
+        };
+
         let items = options
             .iter()
             .map(|opt| SelectionItem {
@@ -144,13 +165,7 @@ impl ApprovalOverlay {
             .collect();
 
         let params = SelectionViewParams {
-            footer_hint: Some(Line::from(vec![
-                "Press ".into(),
-                key_hint::plain(KeyCode::Enter).into(),
-                " to confirm or ".into(),
-                key_hint::plain(KeyCode::Esc).into(),
-                " to cancel".into(),
-            ])),
+            footer_hint,
             items,
             header,
             ..Default::default()
@@ -231,6 +246,32 @@ impl ApprovalOverlay {
 
     fn try_handle_shortcut(&mut self, key_event: &KeyEvent) -> bool {
         match key_event {
+            KeyEvent {
+                kind: KeyEventKind::Press,
+                code: KeyCode::Char('y'),
+                modifiers,
+                ..
+            } if *modifiers == KeyModifiers::CONTROL => {
+                if let Some(ApprovalVariant::Exec { command, .. }) = self.current_variant.as_ref() {
+                    let pretty = strip_bash_lc_and_escape(command);
+                    let snippet = build_copy_command_snippet(&pretty);
+                    match clipboard_copy::copy_text(snippet) {
+                        Ok(()) => {
+                            self.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
+                                history_cell::new_info_event("Copied command.".to_string(), None),
+                            )));
+                        }
+                        Err(err) => {
+                            self.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
+                                history_cell::new_error_event(format!(
+                                    "Failed to copy command: {err}"
+                                )),
+                            )));
+                        }
+                    }
+                }
+                true
+            }
             KeyEvent {
                 kind: KeyEventKind::Press,
                 code: KeyCode::Char('a'),
