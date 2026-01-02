@@ -795,6 +795,11 @@ pub(crate) fn new_session_info(
                 "/review".into(),
                 " - review any changes and find issues".dim(),
             ]),
+            Line::from(vec![
+                "  ".into(),
+                "/resume".into(),
+                " - resume a saved chat".dim(),
+            ]),
         ];
 
         parts.push(Box::new(PlainHistoryCell { lines: help_lines }));
