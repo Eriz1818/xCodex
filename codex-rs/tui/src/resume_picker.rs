@@ -316,12 +316,12 @@ impl PickerState {
         self.show_all = !self.show_all;
         self.apply_filter();
 
-        if let Some(path) = selected_path {
-            if let Some(idx) = self.filtered_rows.iter().position(|row| row.path == path) {
-                self.selected = idx;
-                self.ensure_selected_visible();
-                self.request_frame();
-            }
+        if let Some(path) = selected_path
+            && let Some(idx) = self.filtered_rows.iter().position(|row| row.path == path)
+        {
+            self.selected = idx;
+            self.ensure_selected_visible();
+            self.request_frame();
         }
     }
 
