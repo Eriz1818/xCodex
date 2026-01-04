@@ -457,7 +457,6 @@ impl App {
                     init,
                     resumed.conversation,
                     resumed.session_configured,
-                    false,
                 )
             }
         };
@@ -1392,7 +1391,6 @@ impl App {
                                     init,
                                     resumed.conversation,
                                     resumed.session_configured,
-                                    true,
                                 );
                                 if let Some(summary) = summary {
                                     let mut lines: Vec<Line<'static>> =

@@ -366,9 +366,6 @@ pub(crate) struct ChatWidget {
     frame_requester: FrameRequester,
     // Whether to include the initial welcome banner on session configured
     show_welcome_banner: bool,
-    // When resuming an existing session (selected via resume picker), avoid an
-    // immediate redraw on SessionConfigured to prevent a gratuitous UI flicker.
-    suppress_session_configured_redraw: bool,
     // User messages queued while a turn is in progress
     queued_user_messages: VecDeque<UserMessage>,
     // Pending notification to show when unfocused on next Draw
@@ -476,9 +473,7 @@ impl ChatWidget {
         if let Some(user_message) = self.initial_user_message.take() {
             self.submit_user_message(user_message);
         }
-        if !self.suppress_session_configured_redraw {
-            self.request_redraw();
-        }
+        self.request_redraw();
     }
 
     fn set_skills(&mut self, skills: Option<Vec<SkillMetadata>>) {
@@ -1642,7 +1637,6 @@ impl ChatWidget {
             conversation_id: None,
             queued_user_messages: VecDeque::new(),
             show_welcome_banner: is_first_run,
-            suppress_session_configured_redraw: false,
             pending_notification: None,
             is_review_mode: false,
             pre_review_token_info: None,
@@ -1669,9 +1663,6 @@ impl ChatWidget {
         common: ChatWidgetInit,
         conversation: std::sync::Arc<codex_core::CodexConversation>,
         session_configured: codex_core::protocol::SessionConfiguredEvent,
-        // If true, `on_session_configured` will not call `request_redraw()`.
-        // Callers should schedule a frame once the first history cell is processed.
-        suppress_session_configured_redraw: bool,
     ) -> Self {
         let ChatWidgetInit {
             config,
@@ -1747,7 +1738,6 @@ impl ChatWidget {
             conversation_id: None,
             queued_user_messages: VecDeque::new(),
             show_welcome_banner: false,
-            suppress_session_configured_redraw,
             pending_notification: None,
             is_review_mode: false,
             pre_review_token_info: None,

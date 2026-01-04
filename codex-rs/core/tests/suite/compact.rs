@@ -8,7 +8,8 @@ use codex_core::compact::SUMMARIZATION_PROMPT;
 use codex_core::compact::SUMMARY_PREFIX;
 use codex_core::config::Config;
 use codex_core::features::Feature;
-use codex_core::protocol::AskForApproval;use codex_core::protocol::EventMsg;
+use codex_core::protocol::AskForApproval;
+use codex_core::protocol::EventMsg;
 use codex_core::protocol::Op;
 use codex_core::protocol::RolloutItem;
 use codex_core::protocol::RolloutLine;
@@ -1241,7 +1242,8 @@ async fn auto_compact_runs_after_token_limit_hit() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn auto_compact_runs_after_resume_when_token_usage_is_over_limit() {    skip_if_no_network!();
+async fn auto_compact_runs_after_resume_when_token_usage_is_over_limit() {
+    skip_if_no_network!();
 
     let server = start_mock_server().await;
 
@@ -1346,7 +1348,8 @@ async fn auto_compact_runs_after_resume_when_token_usage_is_over_limit() {    sk
     assert_eq!(
         compact_requests[0].path(),
         "/v1/responses/compact",
-        "remote compaction should hit the compact endpoint"    );
+        "remote compaction should hit the compact endpoint"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

@@ -144,7 +144,8 @@ async fn status_snapshot_includes_reasoning_details() {
     let composite = new_status_output(
         &config,
         &auth_manager,
-        Some(&token_info),        &usage,
+        Some(&token_info),
+        &usage,
         &None,
         Some(&rate_display),
         None,
@@ -199,7 +200,8 @@ async fn status_snapshot_includes_monthly_limit() {
     let composite = new_status_output(
         &config,
         &auth_manager,
-        Some(&token_info),        &usage,
+        Some(&token_info),
+        &usage,
         &None,
         Some(&rate_display),
         None,
@@ -242,7 +244,8 @@ async fn status_snapshot_shows_unlimited_credits() {
     let composite = new_status_output(
         &config,
         &auth_manager,
-        Some(&token_info),        &usage,
+        Some(&token_info),
+        &usage,
         &None,
         Some(&rate_display),
         None,
@@ -284,7 +287,8 @@ async fn status_snapshot_shows_positive_credits() {
     let composite = new_status_output(
         &config,
         &auth_manager,
-        Some(&token_info),        &usage,
+        Some(&token_info),
+        &usage,
         &None,
         Some(&rate_display),
         None,
@@ -326,7 +330,8 @@ async fn status_snapshot_hides_zero_credits() {
     let composite = new_status_output(
         &config,
         &auth_manager,
-        Some(&token_info),        &usage,
+        Some(&token_info),
+        &usage,
         &None,
         Some(&rate_display),
         None,
@@ -366,7 +371,8 @@ async fn status_snapshot_hides_when_has_no_credits_flag() {
     let composite = new_status_output(
         &config,
         &auth_manager,
-        Some(&token_info),        &usage,
+        Some(&token_info),
+        &usage,
         &None,
         Some(&rate_display),
         None,
@@ -406,7 +412,8 @@ async fn status_card_token_usage_excludes_cached_tokens() {
     let composite = new_status_output(
         &config,
         &auth_manager,
-        Some(&token_info),        &usage,
+        Some(&token_info),
+        &usage,
         &None,
         None,
         None,
@@ -461,7 +468,8 @@ async fn status_snapshot_truncates_in_narrow_terminal() {
     let composite = new_status_output(
         &config,
         &auth_manager,
-        Some(&token_info),        &usage,
+        Some(&token_info),
+        &usage,
         &None,
         Some(&rate_display),
         None,
@@ -505,7 +513,8 @@ async fn status_snapshot_shows_missing_limits_message() {
     let composite = new_status_output(
         &config,
         &auth_manager,
-        Some(&token_info),        &usage,
+        Some(&token_info),
+        &usage,
         &None,
         None,
         None,
@@ -567,7 +576,8 @@ async fn status_snapshot_includes_credits_and_limits() {
     let composite = new_status_output(
         &config,
         &auth_manager,
-        Some(&token_info),        &usage,
+        Some(&token_info),
+        &usage,
         &None,
         Some(&rate_display),
         None,
@@ -617,7 +627,8 @@ async fn status_snapshot_shows_empty_limits_message() {
     let composite = new_status_output(
         &config,
         &auth_manager,
-        Some(&token_info),        &usage,
+        Some(&token_info),
+        &usage,
         &None,
         Some(&rate_display),
         None,
@@ -676,7 +687,8 @@ async fn status_snapshot_shows_stale_limits_message() {
     let composite = new_status_output(
         &config,
         &auth_manager,
-        Some(&token_info),        &usage,
+        Some(&token_info),
+        &usage,
         &None,
         Some(&rate_display),
         None,
@@ -739,7 +751,8 @@ async fn status_snapshot_cached_limits_hide_credits_without_flag() {
     let composite = new_status_output(
         &config,
         &auth_manager,
-        Some(&token_info),        &usage,
+        Some(&token_info),
+        &usage,
         &None,
         Some(&rate_display),
         None,
@@ -792,7 +805,8 @@ async fn status_context_window_uses_last_usage() {
     let composite = new_status_output(
         &config,
         &auth_manager,
-        Some(&token_info),        &total_usage,
+        Some(&token_info),
+        &total_usage,
         &None,
         None,
         None,

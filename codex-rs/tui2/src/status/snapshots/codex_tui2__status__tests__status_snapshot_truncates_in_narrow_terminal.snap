@@ -5,7 +5,7 @@ expression: sanitized
 /status
 
 ╭────────────────────────────────────────────────────────────────────╮
-│  >_ xtreme-Codex (v0.0.0)                                          │
+│  >_ xtreme-Codex (v0.1.0)                                          │
 │                                                                    │
 │ Visit https://chatgpt.com/codex/settings/usage for up-to-date      │
 │ information on rate limits and credits                             │
@@ -15,7 +15,6 @@ expression: sanitized
 │  Approval:         on-request                                      │
 │  Sandbox:          read-only                                       │
 │  Agents.md:        <none>                                          │
-│  Auto-compact:     disabled                                        │
 │                                                                    │
 │  Token usage:      1.9K total  (1K input + 900 output)             │
 │  Context window:   99% left (2.25K used / 272K)                    │

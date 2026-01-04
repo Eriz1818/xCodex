@@ -417,7 +417,6 @@ impl App {
                     init,
                     resumed.conversation,
                     resumed.session_configured,
-                    false,
                 )
             }
         };
@@ -635,7 +634,6 @@ impl App {
                                     init,
                                     resumed.conversation,
                                     resumed.session_configured,
-                                    true,
                                 );
                                 self.current_model = model_family.get_model_slug().to_string();
                                 if let Some(summary) = summary {
