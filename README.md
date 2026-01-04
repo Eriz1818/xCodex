@@ -58,7 +58,7 @@ scripts/install-xcodex.sh --release
 
 ## Usage
 
-### Model Context Protocol (MCP)
+## Docs
 
 Codex can access MCP servers. To configure them, refer to the [config docs](./docs/config.md#mcp_servers).
 
@@ -114,11 +114,7 @@ See the [Execpolicy quickstart](./docs/execpolicy.md) to set up rules that gover
   - [Model Context Protocol (MCP)](./docs/advanced.md#model-context-protocol-mcp)
 - [**Zero data retention (ZDR)**](./docs/zdr.md)
 - [**Contributing**](./docs/contributing.md)
-- [**Install & build**](./docs/install.md)
-  - [System Requirements](./docs/install.md#system-requirements)
-  - [DotSlash](./docs/install.md#dotslash)
-  - [Build from source](./docs/install.md#build-from-source)
-- [**FAQ**](./docs/faq.md)
+- [**Installing & building**](./docs/install.md)
 - [**Open source fund**](./docs/open-source-fund.md)
 
 ---

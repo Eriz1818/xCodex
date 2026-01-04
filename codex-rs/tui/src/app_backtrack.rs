@@ -352,10 +352,9 @@ impl App {
     ) {
         let conv = new_conv.conversation;
         let session_configured = new_conv.session_configured;
-        let model_family = self.chat_widget.get_model_family();
         let init = crate::chatwidget::ChatWidgetInit {
             config: cfg,
-            model_family: model_family.clone(),
+            model: self.current_model.clone(),
             frame_requester: tui.frame_requester(),
             app_event_tx: self.app_event_tx.clone(),
             initial_prompt: None,
@@ -367,8 +366,7 @@ impl App {
             is_first_run: false,
         };
         self.chat_widget =
-            crate::chatwidget::ChatWidget::new_from_existing(init, conv, session_configured, true);
-        self.current_model = model_family.get_model_slug().to_string();
+            crate::chatwidget::ChatWidget::new_from_existing(init, conv, session_configured);
         // Trim transcript up to the selected user message and re-render it.
         self.trim_transcript_for_backtrack(nth_user_message);
         self.render_transcript_once(tui);

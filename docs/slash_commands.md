@@ -1,4 +1,4 @@
-## Slash Commands
+# Slash commands
 
 ### What are slash commands?
 
