@@ -63,10 +63,17 @@ pub(crate) fn selection_to_copy_text_for_cells(
     cells: &[Arc<dyn HistoryCell>],
     selection: TranscriptSelection,
     width: u16,
+    verbose_tool_output: bool,
+    expanded_exec_call_ids: &std::collections::HashSet<String>,
 ) -> Option<String> {
     let (anchor, head) = selection.anchor.zip(selection.head)?;
 
-    let transcript = crate::transcript_render::build_wrapped_transcript_lines(cells, width);
+    let transcript = crate::transcript_render::build_wrapped_transcript_lines(
+        cells,
+        width,
+        verbose_tool_output,
+        expanded_exec_call_ids,
+    );
     let total_lines = transcript.lines.len();
     if total_lines == 0 {
         return None;
@@ -624,8 +631,15 @@ mod tests {
             head: Some(TranscriptSelectionPoint::new(0, viewport_edge_col)),
         };
 
-        let out =
-            selection_to_copy_text_for_cells(&cells, selection, width).expect("expected text");
+        let expanded_exec_call_ids = std::collections::HashSet::new();
+        let out = selection_to_copy_text_for_cells(
+            &cells,
+            selection,
+            width,
+            false,
+            &expanded_exec_call_ids,
+        )
+        .expect("expected text");
         assert_eq!(out, "```\n    0123456789ABCDEFGHIJ\n```");
     }
 

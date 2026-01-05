@@ -50,6 +50,7 @@ use crate::transcript_selection::TranscriptSelectionPoint;
 use crate::wrapping::RtOptions;
 use crate::wrapping::word_wrap_line;
 use ratatui::text::Line;
+use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::Duration;
 use std::time::Instant;
@@ -94,9 +95,21 @@ impl TranscriptMultiClick {
         selection: &mut TranscriptSelection,
         cells: &[Arc<dyn HistoryCell>],
         width: u16,
+        verbose_tool_output: bool,
+        expanded_exec_call_ids: &HashSet<String>,
         point: Option<TranscriptSelectionPoint>,
     ) -> bool {
-        self.on_mouse_down_at(selection, cells, width, point, Instant::now())
+        self.on_mouse_down_at(
+            selection,
+            MouseDownContext {
+                cells,
+                width,
+                verbose_tool_output,
+                expanded_exec_call_ids,
+            },
+            point,
+            Instant::now(),
+        )
     }
 
     /// Notify the handler that the user is drag-selecting.
@@ -148,8 +161,7 @@ impl TranscriptMultiClick {
     fn on_mouse_down_at(
         &mut self,
         selection: &mut TranscriptSelection,
-        cells: &[Arc<dyn HistoryCell>],
-        width: u16,
+        ctx: MouseDownContext<'_>,
         point: Option<TranscriptSelectionPoint>,
         now: Instant,
     ) -> bool {
@@ -166,9 +178,24 @@ impl TranscriptMultiClick {
             return *selection != before;
         }
 
-        *selection = selection_for_click(cells, width, point, click_count);
+        *selection = selection_for_click(
+            ctx.cells,
+            ctx.width,
+            ctx.verbose_tool_output,
+            ctx.expanded_exec_call_ids,
+            point,
+            click_count,
+        );
         *selection != before
     }
+}
+
+#[derive(Clone, Copy, Debug)]
+struct MouseDownContext<'a> {
+    cells: &'a [Arc<dyn HistoryCell>],
+    width: u16,
+    verbose_tool_output: bool,
+    expanded_exec_call_ids: &'a HashSet<String>,
 }
 
 /// Tracks recent clicks so we can infer multi-click counts.
@@ -277,6 +304,8 @@ fn max_column_distance(prev_click_count: u8) -> u16 {
 fn selection_for_click(
     cells: &[Arc<dyn HistoryCell>],
     width: u16,
+    verbose_tool_output: bool,
+    expanded_exec_call_ids: &HashSet<String>,
     point: TranscriptSelectionPoint,
     click_count: u8,
 ) -> TranscriptSelection {
@@ -297,7 +326,12 @@ fn selection_for_click(
     // Rebuild the same logical line stream the transcript renders from. This
     // keeps expansion boundaries aligned with current streaming output and the
     // current wrap width.
-    let (lines, line_cell_index) = build_transcript_lines_with_cell_index(cells, width);
+    let (lines, line_cell_index) = build_transcript_lines_with_cell_index(
+        cells,
+        width,
+        verbose_tool_output,
+        expanded_exec_call_ids,
+    );
     if lines.is_empty() {
         return TranscriptSelection {
             anchor: Some(point),
@@ -418,13 +452,27 @@ fn build_transcript_lines(cells: &[Arc<dyn HistoryCell>], width: u16) -> Vec<Lin
 fn build_transcript_lines_with_cell_index(
     cells: &[Arc<dyn HistoryCell>],
     width: u16,
+    verbose_tool_output: bool,
+    expanded_exec_call_ids: &HashSet<String>,
 ) -> (Vec<Line<'static>>, Vec<Option<usize>>) {
     let mut lines: Vec<Line<'static>> = Vec::new();
     let mut line_cell_index: Vec<Option<usize>> = Vec::new();
     let mut has_emitted_lines = false;
 
     for (cell_index, cell) in cells.iter().enumerate() {
-        let cell_lines = cell.display_lines(width);
+        let expanded = cell
+            .as_any()
+            .downcast_ref::<crate::exec_cell::ExecCell>()
+            .and_then(|cell| cell.calls.first())
+            .is_some_and(|call| expanded_exec_call_ids.contains(&call.call_id));
+        let cell_lines = if !verbose_tool_output
+            && cell.as_any().is::<crate::exec_cell::ExecCell>()
+            && !expanded
+        {
+            cell.display_lines(width)
+        } else {
+            cell.transcript_lines(width)
+        };
         if cell_lines.is_empty() {
             continue;
         }
@@ -813,20 +861,27 @@ mod tests {
             Line::from("  second"),
         ]))];
         let width = 20;
+        let expanded_exec_call_ids = HashSet::new();
 
         let mut multi = TranscriptMultiClick::default();
         let t0 = Instant::now();
         let point = TranscriptSelectionPoint::new(1, 1);
         let mut selection = TranscriptSelection::default();
 
-        multi.on_mouse_down_at(&mut selection, &cells, width, Some(point), t0);
+        let ctx = MouseDownContext {
+            cells: &cells,
+            width,
+            verbose_tool_output: false,
+            expanded_exec_call_ids: &expanded_exec_call_ids,
+        };
+
+        multi.on_mouse_down_at(&mut selection, ctx, Some(point), t0);
         assert_eq!(selection.anchor, Some(point));
         assert_eq!(selection.head, None);
 
         multi.on_mouse_down_at(
             &mut selection,
-            &cells,
-            width,
+            ctx,
             Some(point),
             t0 + Duration::from_millis(10),
         );
@@ -840,8 +895,7 @@ mod tests {
 
         multi.on_mouse_down_at(
             &mut selection,
-            &cells,
-            width,
+            ctx,
             Some(point),
             t0 + Duration::from_millis(20),
         );
@@ -860,8 +914,7 @@ mod tests {
         // want to treat it as continuing the multi-click sequence.
         multi.on_mouse_down_at(
             &mut selection,
-            &cells,
-            width,
+            ctx,
             Some(TranscriptSelectionPoint::new(point.line_index, 10)),
             t0 + Duration::from_millis(30),
         );
@@ -880,17 +933,24 @@ mod tests {
             "› hello   world",
         )]))];
         let width = 40;
+        let expanded_exec_call_ids = HashSet::new();
 
         let mut multi = TranscriptMultiClick::default();
         let t0 = Instant::now();
         let point = TranscriptSelectionPoint::new(0, 6);
         let mut selection = TranscriptSelection::default();
 
-        multi.on_mouse_down_at(&mut selection, &cells, width, Some(point), t0);
+        let ctx = MouseDownContext {
+            cells: &cells,
+            width,
+            verbose_tool_output: false,
+            expanded_exec_call_ids: &expanded_exec_call_ids,
+        };
+
+        multi.on_mouse_down_at(&mut selection, ctx, Some(point), t0);
         multi.on_mouse_down_at(
             &mut selection,
-            &cells,
-            width,
+            ctx,
             Some(point),
             t0 + Duration::from_millis(5),
         );
@@ -909,22 +969,28 @@ mod tests {
         let cells: Vec<Arc<dyn HistoryCell>> =
             vec![Arc::new(StaticCell::new(vec![Line::from("› hello world")]))];
         let width = 40;
+        let expanded_exec_call_ids = HashSet::new();
 
         let mut multi = TranscriptMultiClick::default();
         let t0 = Instant::now();
         let mut selection = TranscriptSelection::default();
 
+        let ctx = MouseDownContext {
+            cells: &cells,
+            width,
+            verbose_tool_output: false,
+            expanded_exec_call_ids: &expanded_exec_call_ids,
+        };
+
         multi.on_mouse_down_at(
             &mut selection,
-            &cells,
-            width,
+            ctx,
             Some(TranscriptSelectionPoint::new(0, 0)),
             t0,
         );
         multi.on_mouse_down_at(
             &mut selection,
-            &cells,
-            width,
+            ctx,
             Some(TranscriptSelectionPoint::new(0, 10)),
             t0 + Duration::from_millis(10),
         );
@@ -938,17 +1004,23 @@ mod tests {
         let cells: Vec<Arc<dyn HistoryCell>> =
             vec![Arc::new(StaticCell::new(vec![Line::from("› hello world")]))];
         let width = 40;
+        let expanded_exec_call_ids = HashSet::new();
+        let ctx = MouseDownContext {
+            cells: &cells,
+            width,
+            verbose_tool_output: false,
+            expanded_exec_call_ids: &expanded_exec_call_ids,
+        };
 
         let mut multi = TranscriptMultiClick::default();
         let t0 = Instant::now();
         let point = TranscriptSelectionPoint::new(0, 1);
         let mut selection = TranscriptSelection::default();
 
-        multi.on_mouse_down_at(&mut selection, &cells, width, Some(point), t0);
+        multi.on_mouse_down_at(&mut selection, ctx, Some(point), t0);
         multi.on_mouse_down_at(
             &mut selection,
-            &cells,
-            width,
+            ctx,
             Some(point),
             t0 + ClickTracker::MAX_DELAY + Duration::from_millis(1),
         );
@@ -964,6 +1036,13 @@ mod tests {
             Line::from("  second"),
         ]))];
         let width = 40;
+        let expanded_exec_call_ids = HashSet::new();
+        let ctx = MouseDownContext {
+            cells: &cells,
+            width,
+            verbose_tool_output: false,
+            expanded_exec_call_ids: &expanded_exec_call_ids,
+        };
 
         let mut multi = TranscriptMultiClick::default();
         let t0 = Instant::now();
@@ -971,15 +1050,13 @@ mod tests {
 
         multi.on_mouse_down_at(
             &mut selection,
-            &cells,
-            width,
+            ctx,
             Some(TranscriptSelectionPoint::new(0, 1)),
             t0,
         );
         multi.on_mouse_down_at(
             &mut selection,
-            &cells,
-            width,
+            ctx,
             Some(TranscriptSelectionPoint::new(1, 1)),
             t0 + Duration::from_millis(10),
         );
@@ -993,17 +1070,23 @@ mod tests {
         let cells: Vec<Arc<dyn HistoryCell>> =
             vec![Arc::new(StaticCell::new(vec![Line::from("› hello world")]))];
         let width = 40;
+        let expanded_exec_call_ids = HashSet::new();
+        let ctx = MouseDownContext {
+            cells: &cells,
+            width,
+            verbose_tool_output: false,
+            expanded_exec_call_ids: &expanded_exec_call_ids,
+        };
 
         let mut multi = TranscriptMultiClick::default();
         let t0 = Instant::now();
         let point = TranscriptSelectionPoint::new(0, 1);
         let mut selection = TranscriptSelection::default();
 
-        multi.on_mouse_down_at(&mut selection, &cells, width, Some(point), t0);
+        multi.on_mouse_down_at(&mut selection, ctx, Some(point), t0);
         multi.on_mouse_down_at(
             &mut selection,
-            &cells,
-            width,
+            ctx,
             Some(point),
             t0 + Duration::from_millis(10),
         );
@@ -1018,8 +1101,7 @@ mod tests {
         multi.on_mouse_drag(&selection, Some(TranscriptSelectionPoint::new(0, 10)));
         multi.on_mouse_down_at(
             &mut selection,
-            &cells,
-            width,
+            ctx,
             Some(point),
             t0 + Duration::from_millis(20),
         );
@@ -1032,19 +1114,25 @@ mod tests {
         let cells: Vec<Arc<dyn HistoryCell>> =
             vec![Arc::new(StaticCell::new(vec![Line::from("› hello world")]))];
         let width = 40;
+        let expanded_exec_call_ids = HashSet::new();
+        let ctx = MouseDownContext {
+            cells: &cells,
+            width,
+            verbose_tool_output: false,
+            expanded_exec_call_ids: &expanded_exec_call_ids,
+        };
 
         let mut multi = TranscriptMultiClick::default();
         let t0 = Instant::now();
         let point = TranscriptSelectionPoint::new(0, 1);
         let mut selection = TranscriptSelection::default();
 
-        multi.on_mouse_down_at(&mut selection, &cells, width, Some(point), t0);
+        multi.on_mouse_down_at(&mut selection, ctx, Some(point), t0);
         multi.on_mouse_drag(&selection, Some(TranscriptSelectionPoint::new(0, 2)));
 
         multi.on_mouse_down_at(
             &mut selection,
-            &cells,
-            width,
+            ctx,
             Some(point),
             t0 + Duration::from_millis(10),
         );
@@ -1064,32 +1152,36 @@ mod tests {
             Arc::new(StaticCell::new(vec![Line::from("› second")])),
         ];
         let width = 40;
+        let expanded_exec_call_ids = HashSet::new();
 
         let mut multi = TranscriptMultiClick::default();
         let t0 = Instant::now();
         let mut selection = TranscriptSelection::default();
+        let ctx = MouseDownContext {
+            cells: &cells,
+            width,
+            verbose_tool_output: false,
+            expanded_exec_call_ids: &expanded_exec_call_ids,
+        };
 
         // Index 1 is the spacer line inserted between the two non-continuation cells.
         let point = TranscriptSelectionPoint::new(1, 0);
-        multi.on_mouse_down_at(&mut selection, &cells, width, Some(point), t0);
+        multi.on_mouse_down_at(&mut selection, ctx, Some(point), t0);
         multi.on_mouse_down_at(
             &mut selection,
-            &cells,
-            width,
+            ctx,
             Some(point),
             t0 + Duration::from_millis(10),
         );
         multi.on_mouse_down_at(
             &mut selection,
-            &cells,
-            width,
+            ctx,
             Some(point),
             t0 + Duration::from_millis(20),
         );
         multi.on_mouse_down_at(
             &mut selection,
-            &cells,
-            width,
+            ctx,
             Some(point),
             t0 + Duration::from_millis(30),
         );
@@ -1127,39 +1219,42 @@ mod tests {
             ])),
             Arc::new(StaticCell::new(vec![Line::from("› other")])),
         ];
-        let width = 40;
+        let width: u16 = 40;
+        let expanded_exec_call_ids = HashSet::new();
+        let ctx = MouseDownContext {
+            cells: &cells,
+            width,
+            verbose_tool_output: false,
+            expanded_exec_call_ids: &expanded_exec_call_ids,
+        };
 
         let mut multi = TranscriptMultiClick::default();
         let t0 = Instant::now();
         let point = TranscriptSelectionPoint::new(2, 1);
         let mut selection = TranscriptSelection::default();
 
-        multi.on_mouse_down_at(&mut selection, &cells, width, Some(point), t0);
+        multi.on_mouse_down_at(&mut selection, ctx, Some(point), t0);
         multi.on_mouse_down_at(
             &mut selection,
-            &cells,
-            width,
+            ctx,
             Some(point),
             t0 + Duration::from_millis(10),
         );
         multi.on_mouse_down_at(
             &mut selection,
-            &cells,
-            width,
+            ctx,
             Some(point),
             t0 + Duration::from_millis(20),
         );
         multi.on_mouse_down_at(
             &mut selection,
-            &cells,
-            width,
+            ctx,
             Some(point),
             t0 + Duration::from_millis(30),
         );
         multi.on_mouse_down_at(
             &mut selection,
-            &cells,
-            width,
+            ctx,
             Some(TranscriptSelectionPoint::new(2, 10)),
             t0 + Duration::from_millis(40),
         );
@@ -1184,7 +1279,14 @@ mod tests {
             Arc::new(StaticCell::new(vec![Line::from("› first")])),
             Arc::new(StaticCell::new(vec![Line::from("› second")])),
         ];
-        let width = 40;
+        let width: u16 = 40;
+        let expanded_exec_call_ids = HashSet::new();
+        let ctx = MouseDownContext {
+            cells: &cells,
+            width,
+            verbose_tool_output: false,
+            expanded_exec_call_ids: &expanded_exec_call_ids,
+        };
 
         let mut multi = TranscriptMultiClick::default();
         let t0 = Instant::now();
@@ -1195,8 +1297,7 @@ mod tests {
         for (idx, dt) in [0u64, 10, 20, 30, 40].into_iter().enumerate() {
             multi.on_mouse_down_at(
                 &mut selection,
-                &cells,
-                width,
+                ctx,
                 Some(TranscriptSelectionPoint::new(
                     point.line_index,
                     if idx < 3 { 0 } else { (idx as u16) * 5 },

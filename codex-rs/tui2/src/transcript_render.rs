@@ -13,9 +13,18 @@
 //!   logical line instead of inserting hard newlines.
 
 use crate::history_cell::HistoryCell;
+use crate::history_cell::TranscriptLinesWithJoiners;
 use crate::tui::scrolling::TranscriptLineMeta;
 use ratatui::text::Line;
+use std::collections::HashSet;
 use std::sync::Arc;
+
+fn exec_cell_primary_call_id(cell: &dyn HistoryCell) -> Option<&str> {
+    cell.as_any()
+        .downcast_ref::<crate::exec_cell::ExecCell>()
+        .and_then(|cell| cell.calls.first())
+        .map(|call| call.call_id.as_str())
+}
 
 /// Flattened transcript lines plus the metadata required to interpret them.
 #[derive(Debug)]
@@ -47,6 +56,8 @@ pub(crate) struct TranscriptLines {
 pub(crate) fn build_transcript_lines(
     cells: &[Arc<dyn HistoryCell>],
     width: u16,
+    verbose_tool_output: bool,
+    expanded_exec_call_ids: &HashSet<String>,
 ) -> TranscriptLines {
     // This function is the "lossless" transcript flattener:
     // - it asks each cell for its transcript lines (including any per-cell prefixes/indents)
@@ -60,7 +71,23 @@ pub(crate) fn build_transcript_lines(
     for (cell_index, cell) in cells.iter().enumerate() {
         // Cells provide joiners alongside lines so copy can distinguish hard breaks from soft wraps
         // (and preserve the exact whitespace at wrap boundaries).
-        let rendered = cell.transcript_lines_with_joiners(width);
+        //
+        // In quiet mode, treat tool output cells as "display lines" so they don't dump large
+        // file reads/tool logs into the transcript by default.
+        let expanded = exec_cell_primary_call_id(cell.as_ref())
+            .is_some_and(|id| expanded_exec_call_ids.contains(id));
+        let rendered = if !verbose_tool_output
+            && cell.as_any().is::<crate::exec_cell::ExecCell>()
+            && !expanded
+        {
+            let lines = cell.display_lines(width);
+            TranscriptLinesWithJoiners {
+                joiner_before: vec![None; lines.len()],
+                lines,
+            }
+        } else {
+            cell.transcript_lines_with_joiners(width)
+        };
         if rendered.lines.is_empty() {
             continue;
         }
@@ -112,6 +139,8 @@ pub(crate) fn build_transcript_lines(
 pub(crate) fn build_wrapped_transcript_lines(
     cells: &[Arc<dyn HistoryCell>],
     width: u16,
+    verbose_tool_output: bool,
+    expanded_exec_call_ids: &HashSet<String>,
 ) -> TranscriptLines {
     use crate::render::line_utils::line_to_static;
     use ratatui::style::Color;
@@ -135,7 +164,20 @@ pub(crate) fn build_wrapped_transcript_lines(
     for (cell_index, cell) in cells.iter().enumerate() {
         // Start from each cell's transcript view (prefixes/indents already applied), then apply
         // viewport wrapping to prose while keeping preformatted content intact.
-        let rendered = cell.transcript_lines_with_joiners(width);
+        let expanded = exec_cell_primary_call_id(cell.as_ref())
+            .is_some_and(|id| expanded_exec_call_ids.contains(id));
+        let rendered = if !verbose_tool_output
+            && cell.as_any().is::<crate::exec_cell::ExecCell>()
+            && !expanded
+        {
+            let lines = cell.display_lines(width);
+            TranscriptLinesWithJoiners {
+                joiner_before: vec![None; lines.len()],
+                lines,
+            }
+        } else {
+            cell.transcript_lines_with_joiners(width)
+        };
         if rendered.lines.is_empty() {
             continue;
         }
@@ -305,6 +347,7 @@ mod tests {
     use super::*;
     use crate::history_cell::TranscriptLinesWithJoiners;
     use pretty_assertions::assert_eq;
+    use std::collections::HashSet;
     use std::sync::Arc;
 
     #[derive(Debug)]
@@ -339,6 +382,45 @@ mod tests {
     }
 
     #[test]
+    fn build_wrapped_transcript_lines_respects_per_cell_exec_expansion() {
+        use crate::exec_cell::new_active_exec_command;
+        use codex_core::protocol::ExecCommandSource;
+        use codex_protocol::parse_command::ParsedCommand;
+
+        let cell: Arc<dyn HistoryCell> = Arc::new(new_active_exec_command(
+            "call-1".to_string(),
+            vec!["echo".to_string(), "hello".to_string()],
+            vec![ParsedCommand::Unknown {
+                cmd: "echo hello".to_string(),
+            }],
+            ExecCommandSource::UserShell,
+            None,
+            false,
+        ));
+        let cells = vec![cell];
+
+        let expanded_exec_call_ids = HashSet::new();
+        let quiet = build_wrapped_transcript_lines(&cells, 60, false, &expanded_exec_call_ids);
+        let quiet_text = quiet
+            .lines
+            .iter()
+            .map(concat_line)
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(quiet_text.contains("Running"));
+
+        let expanded_exec_call_ids = HashSet::from([String::from("call-1")]);
+        let expanded = build_wrapped_transcript_lines(&cells, 60, false, &expanded_exec_call_ids);
+        let expanded_text = expanded
+            .lines
+            .iter()
+            .map(concat_line)
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(expanded_text.contains("$ "));
+    }
+
+    #[test]
     fn build_wrapped_transcript_lines_threads_joiners_and_spacers() {
         let cells: Vec<Arc<dyn HistoryCell>> = vec![
             Arc::new(FakeCell {
@@ -354,7 +436,7 @@ mod tests {
         ];
 
         // Force wrapping so we get soft-wrap joiners for the second segment of each cell's line.
-        let transcript = build_wrapped_transcript_lines(&cells, 8);
+        let transcript = build_wrapped_transcript_lines(&cells, 8, true, &HashSet::new());
 
         assert_eq!(transcript.lines.len(), transcript.meta.len());
         assert_eq!(transcript.lines.len(), transcript.joiner_before.len());

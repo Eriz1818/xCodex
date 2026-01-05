@@ -26,6 +26,8 @@ pub(crate) struct FooterProps<'a> {
     pub(crate) transcript_selection_active: bool,
     pub(crate) transcript_scroll_position: Option<(usize, usize)>,
     pub(crate) transcript_copy_selection_key: KeyBinding,
+    pub(crate) composer_has_text: bool,
+    pub(crate) composer_copy_key: KeyBinding,
     pub(crate) status_bar_git_branch: Option<&'a str>,
     pub(crate) status_bar_worktree: Option<&'a str>,
     pub(crate) show_status_bar_git_branch: bool,
@@ -106,6 +108,11 @@ fn footer_lines(props: FooterProps<'_>) -> Vec<Line<'static>> {
                 key_hint::plain(KeyCode::Char('?')).into(),
                 " for shortcuts".dim(),
             ]);
+            if props.composer_has_text {
+                line.push_span(" · ".dim());
+                line.push_span(props.composer_copy_key);
+                line.push_span(" copy prompt".dim());
+            }
             if props.transcript_scrolled {
                 line.push_span(" · ".dim());
                 line.push_span(key_hint::plain(KeyCode::PageUp));
@@ -153,6 +160,11 @@ fn footer_lines(props: FooterProps<'_>) -> Vec<Line<'static>> {
                 props.context_window_percent,
                 props.context_window_used_tokens,
             );
+            if props.composer_has_text {
+                line.push_span(" · ".dim());
+                line.push_span(props.composer_copy_key);
+                line.push_span(" copy prompt".dim());
+            }
             append_status_bar_items(&mut line, props);
             vec![line]
         }
@@ -219,6 +231,7 @@ fn esc_hint_line(esc_backtrack_hint: bool) -> Line<'static> {
 
 fn shortcut_overlay_lines(state: ShortcutsState) -> Vec<Line<'static>> {
     let mut commands = Line::from("");
+    let mut tools = Line::from("");
     let mut newline = Line::from("");
     let mut file_paths = Line::from("");
     let mut paste_image = Line::from("");
@@ -230,6 +243,7 @@ fn shortcut_overlay_lines(state: ShortcutsState) -> Vec<Line<'static>> {
         if let Some(text) = descriptor.overlay_entry(state) {
             match descriptor.id {
                 ShortcutId::Commands => commands = text,
+                ShortcutId::Tools => tools = text,
                 ShortcutId::InsertNewline => newline = text,
                 ShortcutId::FilePaths => file_paths = text,
                 ShortcutId::PasteImage => paste_image = text,
@@ -242,6 +256,7 @@ fn shortcut_overlay_lines(state: ShortcutsState) -> Vec<Line<'static>> {
 
     let ordered = vec![
         commands,
+        tools,
         newline,
         file_paths,
         paste_image,
@@ -318,6 +333,7 @@ fn context_window_line(percent: Option<i64>, used_tokens: Option<i64>) -> Line<'
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum ShortcutId {
     Commands,
+    Tools,
     InsertNewline,
     FilePaths,
     PasteImage,
@@ -399,6 +415,15 @@ const SHORTCUTS: &[ShortcutDescriptor] = &[
         }],
         prefix: "",
         label: " for commands",
+    },
+    ShortcutDescriptor {
+        id: ShortcutId::Tools,
+        bindings: &[ShortcutBinding {
+            key: key_hint::ctrl(KeyCode::Char('o')),
+            condition: DisplayCondition::Always,
+        }],
+        prefix: "",
+        label: " for tools",
     },
     ShortcutDescriptor {
         id: ShortcutId::InsertNewline,
@@ -504,6 +529,8 @@ mod tests {
                 transcript_selection_active: false,
                 transcript_scroll_position: None,
                 transcript_copy_selection_key: key_hint::ctrl_shift(KeyCode::Char('c')),
+                composer_has_text: false,
+                composer_copy_key: key_hint::ctrl(KeyCode::Char('k')),
                 status_bar_git_branch: None,
                 status_bar_worktree: None,
                 show_status_bar_git_branch: false,
@@ -524,6 +551,8 @@ mod tests {
                 transcript_selection_active: true,
                 transcript_scroll_position: Some((3, 42)),
                 transcript_copy_selection_key: key_hint::ctrl_shift(KeyCode::Char('c')),
+                composer_has_text: false,
+                composer_copy_key: key_hint::ctrl(KeyCode::Char('k')),
                 status_bar_git_branch: None,
                 status_bar_worktree: None,
                 show_status_bar_git_branch: false,
@@ -544,6 +573,8 @@ mod tests {
                 transcript_selection_active: false,
                 transcript_scroll_position: None,
                 transcript_copy_selection_key: key_hint::ctrl_shift(KeyCode::Char('c')),
+                composer_has_text: false,
+                composer_copy_key: key_hint::ctrl(KeyCode::Char('k')),
                 status_bar_git_branch: None,
                 status_bar_worktree: None,
                 show_status_bar_git_branch: false,
@@ -564,6 +595,8 @@ mod tests {
                 transcript_selection_active: false,
                 transcript_scroll_position: None,
                 transcript_copy_selection_key: key_hint::ctrl_shift(KeyCode::Char('c')),
+                composer_has_text: false,
+                composer_copy_key: key_hint::ctrl(KeyCode::Char('k')),
                 status_bar_git_branch: None,
                 status_bar_worktree: None,
                 show_status_bar_git_branch: false,
@@ -584,6 +617,8 @@ mod tests {
                 transcript_selection_active: false,
                 transcript_scroll_position: None,
                 transcript_copy_selection_key: key_hint::ctrl_shift(KeyCode::Char('c')),
+                composer_has_text: false,
+                composer_copy_key: key_hint::ctrl(KeyCode::Char('k')),
                 status_bar_git_branch: None,
                 status_bar_worktree: None,
                 show_status_bar_git_branch: false,
@@ -604,6 +639,8 @@ mod tests {
                 transcript_selection_active: false,
                 transcript_scroll_position: None,
                 transcript_copy_selection_key: key_hint::ctrl_shift(KeyCode::Char('c')),
+                composer_has_text: false,
+                composer_copy_key: key_hint::ctrl(KeyCode::Char('k')),
                 status_bar_git_branch: None,
                 status_bar_worktree: None,
                 show_status_bar_git_branch: false,
@@ -624,6 +661,8 @@ mod tests {
                 transcript_selection_active: false,
                 transcript_scroll_position: None,
                 transcript_copy_selection_key: key_hint::ctrl_shift(KeyCode::Char('c')),
+                composer_has_text: false,
+                composer_copy_key: key_hint::ctrl(KeyCode::Char('k')),
                 status_bar_git_branch: None,
                 status_bar_worktree: None,
                 show_status_bar_git_branch: false,
@@ -644,6 +683,8 @@ mod tests {
                 transcript_selection_active: false,
                 transcript_scroll_position: None,
                 transcript_copy_selection_key: key_hint::ctrl_shift(KeyCode::Char('c')),
+                composer_has_text: false,
+                composer_copy_key: key_hint::ctrl(KeyCode::Char('k')),
                 status_bar_git_branch: None,
                 status_bar_worktree: None,
                 show_status_bar_git_branch: false,
@@ -664,6 +705,8 @@ mod tests {
                 transcript_selection_active: false,
                 transcript_scroll_position: None,
                 transcript_copy_selection_key: key_hint::ctrl_shift(KeyCode::Char('c')),
+                composer_has_text: false,
+                composer_copy_key: key_hint::ctrl(KeyCode::Char('k')),
                 status_bar_git_branch: None,
                 status_bar_worktree: None,
                 show_status_bar_git_branch: false,

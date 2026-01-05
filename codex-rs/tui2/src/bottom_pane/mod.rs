@@ -15,7 +15,13 @@ use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
+use ratatui::style::Stylize;
+use ratatui::text::Line;
+use ratatui::text::Span;
+use ratatui::widgets::Paragraph;
+use ratatui::widgets::WidgetRef;
 use std::time::Duration;
+use textwrap::wrap;
 
 mod approval_overlay;
 pub(crate) use approval_overlay::ApprovalOverlay;
@@ -30,6 +36,7 @@ mod footer;
 mod list_selection_view;
 mod prompt_args;
 mod skill_popup;
+mod status_menu_view;
 pub(crate) use list_selection_view::SelectionViewParams;
 mod feedback_view;
 pub(crate) use feedback_view::feedback_selection_params;
@@ -42,6 +49,8 @@ mod selection_popup_common;
 mod textarea;
 pub(crate) use feedback_view::FeedbackNoteView;
 pub(crate) use prompt_args::parse_slash_name;
+pub(crate) use status_menu_view::StatusMenuTab;
+pub(crate) use status_menu_view::StatusMenuView;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum CancellationEvent {
@@ -56,6 +65,58 @@ use codex_protocol::custom_prompts::CustomPrompt;
 use crate::status_indicator_widget::StatusIndicatorWidget;
 pub(crate) use list_selection_view::SelectionAction;
 pub(crate) use list_selection_view::SelectionItem;
+
+#[derive(Debug)]
+pub(crate) struct McpStartupBannerWidget {
+    message: String,
+}
+
+impl McpStartupBannerWidget {
+    pub(crate) fn new(message: String) -> Self {
+        Self { message }
+    }
+
+    fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
+        let message = self.message.trim();
+        if message.is_empty() || width == 0 {
+            return Vec::new();
+        }
+
+        let prefix = "⚠ ";
+        let prefix_width = u16::try_from(prefix.chars().count()).unwrap_or(2);
+        let content_width = width.saturating_sub(prefix_width).max(1);
+
+        let wrapped = wrap(message, usize::from(content_width));
+        let mut lines = Vec::with_capacity(wrapped.len());
+
+        for (idx, part) in wrapped.into_iter().enumerate() {
+            if idx == 0 {
+                lines.push(Line::from(vec![prefix.red(), part.to_string().red()]));
+            } else {
+                lines.push(Line::from(vec![
+                    Span::from(" ".repeat(usize::from(prefix_width))).red(),
+                    part.to_string().red(),
+                ]));
+            }
+        }
+
+        lines
+    }
+}
+
+impl Renderable for McpStartupBannerWidget {
+    fn render(&self, area: Rect, buf: &mut Buffer) {
+        if area.is_empty() {
+            return;
+        }
+
+        Paragraph::new(self.display_lines(area.width)).render_ref(area, buf);
+    }
+
+    fn desired_height(&self, width: u16) -> u16 {
+        u16::try_from(self.display_lines(width).len()).unwrap_or(0)
+    }
+}
 
 /// Pane displayed in the lower half of the chat UI.
 pub(crate) struct BottomPane {
@@ -77,6 +138,8 @@ pub(crate) struct BottomPane {
 
     /// Inline status indicator shown above the composer while a task is running.
     status: Option<StatusIndicatorWidget>,
+    /// Ephemeral MCP startup failure banner (not part of the transcript).
+    mcp_startup_banner: Option<McpStartupBannerWidget>,
     /// Queued user messages to show above the composer while a turn is running.
     queued_user_messages: QueuedUserMessages,
     context_window_percent: Option<i64>,
@@ -124,6 +187,7 @@ impl BottomPane {
             is_task_running: false,
             ctrl_c_quit_hint: false,
             status: None,
+            mcp_startup_banner: None,
             queued_user_messages: QueuedUserMessages::new(),
             esc_backtrack_hint: false,
             animations_enabled,
@@ -276,6 +340,27 @@ impl BottomPane {
             status.update_details(details);
             self.request_redraw();
         }
+    }
+
+    pub(crate) fn set_mcp_startup_banner(&mut self, message: Option<String>) {
+        let next = message.map(McpStartupBannerWidget::new);
+        if self.mcp_startup_banner.is_some() == next.is_some()
+            && self
+                .mcp_startup_banner
+                .as_ref()
+                .zip(next.as_ref())
+                .is_some_and(|(a, b)| a.message == b.message)
+        {
+            return;
+        }
+
+        self.mcp_startup_banner = next;
+        self.request_redraw();
+    }
+
+    #[cfg(test)]
+    pub(crate) fn mcp_startup_banner_message(&self) -> Option<&str> {
+        self.mcp_startup_banner.as_ref().map(|b| b.message.as_str())
     }
 
     pub(crate) fn show_ctrl_c_quit_hint(&mut self) {
@@ -556,8 +641,14 @@ impl BottomPane {
             if let Some(status) = &self.status {
                 flex.push(0, RenderableItem::Borrowed(status));
             }
+            if let Some(banner) = &self.mcp_startup_banner {
+                flex.push(0, RenderableItem::Borrowed(banner));
+            }
             flex.push(1, RenderableItem::Borrowed(&self.queued_user_messages));
-            if self.status.is_some() || !self.queued_user_messages.messages.is_empty() {
+            if self.status.is_some()
+                || self.mcp_startup_banner.is_some()
+                || !self.queued_user_messages.messages.is_empty()
+            {
                 flex.push(0, RenderableItem::Owned("".into()));
             }
             let mut flex2 = FlexRenderable::new();

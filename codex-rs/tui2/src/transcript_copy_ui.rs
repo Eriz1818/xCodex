@@ -45,6 +45,25 @@ use crate::key_hint::KeyBinding;
 use crate::transcript_selection::TRANSCRIPT_GUTTER_COLS;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum TranscriptPillAction {
+    CopySelection,
+    ToggleExecCellExpanded,
+    CopyExecCellFull,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct ExecOutputPillsParams {
+    pub(crate) area: Rect,
+    pub(crate) anchor: (usize, u16),
+    pub(crate) head: (usize, u16),
+    pub(crate) view_top: usize,
+    pub(crate) total_lines: usize,
+    pub(crate) expanded: bool,
+    pub(crate) toggle_key: KeyBinding,
+    pub(crate) copy_full_key: KeyBinding,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 /// The shortcut we advertise and accept for "copy selection".
 pub(crate) enum CopySelectionShortcut {
     CtrlShiftC,
@@ -107,7 +126,9 @@ pub(crate) fn is_copy_selection_key(
 pub(crate) struct TranscriptCopyUi {
     shortcut: CopySelectionShortcut,
     dragging: bool,
-    affordance_rect: Option<Rect>,
+    copy_selection_rect: Option<Rect>,
+    exec_toggle_rect: Option<Rect>,
+    exec_copy_full_rect: Option<Rect>,
 }
 
 impl TranscriptCopyUi {
@@ -116,7 +137,9 @@ impl TranscriptCopyUi {
         Self {
             shortcut,
             dragging: false,
-            affordance_rect: None,
+            copy_selection_rect: None,
+            exec_toggle_rect: None,
+            exec_copy_full_rect: None,
         }
     }
 
@@ -132,71 +155,60 @@ impl TranscriptCopyUi {
         self.dragging = dragging;
     }
 
-    pub(crate) fn clear_affordance(&mut self) {
-        self.affordance_rect = None;
+    pub(crate) fn clear_affordances(&mut self) {
+        self.copy_selection_rect = None;
+        self.exec_toggle_rect = None;
+        self.exec_copy_full_rect = None;
+    }
+
+    pub(crate) fn clear_exec_affordances(&mut self) {
+        self.exec_toggle_rect = None;
+        self.exec_copy_full_rect = None;
     }
 
     /// Returns `true` if the last rendered pill contains `(x, y)`.
     ///
-    /// `render_copy_pill()` sets `affordance_rect` and `clear_affordance()` clears it, so callers
+    /// `render_copy_pill()` sets `copy_selection_rect` and `clear_affordances()` clears it, so callers
     /// should treat this as "hit test against the current frame's affordance".
-    pub(crate) fn hit_test(&self, x: u16, y: u16) -> bool {
-        self.affordance_rect
-            .is_some_and(|r| x >= r.x && x < r.right() && y >= r.y && y < r.bottom())
+    pub(crate) fn hit_test_action(&self, x: u16, y: u16) -> Option<TranscriptPillAction> {
+        let in_rect =
+            |rect: Rect| x >= rect.x && x < rect.right() && y >= rect.y && y < rect.bottom();
+
+        if self.copy_selection_rect.is_some_and(&in_rect) {
+            return Some(TranscriptPillAction::CopySelection);
+        }
+        if self.exec_toggle_rect.is_some_and(&in_rect) {
+            return Some(TranscriptPillAction::ToggleExecCellExpanded);
+        }
+        if self.exec_copy_full_rect.is_some_and(in_rect) {
+            return Some(TranscriptPillAction::CopyExecCellFull);
+        }
+        None
     }
 
-    /// Render the copy "pill" just below the visible end of the selection.
-    ///
-    /// Inputs are expressed in logical transcript coordinates:
-    /// - `anchor`/`head`: `(line_index, column)` in the wrapped transcript (not screen rows).
-    /// - `view_top`: first logical line index currently visible in `area`.
-    /// - `total_lines`: total number of logical transcript lines.
-    ///
-    /// Placement details / edge cases:
-    /// - We hide the pill while dragging to avoid accidental clicks during selection updates.
-    /// - We only render if some part of the selection is visible, and there's room for a line
-    ///   below it inside `area`.
-    /// - We scan the buffer to find the last non-space cell on each candidate row so the pill can
-    ///   sit "near content", not far to the right past trailing whitespace.
-    ///
-    /// Important: this assumes the transcript content has already been rendered into `buf` for the
-    /// current frame, since the placement logic derives `text_end` by inspecting buffer contents.
-    pub(crate) fn render_copy_pill(
-        &mut self,
+    fn last_visible_segment(
         area: Rect,
-        buf: &mut Buffer,
-        anchor: (usize, u16),
-        head: (usize, u16),
+        buf: &Buffer,
+        start: (usize, u16),
+        end: (usize, u16),
         view_top: usize,
         total_lines: usize,
-    ) {
-        // Reset every frame. If we don't render (e.g. selection is off-screen) we shouldn't keep
-        // an old hit target around.
-        self.affordance_rect = None;
-
-        if self.dragging || total_lines == 0 {
-            return;
-        }
-
+    ) -> Option<(u16, u16)> {
         // Skip the transcript gutter (line numbers, diff markers, etc.). Selection/copy operates on
         // transcript content only.
         let base_x = area.x.saturating_add(TRANSCRIPT_GUTTER_COLS);
         let max_x = area.right().saturating_sub(1);
         if base_x > max_x {
-            return;
+            return None;
         }
 
         // Normalize to a start/end pair so the rest of the code can assume forward order.
-        let mut start = anchor;
-        let mut end = head;
+        let mut start = start;
+        let mut end = end;
         if (end.0 < start.0) || (end.0 == start.0 && end.1 < start.1) {
             std::mem::swap(&mut start, &mut end);
         }
 
-        // We want to place the pill *near the visible end of the selection*, which means:
-        // - Find the last visible transcript line that intersects the selection.
-        // - Find the rightmost selected column on that line (clamped to actual rendered text).
-        // - Place the pill one row below that point.
         let visible_start = view_top;
         let visible_end = view_top
             .saturating_add(area.height as usize)
@@ -228,9 +240,6 @@ impl TranscriptCopyUi {
             let line_end_col = if line_index == end.0 {
                 end.1
             } else {
-                // For multi-line selections, treat intermediate lines as selected "to the end" so
-                // the pill doesn't jump left unexpectedly when only the final line has an explicit
-                // end column.
                 max_x.saturating_sub(base_x)
             };
 
@@ -239,14 +248,49 @@ impl TranscriptCopyUi {
                 continue;
             }
 
-            // Clamp the selection end to `text_end` so we don't place the pill far to the right on
-            // lines that are mostly blank (or padded).
             let to_x = row_sel_end.min(text_end);
             last_visible_segment = Some((y, to_x));
         }
 
-        // If nothing in the selection is visible, don't show the affordance.
-        let Some((y, to_x)) = last_visible_segment else {
+        last_visible_segment
+    }
+
+    /// Render the copy "pill" just below the visible end of the selection.
+    ///
+    /// Inputs are expressed in logical transcript coordinates:
+    /// - `anchor`/`head`: `(line_index, column)` in the wrapped transcript (not screen rows).
+    /// - `view_top`: first logical line index currently visible in `area`.
+    /// - `total_lines`: total number of logical transcript lines.
+    ///
+    /// Placement details / edge cases:
+    /// - We hide the pill while dragging to avoid accidental clicks during selection updates.
+    /// - We only render if some part of the selection is visible, and there's room for a line
+    ///   below it inside `area`.
+    /// - We scan the buffer to find the last non-space cell on each candidate row so the pill can
+    ///   sit "near content", not far to the right past trailing whitespace.
+    ///
+    /// Important: this assumes the transcript content has already been rendered into `buf` for the
+    /// current frame, since the placement logic derives `text_end` by inspecting buffer contents.
+    pub(crate) fn render_copy_pill(
+        &mut self,
+        area: Rect,
+        buf: &mut Buffer,
+        anchor: (usize, u16),
+        head: (usize, u16),
+        view_top: usize,
+        total_lines: usize,
+    ) {
+        // Reset every frame. If we don't render (e.g. selection is off-screen) we shouldn't keep
+        // an old hit target around.
+        self.copy_selection_rect = None;
+
+        if self.dragging || total_lines == 0 {
+            return;
+        }
+
+        let Some((y, to_x)) =
+            Self::last_visible_segment(area, buf, anchor, head, view_top, total_lines)
+        else {
             return;
         };
         // Place the pill on the row below the last visible selection segment.
@@ -290,7 +334,108 @@ impl TranscriptCopyUi {
         spans.push(Span::styled(" ", base_style));
 
         Paragraph::new(vec![Line::from(spans)]).render_ref(pill_area, buf);
-        self.affordance_rect = Some(pill_area);
+        self.copy_selection_rect = Some(pill_area);
+    }
+
+    pub(crate) fn render_exec_output_pills(
+        &mut self,
+        buf: &mut Buffer,
+        params: ExecOutputPillsParams,
+    ) {
+        self.exec_toggle_rect = None;
+        self.exec_copy_full_rect = None;
+
+        if self.dragging || params.total_lines == 0 {
+            return;
+        }
+
+        let Some((y, to_x)) = Self::last_visible_segment(
+            params.area,
+            buf,
+            params.anchor,
+            params.head,
+            params.view_top,
+            params.total_lines,
+        ) else {
+            return;
+        };
+        let Some(y) = y.checked_add(1).filter(|y| *y < params.area.bottom()) else {
+            return;
+        };
+
+        let base_style = Style::new().bg(Color::DarkGray);
+        let icon_style = base_style.fg(Color::Cyan);
+        let bold_style = base_style.add_modifier(Modifier::BOLD);
+
+        let toggle_label: Span<'static> = params.toggle_key.into();
+        let toggle_label = toggle_label.content.as_ref().to_string();
+        let copy_full_label: Span<'static> = params.copy_full_key.into();
+        let copy_full_label = copy_full_label.content.as_ref().to_string();
+
+        let toggle_word = if params.expanded {
+            "collapse"
+        } else {
+            "expand"
+        };
+
+        let toggle_text = format!(" ↕ {toggle_word} {toggle_label} ");
+        let copy_full_text = format!(" ⧉ copy full {copy_full_label} ");
+
+        let toggle_width = UnicodeWidthStr::width(toggle_text.as_str()) as u16;
+        let copy_full_width = UnicodeWidthStr::width(copy_full_text.as_str()) as u16;
+        if toggle_width == 0 || copy_full_width == 0 || params.area.width == 0 {
+            return;
+        }
+
+        // Prefer a small gap between the selected content and the first pill, and then leave a
+        // small gap between pills.
+        let desired_x = to_x.saturating_add(2);
+        let mut x = desired_x.clamp(params.area.x, params.area.right().saturating_sub(1));
+
+        let max_start_x = params.area.right().saturating_sub(1);
+        if x > max_start_x {
+            x = max_start_x;
+        }
+
+        // Render the toggle pill first.
+        let toggle_width = toggle_width.min(params.area.right().saturating_sub(x));
+        if toggle_width > 0 {
+            let pill_area = Rect::new(x, y, toggle_width, 1);
+            let spans: Vec<Span<'static>> = vec![
+                Span::styled(" ", base_style),
+                Span::styled("↕", icon_style),
+                Span::styled(" ", base_style),
+                Span::styled(toggle_word, bold_style),
+                Span::styled(" ", base_style),
+                Span::styled(toggle_label, base_style),
+                Span::styled(" ", base_style),
+            ];
+            Paragraph::new(vec![Line::from(spans)]).render_ref(pill_area, buf);
+            self.exec_toggle_rect = Some(pill_area);
+            x = x.saturating_add(toggle_width).saturating_add(1);
+        }
+
+        // Then the copy-full pill.
+        let available = params.area.right().saturating_sub(x);
+        let copy_full_width = copy_full_width.min(available);
+        if copy_full_width == 0 {
+            return;
+        }
+
+        let pill_area = Rect::new(x, y, copy_full_width, 1);
+        let spans: Vec<Span<'static>> = vec![
+            Span::styled(" ", base_style),
+            Span::styled("⧉", icon_style),
+            Span::styled(" ", base_style),
+            Span::styled("copy", bold_style),
+            Span::styled(" ", base_style),
+            Span::styled("full", bold_style),
+            Span::styled(" ", base_style),
+            Span::styled(copy_full_label, base_style),
+            Span::styled(" ", base_style),
+        ];
+        Paragraph::new(vec![Line::from(spans)]).render_ref(pill_area, buf);
+        self.exec_copy_full_rect = Some(pill_area);
     }
 }
 
@@ -327,6 +472,58 @@ mod tests {
         assert!(rendered.contains("copy"));
         assert!(rendered.contains("ctrl + y"));
         assert!(!rendered.contains("ctrl + shift + c"));
-        assert!(ui.affordance_rect.is_some());
+        assert!(ui.copy_selection_rect.is_some());
+    }
+
+    fn find_symbol(buf: &Buffer, area: Rect, needle: &str) -> Option<(u16, u16)> {
+        for y in area.y..area.bottom() {
+            for x in area.x..area.right() {
+                if buf[(x, y)].symbol() == needle {
+                    return Some((x, y));
+                }
+            }
+        }
+        None
+    }
+
+    #[test]
+    fn exec_output_pills_are_clickable() {
+        let area = Rect::new(0, 0, 60, 4);
+        let mut buf = Buffer::empty(area);
+        for x in 2..area.width.saturating_sub(1) {
+            buf[(x, 1)].set_symbol("X");
+        }
+
+        let mut ui = TranscriptCopyUi::new_with_shortcut(CopySelectionShortcut::CtrlShiftC);
+        ui.render_exec_output_pills(
+            &mut buf,
+            ExecOutputPillsParams {
+                area,
+                anchor: (1, 2),
+                head: (1, 6),
+                view_top: 0,
+                total_lines: 4,
+                expanded: false,
+                toggle_key: key_hint::alt(KeyCode::Char('e')),
+                copy_full_key: key_hint::alt(KeyCode::Char('c')),
+            },
+        );
+
+        let rendered = buf_to_string(&buf, area);
+        assert!(rendered.contains("expand"));
+        assert!(rendered.contains("copy"));
+        assert!(rendered.contains("full"));
+
+        let (x, y) = find_symbol(&buf, area, "↕").expect("expand pill icon");
+        assert_eq!(
+            ui.hit_test_action(x, y),
+            Some(TranscriptPillAction::ToggleExecCellExpanded)
+        );
+
+        let (x, y) = find_symbol(&buf, area, "⧉").expect("copy-full pill icon");
+        assert_eq!(
+            ui.hit_test_action(x, y),
+            Some(TranscriptPillAction::CopyExecCellFull)
+        );
     }
 }

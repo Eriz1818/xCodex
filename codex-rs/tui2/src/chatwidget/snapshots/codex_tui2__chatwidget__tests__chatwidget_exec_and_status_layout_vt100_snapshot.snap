@@ -1,7 +1,35 @@
 ---
 source: tui2/src/chatwidget/tests.rs
+assertion_line: 3352
 expression: term.backend().vt100().screen().contents()
 ---
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 • I’m going to search the repo for where “Change Approved” is rendered to update
   that view.
 
@@ -14,4 +42,4 @@ expression: term.backend().vt100().screen().contents()
 
 › Summarize recent commits
 
-  100% context left
+  100% context left · ctrl + k copy prompt

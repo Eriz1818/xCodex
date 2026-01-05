@@ -335,6 +335,8 @@ pub(crate) struct App {
     transcript_view_top: usize,
     transcript_total_lines: usize,
     transcript_copy_ui: TranscriptCopyUi,
+    expanded_exec_call_ids: std::collections::HashSet<String>,
+    last_transcript_width: u16,
 
     // Pager overlay state (Transcript or Static like Diff)
     pub(crate) overlay: Option<Overlay>,
@@ -361,6 +363,8 @@ pub(crate) struct App {
 
     // One-shot suppression of the next world-writable scan after user confirmation.
     skip_world_writable_scan_once: bool,
+
+    shared_dirs_write_notice_shown: bool,
 }
 impl App {
     async fn shutdown_current_conversation(&mut self) {
@@ -504,6 +508,8 @@ impl App {
             transcript_view_top: 0,
             transcript_total_lines: 0,
             transcript_copy_ui: TranscriptCopyUi::new_with_shortcut(copy_selection_shortcut),
+            expanded_exec_call_ids: std::collections::HashSet::new(),
+            last_transcript_width: 0,
             overlay: None,
             deferred_history_lines: Vec::new(),
             has_emitted_history_lines: false,
@@ -515,6 +521,7 @@ impl App {
             pending_update_action: None,
             suppress_shutdown_complete: false,
             skip_world_writable_scan_once: false,
+            shared_dirs_write_notice_shown: false,
         };
 
         // On startup, if Agent mode (workspace-write) or ReadOnly is active, warn about world-writable dirs on Windows.
@@ -570,8 +577,12 @@ impl App {
         let session_lines = if width == 0 {
             Vec::new()
         } else {
-            let transcript =
-                crate::transcript_render::build_transcript_lines(&app.transcript_cells, width);
+            let transcript = crate::transcript_render::build_transcript_lines(
+                &app.transcript_cells,
+                width,
+                app.config.tui_verbose_tool_output,
+                &app.expanded_exec_call_ids,
+            );
             let (lines, line_meta) = (transcript.lines, transcript.meta);
             let is_user_cell: Vec<bool> = app
                 .transcript_cells
@@ -712,9 +723,14 @@ impl App {
             width: area.width,
             height: max_transcript_height,
         };
+        self.last_transcript_width = transcript_area.width;
 
-        let transcript =
-            crate::transcript_render::build_wrapped_transcript_lines(cells, transcript_area.width);
+        let transcript = crate::transcript_render::build_wrapped_transcript_lines(
+            cells,
+            transcript_area.width,
+            self.config.tui_verbose_tool_output,
+            &self.expanded_exec_call_ids,
+        );
         let (lines, line_meta) = (transcript.lines, transcript.meta);
         if lines.is_empty() {
             Clear.render_ref(transcript_area, frame.buffer);
@@ -813,7 +829,50 @@ impl App {
                 self.transcript_total_lines,
             );
         } else {
-            self.transcript_copy_ui.clear_affordance();
+            self.transcript_copy_ui.clear_affordances();
+        }
+
+        if !self.config.tui_verbose_tool_output
+            && let Some(point) = self
+                .transcript_selection
+                .head
+                .or(self.transcript_selection.anchor)
+            && let Some(cell_index) = Self::cell_index_for_line(&line_meta, point.line_index)
+            && let Some(cell) = self.transcript_cells.get(cell_index)
+            && let Some(exec_cell) = cell.as_any().downcast_ref::<crate::exec_cell::ExecCell>()
+            && let Some(call) = exec_cell.calls.first()
+        {
+            let call_id = &call.call_id;
+            let expanded = self.expanded_exec_call_ids.contains(call_id);
+            let toggle_key = crate::key_hint::alt(KeyCode::Char('e'));
+            let copy_full_key = crate::key_hint::alt(KeyCode::Char('c'));
+
+            let (anchor, head) = match (
+                self.transcript_selection.anchor,
+                self.transcript_selection.head,
+            ) {
+                (Some(anchor), Some(head)) if anchor != head => (
+                    (anchor.line_index, anchor.column),
+                    (head.line_index, head.column),
+                ),
+                _ => ((point.line_index, 0), (point.line_index, u16::MAX)),
+            };
+
+            self.transcript_copy_ui.render_exec_output_pills(
+                frame.buffer,
+                crate::transcript_copy_ui::ExecOutputPillsParams {
+                    area: transcript_area,
+                    anchor,
+                    head,
+                    view_top: self.transcript_view_top,
+                    total_lines: self.transcript_total_lines,
+                    expanded,
+                    toggle_key,
+                    copy_full_key,
+                },
+            );
+        } else {
+            self.transcript_copy_ui.clear_exec_affordances();
         }
         chat_top
     }
@@ -904,11 +963,25 @@ impl App {
         let streaming = self.chat_widget.is_task_running();
 
         if matches!(mouse_event.kind, MouseEventKind::Down(MouseButton::Left))
-            && self
+            && let Some(action) = self
                 .transcript_copy_ui
-                .hit_test(mouse_event.column, mouse_event.row)
+                .hit_test_action(mouse_event.column, mouse_event.row)
         {
-            self.copy_transcript_selection(tui);
+            match action {
+                crate::transcript_copy_ui::TranscriptPillAction::CopySelection => {
+                    self.copy_transcript_selection(tui);
+                }
+                crate::transcript_copy_ui::TranscriptPillAction::ToggleExecCellExpanded => {
+                    if self.toggle_exec_cell_expansion_at_selection() {
+                        tui.frame_requester().schedule_frame();
+                    }
+                }
+                crate::transcript_copy_ui::TranscriptPillAction::CopyExecCellFull => {
+                    if self.copy_exec_cell_full_at_cursor() {
+                        tui.frame_requester().schedule_frame();
+                    }
+                }
+            }
             return;
         }
 
@@ -946,6 +1019,8 @@ impl App {
                     &mut self.transcript_selection,
                     &self.transcript_cells,
                     transcript_area.width,
+                    self.config.tui_verbose_tool_output,
+                    &self.expanded_exec_call_ids,
                     point,
                 ) {
                     tui.frame_requester().schedule_frame();
@@ -1108,8 +1183,12 @@ impl App {
             return;
         }
 
-        let transcript =
-            crate::transcript_render::build_wrapped_transcript_lines(&self.transcript_cells, width);
+        let transcript = crate::transcript_render::build_wrapped_transcript_lines(
+            &self.transcript_cells,
+            width,
+            self.config.tui_verbose_tool_output,
+            &self.expanded_exec_call_ids,
+        );
         let line_meta = transcript.meta;
         self.transcript_scroll =
             self.transcript_scroll
@@ -1133,8 +1212,12 @@ impl App {
             return;
         }
 
-        let transcript =
-            crate::transcript_render::build_wrapped_transcript_lines(&self.transcript_cells, width);
+        let transcript = crate::transcript_render::build_wrapped_transcript_lines(
+            &self.transcript_cells,
+            width,
+            self.config.tui_verbose_tool_output,
+            &self.expanded_exec_call_ids,
+        );
         let (lines, line_meta) = (transcript.lines, transcript.meta);
         if lines.is_empty() || line_meta.is_empty() {
             return;
@@ -1286,6 +1369,8 @@ impl App {
             &self.transcript_cells,
             self.transcript_selection,
             width,
+            self.config.tui_verbose_tool_output,
+            &self.expanded_exec_call_ids,
         ) else {
             return;
         };
@@ -1296,6 +1381,184 @@ impl App {
 
     fn copy_selection_key(&self) -> crate::key_hint::KeyBinding {
         self.transcript_copy_ui.key_binding()
+    }
+
+    fn copy_exec_cell_full_at_cursor(&mut self) -> bool {
+        if self.last_transcript_width == 0 {
+            return false;
+        }
+
+        let Some(point) = self
+            .transcript_selection
+            .head
+            .or(self.transcript_selection.anchor)
+        else {
+            return false;
+        };
+
+        let transcript = crate::transcript_render::build_wrapped_transcript_lines(
+            &self.transcript_cells,
+            self.last_transcript_width,
+            self.config.tui_verbose_tool_output,
+            &self.expanded_exec_call_ids,
+        );
+        let Some(cell_index) = Self::cell_index_for_line(&transcript.meta, point.line_index) else {
+            return false;
+        };
+        let Some(cell) = self.transcript_cells.get(cell_index) else {
+            return false;
+        };
+        let Some(exec_cell) = cell.as_any().downcast_ref::<crate::exec_cell::ExecCell>() else {
+            return false;
+        };
+        let Some(call) = exec_cell.calls.first() else {
+            return false;
+        };
+        let call_id = call.call_id.clone();
+
+        let mut expanded_exec_call_ids = self.expanded_exec_call_ids.clone();
+        expanded_exec_call_ids.insert(call_id);
+
+        let transcript = crate::transcript_render::build_wrapped_transcript_lines(
+            &self.transcript_cells,
+            self.last_transcript_width,
+            self.config.tui_verbose_tool_output,
+            &expanded_exec_call_ids,
+        );
+        let (start, end) = Self::cell_bounds_for_index(&transcript.meta, cell_index);
+
+        let Some(text) = crate::transcript_copy::selection_to_copy_text(
+            &transcript.lines,
+            &transcript.joiner_before,
+            TranscriptSelectionPoint::new(start, 0),
+            TranscriptSelectionPoint::new(end, u16::MAX),
+            0,
+            transcript.lines.len(),
+            self.last_transcript_width,
+        ) else {
+            return false;
+        };
+
+        if let Err(err) = clipboard_copy::copy_text(text) {
+            tracing::error!(error = %err, "failed to copy full exec output to clipboard");
+            self.chat_widget
+                .add_error_message(format!("Failed to copy to clipboard: {err}"));
+        } else {
+            self.chat_widget
+                .add_info_message("Copied full tool output to clipboard.".to_string(), None);
+        }
+
+        true
+    }
+
+    fn toggle_exec_cell_expansion_at_selection(&mut self) -> bool {
+        if self.config.tui_verbose_tool_output {
+            return false;
+        }
+        if self.last_transcript_width == 0 {
+            return false;
+        }
+        let Some(point) = self
+            .transcript_selection
+            .head
+            .or(self.transcript_selection.anchor)
+        else {
+            return false;
+        };
+
+        let transcript = crate::transcript_render::build_wrapped_transcript_lines(
+            &self.transcript_cells,
+            self.last_transcript_width,
+            self.config.tui_verbose_tool_output,
+            &self.expanded_exec_call_ids,
+        );
+        let Some(cell_index) = Self::cell_index_for_line(&transcript.meta, point.line_index) else {
+            return false;
+        };
+        let Some(cell) = self.transcript_cells.get(cell_index) else {
+            return false;
+        };
+        let Some(exec_cell) = cell.as_any().downcast_ref::<crate::exec_cell::ExecCell>() else {
+            return false;
+        };
+        let Some(call) = exec_cell.calls.first() else {
+            return false;
+        };
+        let call_id = call.call_id.clone();
+
+        let inserted = self.expanded_exec_call_ids.insert(call_id.clone());
+        if !inserted {
+            self.expanded_exec_call_ids.remove(&call_id);
+        }
+
+        let transcript = crate::transcript_render::build_wrapped_transcript_lines(
+            &self.transcript_cells,
+            self.last_transcript_width,
+            self.config.tui_verbose_tool_output,
+            &self.expanded_exec_call_ids,
+        );
+        let (start, end) = Self::cell_bounds_for_index(&transcript.meta, cell_index);
+        self.transcript_selection = TranscriptSelection {
+            anchor: Some(TranscriptSelectionPoint::new(start, 0)),
+            head: Some(TranscriptSelectionPoint::new(end, u16::MAX)),
+        };
+
+        true
+    }
+
+    fn cell_index_for_line(
+        meta: &[crate::tui::scrolling::TranscriptLineMeta],
+        line_index: usize,
+    ) -> Option<usize> {
+        if meta.is_empty() {
+            return None;
+        }
+        let idx = line_index.min(meta.len().saturating_sub(1));
+        match meta.get(idx) {
+            Some(crate::tui::scrolling::TranscriptLineMeta::CellLine { cell_index, .. }) => {
+                Some(*cell_index)
+            }
+            _ => {
+                for prev in (0..=idx).rev() {
+                    if let crate::tui::scrolling::TranscriptLineMeta::CellLine {
+                        cell_index, ..
+                    } = meta[prev]
+                    {
+                        return Some(cell_index);
+                    }
+                }
+                for item in meta.iter().skip(idx) {
+                    if let crate::tui::scrolling::TranscriptLineMeta::CellLine {
+                        cell_index, ..
+                    } = item
+                    {
+                        return Some(*cell_index);
+                    }
+                }
+                None
+            }
+        }
+    }
+
+    fn cell_bounds_for_index(
+        meta: &[crate::tui::scrolling::TranscriptLineMeta],
+        target_cell: usize,
+    ) -> (usize, usize) {
+        let mut start = None;
+        let mut end = None;
+        for (idx, item) in meta.iter().enumerate() {
+            if matches!(
+                item,
+                crate::tui::scrolling::TranscriptLineMeta::CellLine { cell_index, .. }
+                    if *cell_index == target_cell
+            ) {
+                if start.is_none() {
+                    start = Some(idx);
+                }
+                end = Some(idx);
+            }
+        }
+        (start.unwrap_or(0), end.unwrap_or(0))
     }
 
     /// Map a mouse position in the transcript area to a content-relative
@@ -1543,6 +1806,181 @@ impl App {
                     .set_status_bar_git_options(show_git_branch, show_worktree);
                 tui.frame_requester().schedule_frame();
             }
+            AppEvent::UpdateVerboseToolOutput(verbose) => {
+                self.config.tui_verbose_tool_output = verbose;
+                self.chat_widget.set_verbose_tool_output(verbose);
+                tui.frame_requester().schedule_frame();
+            }
+            AppEvent::WorktreeListUpdated {
+                worktrees,
+                open_picker,
+            } => {
+                self.chat_widget.set_worktree_list(worktrees, open_picker);
+                tui.frame_requester().schedule_frame();
+            }
+            AppEvent::WorktreeDetect { open_picker } => {
+                self.chat_widget.spawn_worktree_detection(open_picker);
+                tui.frame_requester().schedule_frame();
+            }
+            AppEvent::OpenWorktreeCommandMenu => {
+                if self.chat_widget.composer_is_empty() {
+                    self.chat_widget.set_composer_text("/worktree ".to_string());
+                } else {
+                    self.chat_widget.add_info_message(
+                        "Clear the composer to open the /worktree menu.".to_string(),
+                        None,
+                    );
+                }
+                tui.frame_requester().schedule_frame();
+            }
+            AppEvent::WorktreeListUpdateFailed { error, open_picker } => {
+                self.chat_widget
+                    .on_worktree_list_update_failed(error, open_picker);
+                tui.frame_requester().schedule_frame();
+            }
+            AppEvent::WorktreeSwitched(cwd) => {
+                let previous_cwd = self.config.cwd.clone();
+                self.config.cwd = cwd.clone();
+                self.chat_widget.set_session_cwd(cwd);
+                tui.frame_requester().schedule_frame();
+
+                let next_root = codex_core::git_info::resolve_git_worktree_head(&self.config.cwd)
+                    .map(|head| head.worktree_root);
+
+                let auto_link = self.config.worktrees_auto_link_shared_dirs
+                    && !self.config.worktrees_shared_dirs.is_empty();
+                if auto_link
+                    && let Some(next_root) = next_root.clone()
+                    && let Some(workspace_root) =
+                        codex_core::git_info::resolve_root_git_project_for_trust(&next_root)
+                    && next_root != workspace_root
+                {
+                    let show_notice = !self.shared_dirs_write_notice_shown;
+                    self.shared_dirs_write_notice_shown = true;
+                    let shared_dirs = self.config.worktrees_shared_dirs.clone();
+                    let tx = self.app_event_tx.clone();
+                    tokio::spawn(async move {
+                        let actions = codex_core::git_info::link_worktree_shared_dirs(
+                            &next_root,
+                            &workspace_root,
+                            &shared_dirs,
+                        )
+                        .await;
+
+                        let mut linked = 0usize;
+                        let mut skipped = 0usize;
+                        let mut failed = 0usize;
+                        for action in &actions {
+                            match action.outcome {
+                                codex_core::git_info::SharedDirLinkOutcome::Linked => linked += 1,
+                                codex_core::git_info::SharedDirLinkOutcome::AlreadyLinked => {}
+                                codex_core::git_info::SharedDirLinkOutcome::Skipped(_) => {
+                                    skipped += 1;
+                                }
+                                codex_core::git_info::SharedDirLinkOutcome::Failed(_) => {
+                                    failed += 1;
+                                }
+                            }
+                        }
+
+                        if linked == 0 && skipped == 0 && failed == 0 {
+                            return;
+                        }
+
+                        let summary = format!(
+                            "Auto-linked shared dirs after worktree switch: linked={linked}, skipped={skipped}, failed={failed}."
+                        );
+                        let hint = if show_notice {
+                            Some(String::from(
+                                "Note: shared dirs are linked into the workspace root; writes under them persist across worktrees. Tip: run `/worktree doctor` for details.",
+                            ))
+                        } else {
+                            Some(String::from("Tip: run `/worktree doctor` for details."))
+                        };
+                        tx.send(AppEvent::InsertHistoryCell(Box::new(
+                            crate::history_cell::new_info_event(summary, hint),
+                        )));
+                    });
+                }
+
+                let previous_root = codex_core::git_info::resolve_git_worktree_head(&previous_cwd)
+                    .map(|head| head.worktree_root);
+
+                let Some(previous_root) = previous_root else {
+                    return Ok(true);
+                };
+                let Some(next_root) = next_root else {
+                    return Ok(true);
+                };
+
+                if previous_root == next_root {
+                    return Ok(true);
+                }
+
+                if codex_core::git_info::resolve_root_git_project_for_trust(&previous_root)
+                    .is_some_and(|root| root == previous_root)
+                {
+                    return Ok(true);
+                }
+
+                let tx = self.app_event_tx.clone();
+                tokio::spawn(async move {
+                    let Ok(summary) =
+                        codex_core::git_info::summarize_git_untracked_files(&previous_root, 5)
+                            .await
+                    else {
+                        return;
+                    };
+                    if summary.total == 0 {
+                        return;
+                    }
+
+                    tx.send(AppEvent::WorktreeUntrackedFilesDetected {
+                        previous_worktree_root: previous_root,
+                        total: summary.total,
+                        sample: summary.sample,
+                    });
+                });
+            }
+            AppEvent::WorktreeUntrackedFilesDetected {
+                previous_worktree_root,
+                total,
+                sample,
+            } => {
+                let display = crate::exec_command::relativize_to_home(&previous_worktree_root)
+                    .map(|path| {
+                        if path.as_os_str().is_empty() {
+                            String::from("~")
+                        } else {
+                            format!("~/{}", path.display())
+                        }
+                    })
+                    .unwrap_or_else(|| previous_worktree_root.display().to_string());
+
+                let sample_preview = if sample.is_empty() {
+                    String::new()
+                } else {
+                    let preview: String = sample
+                        .iter()
+                        .take(3)
+                        .map(|path| format!("\n  - {path}"))
+                        .collect();
+                    let remainder = total.saturating_sub(sample.len());
+                    if remainder > 0 {
+                        format!("{preview}\n  - … +{remainder} more")
+                    } else {
+                        preview
+                    }
+                };
+
+                self.chat_widget.add_info_message(
+                    format!(
+                        "Untracked files detected in the previous worktree ({display}). Deleting that worktree may lose them.{sample_preview}"
+                    ),
+                    Some(String::from("Tip: git stash push -u -m \"worktree scratch\"")),
+                );
+                tui.frame_requester().schedule_frame();
+            }
             AppEvent::StartFileSearch(query) => {
                 if !query.is_empty() {
                     self.file_search.on_user_query(query);
@@ -1565,6 +2003,10 @@ impl App {
                     .await;
                 self.chat_widget.set_model(&model, model_family);
                 self.current_model = model;
+            }
+            AppEvent::UpdateHideAgentReasoning(hide) => {
+                self.config.hide_agent_reasoning = hide;
+                self.chat_widget.set_hide_agent_reasoning(hide);
             }
             AppEvent::OpenReasoningPopup { model } => {
                 self.chat_widget.open_reasoning_popup(model);
@@ -1699,6 +2141,35 @@ impl App {
                     }
                 }
             }
+            AppEvent::PersistHideAgentReasoning(hide) => {
+                let profile = self.active_profile.as_deref();
+                match ConfigEditsBuilder::new(&self.config.codex_home)
+                    .with_profile(profile)
+                    .with_edits([ConfigEdit::SetPath {
+                        segments: vec!["hide_agent_reasoning".to_string()],
+                        value: toml_edit::value(hide),
+                    }])
+                    .apply()
+                    .await
+                {
+                    Ok(()) => {}
+                    Err(err) => {
+                        tracing::error!(
+                            error = %err,
+                            "failed to persist thoughts preference"
+                        );
+                        if let Some(profile) = profile {
+                            self.chat_widget.add_error_message(format!(
+                                "Failed to save thoughts preference for profile `{profile}`: {err}"
+                            ));
+                        } else {
+                            self.chat_widget.add_error_message(format!(
+                                "Failed to save thoughts preference: {err}"
+                            ));
+                        }
+                    }
+                }
+            }
             AppEvent::PersistStatusBarGitOptions {
                 show_git_branch,
                 show_worktree,
@@ -1740,6 +2211,92 @@ impl App {
                                 "Failed to save status bar options: {err}"
                             ));
                         }
+                    }
+                }
+            }
+            AppEvent::PersistVerboseToolOutput(verbose) => {
+                let profile = self.active_profile.as_deref();
+                match ConfigEditsBuilder::new(&self.config.codex_home)
+                    .with_profile(profile)
+                    .with_edits([ConfigEdit::SetPath {
+                        segments: vec!["tui".to_string(), "verbose_tool_output".to_string()],
+                        value: toml_edit::value(verbose),
+                    }])
+                    .apply()
+                    .await
+                {
+                    Ok(()) => {}
+                    Err(err) => {
+                        tracing::error!(error = %err, "failed to persist tool output verbosity");
+                        if let Some(profile) = profile {
+                            self.chat_widget.add_error_message(format!(
+                                "Failed to save output verbosity for profile `{profile}`: {err}"
+                            ));
+                        } else {
+                            self.chat_widget.add_error_message(format!(
+                                "Failed to save output verbosity: {err}"
+                            ));
+                        }
+                    }
+                }
+            }
+            AppEvent::UpdateWorktreesSharedDirs { shared_dirs } => {
+                self.config.worktrees_shared_dirs = shared_dirs.clone();
+                self.chat_widget.set_worktrees_shared_dirs(shared_dirs);
+            }
+            AppEvent::PersistWorktreesSharedDirs { shared_dirs } => {
+                let mut shared_dirs_array = toml_edit::Array::new();
+                for dir in &shared_dirs {
+                    shared_dirs_array.push(dir.clone());
+                }
+                match ConfigEditsBuilder::new(&self.config.codex_home)
+                    .with_edits([ConfigEdit::SetPath {
+                        segments: vec!["worktrees".to_string(), "shared_dirs".to_string()],
+                        value: toml_edit::value(shared_dirs_array),
+                    }])
+                    .apply()
+                    .await
+                {
+                    Ok(()) => {}
+                    Err(err) => {
+                        tracing::error!(error = %err, "failed to persist worktree shared dirs");
+                        self.chat_widget.add_error_message(format!(
+                            "Failed to save worktree shared dirs: {err}"
+                        ));
+                    }
+                }
+            }
+            AppEvent::PersistMcpStartupTimeout {
+                server,
+                startup_timeout_sec,
+            } => {
+                let profile = self.active_profile.as_deref();
+                match ConfigEditsBuilder::new(&self.config.codex_home)
+                    .with_profile(profile)
+                    .with_edits([ConfigEdit::SetPath {
+                        segments: vec![
+                            "mcp_servers".to_string(),
+                            server.clone(),
+                            "startup_timeout_sec".to_string(),
+                        ],
+                        value: toml_edit::value(
+                            i64::try_from(startup_timeout_sec).unwrap_or(i64::MAX),
+                        ),
+                    }])
+                    .apply()
+                    .await
+                {
+                    Ok(()) => {
+                        if let Some(cfg) = self.config.mcp_servers.get_mut(&server) {
+                            cfg.startup_timeout_sec =
+                                Some(std::time::Duration::from_secs(startup_timeout_sec));
+                        }
+                    }
+                    Err(err) => {
+                        tracing::error!(error = %err, "failed to persist MCP startup timeout");
+                        self.chat_widget.add_error_message(format!(
+                            "Failed to save MCP startup timeout for `{server}`: {err}"
+                        ));
                     }
                 }
             }
@@ -1960,6 +2517,26 @@ impl App {
     async fn handle_key_event(&mut self, tui: &mut tui::Tui, key_event: KeyEvent) {
         match key_event {
             KeyEvent {
+                code: KeyCode::Char('k'),
+                modifiers: crossterm::event::KeyModifiers::CONTROL,
+                kind: KeyEventKind::Press,
+                ..
+            } => {
+                let text = self.chat_widget.composer_text();
+                if text.trim().is_empty() {
+                    self.chat_widget
+                        .add_info_message("Composer is empty.".to_string(), None);
+                } else if let Err(err) = clipboard_copy::copy_text(text) {
+                    tracing::error!(error = %err, "failed to copy composer to clipboard");
+                    self.chat_widget
+                        .add_error_message(format!("Failed to copy composer to clipboard: {err}"));
+                } else {
+                    self.chat_widget
+                        .add_info_message("Copied composer to clipboard.".to_string(), None);
+                }
+                tui.frame_requester().schedule_frame();
+            }
+            KeyEvent {
                 code: KeyCode::Char('t'),
                 modifiers: crossterm::event::KeyModifiers::CONTROL,
                 kind: KeyEventKind::Press,
@@ -1969,6 +2546,26 @@ impl App {
                 let _ = tui.enter_alt_screen();
                 self.overlay = Some(Overlay::new_transcript(self.transcript_cells.clone()));
                 tui.frame_requester().schedule_frame();
+            }
+            KeyEvent {
+                code: KeyCode::Char('e' | 'E'),
+                modifiers: crossterm::event::KeyModifiers::ALT,
+                kind: KeyEventKind::Press,
+                ..
+            } => {
+                if self.toggle_exec_cell_expansion_at_selection() {
+                    tui.frame_requester().schedule_frame();
+                }
+            }
+            KeyEvent {
+                code: KeyCode::Char('c' | 'C'),
+                modifiers: crossterm::event::KeyModifiers::ALT,
+                kind: KeyEventKind::Press,
+                ..
+            } => {
+                if self.copy_exec_cell_full_at_cursor() {
+                    tui.frame_requester().schedule_frame();
+                }
             }
             // Esc primes/advances backtracking only in normal (not working) mode
             // with the composer focused and empty. In any other state, forward
@@ -2182,6 +2779,8 @@ mod tests {
             transcript_copy_ui: TranscriptCopyUi::new_with_shortcut(
                 CopySelectionShortcut::CtrlShiftC,
             ),
+            expanded_exec_call_ids: std::collections::HashSet::new(),
+            last_transcript_width: 0,
             overlay: None,
             deferred_history_lines: Vec::new(),
             has_emitted_history_lines: false,
@@ -2193,6 +2792,7 @@ mod tests {
             feedback: codex_feedback::CodexFeedback::new(),
             pending_update_action: None,
             suppress_shutdown_complete: false,
+            shared_dirs_write_notice_shown: false,
             skip_world_writable_scan_once: false,
         }
     }
@@ -2232,6 +2832,8 @@ mod tests {
                 transcript_copy_ui: TranscriptCopyUi::new_with_shortcut(
                     CopySelectionShortcut::CtrlShiftC,
                 ),
+                expanded_exec_call_ids: std::collections::HashSet::new(),
+                last_transcript_width: 0,
                 overlay: None,
                 deferred_history_lines: Vec::new(),
                 has_emitted_history_lines: false,
@@ -2243,6 +2845,7 @@ mod tests {
                 feedback: codex_feedback::CodexFeedback::new(),
                 pending_update_action: None,
                 suppress_shutdown_complete: false,
+                shared_dirs_write_notice_shown: false,
                 skip_world_writable_scan_once: false,
             },
             rx,
@@ -2316,6 +2919,8 @@ mod tests {
             &app.transcript_cells,
             app.transcript_selection,
             40,
+            app.config.tui_verbose_tool_output,
+            &app.expanded_exec_call_ids,
         )
         .expect("expected text");
         assert_eq!(text, "one\ntwo\nthree\nfour");
@@ -2543,7 +3148,10 @@ mod tests {
 
         assert!(s.contains("copy"));
         assert!(s.contains("ctrl + shift + c"));
-        assert!(app.transcript_copy_ui.hit_test(10, 2));
+        assert_eq!(
+            app.transcript_copy_ui.hit_test_action(10, 2),
+            Some(crate::transcript_copy_ui::TranscriptPillAction::CopySelection)
+        );
     }
 
     #[tokio::test]
@@ -2604,7 +3212,10 @@ mod tests {
         assert!(s.contains("copy"));
         assert!(s.contains("ctrl + y"));
         assert!(!s.contains("ctrl + shift + c"));
-        assert!(app.transcript_copy_ui.hit_test(10, 2));
+        assert_eq!(
+            app.transcript_copy_ui.hit_test_action(10, 2),
+            Some(crate::transcript_copy_ui::TranscriptPillAction::CopySelection)
+        );
     }
 
     #[tokio::test]
@@ -2662,7 +3273,7 @@ mod tests {
         }
 
         assert!(!s.contains("copy"));
-        assert!(!app.transcript_copy_ui.hit_test(10, 2));
+        assert_eq!(app.transcript_copy_ui.hit_test_action(10, 2), None);
     }
 
     #[tokio::test]
