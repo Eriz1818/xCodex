@@ -32,10 +32,12 @@ use std::path::PathBuf;
 use std::time::Duration;
 use supports_color::Stream;
 
+mod config_cmd;
 mod mcp_cmd;
 #[cfg(not(windows))]
 mod wsl_paths;
 
+use crate::config_cmd::ConfigCli;
 use crate::mcp_cmd::McpCli;
 
 use codex_core::config::Config;
@@ -144,6 +146,9 @@ enum Subcommand {
 
     /// Utilities for exercising external hooks.
     Hooks(HooksCommand),
+
+    /// Configuration helpers (paths, editing, diagnostics).
+    Config(ConfigCli),
 }
 
 #[derive(Debug, Parser)]
@@ -587,6 +592,13 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
             // Propagate any root-level config overrides (e.g. `-c key=value`).
             prepend_config_flags(&mut mcp_cli.config_overrides, root_config_overrides.clone());
             mcp_cli.run().await?;
+        }
+        Some(Subcommand::Config(mut config_cli)) => {
+            prepend_config_flags(
+                &mut config_cli.config_overrides,
+                root_config_overrides.clone(),
+            );
+            config_cli.run().await?;
         }
         Some(Subcommand::AppServer(app_server_cli)) => match app_server_cli.subcommand {
             None => {

@@ -43,6 +43,7 @@ libc = { workspace = true }
 owo-colors = { workspace = true }
 regex-lite = { workspace = true }
 serde_json = { workspace = true }
+shlex = { workspace = true }
 supports-color = { workspace = true }
 tokio = { workspace = true, features = [
     "io-std",
@@ -56,6 +57,8 @@ tracing = { workspace = true }
 
 [target.'cfg(target_os = "windows")'.dependencies]
 codex_windows_sandbox = { package = "codex-windows-sandbox", path = "../windows-sandbox-rs" }
+which = { workspace = true }
+winsplit = "0.1"
 
 [dev-dependencies]
 assert_cmd = { workspace = true }

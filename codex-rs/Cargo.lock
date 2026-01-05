@@ -1171,11 +1171,14 @@ dependencies = [
  "pretty_assertions",
  "regex-lite",
  "serde_json",
+ "shlex",
  "supports-color 3.0.2",
  "tempfile",
  "tokio",
  "toml 0.9.5",
  "tracing",
+ "which",
+ "winsplit",
 ]
 
 [[package]]
@@ -1744,6 +1747,7 @@ dependencies = [
  "lazy_static",
  "libc",
  "mcp-types",
+ "notify",
  "pathdiff",
  "pretty_assertions",
  "pulldown-cmark",
@@ -1818,6 +1822,7 @@ dependencies = [
  "lazy_static",
  "libc",
  "mcp-types",
+ "notify",
  "pathdiff",
  "pretty_assertions",
  "pulldown-cmark",
