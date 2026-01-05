@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Stage and optionally package the @openai/codex npm module."""
+"""Stage and optionally package the @eriz1818/xcodex npm module."""
 
 import argparse
 import json
@@ -16,18 +16,18 @@ RESPONSES_API_PROXY_NPM_ROOT = REPO_ROOT / "codex-rs" / "responses-api-proxy" / 
 CODEX_SDK_ROOT = REPO_ROOT / "sdk" / "typescript"
 
 PACKAGE_NATIVE_COMPONENTS: dict[str, list[str]] = {
-    "codex": ["codex", "rg"],
-    "codex-responses-api-proxy": ["codex-responses-api-proxy"],
-    "codex-sdk": ["codex"],
+    "xcodex": ["xcodex", "rg"],
+    "xcodex-responses-api-proxy": ["xcodex-responses-api-proxy"],
+    "codex-sdk": [],
 }
 WINDOWS_ONLY_COMPONENTS: dict[str, list[str]] = {
-    "codex": ["codex-windows-sandbox-setup", "codex-command-runner"],
+    "xcodex": ["codex-windows-sandbox-setup", "codex-command-runner"],
 }
 COMPONENT_DEST_DIR: dict[str, str] = {
-    "codex": "codex",
-    "codex-responses-api-proxy": "codex-responses-api-proxy",
-    "codex-windows-sandbox-setup": "codex",
-    "codex-command-runner": "codex",
+    "xcodex": "xcodex",
+    "xcodex-responses-api-proxy": "xcodex-responses-api-proxy",
+    "codex-windows-sandbox-setup": "xcodex",
+    "codex-command-runner": "xcodex",
     "rg": "path",
 }
 
@@ -36,9 +36,9 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Build or stage the Codex CLI npm package.")
     parser.add_argument(
         "--package",
-        choices=("codex", "codex-responses-api-proxy", "codex-sdk"),
-        default="codex",
-        help="Which npm package to stage (default: codex).",
+        choices=("xcodex", "xcodex-responses-api-proxy", "codex-sdk"),
+        default="xcodex",
+        help="Which npm package to stage (default: xcodex).",
     )
     parser.add_argument(
         "--version",
@@ -112,18 +112,18 @@ def main() -> int:
 
         if release_version:
             staging_dir_str = str(staging_dir)
-            if package == "codex":
+            if package == "xcodex":
                 print(
                     f"Staged version {version} for release in {staging_dir_str}\n\n"
                     "Verify the CLI:\n"
-                    f"    node {staging_dir_str}/bin/codex.js --version\n"
-                    f"    node {staging_dir_str}/bin/codex.js --help\n\n"
+                    f"    node {staging_dir_str}/bin/xcodex.js --version\n"
+                    f"    node {staging_dir_str}/bin/xcodex.js --help\n\n"
                 )
-            elif package == "codex-responses-api-proxy":
+            elif package == "xcodex-responses-api-proxy":
                 print(
                     f"Staged version {version} for release in {staging_dir_str}\n\n"
                     "Verify the responses API proxy:\n"
-                    f"    node {staging_dir_str}/bin/codex-responses-api-proxy.js --help\n\n"
+                    f"    node {staging_dir_str}/bin/xcodex-responses-api-proxy.js --help\n\n"
                 )
             else:
                 print(
@@ -160,10 +160,10 @@ def prepare_staging_dir(staging_dir: Path | None) -> tuple[Path, bool]:
 
 
 def stage_sources(staging_dir: Path, version: str, package: str) -> None:
-    if package == "codex":
+    if package == "xcodex":
         bin_dir = staging_dir / "bin"
         bin_dir.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(CODEX_CLI_ROOT / "bin" / "codex.js", bin_dir / "codex.js")
+        shutil.copy2(CODEX_CLI_ROOT / "bin" / "xcodex.js", bin_dir / "xcodex.js")
         rg_manifest = CODEX_CLI_ROOT / "bin" / "rg"
         if rg_manifest.exists():
             shutil.copy2(rg_manifest, bin_dir / "rg")
@@ -173,11 +173,11 @@ def stage_sources(staging_dir: Path, version: str, package: str) -> None:
             shutil.copy2(readme_src, staging_dir / "README.md")
 
         package_json_path = CODEX_CLI_ROOT / "package.json"
-    elif package == "codex-responses-api-proxy":
+    elif package == "xcodex-responses-api-proxy":
         bin_dir = staging_dir / "bin"
         bin_dir.mkdir(parents=True, exist_ok=True)
-        launcher_src = RESPONSES_API_PROXY_NPM_ROOT / "bin" / "codex-responses-api-proxy.js"
-        shutil.copy2(launcher_src, bin_dir / "codex-responses-api-proxy.js")
+        launcher_src = RESPONSES_API_PROXY_NPM_ROOT / "bin" / "xcodex-responses-api-proxy.js"
+        shutil.copy2(launcher_src, bin_dir / "xcodex-responses-api-proxy.js")
 
         readme_src = RESPONSES_API_PROXY_NPM_ROOT / "README.md"
         if readme_src.exists():
@@ -198,13 +198,6 @@ def stage_sources(staging_dir: Path, version: str, package: str) -> None:
         scripts = package_json.get("scripts")
         if isinstance(scripts, dict):
             scripts.pop("prepare", None)
-
-        files = package_json.get("files")
-        if isinstance(files, list):
-            if "vendor" not in files:
-                files.append("vendor")
-        else:
-            package_json["files"] = ["dist", "vendor"]
 
     with open(staging_dir / "package.json", "w", encoding="utf-8") as out:
         json.dump(package_json, out, indent=2)
@@ -247,8 +240,8 @@ def copy_native_binaries(
     if not vendor_src.exists():
         raise RuntimeError(f"Vendor source directory not found: {vendor_src}")
 
-    components_set = {component for component in components if component in COMPONENT_DEST_DIR}
-    if not components_set:
+    base_components = {component for component in components if component in COMPONENT_DEST_DIR}
+    if not base_components:
         return
 
     vendor_dest = staging_dir / "vendor"
@@ -260,13 +253,14 @@ def copy_native_binaries(
         if not target_dir.is_dir():
             continue
 
+        target_components = set(base_components)
         if "windows" in target_dir.name:
-            components_set.update(WINDOWS_ONLY_COMPONENTS.get(package, []))
+            target_components.update(WINDOWS_ONLY_COMPONENTS.get(package, []))
 
         dest_target_dir = vendor_dest / target_dir.name
         dest_target_dir.mkdir(parents=True, exist_ok=True)
 
-        for component in components_set:
+        for component in target_components:
             dest_dir_name = COMPONENT_DEST_DIR.get(component)
             if dest_dir_name is None:
                 continue

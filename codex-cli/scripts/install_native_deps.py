@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Install Codex native binaries (Rust CLI plus ripgrep helpers)."""
+"""Install xcodex native binaries (Rust CLI plus ripgrep helpers)."""
 
 import argparse
 from contextlib import contextmanager
@@ -20,7 +20,7 @@ from urllib.request import urlopen
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 CODEX_CLI_ROOT = SCRIPT_DIR.parent
-DEFAULT_WORKFLOW_URL = "https://github.com/openai/codex/actions/runs/17952349351"  # rust-v0.40.0
+DEFAULT_WORKFLOW_URL = "https://github.com/openai/codex/actions/runs/17952349351"  # upstream example
 VENDOR_DIR_NAME = "vendor"
 RG_MANIFEST = CODEX_CLI_ROOT / "bin" / "rg"
 BINARY_TARGETS = (
@@ -44,25 +44,25 @@ class BinaryComponent:
 WINDOWS_TARGETS = tuple(target for target in BINARY_TARGETS if "windows" in target)
 
 BINARY_COMPONENTS = {
-    "codex": BinaryComponent(
-        artifact_prefix="codex",
-        dest_dir="codex",
-        binary_basename="codex",
+    "xcodex": BinaryComponent(
+        artifact_prefix="xcodex",
+        dest_dir="xcodex",
+        binary_basename="xcodex",
     ),
-    "codex-responses-api-proxy": BinaryComponent(
-        artifact_prefix="codex-responses-api-proxy",
-        dest_dir="codex-responses-api-proxy",
-        binary_basename="codex-responses-api-proxy",
+    "xcodex-responses-api-proxy": BinaryComponent(
+        artifact_prefix="xcodex-responses-api-proxy",
+        dest_dir="xcodex-responses-api-proxy",
+        binary_basename="xcodex-responses-api-proxy",
     ),
     "codex-windows-sandbox-setup": BinaryComponent(
         artifact_prefix="codex-windows-sandbox-setup",
-        dest_dir="codex",
+        dest_dir="xcodex",
         binary_basename="codex-windows-sandbox-setup",
         targets=WINDOWS_TARGETS,
     ),
     "codex-command-runner": BinaryComponent(
         artifact_prefix="codex-command-runner",
-        dest_dir="codex",
+        dest_dir="xcodex",
         binary_basename="codex-command-runner",
         targets=WINDOWS_TARGETS,
     ),
@@ -129,13 +129,20 @@ def parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--repo",
+        help=(
+            "GitHub repo (<owner>/<name>) to download artifacts from. "
+            "Defaults to the repo implied by --workflow-url."
+        ),
+    )
+    parser.add_argument(
         "--component",
         dest="components",
         action="append",
         choices=tuple(list(BINARY_COMPONENTS) + ["rg"]),
         help=(
             "Limit installation to the specified components."
-            " May be repeated. Defaults to codex, codex-windows-sandbox-setup,"
+            " May be repeated. Defaults to xcodex, codex-windows-sandbox-setup,"
             " codex-command-runner, and rg."
         ),
     )
@@ -151,6 +158,15 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+def _infer_repo_from_workflow_url(workflow_url: str) -> str:
+    parsed = urlparse(workflow_url)
+    # Expected path: /<owner>/<repo>/actions/runs/<id>
+    parts = [p for p in parsed.path.split("/") if p]
+    if len(parts) >= 2:
+        return f"{parts[0]}/{parts[1]}"
+    raise ValueError(f"Unable to infer repo from workflow URL: {workflow_url}")
+
+
 def main() -> int:
     args = parse_args()
 
@@ -158,16 +174,17 @@ def main() -> int:
     vendor_dir = codex_cli_root / VENDOR_DIR_NAME
     vendor_dir.mkdir(parents=True, exist_ok=True)
 
+    workflow_url = (args.workflow_url or DEFAULT_WORKFLOW_URL).strip()
+    if not workflow_url:
+        workflow_url = DEFAULT_WORKFLOW_URL
+    repo = (args.repo or _infer_repo_from_workflow_url(workflow_url)).strip()
+
     components = args.components or [
-        "codex",
+        "xcodex",
         "codex-windows-sandbox-setup",
         "codex-command-runner",
         "rg",
     ]
-
-    workflow_url = (args.workflow_url or DEFAULT_WORKFLOW_URL).strip()
-    if not workflow_url:
-        workflow_url = DEFAULT_WORKFLOW_URL
 
     workflow_id = workflow_url.rstrip("/").split("/")[-1]
     print(f"Downloading native artifacts from workflow {workflow_id}...")
@@ -175,7 +192,7 @@ def main() -> int:
     with _gha_group(f"Download native artifacts from workflow {workflow_id}"):
         with tempfile.TemporaryDirectory(prefix="codex-native-artifacts-") as artifacts_dir_str:
             artifacts_dir = Path(artifacts_dir_str)
-            _download_artifacts(workflow_id, artifacts_dir)
+            _download_artifacts(workflow_id, artifacts_dir, repo)
             install_binary_components(
                 artifacts_dir,
                 vendor_dir,
@@ -259,7 +276,7 @@ def fetch_rg(
     return [results[target] for target in targets]
 
 
-def _download_artifacts(workflow_id: str, dest_dir: Path) -> None:
+def _download_artifacts(workflow_id: str, dest_dir: Path, repo: str) -> None:
     cmd = [
         "gh",
         "run",
@@ -267,7 +284,7 @@ def _download_artifacts(workflow_id: str, dest_dir: Path) -> None:
         "--dir",
         str(dest_dir),
         "--repo",
-        "openai/codex",
+        repo,
         workflow_id,
     ]
     subprocess.check_call(cmd)

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Stage one or more Codex npm packages for release."""
+"""Stage one or more xcodex npm packages for release."""
 
 from __future__ import annotations
 
@@ -16,8 +16,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 BUILD_SCRIPT = REPO_ROOT / "codex-cli" / "scripts" / "build_npm_package.py"
 INSTALL_NATIVE_DEPS = REPO_ROOT / "codex-cli" / "scripts" / "install_native_deps.py"
-WORKFLOW_NAME = ".github/workflows/rust-release.yml"
-GITHUB_REPO = "openai/codex"
+WORKFLOW_NAME = ".github/workflows/xcodex-release.yml"
 
 _SPEC = importlib.util.spec_from_file_location("codex_build_npm_package", BUILD_SCRIPT)
 if _SPEC is None or _SPEC.loader is None:
@@ -47,6 +46,21 @@ def parse_args() -> argparse.Namespace:
         help="Optional workflow URL to reuse for native artifacts.",
     )
     parser.add_argument(
+        "--workflow-file",
+        default=WORKFLOW_NAME,
+        help="Workflow file name used to locate native artifacts (default: %(default)s).",
+    )
+    parser.add_argument(
+        "--tag-prefix",
+        default="xcodex-v",
+        help="Tag prefix used for releases (default: %(default)s).",
+    )
+    parser.add_argument(
+        "--repo",
+        default=os.environ.get("GITHUB_REPOSITORY"),
+        help="GitHub repo to download artifacts from (default: $GITHUB_REPOSITORY).",
+    )
+    parser.add_argument(
         "--output-dir",
         type=Path,
         default=None,
@@ -68,18 +82,18 @@ def collect_native_components(packages: list[str]) -> set[str]:
     return components
 
 
-def resolve_release_workflow(version: str) -> dict:
+def resolve_release_workflow(*, version: str, tag_prefix: str, workflow_file: str) -> dict:
     stdout = subprocess.check_output(
         [
             "gh",
             "run",
             "list",
             "--branch",
-            f"rust-v{version}",
+            f"{tag_prefix}{version}",
             "--json",
             "workflowName,url,headSha",
             "--workflow",
-            WORKFLOW_NAME,
+            workflow_file,
             "--jq",
             "first(.[])",
         ],
@@ -88,15 +102,25 @@ def resolve_release_workflow(version: str) -> dict:
     )
     workflow = json.loads(stdout or "null")
     if not workflow:
-        raise RuntimeError(f"Unable to find rust-release workflow for version {version}.")
+        raise RuntimeError(
+            f"Unable to find workflow {workflow_file} for tag {tag_prefix}{version}."
+        )
     return workflow
 
 
-def resolve_workflow_url(version: str, override: str | None) -> tuple[str, str | None]:
+def resolve_workflow_url(
+    *,
+    version: str,
+    tag_prefix: str,
+    workflow_file: str,
+    override: str | None,
+) -> tuple[str, str | None]:
     if override:
         return override, None
 
-    workflow = resolve_release_workflow(version)
+    workflow = resolve_release_workflow(
+        version=version, tag_prefix=tag_prefix, workflow_file=workflow_file
+    )
     return workflow["url"], workflow.get("headSha")
 
 
@@ -104,11 +128,14 @@ def install_native_components(
     workflow_url: str,
     components: set[str],
     vendor_root: Path,
+    repo: str | None,
 ) -> None:
     if not components:
         return
 
     cmd = [str(INSTALL_NATIVE_DEPS), "--workflow-url", workflow_url]
+    if repo:
+        cmd.extend(["--repo", repo])
     for component in sorted(components):
         cmd.extend(["--component", component])
     cmd.append(str(vendor_root))
@@ -135,15 +162,23 @@ def main() -> int:
     vendor_src: Path | None = None
     resolved_head_sha: str | None = None
 
-    final_messsages = []
+    final_messages = []
 
     try:
         if native_components:
             workflow_url, resolved_head_sha = resolve_workflow_url(
-                args.release_version, args.workflow_url
+                version=args.release_version,
+                tag_prefix=args.tag_prefix,
+                workflow_file=args.workflow_file,
+                override=args.workflow_url,
             )
             vendor_temp_root = Path(tempfile.mkdtemp(prefix="npm-native-", dir=runner_temp))
-            install_native_components(workflow_url, native_components, vendor_temp_root)
+            install_native_components(
+                workflow_url,
+                native_components,
+                vendor_temp_root,
+                args.repo,
+            )
             vendor_src = vendor_temp_root / "vendor"
 
         if resolved_head_sha:
@@ -174,12 +209,12 @@ def main() -> int:
                 if not args.keep_staging_dirs:
                     shutil.rmtree(staging_dir, ignore_errors=True)
 
-            final_messsages.append(f"Staged {package} at {pack_output}")
+            final_messages.append(f"Staged {package} at {pack_output}")
     finally:
         if vendor_temp_root is not None and not args.keep_staging_dirs:
             shutil.rmtree(vendor_temp_root, ignore_errors=True)
 
-    for msg in final_messsages:
+    for msg in final_messages:
         print(msg)
 
     return 0
