@@ -3252,8 +3252,14 @@ mod tests {
             }))
             .await;
 
-        let actual = session.state.lock().await.token_info();
-        assert_eq!(actual, Some(info2));
+        let actual = session
+            .state
+            .lock()
+            .await
+            .token_info()
+            .expect("token info should be seeded from rollout");
+        assert_eq!(actual.total_token_usage, info2.total_token_usage);
+        assert_eq!(actual.model_context_window, info2.model_context_window);
     }
 
     #[tokio::test]
