@@ -442,6 +442,8 @@ impl App {
                     .wrap_err_with(|| {
                         format!("Failed to resume session from {}", path.display())
                     })?;
+                let resumed_model = resumed.session_configured.model.clone();
+                model = resumed_model.clone();
                 let init = crate::chatwidget::ChatWidgetInit {
                     config: config.clone(),
                     frame_requester: tui.frame_requester(),
@@ -453,7 +455,7 @@ impl App {
                     models_manager: conversation_manager.get_models_manager(),
                     feedback: feedback.clone(),
                     is_first_run,
-                    model: model.clone(),
+                    model: resumed_model,
                 };
                 ChatWidget::new_from_existing(
                     init,
@@ -1348,6 +1350,7 @@ impl App {
                             .await
                         {
                             Ok(resumed) => {
+                                let resumed_model = resumed.session_configured.model.clone();
                                 self.shutdown_current_conversation().await;
                                 let init = crate::chatwidget::ChatWidgetInit {
                                     config: self.config.clone(),
@@ -1360,13 +1363,14 @@ impl App {
                                     models_manager: self.server.get_models_manager(),
                                     feedback: self.feedback.clone(),
                                     is_first_run: false,
-                                    model: self.current_model.clone(),
+                                    model: resumed_model.clone(),
                                 };
                                 self.chat_widget = ChatWidget::new_from_existing(
                                     init,
                                     resumed.conversation,
                                     resumed.session_configured,
                                 );
+                                self.current_model = resumed_model;
                                 if let Some(summary) = summary {
                                     let mut lines: Vec<Line<'static>> =
                                         vec![summary.usage_line.clone().into()];

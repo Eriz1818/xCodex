@@ -352,9 +352,10 @@ impl App {
     ) {
         let conv = new_conv.conversation;
         let session_configured = new_conv.session_configured;
+        let forked_model = session_configured.model.clone();
         let init = crate::chatwidget::ChatWidgetInit {
             config: cfg,
-            model: self.current_model.clone(),
+            model: forked_model.clone(),
             frame_requester: tui.frame_requester(),
             app_event_tx: self.app_event_tx.clone(),
             initial_prompt: None,
@@ -367,6 +368,7 @@ impl App {
         };
         self.chat_widget =
             crate::chatwidget::ChatWidget::new_from_existing(init, conv, session_configured);
+        self.current_model = forked_model;
         // Trim transcript up to the selected user message and re-render it.
         self.trim_transcript_for_backtrack(nth_user_message);
         self.render_transcript_once(tui);

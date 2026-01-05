@@ -410,6 +410,7 @@ async fn make_chatwidget_manual(
         conversation_id: None,
         frame_requester: FrameRequester::test_dummy(),
         show_welcome_banner: true,
+        suppress_session_configured_redraw: false,
         queued_user_messages: VecDeque::new(),
         pending_notification: None,
         is_review_mode: false,
