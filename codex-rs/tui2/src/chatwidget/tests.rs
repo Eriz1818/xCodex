@@ -1367,6 +1367,23 @@ async fn slash_rollout_handles_missing_path() {
 }
 
 #[tokio::test]
+async fn slash_hooks_renders_help_snapshot() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.config.codex_home = PathBuf::from("CODEX_HOME");
+
+    chat.dispatch_command(SlashCommand::Hooks);
+
+    let cells = drain_insert_history(&mut rx);
+    assert!(
+        !cells.is_empty(),
+        "expected /hooks output to add at least one history cell"
+    );
+    assert_eq!(cells.len(), 1, "expected a single /hooks history cell");
+    let rendered = lines_to_single_string(&cells[0]);
+    assert_snapshot!("hooks_output", rendered);
+}
+
+#[tokio::test]
 async fn undo_success_events_render_info_messages() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
 
