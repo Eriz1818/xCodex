@@ -1,0 +1,359 @@
+# Release workflow for xcodex.
+# To release, follow a workflow like:
+# ```
+# git tag -a xcodex-v0.1.0 -m "Release 0.1.0"
+# git push origin xcodex-v0.1.0
+# ```
+
+name: xcodex-release
+on:
+  push:
+    tags:
+      - "xcodex-v*.*.*"
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: true
+
+jobs:
+  tag-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate tag matches Cargo.toml version
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "::group::Tag validation"
+
+          [[ "${GITHUB_REF_TYPE}" == "tag" ]] \
+            || { echo "❌  Not a tag push"; exit 1; }
+          [[ "${GITHUB_REF_NAME}" =~ ^xcodex-v[0-9]+\.[0-9]+\.[0-9]+(-alpha\.[0-9]+)?$ ]] \
+            || { echo "❌  Tag '${GITHUB_REF_NAME}' doesn't match expected format"; exit 1; }
+
+          tag_ver="${GITHUB_REF_NAME#xcodex-v}"
+          cargo_ver="$(grep -m1 '^version' codex-rs/Cargo.toml \
+                        | sed -E 's/version *= *\"([^\"]+)\".*/\1/')"
+
+          [[ "${tag_ver}" == "${cargo_ver}" ]] \
+            || { echo "❌  Tag ${tag_ver} ≠ Cargo.toml ${cargo_ver}"; exit 1; }
+
+          echo "✅  Tag and Cargo.toml agree (${tag_ver})"
+          echo "::endgroup::"
+
+  build:
+    needs: tag-check
+    name: Build - ${{ matrix.runner }} - ${{ matrix.target }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      id-token: write
+    defaults:
+      run:
+        working-directory: codex-rs
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15-xlarge
+            target: aarch64-apple-darwin
+          - runner: macos-15-xlarge
+            target: x86_64-apple-darwin
+          - runner: ubuntu-24.04
+            target: x86_64-unknown-linux-musl
+          - runner: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-musl
+          - runner: windows-latest
+            target: x86_64-pc-windows-msvc
+          - runner: windows-11-arm
+            target: aarch64-pc-windows-msvc
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.90.0
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            ${{ github.workspace }}/codex-rs/target/
+          key: cargo-${{ matrix.runner }}-${{ matrix.target }}-release-${{ hashFiles('**/Cargo.lock') }}
+
+      - if: ${{ contains(matrix.target, 'linux-musl') }}
+        name: Install musl build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y musl-tools pkg-config
+
+      - name: Cargo build
+        shell: bash
+        run: |
+          if [[ "${{ contains(matrix.target, 'pc-windows') }}" == 'true' ]]; then
+            cargo build --target ${{ matrix.target }} --release --bin codex --bin codex-responses-api-proxy --bin codex-windows-sandbox-setup --bin codex-command-runner
+          else
+            cargo build --target ${{ matrix.target }} --release --bin codex --bin codex-responses-api-proxy
+          fi
+
+      - if: ${{ contains(matrix.target, 'pc-windows') }}
+        name: Install zstd
+        shell: powershell
+        run: choco install -y zstandard
+
+      - name: Stage artifacts
+        shell: bash
+        run: |
+          dest="dist/${{ matrix.target }}"
+          mkdir -p "$dest"
+          target="${{ matrix.target }}"
+
+          if [[ "${{ contains(matrix.target, 'pc-windows') }}" == 'true' ]]; then
+            cp "target/${target}/release/codex.exe" "$dest/xcodex-${target}.exe"
+            cp "target/${target}/release/codex-responses-api-proxy.exe" "$dest/xcodex-responses-api-proxy-${target}.exe"
+            cp "target/${target}/release/codex-windows-sandbox-setup.exe" "$dest/codex-windows-sandbox-setup-${target}.exe"
+            cp "target/${target}/release/codex-command-runner.exe" "$dest/codex-command-runner-${target}.exe"
+          else
+            cp "target/${target}/release/codex" "$dest/xcodex-${target}"
+            cp "target/${target}/release/codex-responses-api-proxy" "$dest/xcodex-responses-api-proxy-${target}"
+          fi
+
+      - name: Compress artifacts
+        shell: bash
+        run: |
+          dest="dist/${{ matrix.target }}"
+          keep_originals=false
+          if [[ "${{ contains(matrix.target, 'pc-windows') }}" == 'true' ]]; then
+            keep_originals=true
+          fi
+
+          for f in "$dest"/*; do
+            base="$(basename "$f")"
+
+            if [[ "$base" == *.tar.gz || "$base" == *.zip || "$base" == *.dmg ]]; then
+              continue
+            fi
+
+            tar -C "$dest" -czf "$dest/${base}.tar.gz" "$base"
+
+            if [[ "${{ contains(matrix.target, 'pc-windows') }}" == 'true' ]]; then
+              (cd "$dest" && 7z a "${base}.zip" "$base")
+            fi
+
+            zstd_args=(-T0 -19)
+            if [[ "${keep_originals}" == false ]]; then
+              zstd_args+=(--rm)
+            fi
+            zstd "${zstd_args[@]}" "$dest/$base"
+          done
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.target }}
+          path: |
+            codex-rs/dist/${{ matrix.target }}/*
+
+  stage:
+    needs:
+      - build
+    name: stage
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      version: ${{ steps.release_name.outputs.name }}
+      tag: ${{ github.ref_name }}
+      should_publish_npm: ${{ steps.npm_publish_settings.outputs.should_publish }}
+      npm_tag: ${{ steps.npm_publish_settings.outputs.npm_tag }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+
+      - name: List
+        run: ls -R dist/
+
+      - name: Define release name
+        id: release_name
+        run: |
+          version="${GITHUB_REF_NAME#xcodex-v}"
+          echo "name=${version}" >> "$GITHUB_OUTPUT"
+
+      - name: Determine npm publish settings
+        id: npm_publish_settings
+        env:
+          VERSION: ${{ steps.release_name.outputs.name }}
+        run: |
+          set -euo pipefail
+          version="${VERSION}"
+
+          if [[ "${version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "should_publish=true" >> "$GITHUB_OUTPUT"
+            echo "npm_tag=" >> "$GITHUB_OUTPUT"
+          elif [[ "${version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+-alpha\.[0-9]+$ ]]; then
+            echo "should_publish=true" >> "$GITHUB_OUTPUT"
+            echo "npm_tag=alpha" >> "$GITHUB_OUTPUT"
+          else
+            echo "should_publish=false" >> "$GITHUB_OUTPUT"
+            echo "npm_tag=" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Setup Node.js for npm packaging
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      # install_native_deps.py uses the `dotslash` CLI to parse the rg manifest.
+      - uses: facebook/install-dotslash@v2
+
+      - name: Stage npm packages
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          ./scripts/stage_npm_packages.py \
+            --release-version "${{ steps.release_name.outputs.name }}" \
+            --package xcodex \
+            --package xcodex-responses-api-proxy
+
+      - name: Upload release payload
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-dist
+          path: dist/**
+
+  smoke-test-npm:
+    needs: stage
+    name: smoke-test-npm - ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+          - macos-latest
+          - windows-latest
+
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-dist
+          path: dist
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install tarballs (local) + smoke test
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p smoke
+          cd smoke
+
+          npm init -y >/dev/null
+
+          xcodex_tarball="$(ls ../dist/npm/xcodex-npm-*.tgz | head -n 1)"
+          proxy_tarball="$(ls ../dist/npm/xcodex-responses-api-proxy-npm-*.tgz | head -n 1)"
+
+          npm install "$xcodex_tarball" "$proxy_tarball"
+
+          npx --no-install xcodex --version
+          npx --no-install xcodex hooks init
+          npx --no-install xcodex hooks test --configured-only
+          npx --no-install xcodex-responses-api-proxy --help
+
+  create-release:
+    needs:
+      - stage
+      - smoke-test-npm
+    name: create-release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-dist
+          path: dist
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: ${{ needs.stage.outputs.version }}
+          tag_name: ${{ needs.stage.outputs.tag }}
+          files: dist/**
+          prerelease: ${{ contains(needs.stage.outputs.version, '-') }}
+
+  publish-npm:
+    if: ${{ needs.stage.outputs.should_publish_npm == 'true' }}
+    name: publish-npm
+    needs:
+      - stage
+      - create-release
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+
+    steps:
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          registry-url: "https://registry.npmjs.org"
+          scope: "@eriz1818"
+
+      - name: Update npm
+        run: npm install -g npm@latest
+
+      - name: Download npm tarballs from release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          version="${{ needs.stage.outputs.version }}"
+          tag="${{ needs.stage.outputs.tag }}"
+          mkdir -p dist/npm
+
+          gh release download "$tag" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --pattern "xcodex-npm-${version}.tgz" \
+            --dir dist/npm
+
+          gh release download "$tag" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --pattern "xcodex-responses-api-proxy-npm-${version}.tgz" \
+            --dir dist/npm
+
+      - name: Publish to npm
+        env:
+          VERSION: ${{ needs.stage.outputs.version }}
+          NPM_TAG: ${{ needs.stage.outputs.npm_tag }}
+        run: |
+          set -euo pipefail
+          tag_args=()
+          if [[ -n "${NPM_TAG}" ]]; then
+            tag_args+=(--tag "${NPM_TAG}")
+          fi
+
+          tarballs=(
+            "xcodex-npm-${VERSION}.tgz"
+            "xcodex-responses-api-proxy-npm-${VERSION}.tgz"
+          )
+
+          for tarball in "${tarballs[@]}"; do
+            npm publish "${GITHUB_WORKSPACE}/dist/npm/${tarball}" --access public --provenance "${tag_args[@]}"
+          done
