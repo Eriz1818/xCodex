@@ -359,6 +359,8 @@ pub(crate) struct TurnContext {
     /// the model as well as sandbox policies are resolved against this path
     /// instead of `std::env::current_dir()`.
     pub(crate) cwd: PathBuf,
+    pub(crate) worktree_workspace_root: Option<PathBuf>,
+    pub(crate) worktrees_pinned_paths: Vec<String>,
     pub(crate) developer_instructions: Option<String>,
     pub(crate) base_instructions: Option<String>,
     pub(crate) compact_prompt: Option<String>,
@@ -379,6 +381,20 @@ impl TurnContext {
         path.as_ref()
             .map(PathBuf::from)
             .map_or_else(|| self.cwd.clone(), |p| self.cwd.join(p))
+    }
+
+    pub(crate) fn resolve_structured_file_tool_path(&self, path: Option<String>) -> PathBuf {
+        let Some(path) = path.filter(|path| !path.is_empty()) else {
+            return self.cwd.clone();
+        };
+
+        let path = PathBuf::from(path);
+        crate::git_info::resolve_worktree_pinned_path(
+            &self.cwd,
+            self.worktree_workspace_root.as_deref(),
+            &self.worktrees_pinned_paths,
+            &path,
+        )
     }
 
     pub(crate) fn compact_prompt(&self) -> &str {
@@ -517,6 +533,10 @@ impl Session {
             sub_id,
             client,
             cwd: session_configuration.cwd.clone(),
+            worktree_workspace_root: crate::git_info::resolve_root_git_project_for_trust(
+                &session_configuration.cwd,
+            ),
+            worktrees_pinned_paths: per_turn_config.worktrees_pinned_paths.clone(),
             developer_instructions: session_configuration.developer_instructions.clone(),
             base_instructions: session_configuration.base_instructions.clone(),
             compact_prompt: session_configuration.compact_prompt.clone(),
@@ -2380,6 +2400,8 @@ async fn spawn_review_thread(
         sandbox_policy: parent_turn_context.sandbox_policy.clone(),
         shell_environment_policy: parent_turn_context.shell_environment_policy.clone(),
         cwd: parent_turn_context.cwd.clone(),
+        worktree_workspace_root: parent_turn_context.worktree_workspace_root.clone(),
+        worktrees_pinned_paths: parent_turn_context.worktrees_pinned_paths.clone(),
         final_output_json_schema: None,
         codex_linux_sandbox_exe: parent_turn_context.codex_linux_sandbox_exe.clone(),
         tool_call_gate: Arc::new(ReadinessFlag::new()),

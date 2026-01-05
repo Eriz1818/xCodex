@@ -47,7 +47,7 @@ impl ToolHandler for ViewImageHandler {
             FunctionCallError::RespondToModel(format!("failed to parse function arguments: {e:?}"))
         })?;
 
-        let abs_path = turn.resolve_path(Some(args.path));
+        let abs_path = turn.resolve_structured_file_tool_path(Some(args.path));
 
         let metadata = fs::metadata(&abs_path).await.map_err(|error| {
             FunctionCallError::RespondToModel(format!(

@@ -1,4 +1,5 @@
 use std::collections::HashSet;
+use std::path::Component;
 use std::path::Path;
 use std::path::PathBuf;
 
@@ -11,6 +12,26 @@ use serde::Serialize;
 use tokio::process::Command;
 use tokio::time::Duration as TokioDuration;
 use tokio::time::timeout;
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct GitWorktreeHead {
+    pub worktree_root: PathBuf,
+    pub head_path: PathBuf,
+    pub is_bare: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum GitHeadState {
+    Branch(String),
+    Detached,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct GitWorktreeEntry {
+    pub path: PathBuf,
+    pub head: GitHeadState,
+    pub is_bare: bool,
+}
 
 /// Return `true` if the project folder specified by the `Config` is inside a
 /// Git repository.
@@ -40,6 +61,1165 @@ pub fn get_git_repo_root(base_dir: &Path) -> Option<PathBuf> {
     }
 
     None
+}
+
+pub fn resolve_git_worktree_head(base_dir: &Path) -> Option<GitWorktreeHead> {
+    let mut dir = base_dir.to_path_buf();
+
+    loop {
+        let git_path = dir.join(".git");
+        if git_path.is_dir() {
+            return Some(GitWorktreeHead {
+                worktree_root: dir,
+                head_path: git_path.join("HEAD"),
+                is_bare: false,
+            });
+        }
+
+        if git_path.is_file()
+            && let Ok(content) = std::fs::read_to_string(&git_path)
+            && let Some(gitdir) = parse_gitdir_pointer(&content)
+        {
+            let gitdir = resolve_path(&dir, &gitdir);
+            return Some(GitWorktreeHead {
+                worktree_root: dir,
+                head_path: gitdir.join("HEAD"),
+                is_bare: false,
+            });
+        }
+
+        let head_path = dir.join("HEAD");
+        if head_path.is_file() && dir.join("objects").is_dir() && dir.join("refs").is_dir() {
+            return Some(GitWorktreeHead {
+                worktree_root: dir,
+                head_path,
+                is_bare: true,
+            });
+        }
+
+        if !dir.pop() {
+            break;
+        }
+    }
+
+    None
+}
+
+pub fn read_git_head_state(head_path: &Path) -> Option<GitHeadState> {
+    let content = std::fs::read_to_string(head_path).ok()?;
+    let content = content.trim();
+    if content.is_empty() {
+        return None;
+    }
+
+    if let Some(rest) = content.strip_prefix("ref:") {
+        let reference = rest.trim();
+        if let Some(branch) = reference.strip_prefix("refs/heads/") {
+            return Some(GitHeadState::Branch(branch.to_string()));
+        }
+        return Some(GitHeadState::Branch(reference.to_string()));
+    }
+
+    Some(GitHeadState::Detached)
+}
+
+fn parse_git_worktree_list_porcelain(text: &str, cwd: &Path) -> Vec<GitWorktreeEntry> {
+    let mut entries: Vec<GitWorktreeEntry> = Vec::new();
+    let mut current_path: Option<PathBuf> = None;
+    let mut current_head: Option<GitHeadState> = None;
+    let mut current_is_bare = false;
+
+    for line in text.lines() {
+        let line = line.trim();
+        if line.is_empty() {
+            if let (Some(path), Some(head)) = (current_path.take(), current_head.take()) {
+                entries.push(GitWorktreeEntry {
+                    path,
+                    head,
+                    is_bare: current_is_bare,
+                });
+            }
+            current_is_bare = false;
+            continue;
+        }
+
+        if let Some(rest) = line.strip_prefix("worktree ") {
+            let path = PathBuf::from(rest.trim());
+            current_path = Some(if path.is_absolute() {
+                path
+            } else {
+                cwd.join(path)
+            });
+            continue;
+        }
+
+        if line == "bare" {
+            current_is_bare = true;
+            continue;
+        }
+
+        if line == "detached" {
+            current_head = Some(GitHeadState::Detached);
+            continue;
+        }
+
+        if let Some(rest) = line.strip_prefix("branch ") {
+            let reference = rest.trim();
+            if let Some(branch) = reference.strip_prefix("refs/heads/") {
+                current_head = Some(GitHeadState::Branch(branch.to_string()));
+            } else {
+                current_head = Some(GitHeadState::Branch(reference.to_string()));
+            }
+            continue;
+        }
+    }
+
+    if let (Some(path), Some(head)) = (current_path.take(), current_head.take()) {
+        entries.push(GitWorktreeEntry {
+            path,
+            head,
+            is_bare: current_is_bare,
+        });
+    }
+
+    entries
+}
+
+pub async fn try_list_git_worktrees(cwd: &Path) -> Result<Vec<GitWorktreeEntry>, String> {
+    let Some(output) =
+        run_git_command_with_timeout(&["worktree", "list", "--porcelain"], cwd).await
+    else {
+        return Err(String::from("Failed to run `git worktree list`"));
+    };
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(if stderr.trim().is_empty() {
+            String::from("`git worktree list` failed")
+        } else {
+            format!("`git worktree list` failed: {}", stderr.trim())
+        });
+    }
+
+    let text = String::from_utf8(output.stdout)
+        .map_err(|_| String::from("`git worktree list` returned non-utf8 output"))?;
+
+    Ok(parse_git_worktree_list_porcelain(&text, cwd))
+}
+
+pub async fn list_git_worktrees(cwd: &Path) -> Vec<GitWorktreeEntry> {
+    try_list_git_worktrees(cwd).await.unwrap_or_default()
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct GitUntrackedSummary {
+    pub total: usize,
+    pub sample: Vec<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum SharedDirLinkOutcome {
+    Linked,
+    AlreadyLinked,
+    Skipped(String),
+    Failed(String),
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SharedDirLinkAction {
+    pub shared_dir: String,
+    pub link_path: PathBuf,
+    pub target_path: PathBuf,
+    pub outcome: SharedDirLinkOutcome,
+}
+
+fn validate_repo_relative_dir(raw: &str) -> Result<PathBuf, String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Err(String::from("shared dir path is empty"));
+    }
+
+    let path = PathBuf::from(trimmed);
+    if path.is_absolute() {
+        return Err(String::from(
+            "shared dir path must be repo-relative (not absolute)",
+        ));
+    }
+
+    for component in path.components() {
+        match component {
+            Component::CurDir | Component::ParentDir => {
+                return Err(String::from(
+                    "shared dir path must not contain `.` or `..` segments",
+                ));
+            }
+            Component::Prefix(_) | Component::RootDir => {
+                return Err(String::from("shared dir path must be repo-relative"));
+            }
+            Component::Normal(_) => {}
+        }
+    }
+
+    Ok(path)
+}
+
+fn pinned_prefix_from_spec(spec: &str) -> Option<PathBuf> {
+    let trimmed = spec.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    let trimmed = trimmed.trim_end_matches("/**");
+    let trimmed = trimmed.trim_end_matches('/');
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    let path = PathBuf::from(trimmed);
+    if path.is_absolute() {
+        return None;
+    }
+
+    if path
+        .components()
+        .any(|component| matches!(component, Component::CurDir | Component::ParentDir))
+    {
+        return None;
+    }
+
+    Some(path)
+}
+
+fn path_is_pinned(pinned_paths: &[String], candidate: &Path) -> bool {
+    pinned_paths
+        .iter()
+        .filter_map(|spec| pinned_prefix_from_spec(spec))
+        .any(|prefix| candidate.starts_with(prefix))
+}
+
+pub(crate) fn resolve_worktree_pinned_path(
+    worktree_root: &Path,
+    workspace_root: Option<&Path>,
+    pinned_paths: &[String],
+    path: &Path,
+) -> PathBuf {
+    if path.is_absolute() {
+        return path.to_path_buf();
+    }
+
+    if let Some(workspace_root) = workspace_root
+        && !pinned_paths.is_empty()
+        && path_is_pinned(pinned_paths, path)
+    {
+        return workspace_root.join(path);
+    }
+
+    worktree_root.join(path)
+}
+
+pub(crate) fn rewrite_apply_patch_input_for_pinned_paths(
+    patch: &str,
+    worktree_root: &Path,
+    workspace_root: Option<&Path>,
+    pinned_paths: &[String],
+) -> String {
+    if pinned_paths.is_empty() || workspace_root.is_none() {
+        return patch.to_string();
+    }
+
+    let mut out = String::with_capacity(patch.len());
+    for (idx, line) in patch.lines().enumerate() {
+        if idx > 0 {
+            out.push('\n');
+        }
+
+        let (leading_ws, trimmed) = line
+            .char_indices()
+            .find(|(_, ch)| !ch.is_whitespace())
+            .map_or((line, ""), |(i, _)| line.split_at(i));
+
+        let (marker, raw_path) = if let Some(rest) = trimmed.strip_prefix("*** Add File: ") {
+            ("*** Add File: ", rest)
+        } else if let Some(rest) = trimmed.strip_prefix("*** Delete File: ") {
+            ("*** Delete File: ", rest)
+        } else if let Some(rest) = trimmed.strip_prefix("*** Update File: ") {
+            ("*** Update File: ", rest)
+        } else if let Some(rest) = trimmed.strip_prefix("*** Move to: ") {
+            ("*** Move to: ", rest)
+        } else {
+            out.push_str(line);
+            continue;
+        };
+
+        let raw_path = raw_path.trim();
+        if raw_path.is_empty() {
+            out.push_str(line);
+            continue;
+        }
+
+        let path = PathBuf::from(raw_path);
+        if path.is_absolute() || !path_is_pinned(pinned_paths, &path) {
+            out.push_str(line);
+            continue;
+        }
+
+        let resolved =
+            resolve_worktree_pinned_path(worktree_root, workspace_root, pinned_paths, &path);
+
+        out.push_str(leading_ws);
+        out.push_str(marker);
+        out.push_str(&resolved.to_string_lossy());
+    }
+
+    out
+}
+
+async fn has_tracked_files_under(cwd: &Path, pathspec: &Path) -> Result<bool, String> {
+    let spec = pathspec.to_string_lossy();
+    let Some(output) = run_git_command_with_timeout(&["ls-files", "--", &spec], cwd).await else {
+        return Err(String::from("Failed to run `git ls-files`"));
+    };
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(if stderr.trim().is_empty() {
+            String::from("`git ls-files` failed")
+        } else {
+            format!("`git ls-files` failed: {}", stderr.trim())
+        });
+    }
+
+    Ok(!output.stdout.is_empty())
+}
+
+pub async fn summarize_git_untracked_files_under(
+    cwd: &Path,
+    pathspec: &Path,
+    sample_limit: usize,
+) -> Result<GitUntrackedSummary, String> {
+    if sample_limit == 0 {
+        return Ok(GitUntrackedSummary {
+            total: 0,
+            sample: Vec::new(),
+        });
+    }
+
+    let spec = pathspec.to_string_lossy();
+    let Some(output) = run_git_command_with_timeout(
+        &[
+            "ls-files",
+            "--others",
+            "--exclude-standard",
+            "--directory",
+            "--",
+            &spec,
+        ],
+        cwd,
+    )
+    .await
+    else {
+        return Err(String::from("Failed to run `git ls-files`"));
+    };
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(if stderr.trim().is_empty() {
+            String::from("`git ls-files` failed")
+        } else {
+            format!("`git ls-files` failed: {}", stderr.trim())
+        });
+    }
+
+    let text = String::from_utf8(output.stdout)
+        .map_err(|_| String::from("`git ls-files` returned non-utf8 output"))?;
+
+    let mut total = 0usize;
+    let mut sample: Vec<String> = Vec::new();
+    for entry in text.lines().map(str::trim).filter(|line| !line.is_empty()) {
+        total += 1;
+        if sample.len() < sample_limit {
+            sample.push(entry.to_string());
+        }
+    }
+
+    Ok(GitUntrackedSummary { total, sample })
+}
+
+pub async fn summarize_git_untracked_files(
+    cwd: &Path,
+    sample_limit: usize,
+) -> Result<GitUntrackedSummary, String> {
+    if sample_limit == 0 {
+        return Ok(GitUntrackedSummary {
+            total: 0,
+            sample: Vec::new(),
+        });
+    }
+
+    let Some(output) = run_git_command_with_timeout(
+        &["ls-files", "--others", "--exclude-standard", "--directory"],
+        cwd,
+    )
+    .await
+    else {
+        return Err(String::from("Failed to run `git ls-files`"));
+    };
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(if stderr.trim().is_empty() {
+            String::from("`git ls-files` failed")
+        } else {
+            format!("`git ls-files` failed: {}", stderr.trim())
+        });
+    }
+
+    let text = String::from_utf8(output.stdout)
+        .map_err(|_| String::from("`git ls-files` returned non-utf8 output"))?;
+
+    let entries: Vec<String> = text
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .map(ToString::to_string)
+        .collect();
+
+    let sample: Vec<String> = entries.iter().take(sample_limit).cloned().collect();
+
+    Ok(GitUntrackedSummary {
+        total: entries.len(),
+        sample,
+    })
+}
+
+fn canonicalize_or(path: &Path, fallback: &Path) -> PathBuf {
+    std::fs::canonicalize(path).unwrap_or_else(|_| fallback.to_path_buf())
+}
+
+fn path_entry_exists(path: &Path) -> bool {
+    std::fs::symlink_metadata(path).is_ok()
+}
+
+fn path_points_to(path: &Path, target: &Path) -> bool {
+    if !path_entry_exists(path) || !target.exists() {
+        return false;
+    }
+
+    let path_canon = canonicalize_or(path, path);
+    let target_canon = canonicalize_or(target, target);
+    path_canon == target_canon
+}
+
+fn dir_is_empty(path: &Path) -> Result<bool, String> {
+    let mut entries = std::fs::read_dir(path)
+        .map_err(|err| format!("Failed to read {}: {err}", path.display()))?;
+    Ok(entries.next().is_none())
+}
+
+fn remove_if_exists(path: &Path) -> Result<(), String> {
+    let metadata = std::fs::symlink_metadata(path)
+        .map_err(|err| format!("Failed to stat {}: {err}", path.display()))?;
+    if metadata.is_dir() {
+        std::fs::remove_dir(path)
+            .map_err(|err| format!("Failed to remove {}: {err}", path.display()))?;
+        return Ok(());
+    }
+
+    std::fs::remove_file(path)
+        .map_err(|err| format!("Failed to remove {}: {err}", path.display()))?;
+    Ok(())
+}
+
+#[cfg(unix)]
+fn create_dir_link(target: &Path, link: &Path) -> Result<(), String> {
+    std::os::unix::fs::symlink(target, link)
+        .map_err(|err| format!("Failed to create symlink {}: {err}", link.display()))
+}
+
+#[cfg(target_os = "windows")]
+fn create_dir_link(target: &Path, link: &Path) -> Result<(), String> {
+    use std::os::windows::process::CommandExt as _;
+
+    let link_s = link.to_string_lossy().to_string();
+    let target_s = target.to_string_lossy().to_string();
+    let link_quoted = format!("\"{link_s}\"");
+    let target_quoted = format!("\"{target_s}\"");
+
+    let output = std::process::Command::new("cmd")
+        .raw_arg("/c")
+        .raw_arg("mklink")
+        .raw_arg("/J")
+        .raw_arg(&link_quoted)
+        .raw_arg(&target_quoted)
+        .output()
+        .map_err(|err| format!("Failed to run `mklink` to create {}: {err}", link.display()))?;
+
+    if output.status.success() && link.exists() {
+        return Ok(());
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    Err(format!(
+        "`mklink` failed creating {} -> {} (status={:?}, stdout={}, stderr={})",
+        link.display(),
+        target.display(),
+        output.status,
+        stdout.trim(),
+        stderr.trim()
+    ))
+}
+
+#[cfg(not(any(unix, windows)))]
+fn create_dir_link(_target: &Path, link: &Path) -> Result<(), String> {
+    Err(format!(
+        "Linking shared dirs is not supported on this platform ({}).",
+        link.display()
+    ))
+}
+
+fn next_available_path(base: &Path) -> PathBuf {
+    if !path_entry_exists(base) {
+        return base.to_path_buf();
+    }
+
+    let Some(parent) = base.parent() else {
+        return base.to_path_buf();
+    };
+
+    let file_name = base
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("migrated");
+
+    for i in 1..=10_000usize {
+        let candidate = parent.join(format!("{file_name}.migrated-{i}"));
+        if !path_entry_exists(&candidate) {
+            return candidate;
+        }
+    }
+
+    base.to_path_buf()
+}
+
+fn copy_dir_recursive(source: &Path, destination: &Path) -> Result<(), String> {
+    std::fs::create_dir_all(destination)
+        .map_err(|err| format!("Failed to create {}: {err}", destination.display()))?;
+
+    for entry in std::fs::read_dir(source)
+        .map_err(|err| format!("Failed to read {}: {err}", source.display()))?
+    {
+        let entry = entry.map_err(|err| format!("Failed to read dir entry: {err}"))?;
+        let file_type = entry
+            .file_type()
+            .map_err(|err| format!("Failed to stat dir entry: {err}"))?;
+        let src = entry.path();
+        let dst = destination.join(entry.file_name());
+
+        if file_type.is_dir() {
+            copy_dir_recursive(&src, &dst)?;
+        } else if file_type.is_file() {
+            if let Some(parent) = dst.parent() {
+                std::fs::create_dir_all(parent)
+                    .map_err(|err| format!("Failed to create {}: {err}", parent.display()))?;
+            }
+            std::fs::copy(&src, &dst)
+                .map_err(|err| format!("Failed to copy {}: {err}", src.display()))?;
+        } else if file_type.is_symlink() {
+            #[cfg(unix)]
+            {
+                let target = std::fs::read_link(&src)
+                    .map_err(|err| format!("Failed to read link {}: {err}", src.display()))?;
+                std::os::unix::fs::symlink(&target, &dst)
+                    .map_err(|err| format!("Failed to create symlink {}: {err}", dst.display()))?;
+            }
+
+            #[cfg(not(unix))]
+            {
+                return Err(format!(
+                    "Cannot migrate symlink {} on this platform.",
+                    src.display()
+                ));
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn move_path(source: &Path, destination: &Path) -> Result<(), String> {
+    if let Some(parent) = destination.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|err| format!("Failed to create {}: {err}", parent.display()))?;
+    }
+
+    match std::fs::rename(source, destination) {
+        Ok(()) => return Ok(()),
+        Err(err) if err.kind() != std::io::ErrorKind::CrossesDevices => {
+            return Err(format!(
+                "Failed to move {} -> {}: {err}",
+                source.display(),
+                destination.display()
+            ));
+        }
+        Err(_) => {}
+    }
+
+    let metadata = std::fs::symlink_metadata(source)
+        .map_err(|err| format!("Failed to stat {}: {err}", source.display()))?;
+
+    if metadata.is_file() {
+        std::fs::copy(source, destination)
+            .map_err(|err| format!("Failed to copy {}: {err}", source.display()))?;
+        std::fs::remove_file(source)
+            .map_err(|err| format!("Failed to remove {}: {err}", source.display()))?;
+        return Ok(());
+    }
+
+    if metadata.is_dir() {
+        copy_dir_recursive(source, destination)?;
+        std::fs::remove_dir_all(source)
+            .map_err(|err| format!("Failed to remove {}: {err}", source.display()))?;
+        return Ok(());
+    }
+
+    Err(format!(
+        "Cannot migrate non-file path {}.",
+        source.display()
+    ))
+}
+
+async fn list_git_untracked_entries_under(
+    cwd: &Path,
+    pathspec: &Path,
+) -> Result<Vec<String>, String> {
+    let spec = pathspec.to_string_lossy();
+    let Some(output) = run_git_command_with_timeout(
+        &[
+            "ls-files",
+            "--others",
+            "--exclude-standard",
+            "--directory",
+            "--",
+            &spec,
+        ],
+        cwd,
+    )
+    .await
+    else {
+        return Err(String::from("Failed to run `git ls-files`"));
+    };
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(if stderr.trim().is_empty() {
+            String::from("`git ls-files` failed")
+        } else {
+            format!("`git ls-files` failed: {}", stderr.trim())
+        });
+    }
+
+    let text = String::from_utf8(output.stdout)
+        .map_err(|_| String::from("`git ls-files` returned non-utf8 output"))?;
+
+    Ok(text
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .map(ToString::to_string)
+        .collect())
+}
+
+async fn link_one_shared_dir(
+    worktree_root: &Path,
+    workspace_root: &Path,
+    shared_dir: &str,
+    migrate_untracked: bool,
+) -> SharedDirLinkAction {
+    let pathspec = match validate_repo_relative_dir(shared_dir) {
+        Ok(pathspec) => pathspec,
+        Err(err) => {
+            return SharedDirLinkAction {
+                shared_dir: shared_dir.to_string(),
+                link_path: worktree_root.join(shared_dir),
+                target_path: workspace_root.join(shared_dir),
+                outcome: SharedDirLinkOutcome::Failed(err),
+            };
+        }
+    };
+
+    let link_path = worktree_root.join(&pathspec);
+    let target_path = workspace_root.join(&pathspec);
+
+    if link_path == target_path {
+        let _ = std::fs::create_dir_all(&target_path);
+        return SharedDirLinkAction {
+            shared_dir: shared_dir.to_string(),
+            link_path,
+            target_path,
+            outcome: SharedDirLinkOutcome::AlreadyLinked,
+        };
+    }
+
+    if path_points_to(&link_path, &target_path) {
+        return SharedDirLinkAction {
+            shared_dir: shared_dir.to_string(),
+            link_path,
+            target_path,
+            outcome: SharedDirLinkOutcome::AlreadyLinked,
+        };
+    }
+
+    if let Err(err) = std::fs::create_dir_all(&target_path) {
+        let target_display = target_path.display().to_string();
+        return SharedDirLinkAction {
+            shared_dir: shared_dir.to_string(),
+            link_path,
+            target_path,
+            outcome: SharedDirLinkOutcome::Failed(format!(
+                "Failed to create {target_display}: {err}"
+            )),
+        };
+    }
+
+    match has_tracked_files_under(worktree_root, &pathspec).await {
+        Ok(true) => {
+            return SharedDirLinkAction {
+                shared_dir: shared_dir.to_string(),
+                link_path,
+                target_path,
+                outcome: SharedDirLinkOutcome::Skipped(String::from(
+                    "Contains tracked files; refusing to link.",
+                )),
+            };
+        }
+        Ok(false) => {}
+        Err(err) => {
+            return SharedDirLinkAction {
+                shared_dir: shared_dir.to_string(),
+                link_path,
+                target_path,
+                outcome: SharedDirLinkOutcome::Failed(err),
+            };
+        }
+    }
+
+    if path_entry_exists(&link_path) {
+        let link_display = link_path.display().to_string();
+        let link_metadata = match std::fs::symlink_metadata(&link_path) {
+            Ok(metadata) => metadata,
+            Err(err) => {
+                return SharedDirLinkAction {
+                    shared_dir: shared_dir.to_string(),
+                    link_path,
+                    target_path,
+                    outcome: SharedDirLinkOutcome::Failed(format!(
+                        "Failed to stat {link_display}: {err}"
+                    )),
+                };
+            }
+        };
+        let link_is_symlink = link_metadata.file_type().is_symlink();
+
+        if link_is_symlink {
+            // The path is already a symlink (potentially broken or pointing elsewhere). It's safe
+            // to replace it with the desired link target.
+        } else if link_metadata.is_dir() {
+            let empty = match dir_is_empty(&link_path) {
+                Ok(empty) => empty,
+                Err(err) => {
+                    return SharedDirLinkAction {
+                        shared_dir: shared_dir.to_string(),
+                        link_path,
+                        target_path,
+                        outcome: SharedDirLinkOutcome::Failed(err),
+                    };
+                }
+            };
+
+            if !empty && migrate_untracked {
+                match list_git_untracked_entries_under(worktree_root, &pathspec).await {
+                    Ok(entries) if entries.is_empty() => {
+                        return SharedDirLinkAction {
+                            shared_dir: shared_dir.to_string(),
+                            link_path,
+                            target_path,
+                            outcome: SharedDirLinkOutcome::Skipped(String::from(
+                                "Directory is not empty but contains no git-untracked files; migrate manually.",
+                            )),
+                        };
+                    }
+                    Ok(entries) => {
+                        for entry in entries {
+                            let entry = entry.trim_end_matches('/');
+                            if entry.is_empty() {
+                                continue;
+                            }
+                            let source = worktree_root.join(entry);
+                            if !path_entry_exists(&source) {
+                                continue;
+                            }
+                            let desired_destination = workspace_root.join(entry);
+                            let destination = next_available_path(&desired_destination);
+                            if let Err(err) = move_path(&source, &destination) {
+                                return SharedDirLinkAction {
+                                    shared_dir: shared_dir.to_string(),
+                                    link_path,
+                                    target_path,
+                                    outcome: SharedDirLinkOutcome::Failed(err),
+                                };
+                            }
+                        }
+                    }
+                    Err(err) => {
+                        return SharedDirLinkAction {
+                            shared_dir: shared_dir.to_string(),
+                            link_path,
+                            target_path,
+                            outcome: SharedDirLinkOutcome::Failed(err),
+                        };
+                    }
+                }
+            }
+
+            match dir_is_empty(&link_path) {
+                Ok(true) => {}
+                Ok(false) => {
+                    let reason = if migrate_untracked {
+                        "Directory is not empty; refusing to replace it with a link after migration."
+                    } else {
+                        "Directory is not empty; run `/worktree link-shared --migrate` to migrate git-untracked files, then retry."
+                    };
+                    return SharedDirLinkAction {
+                        shared_dir: shared_dir.to_string(),
+                        link_path,
+                        target_path,
+                        outcome: SharedDirLinkOutcome::Skipped(String::from(reason)),
+                    };
+                }
+                Err(err) => {
+                    return SharedDirLinkAction {
+                        shared_dir: shared_dir.to_string(),
+                        link_path,
+                        target_path,
+                        outcome: SharedDirLinkOutcome::Failed(err),
+                    };
+                }
+            }
+        } else {
+            return SharedDirLinkAction {
+                shared_dir: shared_dir.to_string(),
+                link_path,
+                target_path,
+                outcome: SharedDirLinkOutcome::Skipped(String::from(
+                    "Path exists and is not an empty directory; refusing to replace it with a link.",
+                )),
+            };
+        }
+
+        if let Err(err) = remove_if_exists(&link_path) {
+            return SharedDirLinkAction {
+                shared_dir: shared_dir.to_string(),
+                link_path,
+                target_path,
+                outcome: SharedDirLinkOutcome::Failed(err),
+            };
+        }
+    } else if let Some(parent) = link_path.parent()
+        && let Err(err) = std::fs::create_dir_all(parent)
+    {
+        let parent_display = parent.display().to_string();
+        return SharedDirLinkAction {
+            shared_dir: shared_dir.to_string(),
+            link_path,
+            target_path,
+            outcome: SharedDirLinkOutcome::Failed(format!(
+                "Failed to create {parent_display}: {err}"
+            )),
+        };
+    }
+
+    match create_dir_link(&target_path, &link_path) {
+        Ok(()) => SharedDirLinkAction {
+            shared_dir: shared_dir.to_string(),
+            link_path,
+            target_path,
+            outcome: SharedDirLinkOutcome::Linked,
+        },
+        Err(err) => SharedDirLinkAction {
+            shared_dir: shared_dir.to_string(),
+            link_path,
+            target_path,
+            outcome: SharedDirLinkOutcome::Failed(err),
+        },
+    }
+}
+
+pub async fn link_worktree_shared_dirs(
+    worktree_root: &Path,
+    workspace_root: &Path,
+    shared_dirs: &[String],
+) -> Vec<SharedDirLinkAction> {
+    let mut results: Vec<SharedDirLinkAction> = Vec::new();
+
+    for shared_dir in shared_dirs {
+        results.push(link_one_shared_dir(worktree_root, workspace_root, shared_dir, false).await);
+    }
+
+    results
+}
+
+pub async fn link_worktree_shared_dirs_migrating_untracked(
+    worktree_root: &Path,
+    workspace_root: &Path,
+    shared_dirs: &[String],
+) -> Vec<SharedDirLinkAction> {
+    let mut results: Vec<SharedDirLinkAction> = Vec::new();
+
+    for shared_dir in shared_dirs {
+        results.push(link_one_shared_dir(worktree_root, workspace_root, shared_dir, true).await);
+    }
+
+    results
+}
+
+pub async fn worktree_doctor_lines(
+    cwd: &Path,
+    shared_dirs: &[String],
+    sample_limit: usize,
+) -> Vec<String> {
+    let Some(head) = resolve_git_worktree_head(cwd) else {
+        return vec![String::from("worktree doctor — not inside a git worktree.")];
+    };
+
+    let worktree_root = head.worktree_root;
+    let workspace_root = resolve_root_git_project_for_trust(&worktree_root);
+
+    let mut lines: Vec<String> = Vec::new();
+    lines.push(String::from("worktree doctor"));
+    lines.push(format!("active worktree: {}", worktree_root.display()));
+    if let Some(root) = &workspace_root {
+        lines.push(format!("workspace root: {}", root.display()));
+    } else {
+        lines.push(String::from("workspace root: (unknown)"));
+    }
+
+    if shared_dirs.is_empty() {
+        lines.push(String::from("shared dirs: (none configured)"));
+        lines.push(String::from(
+            "Tip: set `worktrees.shared_dirs` in config to enable `/worktree link-shared`.",
+        ));
+        return lines;
+    }
+
+    lines.push(format!("shared dirs: {}", shared_dirs.join(", ")));
+
+    let Some(workspace_root) = workspace_root else {
+        lines.push(String::from(
+            "Cannot resolve workspace root; skipping shared-dir checks.",
+        ));
+        return lines;
+    };
+
+    for shared_dir in shared_dirs {
+        let pathspec = match validate_repo_relative_dir(shared_dir) {
+            Ok(pathspec) => pathspec,
+            Err(err) => {
+                lines.push(format!("- {shared_dir}: invalid path ({err})"));
+                continue;
+            }
+        };
+
+        let link_path = worktree_root.join(&pathspec);
+        let target_path = workspace_root.join(&pathspec);
+        let linked = path_points_to(&link_path, &target_path);
+        let link_is_symlink =
+            std::fs::symlink_metadata(&link_path).is_ok_and(|md| md.file_type().is_symlink());
+
+        let tracked = (has_tracked_files_under(&worktree_root, &pathspec).await).ok();
+
+        let untracked =
+            summarize_git_untracked_files_under(&worktree_root, &pathspec, sample_limit)
+                .await
+                .ok();
+
+        let mut status = String::new();
+        if linked {
+            status.push_str("linked");
+        } else if path_entry_exists(&link_path) {
+            if link_is_symlink {
+                status.push_str("link present (not pointing at workspace root)");
+            } else {
+                status.push_str("not linked");
+            }
+        } else {
+            status.push_str("missing");
+        }
+
+        if let Some(tracked) = tracked {
+            if tracked {
+                status.push_str(", tracked files present");
+            } else {
+                status.push_str(", no tracked files");
+            }
+        }
+
+        if let Some(summary) = &untracked {
+            if summary.total > 0 {
+                status.push_str(&format!(", untracked={}", summary.total));
+            } else {
+                status.push_str(", untracked=0");
+            }
+        }
+
+        lines.push(format!("- {shared_dir}: {status}"));
+        if let Some(summary) = untracked
+            && summary.total > 0
+            && !summary.sample.is_empty()
+        {
+            for sample in summary.sample.into_iter().take(3) {
+                lines.push(format!("    - {sample}"));
+            }
+            if summary.total > 3 {
+                lines.push(format!("    - … +{} more", summary.total - 3));
+            }
+        }
+    }
+
+    lines.push(String::from("Next steps:"));
+    lines.push(String::from(
+        "- Run `/worktree link-shared` to apply links for configured shared dirs.",
+    ));
+    lines.push(String::from(
+        "- If a shared dir is refused due to non-empty content, run `/worktree link-shared --migrate` or migrate files into the workspace root first, then retry.",
+    ));
+    lines.push(String::from(
+        "- If you want shared-dir links applied automatically on switch, enable `worktrees.auto_link_shared_dirs = true`.",
+    ));
+    lines.push(String::from(
+        "- If you created worktrees outside xcodex, run `/worktree detect` to refresh the picker list.",
+    ));
+
+    lines
+}
+
+fn validate_git_branch_name(raw: &str) -> Result<String, String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Err(String::from("branch name is empty"));
+    }
+    if trimmed.chars().any(char::is_whitespace) {
+        return Err(String::from("branch name must not contain whitespace"));
+    }
+    Ok(trimmed.to_string())
+}
+
+async fn git_branch_exists(cwd: &Path, branch: &str) -> Result<bool, String> {
+    let Some(output) = run_git_command_with_timeout(
+        &[
+            "show-ref",
+            "--verify",
+            "--quiet",
+            &format!("refs/heads/{branch}"),
+        ],
+        cwd,
+    )
+    .await
+    else {
+        return Err(String::from("Failed to run `git show-ref`"));
+    };
+
+    Ok(output.status.success())
+}
+
+async fn run_git_command_with_timeout_result(
+    args: &[&str],
+    cwd: &Path,
+) -> Result<std::process::Output, String> {
+    timeout(
+        GIT_COMMAND_TIMEOUT,
+        Command::new("git").args(args).current_dir(cwd).output(),
+    )
+    .await
+    .map_err(|_| format!("`git {}` timed out", args.join(" ")))?
+    .map_err(|err| format!("Failed to run `git {}`: {err}", args.join(" ")))
+}
+
+pub async fn init_git_worktree(
+    workspace_root: &Path,
+    name: &str,
+    branch: &str,
+    worktree_path: Option<&Path>,
+) -> Result<PathBuf, String> {
+    let name = name.trim();
+    if name.is_empty() {
+        return Err(String::from("worktree name is empty"));
+    }
+
+    let branch = validate_git_branch_name(branch)?;
+
+    let default_path = workspace_root.join(".worktrees").join(name);
+    let path = worktree_path.unwrap_or(&default_path);
+    let path = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        workspace_root.join(path)
+    };
+
+    if path_entry_exists(&path) {
+        return Err(format!("Worktree path already exists: {}", path.display()));
+    }
+
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|err| format!("Failed to create {}: {err}", parent.display()))?;
+    }
+
+    let branch_exists = git_branch_exists(workspace_root, &branch).await?;
+    let args: Vec<String> = if branch_exists {
+        vec![
+            "worktree".to_string(),
+            "add".to_string(),
+            path.display().to_string(),
+            branch.clone(),
+        ]
+    } else {
+        vec![
+            "worktree".to_string(),
+            "add".to_string(),
+            "-b".to_string(),
+            branch.clone(),
+            path.display().to_string(),
+        ]
+    };
+
+    let args_ref: Vec<&str> = args.iter().map(String::as_str).collect();
+    let output = run_git_command_with_timeout_result(&args_ref, workspace_root).await?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = stderr.trim();
+        let stdout = stdout.trim();
+        let mut message = format!("`git {}` failed", args.join(" "));
+        if !stderr.is_empty() {
+            message.push_str(&format!(": {stderr}"));
+        } else if !stdout.is_empty() {
+            message.push_str(&format!(": {stdout}"));
+        }
+        return Err(message);
+    }
+
+    Ok(path)
+}
+
+fn parse_gitdir_pointer(content: &str) -> Option<PathBuf> {
+    content.lines().find_map(|line| {
+        let line = line.trim();
+        line.strip_prefix("gitdir:")
+            .map(str::trim)
+            .filter(|rest| !rest.is_empty())
+            .map(PathBuf::from)
+    })
 }
 
 /// Timeout for git commands to prevent freezing on large repositories
@@ -107,6 +1287,54 @@ pub async fn collect_git_info(cwd: &Path) -> Option<GitInfo> {
     }
 
     Some(git_info)
+}
+
+#[cfg(test)]
+mod untracked_summary_tests {
+    use super::*;
+    use std::fs;
+    use tempfile::tempdir;
+
+    #[tokio::test]
+    async fn summarize_git_untracked_files_reports_untracked_entries() {
+        let dir = tempdir().expect("tempdir");
+        let root = dir.path();
+
+        let init = Command::new("git")
+            .args(["init"])
+            .current_dir(root)
+            .output()
+            .await
+            .expect("git init");
+        assert!(init.status.success());
+
+        fs::write(root.join("tracked.txt"), "tracked").expect("write tracked");
+        let add = Command::new("git")
+            .args(["add", "tracked.txt"])
+            .current_dir(root)
+            .output()
+            .await
+            .expect("git add");
+        assert!(add.status.success());
+
+        fs::write(root.join("untracked.txt"), "untracked").expect("write untracked");
+        fs::create_dir_all(root.join("untracked_dir")).expect("mkdir");
+        fs::write(root.join("untracked_dir").join("file.txt"), "x").expect("write untracked dir");
+
+        let summary = summarize_git_untracked_files(root, 10)
+            .await
+            .expect("summarize");
+
+        assert!(summary.total >= 2, "{summary:?}");
+        assert!(
+            summary.sample.iter().any(|p| p == "untracked.txt"),
+            "{summary:?}"
+        );
+        assert!(
+            summary.sample.iter().any(|p| p == "untracked_dir/"),
+            "{summary:?}"
+        );
+    }
 }
 
 /// A minimal commit summary entry used for pickers (subject + timestamp + sha).
@@ -605,6 +1833,93 @@ mod tests {
     use std::path::PathBuf;
     use tempfile::TempDir;
 
+    #[test]
+    fn read_git_head_state_branch() {
+        let tmp = TempDir::new().expect("tempdir");
+        let head = tmp.path().join("HEAD");
+        std::fs::write(&head, "ref: refs/heads/feat/x\n").unwrap();
+        assert_eq!(
+            read_git_head_state(&head),
+            Some(GitHeadState::Branch("feat/x".to_string()))
+        );
+    }
+
+    #[test]
+    fn read_git_head_state_detached() {
+        let tmp = TempDir::new().expect("tempdir");
+        let head = tmp.path().join("HEAD");
+        std::fs::write(&head, "0123456789abcdef\n").unwrap();
+        assert_eq!(read_git_head_state(&head), Some(GitHeadState::Detached));
+    }
+
+    #[test]
+    fn resolve_worktree_pinned_path_pins_to_workspace_root_for_prefixes() {
+        let tmp = TempDir::new().expect("tempdir");
+        let workspace_root = tmp.path().join("workspace");
+        let worktree_root = workspace_root.join(".worktrees").join("feat-a");
+
+        let pinned = vec![String::from("docs/impl-plans")];
+        let candidate = PathBuf::from("docs/impl-plans/xcodex-qol.md");
+        assert_eq!(
+            resolve_worktree_pinned_path(
+                &worktree_root,
+                Some(&workspace_root),
+                &pinned,
+                &candidate
+            ),
+            workspace_root.join(candidate),
+        );
+
+        let non_pinned = PathBuf::from("src/main.rs");
+        assert_eq!(
+            resolve_worktree_pinned_path(
+                &worktree_root,
+                Some(&workspace_root),
+                &pinned,
+                &non_pinned
+            ),
+            worktree_root.join(non_pinned),
+        );
+    }
+
+    #[test]
+    fn rewrite_apply_patch_input_for_pinned_paths_rewrites_hunk_headers() {
+        let tmp = TempDir::new().expect("tempdir");
+        let workspace_root = tmp.path().join("workspace");
+        let worktree_root = workspace_root.join(".worktrees").join("feat-a");
+        let pinned = vec![String::from("docs/impl-plans/**")];
+
+        let patch = "\
+*** Begin Patch
+*** Update File: docs/impl-plans/xcodex-qol.md
+@@
+-before
++after
+*** Update File: src/main.rs
+@@
+-old
++new
+*** End Patch";
+
+        let rewritten = rewrite_apply_patch_input_for_pinned_paths(
+            patch,
+            &worktree_root,
+            Some(&workspace_root),
+            &pinned,
+        );
+
+        let expected_path = workspace_root.join("docs/impl-plans/xcodex-qol.md");
+        assert!(rewritten.contains(&format!("*** Update File: {}", expected_path.display())));
+        assert!(rewritten.contains("*** Update File: src/main.rs"));
+    }
+
+    #[tokio::test]
+    async fn list_git_worktrees_returns_empty_outside_repo() {
+        let temp_dir = TempDir::new().expect("tempdir");
+        let worktrees = list_git_worktrees(temp_dir.path()).await;
+        assert!(worktrees.is_empty());
+    }
+
     // Helper function to create a test git repository
     async fn create_test_git_repo(temp_dir: &TempDir) -> PathBuf {
         let repo_path = temp_dir.path().join("repo");
@@ -1038,6 +2353,42 @@ mod tests {
         let got_nested =
             resolve_root_git_project_for_trust(&nested).and_then(|p| std::fs::canonicalize(p).ok());
         assert_eq!(got_nested, expected);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn link_shared_dirs_replaces_existing_symlink() {
+        skip_if_sandbox!();
+        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+        let repo_path = create_test_git_repo(&temp_dir).await;
+
+        let wt_root = temp_dir.path().join("wt");
+        let _ = std::process::Command::new("git")
+            .args([
+                "worktree",
+                "add",
+                wt_root.to_str().unwrap(),
+                "-b",
+                "feature/shared-symlink",
+            ])
+            .current_dir(&repo_path)
+            .output()
+            .expect("git worktree add");
+
+        let shared_dir = String::from("notes");
+        let wrong_target = wt_root.join("elsewhere");
+        std::fs::create_dir_all(&wrong_target).unwrap();
+        std::os::unix::fs::symlink(&wrong_target, wt_root.join(&shared_dir)).unwrap();
+
+        let actions =
+            link_worktree_shared_dirs(&wt_root, &repo_path, std::slice::from_ref(&shared_dir))
+                .await;
+        assert_eq!(actions.len(), 1);
+        assert!(matches!(actions[0].outcome, SharedDirLinkOutcome::Linked));
+        assert!(path_points_to(
+            &wt_root.join(&shared_dir),
+            &repo_path.join(&shared_dir)
+        ));
     }
 
     #[test]

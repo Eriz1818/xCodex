@@ -75,6 +75,13 @@ impl ToolHandler for ApplyPatchHandler {
             }
         };
 
+        let patch_input = crate::git_info::rewrite_apply_patch_input_for_pinned_paths(
+            &patch_input,
+            &turn.cwd,
+            turn.worktree_workspace_root.as_deref(),
+            &turn.worktrees_pinned_paths,
+        );
+
         // Re-parse and verify the patch so we can compute changes and approval.
         // Avoid building temporary ExecParams/command vectors; derive directly from inputs.
         let cwd = turn.cwd.clone();

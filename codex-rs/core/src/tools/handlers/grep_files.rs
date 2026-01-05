@@ -72,7 +72,7 @@ impl ToolHandler for GrepFilesHandler {
         }
 
         let limit = args.limit.min(MAX_LIMIT);
-        let search_path = turn.resolve_path(args.path.clone());
+        let search_path = turn.resolve_structured_file_tool_path(args.path.clone());
 
         verify_path_exists(&search_path).await?;
 

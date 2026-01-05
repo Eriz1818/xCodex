@@ -1,5 +1,4 @@
 use std::collections::VecDeque;
-use std::path::PathBuf;
 
 use async_trait::async_trait;
 use codex_utils_string::take_bytes_at_char_boundary;
@@ -96,7 +95,7 @@ impl ToolHandler for ReadFileHandler {
     }
 
     async fn handle(&self, invocation: ToolInvocation) -> Result<ToolOutput, FunctionCallError> {
-        let ToolInvocation { payload, .. } = invocation;
+        let ToolInvocation { payload, turn, .. } = invocation;
 
         let arguments = match payload {
             ToolPayload::Function { arguments } => arguments,
@@ -121,6 +120,12 @@ impl ToolHandler for ReadFileHandler {
             indentation,
         } = args;
 
+        if file_path.trim().is_empty() {
+            return Err(FunctionCallError::RespondToModel(
+                "file_path must not be empty".to_string(),
+            ));
+        }
+
         if offset == 0 {
             return Err(FunctionCallError::RespondToModel(
                 "offset must be a 1-indexed line number".to_string(),
@@ -133,12 +138,7 @@ impl ToolHandler for ReadFileHandler {
             ));
         }
 
-        let path = PathBuf::from(&file_path);
-        if !path.is_absolute() {
-            return Err(FunctionCallError::RespondToModel(
-                "file_path must be an absolute path".to_string(),
-            ));
-        }
+        let path = turn.resolve_structured_file_tool_path(Some(file_path));
 
         let collected = match mode {
             ReadMode::Slice => slice::read(&path, offset, limit).await?,
