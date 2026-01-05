@@ -115,6 +115,25 @@ pub enum Op {
         final_output_json_schema: Option<Value>,
     },
 
+    /// Retry connecting to a set of configured MCP servers.
+    ///
+    /// This is intended for cases where MCP startup failed or was cancelled and the user
+    /// wants to restart specific servers without restarting the session.
+    McpRetry {
+        /// Names of MCP servers to retry.
+        servers: Vec<String>,
+    },
+
+    /// Override the startup timeout for an MCP server for the current session.
+    ///
+    /// This does not persist to disk; UIs may additionally persist the configuration.
+    McpSetStartupTimeout {
+        /// Name of the MCP server to update.
+        server: String,
+        /// Timeout in seconds.
+        startup_timeout_sec: u64,
+    },
+
     /// Override parts of the persistent turn context for subsequent turns.
     ///
     /// All fields are optional; when omitted, the existing value is preserved.

@@ -1,5 +1,8 @@
 //! Session-wide mutable state.
 
+use std::collections::HashMap;
+use std::time::Duration;
+
 use codex_protocol::models::ResponseItem;
 
 use crate::codex::SessionConfiguration;
@@ -17,6 +20,7 @@ pub(crate) struct SessionState {
     pub(crate) latest_api_token_usage: Option<TokenUsage>,
     pub(crate) auto_compact_enabled: bool,
     pub(crate) low_context_warning_state: LowContextWarningState,
+    pub(crate) mcp_startup_timeout_overrides: HashMap<String, Duration>,
 }
 
 impl SessionState {
@@ -30,6 +34,7 @@ impl SessionState {
             latest_api_token_usage: None,
             auto_compact_enabled: false,
             low_context_warning_state: LowContextWarningState::default(),
+            mcp_startup_timeout_overrides: HashMap::new(),
         }
     }
 

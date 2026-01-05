@@ -690,7 +690,7 @@ impl Session {
 
         let services = SessionServices {
             mcp_connection_manager: Arc::new(RwLock::new(McpConnectionManager::default())),
-            mcp_startup_cancellation_token: CancellationToken::new(),
+            mcp_startup_cancellation_token: Mutex::new(CancellationToken::new()),
             unified_exec_manager: UnifiedExecSessionManager::default(),
             user_hooks: UserHooks::new(
                 config.codex_home.clone(),
@@ -758,7 +758,11 @@ impl Session {
                 config.mcp_oauth_credentials_store_mode,
                 auth_statuses.clone(),
                 tx_event.clone(),
-                sess.services.mcp_startup_cancellation_token.clone(),
+                sess.services
+                    .mcp_startup_cancellation_token
+                    .lock()
+                    .await
+                    .clone(),
                 sandbox_state,
                 Some(crate::mcp_connection_manager::McpHookContext::new(
                     sess.services.user_hooks.clone(),
@@ -1759,7 +1763,11 @@ impl Session {
     }
 
     async fn cancel_mcp_startup(&self) {
-        self.services.mcp_startup_cancellation_token.cancel();
+        self.services
+            .mcp_startup_cancellation_token
+            .lock()
+            .await
+            .cancel();
     }
 }
 
@@ -1832,6 +1840,21 @@ async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiv
             Op::ListSkills { cwds, force_reload } => {
                 handlers::list_skills(&sess, sub.id.clone(), cwds, force_reload).await;
             }
+            Op::McpRetry { servers } => {
+                handlers::mcp_retry(&sess, &config, sub.id.clone(), servers).await;
+            }
+            Op::McpSetStartupTimeout {
+                server,
+                startup_timeout_sec,
+            } => {
+                handlers::mcp_set_startup_timeout(
+                    &sess,
+                    sub.id.clone(),
+                    server,
+                    startup_timeout_sec,
+                )
+                .await;
+            }
             Op::Undo => {
                 handlers::undo(&sess, sub.id.clone()).await;
             }
@@ -1874,6 +1897,7 @@ mod handlers {
     use crate::codex::SessionSettingsUpdate;
     use crate::codex::TurnContext;
 
+    use crate::SandboxState;
     use crate::codex::spawn_review_thread;
     use crate::config::Config;
     use crate::features::Feature;
@@ -1903,8 +1927,10 @@ mod handlers {
     use codex_rmcp_client::ElicitationAction;
     use codex_rmcp_client::ElicitationResponse;
     use mcp_types::RequestId;
+    use std::collections::HashMap;
     use std::path::PathBuf;
     use std::sync::Arc;
+    use tokio_util::sync::CancellationToken;
     use tracing::info;
     use tracing::warn;
 
@@ -2175,6 +2201,130 @@ mod handlers {
             msg: EventMsg::McpListToolsResponse(snapshot),
         };
         sess.send_event_raw(event).await;
+    }
+
+    pub async fn mcp_retry(
+        sess: &Arc<Session>,
+        config: &Arc<Config>,
+        sub_id: String,
+        servers: Vec<String>,
+    ) {
+        let timeout_overrides = {
+            let state = sess.state.lock().await;
+            state.mcp_startup_timeout_overrides.clone()
+        };
+
+        let mut retry_servers = HashMap::new();
+        for server in servers {
+            match config.mcp_servers.get(&server) {
+                Some(cfg) if cfg.enabled => {
+                    let mut cfg = cfg.clone();
+                    if let Some(timeout) = timeout_overrides.get(&server).copied() {
+                        cfg.startup_timeout_sec = Some(timeout);
+                    }
+                    retry_servers.insert(server, cfg);
+                }
+                Some(_) => {
+                    sess.send_event_raw(Event {
+                        id: sub_id.clone(),
+                        msg: EventMsg::Warning(WarningEvent {
+                            message: format!(
+                                "MCP server `{server}` is disabled; enable it in config.toml before retrying."
+                            ),
+                        }),
+                    })
+                    .await;
+                }
+                None => {
+                    sess.send_event_raw(Event {
+                        id: sub_id.clone(),
+                        msg: EventMsg::Warning(WarningEvent {
+                            message: format!("Unknown MCP server `{server}`."),
+                        }),
+                    })
+                    .await;
+                }
+            }
+        }
+
+        if retry_servers.is_empty() {
+            return;
+        }
+
+        // Reset cancellation token so retries can be cancelled even if the previous
+        // startup attempt was interrupted.
+        let cancel_token = {
+            let mut token = sess.services.mcp_startup_cancellation_token.lock().await;
+            if token.is_cancelled() {
+                *token = CancellationToken::new();
+            }
+            token.clone()
+        };
+
+        let auth_statuses = compute_auth_statuses(
+            retry_servers.iter(),
+            config.mcp_oauth_credentials_store_mode,
+        )
+        .await;
+
+        let sandbox_state = {
+            let state = sess.state.lock().await;
+            let cfg = &state.session_configuration;
+            SandboxState {
+                sandbox_policy: cfg.sandbox_policy.get().clone(),
+                codex_linux_sandbox_exe: config.codex_linux_sandbox_exe.clone(),
+                sandbox_cwd: cfg.cwd.clone(),
+            }
+        };
+
+        let hook_context = {
+            let state = sess.state.lock().await;
+            let cfg = &state.session_configuration;
+            Some(crate::mcp_connection_manager::McpHookContext::new(
+                sess.services.user_hooks.clone(),
+                sess.conversation_id.to_string(),
+                cfg.cwd.display().to_string(),
+            ))
+        };
+
+        sess.services
+            .mcp_connection_manager
+            .write()
+            .await
+            .retry_servers(
+                retry_servers,
+                config.mcp_oauth_credentials_store_mode,
+                auth_statuses,
+                sess.tx_event.clone(),
+                cancel_token,
+                sandbox_state,
+                hook_context,
+            )
+            .await;
+    }
+
+    pub async fn mcp_set_startup_timeout(
+        sess: &Arc<Session>,
+        sub_id: String,
+        server: String,
+        startup_timeout_sec: u64,
+    ) {
+        let mut state = sess.state.lock().await;
+        state.mcp_startup_timeout_overrides.insert(
+            server.clone(),
+            std::time::Duration::from_secs(startup_timeout_sec),
+        );
+        drop(state);
+
+        sess.send_event_raw(Event {
+            id: sub_id,
+            msg: EventMsg::Warning(WarningEvent {
+                message: format!(
+                    "Set MCP startup timeout for `{server}` to {startup_timeout_sec}s (session only)."
+                ),
+            }),
+        })
+        .await;
     }
 
     pub async fn list_custom_prompts(sess: &Session, sub_id: String) {
@@ -3486,7 +3636,7 @@ mod tests {
 
         let services = SessionServices {
             mcp_connection_manager: Arc::new(RwLock::new(McpConnectionManager::default())),
-            mcp_startup_cancellation_token: CancellationToken::new(),
+            mcp_startup_cancellation_token: Mutex::new(CancellationToken::new()),
             unified_exec_manager: UnifiedExecSessionManager::default(),
             user_hooks: UserHooks::new(
                 config.codex_home.clone(),
@@ -3577,7 +3727,7 @@ mod tests {
 
         let services = SessionServices {
             mcp_connection_manager: Arc::new(RwLock::new(McpConnectionManager::default())),
-            mcp_startup_cancellation_token: CancellationToken::new(),
+            mcp_startup_cancellation_token: Mutex::new(CancellationToken::new()),
             unified_exec_manager: UnifiedExecSessionManager::default(),
             user_hooks: UserHooks::new(
                 config.codex_home.clone(),
