@@ -21,6 +21,7 @@ use crate::transcript_scrollbar::split_transcript_area;
 use crate::transcript_selection::TranscriptSelection;
 use crate::tui;
 use ratatui::layout::Rect;
+use std::collections::HashSet;
 
 /// User-visible feedback shown briefly after a copy attempt.
 ///
@@ -76,9 +77,17 @@ impl TranscriptCopyAction {
         chat_height: u16,
         transcript_cells: &[Arc<dyn HistoryCell>],
         transcript_selection: TranscriptSelection,
+        verbose_tool_output: bool,
+        expanded_exec_call_ids: &HashSet<String>,
     ) -> bool {
-        let outcome =
-            copy_transcript_selection(tui, chat_height, transcript_cells, transcript_selection);
+        let outcome = copy_transcript_selection(
+            tui,
+            chat_height,
+            transcript_cells,
+            transcript_selection,
+            verbose_tool_output,
+            expanded_exec_call_ids,
+        );
         self.handle_copy_outcome(tui, outcome)
     }
 
@@ -141,6 +150,8 @@ pub(crate) fn copy_transcript_selection(
     chat_height: u16,
     transcript_cells: &[Arc<dyn HistoryCell>],
     transcript_selection: TranscriptSelection,
+    verbose_tool_output: bool,
+    expanded_exec_call_ids: &HashSet<String>,
 ) -> CopySelectionOutcome {
     // This function is intentionally "dumb plumbing":
     // - validate layout prerequisites
@@ -176,6 +187,8 @@ pub(crate) fn copy_transcript_selection(
         transcript_cells,
         transcript_selection,
         transcript_area.width,
+        verbose_tool_output,
+        expanded_exec_call_ids,
     ) else {
         return CopySelectionOutcome::NoSelection;
     };

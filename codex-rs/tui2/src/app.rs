@@ -836,6 +836,7 @@ impl App {
             self.transcript_copy_ui.clear_affordances();
         }
 
+        let line_meta = self.transcript_view_cache.line_meta();
         if !self.config.tui_verbose_tool_output
             && let Some(point) = self
                 .transcript_selection
@@ -1011,6 +1012,8 @@ impl App {
                         chat_height,
                         &self.transcript_cells,
                         self.transcript_selection,
+                        self.config.tui_verbose_tool_output,
+                        &self.expanded_exec_call_ids,
                     ) {
                         self.transcript_selection = TranscriptSelection::default();
                     }
@@ -1453,7 +1456,7 @@ impl App {
             return false;
         };
 
-        if let Err(err) = clipboard_copy::copy_text(text) {
+        if let Err(err) = crate::clipboard_copy::copy_text(text) {
             tracing::error!(error = %err, "failed to copy full exec output to clipboard");
             self.chat_widget
                 .add_error_message(format!("Failed to copy to clipboard: {err}"));
@@ -2217,32 +2220,6 @@ impl App {
                     }
                 }
             }
-            AppEvent::PersistHideAgentReasoning(hide) => {
-                let profile = self.active_profile.as_deref();
-                match ConfigEditsBuilder::new(&self.config.codex_home)
-                    .with_profile(profile)
-                    .with_edits([ConfigEdit::SetPath {
-                        segments: vec!["hide_agent_reasoning".to_string()],
-                        value: toml_edit::value(hide),
-                    }])
-                    .apply()
-                    .await
-                {
-                    Ok(()) => {}
-                    Err(err) => {
-                        tracing::error!(error = %err, "failed to persist thoughts preference");
-                        if let Some(profile) = profile {
-                            self.chat_widget.add_error_message(format!(
-                                "Failed to save thoughts preference for profile `{profile}`: {err}"
-                            ));
-                        } else {
-                            self.chat_widget.add_error_message(format!(
-                                "Failed to save thoughts preference: {err}"
-                            ));
-                        }
-                    }
-                }
-            }
             AppEvent::PersistVerboseToolOutput(verbose) => {
                 let profile = self.active_profile.as_deref();
                 match ConfigEditsBuilder::new(&self.config.codex_home)
@@ -2555,7 +2532,7 @@ impl App {
                 if text.trim().is_empty() {
                     self.chat_widget
                         .add_info_message("Composer is empty.".to_string(), None);
-                } else if let Err(err) = clipboard_copy::copy_text(text) {
+                } else if let Err(err) = crate::clipboard_copy::copy_text(text) {
                     tracing::error!(error = %err, "failed to copy composer to clipboard");
                     self.chat_widget
                         .add_error_message(format!("Failed to copy composer to clipboard: {err}"));
@@ -2632,6 +2609,8 @@ impl App {
                     chat_height,
                     &self.transcript_cells,
                     self.transcript_selection,
+                    self.config.tui_verbose_tool_output,
+                    &self.expanded_exec_call_ids,
                 ) {
                     self.transcript_selection = TranscriptSelection::default();
                 }

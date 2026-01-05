@@ -216,15 +216,13 @@ async fn status_menu_summary_snapshot_includes_limit_bars() {
     let rate_display = rate_limit_snapshot_display(&snapshot, captured_at);
 
     let model_slug = ModelsManager::get_model_offline(config.model.as_deref());
-    let model_family = test_model_family(&model_slug, &config);
+    let token_info = token_info_for(&model_slug, &config, &usage);
 
     let cell = new_status_menu_summary_card(
         &config,
         &auth_manager,
-        &model_family,
-        false,
+        Some(&token_info),
         &usage,
-        Some(&usage),
         &None,
         Some(&rate_display),
         None,

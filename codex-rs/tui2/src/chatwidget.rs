@@ -5082,10 +5082,6 @@ impl ChatWidget {
         self.config.model_reasoning_effort = effort;
     }
 
-    pub(crate) fn set_hide_agent_reasoning(&mut self, hide: bool) {
-        self.config.hide_agent_reasoning = hide;
-    }
-
     pub(crate) fn set_verbose_tool_output(&mut self, verbose: bool) {
         self.config.tui_verbose_tool_output = verbose;
     }

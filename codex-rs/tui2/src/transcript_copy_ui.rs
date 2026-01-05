@@ -552,8 +552,13 @@ mod tests {
         assert!(rendered.contains("copy"));
         assert!(rendered.contains("ctrl + shift + c"));
 
-        let rect = ui.affordance_rect.expect("expected pill to render");
+        let rect = ui
+            .copy_selection_rect
+            .expect("expected copy-selection pill to render");
         assert_eq!(rect.y, 1);
-        assert!(ui.hit_test(rect.x, rect.y));
+        assert_eq!(
+            ui.hit_test_action(rect.x, rect.y),
+            Some(TranscriptPillAction::CopySelection)
+        );
     }
 }
