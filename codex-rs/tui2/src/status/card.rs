@@ -62,6 +62,7 @@ struct StatusHistoryCell {
     approval: String,
     sandbox: String,
     agents_summary: String,
+    auto_compact_enabled: bool,
     account: Option<StatusAccountDisplay>,
     session_id: Option<String>,
     token_usage: StatusTokenUsageData,
@@ -190,6 +191,8 @@ impl StatusHistoryCell {
             }
         };
         let agents_summary = compose_agents_summary(config);
+        let auto_compact_enabled =
+            codex_core::prefs::load_blocking(&config.codex_home).auto_compact_enabled;
         let account = compose_account_display(auth_manager, plan_type);
         let session_id = session_id.as_ref().map(std::string::ToString::to_string);
         let default_usage = TokenUsage::default();
@@ -218,6 +221,7 @@ impl StatusHistoryCell {
             approval,
             sandbox,
             agents_summary,
+            auto_compact_enabled,
             account,
             session_id,
             token_usage,
@@ -451,6 +455,14 @@ impl HistoryCell for StatusHistoryCell {
         lines.push(formatter.line("Approval", vec![Span::from(self.approval.clone())]));
         lines.push(formatter.line("Sandbox", vec![Span::from(self.sandbox.clone())]));
         lines.push(formatter.line("Agents.md", vec![Span::from(self.agents_summary.clone())]));
+        lines.push(formatter.line(
+            "Auto-compact",
+            vec![if self.auto_compact_enabled {
+                "enabled".green().bold()
+            } else {
+                "disabled".dim()
+            }],
+        ));
 
         if let Some(account_value) = account_value {
             lines.push(formatter.line("Account", vec![Span::from(account_value)]));
