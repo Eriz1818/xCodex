@@ -4,7 +4,7 @@ xcodex (xtreme-codex) is an effort to add features to upstream Codex CLI.
 
 ## Status
 
-- Slash commands: `/status`, `/settings`, `/compact`, `/autocompact`, and `/thoughts` are working.
+- Slash commands: `/help xcodex`, `/status`, `/settings`, `/compact`, `/autocompact`, and `/thoughts` are working.
 - Background terminals: `/ps` lists running background terminals and hooks; `/ps-kill` can terminate background terminals.
 - Hooks: basic automation hooks are in place.
 - Other features are in progress; expect rough edges and some churn.
@@ -12,6 +12,7 @@ xcodex (xtreme-codex) is an effort to add features to upstream Codex CLI.
 ## What’s here
 
 - Settings: `docs/xcodex/settings.md`
+- Worktrees: `docs/xcodex/worktrees.md` (quickstart + shared-dirs contract at the top)
 - Hooks: `docs/xcodex/hooks.md`
 - Keeping context under control: `docs/xcodex/compact.md`
 - Hiding thoughts: `docs/xcodex/thoughts.md`
@@ -27,11 +28,42 @@ just xcodex-install
 
 This installs to `~/.local/bin/xcodex` by default.
 
+## Npm packages (WIP)
+
+The goal is to ship `xcodex` and the responses API proxy as npm packages that bundle prebuilt native binaries.
+
+- Target packages:
+  - `@eriz1818/xcodex` → `xcodex`
+  - `@eriz1818/xcodex-responses-api-proxy` → `xcodex-responses-api-proxy`
+
+Local smoke test (once vendor binaries are staged into the package tarballs):
+
+```sh
+cd codex-cli
+npm pack
+npm i -g ./eriz1818-xcodex-*.tgz
+xcodex --version
+
+cd ../codex-rs/responses-api-proxy/npm
+npm pack
+npm i -g ./eriz1818-xcodex-responses-api-proxy-*.tgz
+xcodex-responses-api-proxy --help
+```
+
 ## Coexisting with upstream `codex`
 
 - Home directory: when invoked as `xcodex` and `CODEX_HOME` is unset, the default home is `~/.xcodex` (upstream `codex` remains `~/.codex`).
 - MCP OAuth tokens: `xcodex` stores keyring-backed MCP OAuth tokens under a separate keyring service name from upstream `codex`, so refreshing/deleting tokens in `xcodex` won’t impact upstream `codex`.
 - Hooks: hooks are configured under `$CODEX_HOME/config.toml`; with separate default homes, hooks you configure/run via `xcodex` won’t affect upstream `codex` unless you intentionally set `CODEX_HOME=~/.codex`.
+
+## Config commands
+
+Quick helpers for finding and editing your config:
+
+- `xcodex config path`: prints `CODEX_HOME`, `$CODEX_HOME/config.toml`, and any in-repo `.codex/config.toml` layers that apply to the current working directory.
+- `xcodex config edit`: opens `$CODEX_HOME/config.toml` in `$VISUAL`/`$EDITOR` (or prints the path if no editor is set).
+  - `--project` edits the nearest `./.codex/config.toml` instead (project-local config for the current repo).
+- `xcodex config doctor`: validates config parsing and reports common issues like unknown keys.
 
 ## First run setup wizard
 

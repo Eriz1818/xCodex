@@ -23,6 +23,7 @@ When filing issues, include repro steps and attach the files printed by `/feedba
 - Keep context under control with `/compact` and `/autocompact` (see [`docs/xcodex/compact.md`](docs/xcodex/compact.md)).
 - Hide/show agent thoughts in the TUI with `/thoughts` (see [`docs/xcodex/thoughts.md`](docs/xcodex/thoughts.md)).
 - Track your worktrees and branches in the status bar with `/settings` (see [`docs/xcodex/settings.md`](docs/xcodex/settings.md)).
+- Switch a session between git worktrees with `/worktree` (see [`docs/xcodex/worktrees.md`](docs/xcodex/worktrees.md)).
 - Automate xcodex with hooks (session/model/tool lifecycle events; see [`docs/xcodex/hooks.md`](docs/xcodex/hooks.md)).
 - Manage background terminals with `/ps` (list) and `/ps-kill` (terminate) (see [`docs/xcodex/background-terminals.md`](docs/xcodex/background-terminals.md)).
 

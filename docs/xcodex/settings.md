@@ -2,13 +2,15 @@
 
 `/settings` exposes a small set of runtime/persistent configuration toggles for `xcodex`.
 
-Today, `xcodex` renders settings as an inline “card” in the transcript (not a full-screen menu).
+In the legacy TUI (`tui`), `/settings` opens a bottom-pane tabbed menu (replacing the composer temporarily).
 
 ## Status bar items
 
 `xcodex` can optionally show additional items in the footer status bar, behind toggles.
 
 The values shown are derived from the session’s working directory (the same directory shown in `/status`), so different sessions can show different branches/worktrees.
+
+While enabled, `xcodex` refreshes these values automatically (about every 5 seconds). If `HEAD` is detached, it shows `branch: (detached)`.
 
 ### Toggle via `/settings`
 

@@ -23,8 +23,10 @@ Control Codex’s behavior during an interactive session with slash commands.
 | `/thoughts`     | toggle showing agent thoughts/reasoning (supports `on|off|toggle|status`)  |
 | `/diff`         | show git diff (including untracked files)                                  |
 | `/mention`      | mention a file                                                             |
-| `/status`       | show current session configuration and token usage                         |
-| `/settings`     | configure UI and session behavior (e.g., status bar items)                 |
+| `/help`         | show help for a topic (e.g. `/help xcodex`)                                |
+| `/status`       | open the status/settings menu (bottom pane)                                |
+| `/settings`     | open the status/settings menu (bottom pane)                                |
+| `/worktree`     | switch this session to a different git worktree (see also: `/worktree shared`) |
 | `/mcp`          | list configured MCP tools                                                  |
 | `/experimental` | open the experimental menu to enable features from our beta program        |
 | `/skills`       | browse and insert skills (experimental; see [docs/skills.md](./skills.md)) |
@@ -34,3 +36,20 @@ Control Codex’s behavior during an interactive session with slash commands.
 | `/feedback`     | save a local report for troubleshooting                                    |
 
 ---
+
+### xcodex additions
+
+If you're using `xcodex`, run:
+
+- `/help xcodex` — quick index of xcodex-only features available in your current UI.
+- `/ps` and `/ps-kill` — background terminals (availability may depend on UI frontend); see `docs/xcodex/background-terminals.md`.
+
+More xcodex docs:
+
+- `docs/xcodex/README.md`
+- `docs/xcodex/settings.md`
+- `docs/xcodex/worktrees.md`
+
+Worktree helpers (xcodex):
+
+- `/worktree shared add|rm|list` — edit `worktrees.shared_dirs` from inside the TUI (no manual `config.toml` edit).
