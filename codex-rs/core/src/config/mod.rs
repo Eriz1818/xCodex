@@ -13,6 +13,7 @@ use crate::config::types::ShellEnvironmentPolicy;
 use crate::config::types::ShellEnvironmentPolicyToml;
 use crate::config::types::Tui;
 use crate::config::types::UriBasedFileOpener;
+use crate::config::types::Worktrees;
 use crate::config_loader::ConfigLayerStack;
 use crate::config_loader::ConfigRequirements;
 use crate::config_loader::LoaderOverrides;
@@ -260,10 +261,37 @@ pub struct Config {
     /// This is the same `tui.status_bar_show_worktree` value from `config.toml` (see [`Tui`]).
     pub tui_status_bar_show_worktree: bool,
 
+    /// When true, show verbose tool output in the transcript (including large file reads).
+    ///
+    /// This is the same `tui.verbose_tool_output` value from `config.toml` (see [`Tui`]).
+    pub tui_verbose_tool_output: bool,
+
+    /// Enable application mouse capture in TUI2.
+    ///
+    /// This is the same `tui.mouse_capture` value from `config.toml` (see [`Tui`]).
+    pub tui_mouse_capture: bool,
+
     /// The directory that should be treated as the current working directory
     /// for the session. All relative paths inside the business-logic layer are
     /// resolved against this path.
     pub cwd: PathBuf,
+
+    /// Optional list of repo-relative directories to share across worktrees.
+    ///
+    /// This is the same `worktrees.shared_dirs` value from `config.toml` (see [`Worktrees`]).
+    pub worktrees_shared_dirs: Vec<String>,
+
+    /// Optional list of repo-relative paths/prefixes that should resolve to a stable workspace
+    /// root for structured file tools, even while switching worktrees.
+    ///
+    /// This is the same `worktrees.pinned_paths` value from `config.toml` (see [`Worktrees`]).
+    pub worktrees_pinned_paths: Vec<String>,
+
+    /// Whether xcodex should automatically link shared dirs when switching worktrees.
+    ///
+    /// This is the same `worktrees.auto_link_shared_dirs` value from `config.toml` (see
+    /// [`Worktrees`]).
+    pub worktrees_auto_link_shared_dirs: bool,
 
     /// Preferred store for CLI auth credentials.
     /// file (default): Use a file in the Codex home directory.
@@ -793,6 +821,9 @@ pub struct ConfigToml {
 
     /// Collection of settings that are specific to the TUI.
     pub tui: Option<Tui>,
+
+    /// Settings that affect worktree behavior.
+    pub worktrees: Option<Worktrees>,
 
     /// When set to `true`, `AgentReasoning` events will be hidden from the
     /// UI/output. Defaults to `false`.
@@ -1423,6 +1454,21 @@ impl Config {
             model_provider_id,
             model_provider,
             cwd: resolved_cwd,
+            worktrees_shared_dirs: cfg
+                .worktrees
+                .as_ref()
+                .map(|w| w.shared_dirs.clone())
+                .unwrap_or_default(),
+            worktrees_pinned_paths: cfg
+                .worktrees
+                .as_ref()
+                .map(|w| w.pinned_paths.clone())
+                .unwrap_or_default(),
+            worktrees_auto_link_shared_dirs: cfg
+                .worktrees
+                .as_ref()
+                .map(|w| w.auto_link_shared_dirs)
+                .unwrap_or(false),
             approval_policy: constrained_approval_policy,
             sandbox_policy: constrained_sandbox_policy,
             did_user_set_custom_approval_policy_or_sandbox_mode,
@@ -1537,6 +1583,12 @@ impl Config {
                 .as_ref()
                 .map(|t| t.status_bar_show_worktree)
                 .unwrap_or(false),
+            tui_verbose_tool_output: cfg
+                .tui
+                .as_ref()
+                .map(|t| t.verbose_tool_output)
+                .unwrap_or(false),
+            tui_mouse_capture: cfg.tui.as_ref().map(|t| t.mouse_capture).unwrap_or(true),
             otel: {
                 let t: OtelConfigToml = cfg.otel.unwrap_or_default();
                 let log_user_prompt = t.log_user_prompt.unwrap_or(false);
@@ -1830,6 +1882,8 @@ persistence = "none"
                 notifications: Notifications::Enabled(true),
                 animations: true,
                 show_tooltips: true,
+                mouse_capture: true,
+                verbose_tool_output: false,
                 status_bar_show_git_branch: false,
                 status_bar_show_worktree: false,
                 confirm_exit_with_running_hooks: true,
@@ -3402,6 +3456,9 @@ model_verbosity = "high"
                 notify: None,
                 hooks: HooksConfig::default(),
                 cwd: fixture.cwd(),
+                worktrees_shared_dirs: Vec::new(),
+                worktrees_pinned_paths: Vec::new(),
+                worktrees_auto_link_shared_dirs: false,
                 cli_auth_credentials_store_mode: Default::default(),
                 mcp_servers: HashMap::new(),
                 mcp_oauth_credentials_store_mode: Default::default(),
@@ -3452,6 +3509,8 @@ model_verbosity = "high"
                 tui_scroll_invert: false,
                 tui_status_bar_show_git_branch: false,
                 tui_status_bar_show_worktree: false,
+                tui_verbose_tool_output: false,
+                tui_mouse_capture: true,
                 otel: OtelConfig::default(),
             },
             o3_profile_config
@@ -3489,6 +3548,9 @@ model_verbosity = "high"
             notify: None,
             hooks: HooksConfig::default(),
             cwd: fixture.cwd(),
+            worktrees_shared_dirs: Vec::new(),
+            worktrees_pinned_paths: Vec::new(),
+            worktrees_auto_link_shared_dirs: false,
             cli_auth_credentials_store_mode: Default::default(),
             mcp_servers: HashMap::new(),
             mcp_oauth_credentials_store_mode: Default::default(),
@@ -3539,6 +3601,8 @@ model_verbosity = "high"
             tui_scroll_invert: false,
             tui_status_bar_show_git_branch: false,
             tui_status_bar_show_worktree: false,
+            tui_verbose_tool_output: false,
+            tui_mouse_capture: true,
             otel: OtelConfig::default(),
         };
 
@@ -3591,6 +3655,9 @@ model_verbosity = "high"
             notify: None,
             hooks: HooksConfig::default(),
             cwd: fixture.cwd(),
+            worktrees_shared_dirs: Vec::new(),
+            worktrees_pinned_paths: Vec::new(),
+            worktrees_auto_link_shared_dirs: false,
             cli_auth_credentials_store_mode: Default::default(),
             mcp_servers: HashMap::new(),
             mcp_oauth_credentials_store_mode: Default::default(),
@@ -3641,6 +3708,8 @@ model_verbosity = "high"
             tui_scroll_invert: false,
             tui_status_bar_show_git_branch: false,
             tui_status_bar_show_worktree: false,
+            tui_verbose_tool_output: false,
+            tui_mouse_capture: true,
             otel: OtelConfig::default(),
         };
 
@@ -3679,6 +3748,9 @@ model_verbosity = "high"
             notify: None,
             hooks: HooksConfig::default(),
             cwd: fixture.cwd(),
+            worktrees_shared_dirs: Vec::new(),
+            worktrees_pinned_paths: Vec::new(),
+            worktrees_auto_link_shared_dirs: false,
             cli_auth_credentials_store_mode: Default::default(),
             mcp_servers: HashMap::new(),
             mcp_oauth_credentials_store_mode: Default::default(),
@@ -3729,6 +3801,8 @@ model_verbosity = "high"
             tui_scroll_invert: false,
             tui_status_bar_show_git_branch: false,
             tui_status_bar_show_worktree: false,
+            tui_verbose_tool_output: false,
+            tui_mouse_capture: true,
             otel: OtelConfig::default(),
         };
 

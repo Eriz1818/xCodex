@@ -403,6 +403,21 @@ pub struct Tui {
     #[serde(default = "default_true")]
     pub show_tooltips: bool,
 
+    /// Enable application mouse capture in TUI2.
+    ///
+    /// When enabled, TUI2 receives mouse scroll and click events directly. When disabled, terminals
+    /// can use native mouse selection/copy, but TUI2 will not receive mouse wheel/trackpad events.
+    ///
+    /// Defaults to `true`.
+    #[serde(default = "default_true")]
+    pub mouse_capture: bool,
+
+    /// When true, show verbose tool output in the transcript (including large file reads).
+    ///
+    /// Defaults to `false` (quiet by default).
+    #[serde(default)]
+    pub verbose_tool_output: bool,
+
     /// Show the current git branch in the bottom status bar.
     /// Defaults to `false`.
     #[serde(default)]
@@ -520,6 +535,36 @@ pub struct Tui {
     /// wheel and trackpad input.
     #[serde(default)]
     pub scroll_invert: bool,
+}
+
+/// Collection of settings that affect git worktree behavior.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default)]
+pub struct Worktrees {
+    /// Optional list of repo-relative directories to share across worktrees.
+    ///
+    /// When enabled by higher-level features (e.g. `/worktree link-shared`), these directories
+    /// can be linked to a stable workspace root (symlink on macOS/Linux; junction on Windows) so
+    /// untracked files under them are not stranded inside disposable worktrees.
+    ///
+    /// Defaults to empty (opt-in).
+    #[serde(default)]
+    pub shared_dirs: Vec<String>,
+
+    /// Optional list of repo-relative paths/prefixes that should resolve to a stable workspace
+    /// root for structured file tools (e.g. apply_patch/read_file/list_dir/grep_files), even
+    /// while switching worktrees.
+    ///
+    /// This does not affect shell behavior; for shell ergonomics, use [`Worktrees::shared_dirs`]
+    /// and `/worktree link-shared`.
+    ///
+    /// Defaults to empty (opt-in).
+    #[serde(default)]
+    pub pinned_paths: Vec<String>,
+
+    /// When true, xcodex may automatically ensure shared dirs are linked when switching worktrees.
+    /// Defaults to `false` (opt-in).
+    #[serde(default)]
+    pub auto_link_shared_dirs: bool,
 }
 
 const fn default_true() -> bool {
