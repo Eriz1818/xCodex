@@ -103,6 +103,7 @@ use crate::diff_render::display_path_for;
 use crate::exec_cell::CommandOutput;
 use crate::exec_cell::ExecCell;
 use crate::exec_cell::new_active_exec_command;
+use crate::exec_command::strip_bash_lc_and_escape;
 use crate::get_git_diff::get_git_diff;
 use crate::history_cell;
 use crate::history_cell::AgentMessageCell;
@@ -152,6 +153,16 @@ struct RunningCommand {
     command: Vec<String>,
     parsed_cmd: Vec<ParsedCommand>,
     source: ExecCommandSource,
+}
+
+struct UnifiedExecSessionSummary {
+    key: String,
+    command_display: String,
+}
+
+struct HookProcessSummary {
+    key: String,
+    command_display: String,
 }
 
 struct UnifiedExecWaitState {
@@ -312,7 +323,8 @@ pub(crate) struct ChatWidget {
     suppressed_exec_calls: HashSet<String>,
     last_unified_wait: Option<UnifiedExecWaitState>,
     task_complete_pending: bool,
-    hook_processes: HashSet<String>,
+    unified_exec_sessions: Vec<UnifiedExecSessionSummary>,
+    hook_processes: Vec<HookProcessSummary>,
     mcp_startup_status: Option<HashMap<String, McpStartupStatus>>,
     // Queue of interruptive UI events deferred during an active write cycle
     interrupts: InterruptManager,
@@ -500,6 +512,10 @@ impl ChatWidget {
     }
 
     fn on_agent_reasoning_delta(&mut self, delta: String) {
+        if self.config.hide_agent_reasoning {
+            return;
+        }
+
         // For reasoning deltas, do not stream to history. Accumulate the
         // current reasoning block and extract the first bold element
         // (between **/**) as the chunk header. Show this header as status.
@@ -515,6 +531,12 @@ impl ChatWidget {
     }
 
     fn on_agent_reasoning_final(&mut self) {
+        if self.config.hide_agent_reasoning {
+            self.reasoning_buffer.clear();
+            self.full_reasoning_buffer.clear();
+            return;
+        }
+
         // At the end of a reasoning block, record transcript-only content.
         self.full_reasoning_buffer.push_str(&self.reasoning_buffer);
         if !self.full_reasoning_buffer.is_empty() {
@@ -528,6 +550,12 @@ impl ChatWidget {
     }
 
     fn on_reasoning_section_break(&mut self) {
+        if self.config.hide_agent_reasoning {
+            self.reasoning_buffer.clear();
+            self.full_reasoning_buffer.clear();
+            return;
+        }
+
         // Start a new reasoning block for header extraction and accumulate transcript.
         self.full_reasoning_buffer.push_str(&self.reasoning_buffer);
         self.full_reasoning_buffer.push_str("\n\n");
@@ -958,6 +986,9 @@ impl ChatWidget {
 
     fn on_exec_command_begin(&mut self, ev: ExecCommandBeginEvent) {
         self.flush_answer_stream_with_separator();
+        if ev.source == ExecCommandSource::UnifiedExecStartup {
+            self.track_unified_exec_session_begin(&ev);
+        }
         let ev2 = ev.clone();
         self.defer_or_handle(|q| q.push_exec_begin(ev), |s| s.handle_exec_begin_now(ev2));
     }
@@ -974,11 +1005,22 @@ impl ChatWidget {
     }
 
     fn on_hook_process_begin(&mut self, ev: HookProcessBeginEvent) {
-        self.hook_processes.insert(ev.hook_id.to_string());
+        let key = ev.hook_id.to_string();
+        let command_display = strip_bash_lc_and_escape(&ev.command);
+        let command_display = format!("{} · {command_display}", ev.event_type);
+        if let Some(existing) = self.hook_processes.iter_mut().find(|hook| hook.key == key) {
+            existing.command_display = command_display;
+        } else {
+            self.hook_processes.push(HookProcessSummary {
+                key,
+                command_display,
+            });
+        }
     }
 
     fn on_hook_process_end(&mut self, ev: HookProcessEndEvent) {
-        self.hook_processes.remove(&ev.hook_id.to_string());
+        let key = ev.hook_id.to_string();
+        self.hook_processes.retain(|hook| hook.key != key);
     }
 
     fn on_patch_apply_begin(&mut self, event: PatchApplyBeginEvent) {
@@ -1006,8 +1048,34 @@ impl ChatWidget {
     }
 
     fn on_exec_command_end(&mut self, ev: ExecCommandEndEvent) {
+        if ev.source == ExecCommandSource::UnifiedExecStartup {
+            self.track_unified_exec_session_end(&ev);
+        }
         let ev2 = ev.clone();
         self.defer_or_handle(|q| q.push_exec_end(ev), |s| s.handle_exec_end_now(ev2));
+    }
+
+    fn track_unified_exec_session_begin(&mut self, ev: &ExecCommandBeginEvent) {
+        let key = ev.process_id.clone().unwrap_or_else(|| ev.call_id.clone());
+        let command_display = strip_bash_lc_and_escape(&ev.command);
+        if let Some(existing) = self
+            .unified_exec_sessions
+            .iter_mut()
+            .find(|session| session.key == key)
+        {
+            existing.command_display = command_display;
+        } else {
+            self.unified_exec_sessions.push(UnifiedExecSessionSummary {
+                key,
+                command_display,
+            });
+        }
+    }
+
+    fn track_unified_exec_session_end(&mut self, ev: &ExecCommandEndEvent) {
+        let key = ev.process_id.clone().unwrap_or_else(|| ev.call_id.clone());
+        self.unified_exec_sessions
+            .retain(|session| session.key != key);
     }
 
     fn on_mcp_tool_call_begin(&mut self, ev: McpToolCallBeginEvent) {
@@ -1467,7 +1535,8 @@ impl ChatWidget {
             suppressed_exec_calls: HashSet::new(),
             last_unified_wait: None,
             task_complete_pending: false,
-            hook_processes: HashSet::new(),
+            unified_exec_sessions: Vec::new(),
+            hook_processes: Vec::new(),
             mcp_startup_status: None,
             interrupts: InterruptManager::new(),
             reasoning_buffer: String::new(),
@@ -1569,7 +1638,8 @@ impl ChatWidget {
             suppressed_exec_calls: HashSet::new(),
             last_unified_wait: None,
             task_complete_pending: false,
-            hook_processes: HashSet::new(),
+            unified_exec_sessions: Vec::new(),
+            hook_processes: Vec::new(),
             mcp_startup_status: None,
             interrupts: InterruptManager::new(),
             reasoning_buffer: String::new(),
@@ -1739,6 +1809,17 @@ impl ChatWidget {
                 self.app_event_tx
                     .send(AppEvent::CodexOp(Op::SetAutoCompact { enabled }));
             }
+            SlashCommand::Thoughts => {
+                let hide = !self.config.hide_agent_reasoning;
+                self.set_hide_agent_reasoning(hide);
+                let status = if hide { "hidden" } else { "shown" };
+                self.add_info_message(format!("Thoughts {status}."), None);
+                self.app_event_tx
+                    .send(AppEvent::UpdateHideAgentReasoning(hide));
+                self.app_event_tx
+                    .send(AppEvent::PersistHideAgentReasoning(hide));
+                self.request_redraw();
+            }
             SlashCommand::Review => {
                 self.open_review_popup();
             }
@@ -1794,6 +1875,15 @@ impl ChatWidget {
                     self.config.tui_status_bar_show_git_branch,
                     self.config.tui_status_bar_show_worktree,
                 );
+            }
+            SlashCommand::Hooks => {
+                self.add_hooks_output();
+            }
+            SlashCommand::Ps => {
+                self.add_ps_output();
+            }
+            SlashCommand::PsKill => {
+                self.open_kill_popup();
             }
             SlashCommand::Mcp => {
                 self.add_mcp_output();
@@ -1970,6 +2060,56 @@ impl ChatWidget {
                 };
                 self.add_info_message(format!("Auto-compact is currently {status}."), None);
             }
+            return;
+        }
+
+        if image_paths.is_empty()
+            && text.lines().count() == 1
+            && let Some((name, rest)) = parse_slash_name(text.as_str())
+            && name == "thoughts"
+        {
+            let args: Vec<&str> = rest.split_whitespace().collect();
+            let next_hide = match args.as_slice() {
+                [] => Some(!self.config.hide_agent_reasoning),
+                [arg] => match arg.to_ascii_lowercase().as_str() {
+                    "on" | "show" | "true" => Some(false),
+                    "off" | "hide" | "false" => Some(true),
+                    "toggle" => Some(!self.config.hide_agent_reasoning),
+                    "status" => None,
+                    _ => {
+                        self.add_info_message(
+                            "Usage: /thoughts [on|off|toggle|status]".to_string(),
+                            None,
+                        );
+                        return;
+                    }
+                },
+                _ => {
+                    self.add_info_message(
+                        "Usage: /thoughts [on|off|toggle|status]".to_string(),
+                        None,
+                    );
+                    return;
+                }
+            };
+
+            if let Some(hide) = next_hide {
+                self.set_hide_agent_reasoning(hide);
+                let status = if hide { "hidden" } else { "shown" };
+                self.add_info_message(format!("Thoughts {status}."), None);
+                self.app_event_tx
+                    .send(AppEvent::UpdateHideAgentReasoning(hide));
+                self.app_event_tx
+                    .send(AppEvent::PersistHideAgentReasoning(hide));
+            } else {
+                let status = if self.config.hide_agent_reasoning {
+                    "hidden"
+                } else {
+                    "shown"
+                };
+                self.add_info_message(format!("Thoughts are currently {status}."), None);
+            }
+            self.request_redraw();
             return;
         }
 
@@ -2384,6 +2524,141 @@ impl ChatWidget {
         let command = PlainHistoryCell::new(vec![Line::from(vec!["/settings".magenta()])]);
         let card = crate::status::new_settings_card(show_git_branch, show_worktree);
         self.add_to_history(CompositeHistoryCell::new(vec![Box::new(command), card]));
+    }
+
+    pub(crate) fn add_hooks_output(&mut self) {
+        let command = PlainHistoryCell::new(vec![Line::from(vec!["/hooks".magenta()])]);
+        let codex_home = self.config.codex_home.clone();
+        let logs_dir = codex_home.join("tmp").join("hooks").join("logs");
+        let payloads_dir = codex_home.join("tmp").join("hooks").join("payloads");
+
+        let lines: Vec<Line<'static>> = vec![
+            Line::from(vec![
+                "Automation hooks run external programs on lifecycle events. ".into(),
+                "Treat hook payloads/logs as potentially sensitive.".dim(),
+            ]),
+            Line::from(""),
+            Line::from(vec!["Quickstart:".magenta().bold()]),
+            Line::from(vec!["  xcodex hooks init".cyan()]),
+            Line::from(vec!["  xcodex hooks test --configured-only".cyan()]),
+            Line::from(vec!["  xcodex hooks list".cyan()]),
+            Line::from(vec!["  xcodex hooks paths".cyan()]),
+            Line::from(""),
+            Line::from(vec![
+                "Config: ".dim(),
+                format!("{}/config.toml", codex_home.display()).into(),
+            ]),
+            Line::from(vec!["Logs: ".dim(), logs_dir.display().to_string().into()]),
+            Line::from(vec![
+                "Payloads: ".dim(),
+                payloads_dir.display().to_string().into(),
+            ]),
+            Line::from(""),
+            Line::from(vec![
+                "Docs: ".dim(),
+                "docs/xcodex/hooks.md".cyan(),
+                " and ".dim(),
+                "docs/xcodex/hooks-gallery.md".cyan(),
+            ]),
+        ];
+
+        self.add_to_history(CompositeHistoryCell::new(vec![
+            Box::new(command),
+            Box::new(PlainHistoryCell::new(lines)),
+        ]));
+    }
+
+    pub(crate) fn add_ps_output(&mut self) {
+        let sessions = self
+            .unified_exec_sessions
+            .iter()
+            .map(|session| {
+                history_cell::BackgroundActivityEntry::new(
+                    session.key.clone(),
+                    session.command_display.clone(),
+                )
+            })
+            .collect();
+        let hooks = self
+            .hook_processes
+            .iter()
+            .map(|hook| {
+                history_cell::BackgroundActivityEntry::new(
+                    hook.key.clone(),
+                    hook.command_display.clone(),
+                )
+            })
+            .collect();
+        self.add_to_history(history_cell::new_unified_exec_sessions_output(
+            sessions, hooks,
+        ));
+    }
+
+    fn open_kill_popup(&mut self) {
+        if self.unified_exec_sessions.is_empty() {
+            self.add_info_message("No background terminals running.".to_string(), None);
+            return;
+        }
+
+        let mut items: Vec<SelectionItem> = Vec::new();
+
+        let all_actions: Vec<SelectionAction> = vec![Box::new(|tx| {
+            tx.send(AppEvent::CodexOp(Op::TerminateAllUnifiedExecSessions));
+            tx.send(AppEvent::InsertHistoryCell(Box::new(
+                history_cell::new_info_event(
+                    "Terminating all background terminals…".to_string(),
+                    None,
+                ),
+            )));
+        })];
+        items.push(SelectionItem {
+            name: "Terminate all background terminals".to_string(),
+            description: Some("Closes every running background terminal session.".to_string()),
+            selected_description: None,
+            is_current: false,
+            actions: all_actions,
+            dismiss_on_select: true,
+            ..Default::default()
+        });
+
+        for session in &self.unified_exec_sessions {
+            let process_id = session.key.clone();
+            let process_id_for_action = process_id.clone();
+            let command_display = session.command_display.clone();
+            let search_value = format!("{process_id} {command_display}");
+            let actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
+                tx.send(AppEvent::CodexOp(Op::TerminateUnifiedExecSession {
+                    process_id: process_id_for_action.clone(),
+                }));
+                tx.send(AppEvent::InsertHistoryCell(Box::new(
+                    history_cell::new_info_event(
+                        format!("Terminating background terminal {process_id_for_action}…"),
+                        None,
+                    ),
+                )));
+            })];
+            items.push(SelectionItem {
+                name: process_id,
+                description: Some(command_display),
+                selected_description: None,
+                is_current: false,
+                actions,
+                dismiss_on_select: true,
+                search_value: Some(search_value),
+                ..Default::default()
+            });
+        }
+
+        self.bottom_pane.show_selection_view(SelectionViewParams {
+            title: Some("Terminate background terminals".to_string()),
+            subtitle: Some("Select a unified-exec session id (shown by /ps).".to_string()),
+            footer_hint: Some(standard_popup_hint_line()),
+            items,
+            is_searchable: true,
+            search_placeholder: Some("Search by id or command".to_string()),
+            ..Default::default()
+        });
+        self.request_redraw();
     }
 
     fn stop_rate_limit_poller(&mut self) {
@@ -3384,6 +3659,14 @@ impl ChatWidget {
     pub(crate) fn set_model(&mut self, model: &str) {
         self.session_header.set_model(model);
         self.model = model.to_string();
+    }
+
+    pub(crate) fn set_hide_agent_reasoning(&mut self, hide: bool) {
+        self.config.hide_agent_reasoning = hide;
+        if hide {
+            self.reasoning_buffer.clear();
+            self.full_reasoning_buffer.clear();
+        }
     }
 
     pub(crate) fn add_info_message(&mut self, message: String, hint: Option<String>) {

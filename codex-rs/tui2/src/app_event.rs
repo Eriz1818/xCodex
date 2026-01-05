@@ -75,6 +75,9 @@ pub(crate) enum AppEvent {
     /// Update the current model slug in the running app and widget.
     UpdateModel(String),
 
+    /// Update whether `AgentReasoning` events should be hidden from UI output.
+    UpdateHideAgentReasoning(bool),
+
     /// Persist the selected model and reasoning effort to the appropriate config.
     PersistModelSelection {
         model: String,
@@ -86,6 +89,9 @@ pub(crate) enum AppEvent {
         show_git_branch: bool,
         show_worktree: bool,
     },
+
+    /// Persist `hide_agent_reasoning` to the appropriate config.
+    PersistHideAgentReasoning(bool),
 
     /// Open the reasoning selection popup after picking a model.
     OpenReasoningPopup {

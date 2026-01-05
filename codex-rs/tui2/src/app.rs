@@ -1520,6 +1520,10 @@ impl App {
                 self.chat_widget.set_model(&model);
                 self.current_model = model;
             }
+            AppEvent::UpdateHideAgentReasoning(hide) => {
+                self.config.hide_agent_reasoning = hide;
+                self.chat_widget.set_hide_agent_reasoning(hide);
+            }
             AppEvent::OpenReasoningPopup { model } => {
                 self.chat_widget.open_reasoning_popup(model);
             }
@@ -1692,6 +1696,35 @@ impl App {
                         } else {
                             self.chat_widget.add_error_message(format!(
                                 "Failed to save status bar options: {err}"
+                            ));
+                        }
+                    }
+                }
+            }
+            AppEvent::PersistHideAgentReasoning(hide) => {
+                let profile = self.active_profile.as_deref();
+                match ConfigEditsBuilder::new(&self.config.codex_home)
+                    .with_profile(profile)
+                    .with_edits([ConfigEdit::SetPath {
+                        segments: vec!["hide_agent_reasoning".to_string()],
+                        value: toml_edit::value(hide),
+                    }])
+                    .apply()
+                    .await
+                {
+                    Ok(()) => {}
+                    Err(err) => {
+                        tracing::error!(
+                            error = %err,
+                            "failed to persist thoughts preference"
+                        );
+                        if let Some(profile) = profile {
+                            self.chat_widget.add_error_message(format!(
+                                "Failed to save thoughts preference for profile `{profile}`: {err}"
+                            ));
+                        } else {
+                            self.chat_widget.add_error_message(format!(
+                                "Failed to save thoughts preference: {err}"
                             ));
                         }
                     }
