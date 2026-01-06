@@ -1,6 +1,6 @@
 ---
 source: tui/src/status/tests.rs
-assertion_line: 531
+assertion_line: 604
 expression: sanitized
 ---
 /status
@@ -19,7 +19,7 @@ expression: sanitized
 │  Sandbox:          read-only                                          │
 │  Agents.md:        <none>                                             │
 │  Auto-compact:     disabled                                           │
-│  Thoughts:         shown                                              │
+│  Thoughts:         hidden                                             │
 │                                                                       │
 │  Token usage:      750 total  (500 input + 250 output)                │
 │  Context window:   [████████████████████] 100% left (750 used / 272K) │

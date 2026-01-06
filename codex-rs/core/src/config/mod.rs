@@ -1509,7 +1509,7 @@ impl Config {
             file_opener: cfg.file_opener.unwrap_or(UriBasedFileOpener::VsCode),
             codex_linux_sandbox_exe,
 
-            hide_agent_reasoning: cfg.hide_agent_reasoning.unwrap_or(false),
+            hide_agent_reasoning: cfg.hide_agent_reasoning.unwrap_or(true),
             show_raw_agent_reasoning: cfg
                 .show_raw_agent_reasoning
                 .or(show_raw_agent_reasoning)
@@ -3473,7 +3473,7 @@ model_verbosity = "high"
                 history: History::default(),
                 file_opener: UriBasedFileOpener::VsCode,
                 codex_linux_sandbox_exe: None,
-                hide_agent_reasoning: false,
+                hide_agent_reasoning: true,
                 show_raw_agent_reasoning: false,
                 model_reasoning_effort: Some(ReasoningEffort::High),
                 model_reasoning_summary: ReasoningSummary::Detailed,
@@ -3565,7 +3565,7 @@ model_verbosity = "high"
             history: History::default(),
             file_opener: UriBasedFileOpener::VsCode,
             codex_linux_sandbox_exe: None,
-            hide_agent_reasoning: false,
+            hide_agent_reasoning: true,
             show_raw_agent_reasoning: false,
             model_reasoning_effort: None,
             model_reasoning_summary: ReasoningSummary::default(),
@@ -3672,7 +3672,7 @@ model_verbosity = "high"
             history: History::default(),
             file_opener: UriBasedFileOpener::VsCode,
             codex_linux_sandbox_exe: None,
-            hide_agent_reasoning: false,
+            hide_agent_reasoning: true,
             show_raw_agent_reasoning: false,
             model_reasoning_effort: None,
             model_reasoning_summary: ReasoningSummary::default(),
@@ -3765,7 +3765,7 @@ model_verbosity = "high"
             history: History::default(),
             file_opener: UriBasedFileOpener::VsCode,
             codex_linux_sandbox_exe: None,
-            hide_agent_reasoning: false,
+            hide_agent_reasoning: true,
             show_raw_agent_reasoning: false,
             model_reasoning_effort: Some(ReasoningEffort::High),
             model_reasoning_summary: ReasoningSummary::Detailed,

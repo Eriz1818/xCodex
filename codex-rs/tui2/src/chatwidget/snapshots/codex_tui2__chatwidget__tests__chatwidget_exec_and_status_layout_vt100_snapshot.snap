@@ -1,6 +1,6 @@
 ---
 source: tui2/src/chatwidget/tests.rs
-assertion_line: 3352
+assertion_line: 3369
 expression: term.backend().vt100().screen().contents()
 ---
 
@@ -37,7 +37,7 @@ expression: term.backend().vt100().screen().contents()
   └ Search Change Approved
     Read diff_render.rs
 
-• Investigating rendering code (0s • esc to interrupt)
+• Working (0s • esc to interrupt)
 
 
 › Summarize recent commits

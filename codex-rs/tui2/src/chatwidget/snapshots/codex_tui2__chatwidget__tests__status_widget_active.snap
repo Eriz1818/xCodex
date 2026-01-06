@@ -1,9 +1,10 @@
 ---
 source: tui2/src/chatwidget/tests.rs
+assertion_line: 2549
 expression: terminal.backend()
 ---
 "                                                                                "
-"• Analyzing (0s • esc to interrupt)                                             "
+"• Working (0s • esc to interrupt)                                               "
 "                                                                                "
 "                                                                                "
 "› Ask xcodex to do anything                                                     "
