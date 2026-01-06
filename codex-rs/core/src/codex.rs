@@ -8,6 +8,7 @@ use std::sync::atomic::Ordering;
 
 use crate::AuthManager;
 use crate::SandboxState;
+use crate::agent::AgentControl;
 use crate::client_common::REVIEW_PROMPT;
 use crate::compact;
 use crate::compact::run_inline_auto_compact_task;
@@ -207,21 +208,23 @@ fn maybe_push_chat_wire_api_deprecation(
 
 impl Codex {
     /// Spawn a new [`Codex`] and initialize the session.
-    pub async fn spawn(
+    pub(crate) async fn spawn(
         config: Config,
         auth_manager: Arc<AuthManager>,
         models_manager: Arc<ModelsManager>,
         skills_manager: Arc<SkillsManager>,
         conversation_history: InitialHistory,
         session_source: SessionSource,
+        agent_control: AgentControl,
     ) -> CodexResult<CodexSpawnOk> {
         let (tx_sub, rx_sub) = async_channel::bounded(SUBMISSION_CHANNEL_CAPACITY);
         let (tx_event, rx_event) = async_channel::unbounded();
 
-        let loaded_skills = config
-            .features
-            .enabled(Feature::Skills)
-            .then(|| skills_manager.skills_for_cwd(&config.cwd));
+        let loaded_skills = if config.features.enabled(Feature::Skills) {
+            Some(skills_manager.skills_for_config(&config))
+        } else {
+            None
+        };
 
         if let Some(outcome) = &loaded_skills {
             for err in &outcome.errors {
@@ -283,6 +286,7 @@ impl Codex {
             conversation_history,
             session_source_clone,
             skills_manager,
+            agent_control,
         )
         .await
         .map_err(|e| {
@@ -568,6 +572,7 @@ impl Session {
         initial_history: InitialHistory,
         session_source: SessionSource,
         skills_manager: Arc<SkillsManager>,
+        agent_control: AgentControl,
     ) -> anyhow::Result<Arc<Self>> {
         debug!(
             "Configuring session: model={}; provider={:?}",
@@ -707,6 +712,7 @@ impl Session {
             models_manager: Arc::clone(&models_manager),
             tool_approvals: Mutex::new(ApprovalStore::default()),
             skills_manager,
+            agent_control,
         };
 
         let sess = Arc::new(Session {
@@ -1062,6 +1068,11 @@ impl Session {
     }
 
     pub(crate) async fn send_event_raw(&self, event: Event) {
+        self.services
+            .agent_control
+            .bus
+            .on_event(self.conversation_id, &event.msg)
+            .await;
         // Persist the event into rollout (recorder filters as needed)
         let rollout_items = vec![RolloutItem::EventMsg(event.msg.clone())];
         self.persist_rollout_items(&rollout_items).await;
@@ -2382,18 +2393,18 @@ mod handlers {
         };
         let skills = if sess.enabled(Feature::Skills) {
             let skills_manager = &sess.services.skills_manager;
-            cwds.into_iter()
-                .map(|cwd| {
-                    let outcome = skills_manager.skills_for_cwd_with_options(&cwd, force_reload);
-                    let errors = super::errors_to_info(&outcome.errors);
-                    let skills = super::skills_to_info(&outcome.skills);
-                    SkillsListEntry {
-                        cwd,
-                        skills,
-                        errors,
-                    }
-                })
-                .collect()
+            let mut entries = Vec::new();
+            for cwd in cwds {
+                let outcome = skills_manager.skills_for_cwd(&cwd, force_reload).await;
+                let errors = super::errors_to_info(&outcome.errors);
+                let skills = super::skills_to_info(&outcome.skills);
+                entries.push(SkillsListEntry {
+                    cwd,
+                    skills,
+                    errors,
+                });
+            }
+            entries
         } else {
             cwds.into_iter()
                 .map(|cwd| SkillsListEntry {
@@ -2658,11 +2669,16 @@ pub(crate) async fn run_task(
                 .unwrap_or(i64::MAX)
         });
 
-    let skills_outcome = sess.enabled(Feature::Skills).then(|| {
-        sess.services
-            .skills_manager
-            .skills_for_cwd(&turn_context.cwd)
-    });
+    let skills_outcome = if sess.enabled(Feature::Skills) {
+        Some(
+            sess.services
+                .skills_manager
+                .skills_for_cwd(&turn_context.cwd, false)
+                .await,
+        )
+    } else {
+        None
+    };
 
     let SkillInjections {
         items: skill_items,
@@ -3724,6 +3740,7 @@ mod tests {
         let auth_manager =
             AuthManager::from_auth_for_testing(CodexAuth::from_api_key("Test API Key"));
         let models_manager = Arc::new(ModelsManager::new(auth_manager.clone()));
+        let agent_control = AgentControl::default();
         let exec_policy = ExecPolicyManager::default();
         let model = ModelsManager::get_model_offline(config.model.as_deref());
         let session_configuration = SessionConfiguration {
@@ -3774,6 +3791,7 @@ mod tests {
             models_manager: Arc::clone(&models_manager),
             tool_approvals: Mutex::new(ApprovalStore::default()),
             skills_manager,
+            agent_control,
         };
 
         let turn_context = Session::make_turn_context(
@@ -3815,6 +3833,7 @@ mod tests {
         let auth_manager =
             AuthManager::from_auth_for_testing(CodexAuth::from_api_key("Test API Key"));
         let models_manager = Arc::new(ModelsManager::new(auth_manager.clone()));
+        let agent_control = AgentControl::default();
         let exec_policy = ExecPolicyManager::default();
         let model = ModelsManager::get_model_offline(config.model.as_deref());
         let session_configuration = SessionConfiguration {
@@ -3865,6 +3884,7 @@ mod tests {
             models_manager: Arc::clone(&models_manager),
             tool_approvals: Mutex::new(ApprovalStore::default()),
             skills_manager,
+            agent_control,
         };
 
         let turn_context = Arc::new(Session::make_turn_context(
