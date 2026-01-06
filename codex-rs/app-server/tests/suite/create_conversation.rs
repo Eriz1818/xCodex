@@ -12,6 +12,7 @@ use codex_app_server_protocol::NewConversationResponse;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::SendUserMessageParams;
 use codex_app_server_protocol::SendUserMessageResponse;
+use core_test_support::skip_if_no_network;
 use pretty_assertions::assert_eq;
 use serde_json::json;
 use std::path::Path;
@@ -22,6 +23,8 @@ const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn test_conversation_create_and_send_message_ok() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
     // Mock server – we won't strictly rely on it, but provide one to satisfy any model wiring.
     let responses = vec![create_final_assistant_message_sse_response("Done")?];
     let server = create_mock_chat_completions_server(responses).await;

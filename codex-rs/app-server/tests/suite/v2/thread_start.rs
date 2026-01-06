@@ -8,6 +8,7 @@ use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::ThreadStartedNotification;
+use core_test_support::skip_if_no_network;
 use std::path::Path;
 use tempfile::TempDir;
 use tokio::time::timeout;
@@ -16,6 +17,8 @@ const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs
 
 #[tokio::test]
 async fn thread_start_creates_thread_and_emits_started() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
     // Provide a mock server and config so model wiring is valid.
     let server = create_mock_chat_completions_server(vec![]).await;
 

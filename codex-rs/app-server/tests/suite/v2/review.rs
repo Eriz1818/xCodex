@@ -17,6 +17,7 @@ use codex_app_server_protocol::ThreadItem;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::TurnStatus;
+use core_test_support::skip_if_no_network;
 use serde_json::json;
 use tempfile::TempDir;
 use tokio::time::timeout;
@@ -26,6 +27,8 @@ const INVALID_REQUEST_ERROR_CODE: i64 = -32600;
 
 #[tokio::test]
 async fn review_start_runs_review_turn_and_emits_code_review_item() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
     let review_payload = json!({
         "findings": [
             {
@@ -135,6 +138,8 @@ async fn review_start_runs_review_turn_and_emits_code_review_item() -> Result<()
 
 #[tokio::test]
 async fn review_start_rejects_empty_base_branch() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
     let server = create_mock_chat_completions_server_unchecked(vec![]).await;
     let codex_home = TempDir::new()?;
     create_config_toml(codex_home.path(), &server.uri())?;
@@ -169,6 +174,8 @@ async fn review_start_rejects_empty_base_branch() -> Result<()> {
 
 #[tokio::test]
 async fn review_start_with_detached_delivery_returns_new_thread_id() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
     let review_payload = json!({
         "findings": [],
         "overall_correctness": "ok",
@@ -219,6 +226,8 @@ async fn review_start_with_detached_delivery_returns_new_thread_id() -> Result<(
 
 #[tokio::test]
 async fn review_start_rejects_empty_commit_sha() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
     let server = create_mock_chat_completions_server_unchecked(vec![]).await;
     let codex_home = TempDir::new()?;
     create_config_toml(codex_home.path(), &server.uri())?;
@@ -254,6 +263,8 @@ async fn review_start_rejects_empty_commit_sha() -> Result<()> {
 
 #[tokio::test]
 async fn review_start_rejects_empty_custom_instructions() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
     let server = create_mock_chat_completions_server_unchecked(vec![]).await;
     let codex_home = TempDir::new()?;
     create_config_toml(codex_home.path(), &server.uri())?;

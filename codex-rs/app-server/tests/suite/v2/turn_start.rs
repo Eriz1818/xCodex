@@ -42,6 +42,8 @@ const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs
 
 #[tokio::test]
 async fn turn_start_emits_notifications_and_accepts_model_override() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
     // Provide a mock server and config so model wiring is valid.
     // Three Codex turns hit the mock model (session start + two turn/start calls).
     let responses = vec![
@@ -149,6 +151,8 @@ async fn turn_start_emits_notifications_and_accepts_model_override() -> Result<(
 
 #[tokio::test]
 async fn turn_start_accepts_local_image_input() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
     // Two Codex turns hit the mock model (session start + turn/start).
     let responses = vec![
         create_final_assistant_message_sse_response("Done")?,

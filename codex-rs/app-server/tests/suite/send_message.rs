@@ -17,6 +17,7 @@ use codex_protocol::ConversationId;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::RawResponseItemEvent;
+use core_test_support::skip_if_no_network;
 use pretty_assertions::assert_eq;
 use std::path::Path;
 use tempfile::TempDir;
@@ -26,6 +27,8 @@ const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs
 
 #[tokio::test]
 async fn test_send_message_success() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
     // Spin up a mock completions server that immediately ends the Codex turn.
     // Two Codex turns hit the mock model (session start + send-user-message). Provide two SSE responses.
     let responses = vec![
@@ -135,6 +138,8 @@ async fn send_message(
 
 #[tokio::test]
 async fn test_send_message_raw_notifications_opt_in() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
     let responses = vec![create_final_assistant_message_sse_response("Done")?];
     let server = create_mock_chat_completions_server(responses).await;
 

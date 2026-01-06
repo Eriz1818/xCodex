@@ -20,6 +20,7 @@ use codex_app_server_protocol::ServerNotification;
 use codex_core::auth::AuthCredentialsStoreMode;
 use codex_login::login_with_api_key;
 use codex_protocol::account::PlanType as AccountPlanType;
+use core_test_support::skip_if_no_network;
 use pretty_assertions::assert_eq;
 use serial_test::serial;
 use std::path::Path;
@@ -242,6 +243,8 @@ async fn login_account_chatgpt_rejected_when_forced_api() -> Result<()> {
 // Serialize tests that launch the login server since it binds to a fixed port.
 #[serial(login_port)]
 async fn login_account_chatgpt_start_can_be_cancelled() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
     let codex_home = TempDir::new()?;
     create_config_toml(codex_home.path(), CreateConfigTomlParams::default())?;
 
@@ -308,6 +311,8 @@ async fn login_account_chatgpt_start_can_be_cancelled() -> Result<()> {
 // Serialize tests that launch the login server since it binds to a fixed port.
 #[serial(login_port)]
 async fn login_account_chatgpt_includes_forced_workspace_query_param() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
     let codex_home = TempDir::new()?;
     create_config_toml(
         codex_home.path(),

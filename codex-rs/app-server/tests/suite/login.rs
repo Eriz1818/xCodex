@@ -10,6 +10,7 @@ use codex_app_server_protocol::LogoutChatGptResponse;
 use codex_app_server_protocol::RequestId;
 use codex_core::auth::AuthCredentialsStoreMode;
 use codex_login::login_with_api_key;
+use core_test_support::skip_if_no_network;
 use serial_test::serial;
 use std::path::Path;
 use tempfile::TempDir;
@@ -139,6 +140,8 @@ async fn login_chatgpt_rejected_when_forced_api() -> Result<()> {
 // Serialize tests that launch the login server since it binds to a fixed port.
 #[serial(login_port)]
 async fn login_chatgpt_includes_forced_workspace_query_param() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
     let codex_home = TempDir::new()?;
     create_config_toml_forced_workspace(codex_home.path(), "ws-forced")?;
 
