@@ -288,13 +288,13 @@ impl StatusMenuView {
 
     fn selected_tool_hint_lines(&self) -> Vec<Line<'static>> {
         let hint = match self.selected_tools_row {
-            0 => "Resume: pick a previous session to continue",
-            1 => "Worktrees: switch worktrees and manage shared dirs",
-            2 => "Approvals: review and adjust approval/sandbox presets",
+            0 => "Pick a previous session to continue.",
+            1 => "Switch worktrees and manage shared dirs.",
+            2 => "Review and adjust approval/sandbox presets.",
             _ => return Vec::new(),
         };
 
-        vec![vec!["Hint: ".dim(), hint.dim()].into()]
+        vec![vec![hint.dim()].into()]
     }
 
     fn switch_tab(&mut self) {
@@ -617,5 +617,17 @@ mod tests {
         view.handle_key_event(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
         view.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
         assert_snapshot!("status_menu_settings_tab", render_lines(&view, 60));
+    }
+
+    #[test]
+    fn status_menu_renders_tools_tab() {
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let status_cell = Box::new(crate::history_cell::new_info_event(
+            "Status card".to_string(),
+            None,
+        ));
+        let view = StatusMenuView::new(StatusMenuTab::Tools, tx, status_cell, true, false, false);
+        assert_snapshot!("status_menu_tools_tab", render_lines(&view, 60));
     }
 }
