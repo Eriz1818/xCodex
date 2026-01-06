@@ -29,13 +29,26 @@ just xcodex-install
 
 This installs to `~/.local/bin/xcodex` by default.
 
-## Npm packages (WIP)
+## Npm packages
 
-The goal is to ship `xcodex` and the responses API proxy as npm packages that bundle prebuilt native binaries.
+`xcodex` and the responses API proxy are distributed as npm packages that bundle prebuilt native binaries:
 
 - Target packages:
   - `@eriz1818/xcodex` → `xcodex`
   - `@eriz1818/xcodex-responses-api-proxy` → `xcodex-responses-api-proxy`
+
+Install:
+
+```sh
+npm i -g @eriz1818/xcodex
+npm i -g @eriz1818/xcodex-responses-api-proxy
+```
+
+Prereleases are published under the `alpha` dist-tag:
+
+```sh
+npm i -g @eriz1818/xcodex@alpha
+```
 
 Local smoke test (once vendor binaries are staged into the package tarballs):
 

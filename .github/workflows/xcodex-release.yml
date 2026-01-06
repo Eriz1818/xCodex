@@ -39,6 +39,12 @@ jobs:
           [[ "${tag_ver}" == "${cargo_ver}" ]] \
             || { echo "❌  Tag ${tag_ver} ≠ Cargo.toml ${cargo_ver}"; exit 1; }
 
+          # 4. Changelog should mention the version heading.
+          if ! grep -q "^## ${tag_ver}$" CHANGELOG.md; then
+            echo "❌  CHANGELOG.md missing heading: '## ${tag_ver}'"
+            exit 1
+          fi
+
           echo "✅  Tag and Cargo.toml agree (${tag_ver})"
           echo "::endgroup::"
 

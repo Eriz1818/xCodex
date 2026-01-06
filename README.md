@@ -33,7 +33,21 @@ Fork-specific docs live in `docs/xcodex/` (start at [`docs/xcodex/README.md`](do
 
 ## Quickstart
 
-This fork does not use the upstream npm/Homebrew installation flow.
+This fork ships an npm distribution (recommended) and also supports building from source.
+
+### Install (npm)
+
+```bash
+npm i -g @eriz1818/xcodex
+xcodex --version
+xcodex
+```
+
+Prereleases are published under the `alpha` dist-tag:
+
+```bash
+npm i -g @eriz1818/xcodex@alpha
+```
 
 ### Install (build from source)
 
