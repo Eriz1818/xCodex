@@ -755,10 +755,12 @@ impl ChatWidget {
     }
 
     fn context_remaining_percent(&self, info: &TokenUsageInfo) -> Option<i64> {
-        info.model_context_window.map(|window| {
-            info.last_token_usage
-                .percent_of_context_window_remaining(window)
-        })
+        info.model_context_window
+            .or(info.full_model_context_window)
+            .map(|window| {
+                info.last_token_usage
+                    .percent_of_context_window_remaining(window)
+            })
     }
 
     fn context_used_tokens(&self, info: &TokenUsageInfo, percent_known: bool) -> Option<i64> {

@@ -39,13 +39,17 @@ fn test_auth_manager(config: &Config) -> AuthManager {
 }
 
 fn token_info_for(model_slug: &str, config: &Config, usage: &TokenUsage) -> TokenUsageInfo {
-    let context_window = ModelsManager::construct_model_family_offline(model_slug, config)
-        .context_window
-        .or(config.model_context_window);
+    let model_family = ModelsManager::construct_model_family_offline(model_slug, config);
+    let full_context_window = model_family.context_window.or(config.model_context_window);
+    let effective_context_window = full_context_window.map(|window| {
+        let percent = model_family.effective_context_window_percent.clamp(1, 100);
+        window.saturating_mul(percent) / 100
+    });
     TokenUsageInfo {
         total_token_usage: usage.clone(),
         last_token_usage: usage.clone(),
-        model_context_window: context_window,
+        model_context_window: effective_context_window,
+        full_model_context_window: full_context_window,
     }
 }
 
@@ -871,6 +875,7 @@ async fn status_context_window_uses_last_usage() {
         total_token_usage: total_usage.clone(),
         last_token_usage: last_usage,
         model_context_window: config.model_context_window,
+        full_model_context_window: config.model_context_window,
     };
     let composite = new_status_output(
         &config,

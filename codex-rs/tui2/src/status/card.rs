@@ -397,15 +397,30 @@ impl StatusHistoryCell {
         let account = compose_account_display(auth_manager, plan_type);
         let session_id = session_id.as_ref().map(std::string::ToString::to_string);
         let default_usage = TokenUsage::default();
-        let (context_usage, context_window) = match token_info {
-            Some(info) => (&info.last_token_usage, info.model_context_window),
-            None => (&default_usage, config.model_context_window),
+        let (context_usage, context_window, full_context_window) = match token_info {
+            Some(info) => (
+                &info.last_token_usage,
+                info.model_context_window,
+                info.full_model_context_window,
+            ),
+            None => (
+                &default_usage,
+                config.model_context_window,
+                config.model_context_window,
+            ),
         };
-        let context_window = context_window.map(|window| StatusContextWindowData {
-            percent_remaining: context_usage.percent_of_context_window_remaining(window),
-            tokens_in_context: context_usage.tokens_in_context_window(),
-            window,
-        });
+        let context_window = match (
+            full_context_window.or(context_window),
+            context_window.or(full_context_window),
+        ) {
+            (Some(display_window), Some(percent_window)) => Some(StatusContextWindowData {
+                percent_remaining: context_usage
+                    .percent_of_context_window_remaining(percent_window),
+                tokens_in_context: context_usage.tokens_in_context_window(),
+                window: display_window,
+            }),
+            _ => None,
+        };
 
         let token_usage = StatusTokenUsageData {
             total: total_usage.blended_total(),
