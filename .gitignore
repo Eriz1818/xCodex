@@ -66,6 +66,9 @@ coverage/
 
 # personal files
 personal/
+docs/personal
+docs/impl-plans
+docs/impl-plans/
 
 # os
 .DS_Store
@@ -89,4 +92,3 @@ CHANGELOG.ignore.md
 # Python bytecode files
 __pycache__/
 *.pyc
-
