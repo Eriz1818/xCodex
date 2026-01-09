@@ -140,6 +140,7 @@ pub(crate) struct BottomPane {
     ctrl_c_quit_hint: bool,
     esc_backtrack_hint: bool,
     animations_enabled: bool,
+    xtreme_ui_enabled: bool,
 
     /// Inline status indicator shown above the composer while a task is running.
     status: Option<StatusIndicatorWidget>,
@@ -160,6 +161,7 @@ pub(crate) struct BottomPaneParams {
     pub(crate) enhanced_keys_supported: bool,
     pub(crate) placeholder_text: String,
     pub(crate) disable_paste_burst: bool,
+    pub(crate) xtreme_ui_enabled: bool,
     pub(crate) animations_enabled: bool,
     pub(crate) skills: Option<Vec<SkillMetadata>>,
 }
@@ -173,6 +175,7 @@ impl BottomPane {
             enhanced_keys_supported,
             placeholder_text,
             disable_paste_burst,
+            xtreme_ui_enabled,
             animations_enabled,
             skills,
         } = params;
@@ -183,6 +186,7 @@ impl BottomPane {
             placeholder_text,
             disable_paste_burst,
         );
+        composer.set_xtreme_ui_enabled(xtreme_ui_enabled);
         composer.set_skill_mentions(skills);
 
         Self {
@@ -199,6 +203,7 @@ impl BottomPane {
             queued_user_messages: QueuedUserMessages::new(),
             esc_backtrack_hint: false,
             animations_enabled,
+            xtreme_ui_enabled,
             context_window_percent: None,
             context_window_used_tokens: None,
         }
@@ -426,6 +431,23 @@ impl BottomPane {
 
     // esc_backtrack_hint_visible removed; hints are controlled internally.
 
+    pub(crate) fn set_xtreme_ui_enabled(&mut self, enabled: bool) {
+        if self.xtreme_ui_enabled == enabled {
+            return;
+        }
+
+        self.xtreme_ui_enabled = enabled;
+        self.composer.set_xtreme_ui_enabled(enabled);
+        if let Some(status) = self.status.as_mut() {
+            if enabled {
+                status.update_header("Charging".to_string());
+            } else {
+                status.update_header("Working".to_string());
+            }
+        }
+        self.request_redraw();
+    }
+
     pub fn set_task_running(&mut self, running: bool) {
         let was_running = self.is_task_running;
         self.is_task_running = running;
@@ -439,6 +461,11 @@ impl BottomPane {
                         self.frame_requester.clone(),
                         self.animations_enabled,
                     ));
+                    if self.xtreme_ui_enabled
+                        && let Some(status) = self.status.as_mut()
+                    {
+                        status.update_header("Charging".to_string());
+                    }
                 }
                 if let Some(status) = self.status.as_mut() {
                     status.set_interrupt_hint_visible(true);
@@ -465,6 +492,11 @@ impl BottomPane {
                 self.frame_requester.clone(),
                 self.animations_enabled,
             ));
+            if self.xtreme_ui_enabled
+                && let Some(status) = self.status.as_mut()
+            {
+                status.update_header("Charging".to_string());
+            }
             self.request_redraw();
         }
     }
@@ -743,6 +775,7 @@ mod tests {
             enhanced_keys_supported: false,
             placeholder_text: "Ask xcodex to do anything".to_string(),
             disable_paste_burst: false,
+            xtreme_ui_enabled: true,
             animations_enabled: true,
             skills: Some(Vec::new()),
         });
@@ -766,6 +799,7 @@ mod tests {
             enhanced_keys_supported: false,
             placeholder_text: "Ask xcodex to do anything".to_string(),
             disable_paste_burst: false,
+            xtreme_ui_enabled: true,
             animations_enabled: true,
             skills: Some(Vec::new()),
         });
@@ -800,6 +834,7 @@ mod tests {
             enhanced_keys_supported: false,
             placeholder_text: "Ask xcodex to do anything".to_string(),
             disable_paste_burst: false,
+            xtreme_ui_enabled: true,
             animations_enabled: true,
             skills: Some(Vec::new()),
         });
@@ -834,8 +869,8 @@ mod tests {
             row0.push(buf[(x, 0)].symbol().chars().next().unwrap_or(' '));
         }
         assert!(
-            row0.contains("Working"),
-            "expected Working header after denial on row 0: {row0:?}"
+            row0.contains("Charging"),
+            "expected Charging header after denial on row 0: {row0:?}"
         );
 
         // Composer placeholder should be visible somewhere below.
@@ -867,6 +902,7 @@ mod tests {
             enhanced_keys_supported: false,
             placeholder_text: "Ask xcodex to do anything".to_string(),
             disable_paste_burst: false,
+            xtreme_ui_enabled: true,
             animations_enabled: true,
             skills: Some(Vec::new()),
         });
@@ -880,7 +916,7 @@ mod tests {
         pane.render(area, &mut buf);
 
         let bufs = snapshot_buffer(&buf);
-        assert!(bufs.contains("• Working"), "expected Working header");
+        assert!(bufs.contains("• Charging"), "expected Charging header");
     }
 
     #[test]
@@ -894,6 +930,7 @@ mod tests {
             enhanced_keys_supported: false,
             placeholder_text: "Ask xcodex to do anything".to_string(),
             disable_paste_burst: false,
+            xtreme_ui_enabled: true,
             animations_enabled: true,
             skills: Some(Vec::new()),
         });
@@ -925,6 +962,7 @@ mod tests {
             enhanced_keys_supported: false,
             placeholder_text: "Ask xcodex to do anything".to_string(),
             disable_paste_burst: false,
+            xtreme_ui_enabled: true,
             animations_enabled: true,
             skills: Some(Vec::new()),
         });
@@ -953,6 +991,7 @@ mod tests {
             enhanced_keys_supported: false,
             placeholder_text: "Ask xcodex to do anything".to_string(),
             disable_paste_burst: false,
+            xtreme_ui_enabled: true,
             animations_enabled: true,
             skills: Some(Vec::new()),
         });

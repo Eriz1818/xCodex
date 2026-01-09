@@ -2,7 +2,15 @@ use codex_core::features::FEATURES;
 use lazy_static::lazy_static;
 use rand::Rng;
 
-const RAW_TOOLTIPS: &str = include_str!("../tooltips.txt");
+const RAW_CODEX_TOOLTIPS: &str = include_str!("../tooltips.txt");
+const RAW_XCODEX_TOOLTIPS: &str = include_str!("../tooltips_xcodex.txt");
+
+fn parse_tooltips(raw: &'static str) -> Vec<&'static str> {
+    raw.lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty() && !line.starts_with('#'))
+        .collect()
+}
 
 fn beta_tooltips() -> Vec<&'static str> {
     FEATURES
@@ -12,14 +20,11 @@ fn beta_tooltips() -> Vec<&'static str> {
 }
 
 lazy_static! {
-    static ref TOOLTIPS: Vec<&'static str> = RAW_TOOLTIPS
-        .lines()
-        .map(str::trim)
-        .filter(|line| !line.is_empty() && !line.starts_with('#'))
-        .collect();
-    static ref ALL_TOOLTIPS: Vec<&'static str> = {
+    static ref CODEX_TOOLTIPS: Vec<&'static str> = parse_tooltips(RAW_CODEX_TOOLTIPS);
+    static ref XCODEX_TOOLTIPS: Vec<&'static str> = parse_tooltips(RAW_XCODEX_TOOLTIPS);
+    static ref ALL_CODEX_TOOLTIPS: Vec<&'static str> = {
         let mut tips = Vec::new();
-        tips.extend(TOOLTIPS.iter().copied());
+        tips.extend(CODEX_TOOLTIPS.iter().copied());
         tips.extend(beta_tooltips());
         tips
     };
@@ -27,16 +32,19 @@ lazy_static! {
 
 pub(crate) fn random_tooltip() -> Option<&'static str> {
     let mut rng = rand::rng();
-    pick_tooltip(&mut rng)
+    pick_tooltip(&mut rng, ALL_CODEX_TOOLTIPS.as_slice())
 }
 
-fn pick_tooltip<R: Rng + ?Sized>(rng: &mut R) -> Option<&'static str> {
-    if ALL_TOOLTIPS.is_empty() {
+pub(crate) fn random_xcodex_tooltip() -> Option<&'static str> {
+    let mut rng = rand::rng();
+    pick_tooltip(&mut rng, XCODEX_TOOLTIPS.as_slice())
+}
+
+fn pick_tooltip<R: Rng + ?Sized>(rng: &mut R, tooltips: &[&'static str]) -> Option<&'static str> {
+    if tooltips.is_empty() {
         None
     } else {
-        ALL_TOOLTIPS
-            .get(rng.random_range(0..ALL_TOOLTIPS.len()))
-            .copied()
+        tooltips.get(rng.random_range(0..tooltips.len())).copied()
     }
 }
 
@@ -49,17 +57,26 @@ mod tests {
     #[test]
     fn random_tooltip_returns_some_tip_when_available() {
         let mut rng = StdRng::seed_from_u64(42);
-        assert!(pick_tooltip(&mut rng).is_some());
+        assert!(pick_tooltip(&mut rng, ALL_CODEX_TOOLTIPS.as_slice()).is_some());
     }
 
     #[test]
     fn random_tooltip_is_reproducible_with_seed() {
         let expected = {
             let mut rng = StdRng::seed_from_u64(7);
-            pick_tooltip(&mut rng)
+            pick_tooltip(&mut rng, ALL_CODEX_TOOLTIPS.as_slice())
         };
 
         let mut rng = StdRng::seed_from_u64(7);
-        assert_eq!(expected, pick_tooltip(&mut rng));
+        assert_eq!(
+            expected,
+            pick_tooltip(&mut rng, ALL_CODEX_TOOLTIPS.as_slice())
+        );
+    }
+
+    #[test]
+    fn random_xcodex_tooltip_returns_some_tip_when_available() {
+        let mut rng = StdRng::seed_from_u64(42);
+        assert!(pick_tooltip(&mut rng, XCODEX_TOOLTIPS.as_slice()).is_some());
     }
 }

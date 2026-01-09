@@ -1,12 +1,16 @@
+#[cfg(test)]
 use crate::history_cell::CompositeHistoryCell;
 use crate::history_cell::HistoryCell;
+#[cfg(test)]
 use crate::history_cell::PlainHistoryCell;
 use crate::history_cell::with_border_with_inner_width;
 use crate::version::CODEX_CLI_VERSION;
+use crate::xtreme;
 use chrono::DateTime;
 use chrono::Local;
 use codex_common::create_config_summary_entries;
 use codex_core::config::Config;
+use codex_core::protocol::AskForApproval;
 use codex_core::protocol::NetworkAccess;
 use codex_core::protocol::SandboxPolicy;
 use codex_core::protocol::TokenUsage;
@@ -55,6 +59,64 @@ pub(crate) struct StatusTokenUsageData {
     context_window: Option<StatusContextWindowData>,
 }
 
+#[derive(Debug, Clone, Default)]
+pub(crate) struct SessionStats {
+    pub(crate) turns_completed: usize,
+    pub(crate) exec_commands: usize,
+    pub(crate) mcp_calls: usize,
+    pub(crate) patches: usize,
+    pub(crate) files_changed: usize,
+    pub(crate) approvals_requested: usize,
+    pub(crate) tests_run: usize,
+}
+
+impl SessionStats {
+    pub(crate) fn is_empty(&self) -> bool {
+        self.turns_completed == 0
+            && self.exec_commands == 0
+            && self.mcp_calls == 0
+            && self.patches == 0
+            && self.files_changed == 0
+            && self.approvals_requested == 0
+            && self.tests_run == 0
+    }
+
+    fn to_summary_parts(&self) -> Vec<String> {
+        let mut parts: Vec<String> = Vec::new();
+        if self.turns_completed > 0 {
+            parts.push(format!("{} turns", self.turns_completed));
+        }
+        if self.exec_commands > 0 {
+            parts.push(format!("{} cmds", self.exec_commands));
+        }
+        if self.mcp_calls > 0 {
+            parts.push(format!("{} tools", self.mcp_calls));
+        }
+        if self.patches > 0 {
+            parts.push(format!("{} edits", self.patches));
+        }
+        if self.files_changed > 0 {
+            parts.push(format!("{} files", self.files_changed));
+        }
+        if self.tests_run > 0 {
+            parts.push(format!("{} tests", self.tests_run));
+        }
+        if self.approvals_requested > 0 {
+            parts.push(format!("{} approvals", self.approvals_requested));
+        }
+        parts
+    }
+
+    fn spans(&self) -> Vec<Span<'static>> {
+        let parts = self.to_summary_parts();
+        if parts.is_empty() {
+            return Vec::new();
+        }
+
+        vec![Span::from(parts.join(" · "))]
+    }
+}
+
 #[derive(Debug)]
 struct StatusHistoryCell {
     ui_frontend: String,
@@ -62,6 +124,8 @@ struct StatusHistoryCell {
     model_details: Vec<String>,
     directory: PathBuf,
     codex_home: PathBuf,
+    approval_policy: AskForApproval,
+    sandbox_policy: SandboxPolicy,
     approval: String,
     sandbox: String,
     agents_summary: String,
@@ -69,17 +133,48 @@ struct StatusHistoryCell {
     hide_agent_reasoning: bool,
     account: Option<StatusAccountDisplay>,
     session_id: Option<String>,
+    session_stats: Option<SessionStats>,
     token_usage: StatusTokenUsageData,
     rate_limits: StatusRateLimitData,
+    xtreme_ui_enabled: bool,
 }
 
 #[allow(clippy::too_many_arguments)]
+#[cfg(test)]
 pub(crate) fn new_status_output(
     config: &Config,
     auth_manager: &AuthManager,
     token_info: Option<&TokenUsageInfo>,
     total_usage: &TokenUsage,
     session_id: &Option<ConversationId>,
+    rate_limits: Option<&RateLimitSnapshotDisplay>,
+    plan_type: Option<PlanType>,
+    now: DateTime<Local>,
+    model_name: &str,
+) -> CompositeHistoryCell {
+    new_status_output_with_session_stats(
+        config,
+        auth_manager,
+        token_info,
+        total_usage,
+        session_id,
+        None,
+        rate_limits,
+        plan_type,
+        now,
+        model_name,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+#[cfg(test)]
+pub(crate) fn new_status_output_with_session_stats(
+    config: &Config,
+    auth_manager: &AuthManager,
+    token_info: Option<&TokenUsageInfo>,
+    total_usage: &TokenUsage,
+    session_id: &Option<ConversationId>,
+    session_stats: Option<&SessionStats>,
     rate_limits: Option<&RateLimitSnapshotDisplay>,
     plan_type: Option<PlanType>,
     now: DateTime<Local>,
@@ -92,6 +187,7 @@ pub(crate) fn new_status_output(
         token_info,
         total_usage,
         session_id,
+        session_stats,
         rate_limits,
         plan_type,
         now,
@@ -102,6 +198,7 @@ pub(crate) fn new_status_output(
 }
 
 #[allow(clippy::too_many_arguments)]
+#[cfg(test)]
 pub(crate) fn new_status_menu_summary_card(
     config: &Config,
     auth_manager: &AuthManager,
@@ -113,12 +210,40 @@ pub(crate) fn new_status_menu_summary_card(
     now: DateTime<Local>,
     model_name: &str,
 ) -> Box<dyn HistoryCell> {
+    new_status_menu_summary_card_with_session_stats(
+        config,
+        auth_manager,
+        token_info,
+        total_usage,
+        session_id,
+        None,
+        rate_limits,
+        plan_type,
+        now,
+        model_name,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn new_status_menu_summary_card_with_session_stats(
+    config: &Config,
+    auth_manager: &AuthManager,
+    token_info: Option<&TokenUsageInfo>,
+    total_usage: &TokenUsage,
+    session_id: &Option<ConversationId>,
+    session_stats: Option<&SessionStats>,
+    rate_limits: Option<&RateLimitSnapshotDisplay>,
+    plan_type: Option<PlanType>,
+    now: DateTime<Local>,
+    model_name: &str,
+) -> Box<dyn HistoryCell> {
     Box::new(StatusMenuSummaryCell(StatusHistoryCell::new(
         config,
         auth_manager,
         token_info,
         total_usage,
         session_id,
+        session_stats,
         rate_limits,
         plan_type,
         now,
@@ -127,10 +252,12 @@ pub(crate) fn new_status_menu_summary_card(
 }
 
 pub(crate) fn new_settings_card(
+    xtreme_ui_enabled: bool,
     show_git_branch: bool,
     show_worktree: bool,
 ) -> Box<dyn HistoryCell> {
     Box::new(SettingsHistoryCell {
+        xtreme_ui_enabled,
         show_git_branch,
         show_worktree,
     })
@@ -138,6 +265,7 @@ pub(crate) fn new_settings_card(
 
 #[derive(Debug)]
 struct SettingsHistoryCell {
+    xtreme_ui_enabled: bool,
     show_git_branch: bool,
     show_worktree: bool,
 }
@@ -150,12 +278,14 @@ impl HistoryCell for SettingsHistoryCell {
         }
 
         let mut lines: Vec<Line<'static>> = Vec::new();
-        lines.push(Line::from(vec![
-            Span::from(format!("{}>_ ", FieldFormatter::INDENT)).dim(),
+        let mut title_spans = vec![FieldFormatter::INDENT.dim()];
+        title_spans.extend(xtreme::title_prefix_spans(self.xtreme_ui_enabled));
+        title_spans.extend([
             "xtreme-Codex".bold(),
             " ".dim(),
             format!("(v{CODEX_CLI_VERSION})").dim(),
-        ]));
+        ]);
+        lines.push(Line::from(title_spans));
         lines.push(Line::from(Vec::<Span<'static>>::new()));
 
         lines.push("Status bar items".bold().into());
@@ -348,6 +478,7 @@ impl StatusHistoryCell {
         token_info: Option<&TokenUsageInfo>,
         total_usage: &TokenUsage,
         session_id: &Option<ConversationId>,
+        session_stats: Option<&SessionStats>,
         rate_limits: Option<&RateLimitSnapshotDisplay>,
         plan_type: Option<PlanType>,
         now: DateTime<Local>,
@@ -355,12 +486,14 @@ impl StatusHistoryCell {
     ) -> Self {
         let config_entries = create_config_summary_entries(config, model_name);
         let (model_name, model_details) = compose_model_display(model_name, &config_entries);
+        let approval_policy = config.approval_policy.value();
+        let sandbox_policy = config.sandbox_policy.get().clone();
         let approval = config_entries
             .iter()
             .find(|(k, _)| *k == "approval")
             .map(|(_, v)| v.clone())
             .unwrap_or_else(|| "<unknown>".to_string());
-        let sandbox = match config.sandbox_policy.get() {
+        let sandbox = match &sandbox_policy {
             SandboxPolicy::DangerFullAccess => "danger-full-access".to_string(),
             SandboxPolicy::ReadOnly => "read-only".to_string(),
             SandboxPolicy::WorkspaceWrite { .. } => "workspace-write".to_string(),
@@ -375,8 +508,10 @@ impl StatusHistoryCell {
         let agents_summary = compose_agents_summary(config);
         let auto_compact_enabled =
             codex_core::prefs::load_blocking(&config.codex_home).auto_compact_enabled;
+        let xtreme_ui_enabled = xtreme::xtreme_ui_enabled(config);
         let account = compose_account_display(auth_manager, plan_type);
         let session_id = session_id.as_ref().map(std::string::ToString::to_string);
+        let session_stats = session_stats.filter(|stats| !stats.is_empty()).cloned();
         let default_usage = TokenUsage::default();
         let (context_usage, context_window, full_context_window) = match token_info {
             Some(info) => (
@@ -417,6 +552,8 @@ impl StatusHistoryCell {
             model_details,
             directory: config.cwd.clone(),
             codex_home: config.codex_home.clone(),
+            approval_policy,
+            sandbox_policy,
             approval,
             sandbox,
             agents_summary,
@@ -424,8 +561,10 @@ impl StatusHistoryCell {
             hide_agent_reasoning: config.hide_agent_reasoning,
             account,
             session_id,
+            session_stats,
             token_usage,
             rate_limits,
+            xtreme_ui_enabled,
         }
     }
 
@@ -598,13 +737,26 @@ fn status_menu_limit_bar_indent(status: &StatusHistoryCell) -> usize {
 impl HistoryCell for StatusHistoryCell {
     fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
         let mut lines: Vec<Line<'static>> = Vec::new();
-        lines.push(Line::from(vec![
-            Span::from(format!("{}>_ ", FieldFormatter::INDENT)).dim(),
+        let mut title_spans = vec![FieldFormatter::INDENT.dim()];
+        title_spans.extend(xtreme::title_prefix_spans(self.xtreme_ui_enabled));
+        title_spans.extend([
             Span::from("xtreme-Codex").bold(),
             Span::from(" ").dim(),
             Span::from(format!("(v{CODEX_CLI_VERSION})")).dim(),
-        ]));
+        ]);
+        lines.push(Line::from(title_spans));
         lines.push(Line::from(Vec::<Span<'static>>::new()));
+
+        if let Some(mut spans) = xtreme::power_meter_spans(
+            self.xtreme_ui_enabled,
+            self.approval_policy,
+            &self.sandbox_policy,
+        ) {
+            let mut row = vec![FieldFormatter::INDENT.dim()];
+            row.append(&mut spans);
+            lines.push(Line::from(row));
+            lines.push(Line::from(Vec::<Span<'static>>::new()));
+        }
 
         let available_inner_width = usize::from(width.saturating_sub(4));
         if available_inner_width == 0 {
@@ -644,6 +796,9 @@ impl HistoryCell for StatusHistoryCell {
         }
         if self.session_id.is_some() {
             push_label(&mut labels, &mut seen, "Session");
+        }
+        if self.session_stats.is_some() {
+            push_label(&mut labels, &mut seen, "Session stats");
         }
         push_label(&mut labels, &mut seen, "Token usage");
         if self.token_usage.context_window.is_some() {
@@ -712,6 +867,10 @@ impl HistoryCell for StatusHistoryCell {
 
         if let Some(session) = self.session_id.as_ref() {
             lines.push(formatter.line("Session", vec![Span::from(session.clone())]));
+        }
+
+        if let Some(stats) = self.session_stats.as_ref() {
+            lines.push(formatter.line("Session stats", stats.spans()));
         }
 
         lines.push(Line::from(Vec::<Span<'static>>::new()));
