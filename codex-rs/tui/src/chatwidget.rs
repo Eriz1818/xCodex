@@ -2701,6 +2701,140 @@ impl ChatWidget {
         if image_paths.is_empty()
             && text.lines().count() == 1
             && let Some((name, rest)) = parse_slash_name(text.as_str())
+            && name == "hooks"
+        {
+            let args: Vec<&str> = rest.split_whitespace().collect();
+            match args.as_slice() {
+                [] => {
+                    self.dispatch_command(SlashCommand::Hooks);
+                }
+                ["install", "list"] | ["install", "--list"] => {
+                    let mut lines = Vec::new();
+                    lines.push(vec!["/hooks install list".magenta()].into());
+                    lines.push(Line::from(""));
+                    lines.push(vec!["Available SDKs:".magenta().bold()].into());
+                    for sdk in codex_common::hooks_sdk_install::all_hook_sdks() {
+                        lines.push(
+                            vec![
+                                "- ".dim(),
+                                sdk.id().cyan(),
+                                ": ".dim(),
+                                sdk.description().into(),
+                            ]
+                            .into(),
+                        );
+                    }
+                    lines.push(
+                        vec![
+                            "- ".dim(),
+                            "all".cyan(),
+                            ": ".dim(),
+                            "install everything".into(),
+                        ]
+                        .into(),
+                    );
+                    self.add_plain_history_lines(lines);
+                }
+                ["install", ..] => {
+                    let mut force = false;
+                    let mut sdk_name: Option<&str> = None;
+                    for arg in &args[1..] {
+                        if *arg == "--force" {
+                            force = true;
+                            continue;
+                        }
+                        if arg.starts_with('-') {
+                            self.add_info_message(
+                                "Usage: /hooks install <sdk|all> [--force] | /hooks install list"
+                                    .to_string(),
+                                None,
+                            );
+                            return;
+                        }
+                        if sdk_name.is_some() {
+                            self.add_info_message(
+                                "Usage: /hooks install <sdk|all> [--force] | /hooks install list"
+                                    .to_string(),
+                                None,
+                            );
+                            return;
+                        }
+                        sdk_name = Some(*arg);
+                    }
+
+                    let Some(sdk_name) = sdk_name else {
+                        self.add_info_message(
+                            "Usage: /hooks install <sdk|all> [--force] | /hooks install list"
+                                .to_string(),
+                            None,
+                        );
+                        return;
+                    };
+
+                    let targets = if sdk_name.eq_ignore_ascii_case("all") {
+                        codex_common::hooks_sdk_install::all_hook_sdks()
+                    } else {
+                        match sdk_name.parse::<codex_common::hooks_sdk_install::HookSdk>() {
+                            Ok(sdk) => vec![sdk],
+                            Err(_) => {
+                                self.add_info_message(
+                                    format!("Unknown SDK `{sdk_name}`. Try: /hooks install list"),
+                                    None,
+                                );
+                                return;
+                            }
+                        }
+                    };
+
+                    let codex_home = self.config.codex_home.clone();
+                    let report = codex_common::hooks_sdk_install::install_hook_sdks(
+                        &codex_home,
+                        &targets,
+                        force,
+                    );
+
+                    match report {
+                        Ok(report) => {
+                            let text =
+                                codex_common::hooks_sdk_install::format_install_report(&report)
+                                    .unwrap_or_else(|_| String::from("installed hook SDK files"));
+                            let mut lines = Vec::new();
+                            let sdk_name = sdk_name.to_string();
+                            let suffix = if force { " --force" } else { "" };
+                            lines.push(
+                                vec![
+                                    "/hooks".magenta(),
+                                    " ".into(),
+                                    "install".cyan(),
+                                    " ".into(),
+                                    sdk_name.cyan(),
+                                    suffix.dim(),
+                                ]
+                                .into(),
+                            );
+                            lines.push(Line::from(""));
+                            lines.extend(text.lines().map(|line| Line::from(line.to_string())));
+                            self.add_plain_history_lines(lines);
+                        }
+                        Err(err) => {
+                            self.add_error_message(format!("hooks install failed: {err}"));
+                        }
+                    }
+                }
+                _ => {
+                    self.add_info_message(
+                        "Usage: /hooks install <sdk|all> [--force] | /hooks install list"
+                            .to_string(),
+                        None,
+                    );
+                }
+            }
+            return;
+        }
+
+        if image_paths.is_empty()
+            && text.lines().count() == 1
+            && let Some((name, rest)) = parse_slash_name(text.as_str())
             && name == "worktree"
         {
             let args: Vec<&str> = rest.split_whitespace().collect();
@@ -3747,6 +3881,9 @@ impl ChatWidget {
             Line::from(""),
             Line::from(vec!["Quickstart:".magenta().bold()]),
             Line::from(vec!["  xcodex hooks init".cyan()]),
+            Line::from(vec!["  xcodex hooks install --list".cyan()]),
+            Line::from(vec!["  xcodex hooks install python".cyan()]),
+            Line::from(vec!["  xcodex hooks help".cyan()]),
             Line::from(vec!["  xcodex hooks test --configured-only".cyan()]),
             Line::from(vec!["  xcodex hooks list".cyan()]),
             Line::from(vec!["  xcodex hooks paths".cyan()]),
@@ -3769,6 +3906,8 @@ impl ChatWidget {
                 "docs/xcodex/hooks.md".cyan(),
                 " and ".dim(),
                 "docs/xcodex/hooks-gallery.md".cyan(),
+                " and ".dim(),
+                "docs/xcodex/hooks-sdks.md".cyan(),
             ]),
         ];
 

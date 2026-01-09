@@ -8,6 +8,9 @@ Automation hooks run external programs on lifecycle events. Treat hook payloads/
 
 Quickstart:
   xcodex hooks init
+  xcodex hooks install --list
+  xcodex hooks install python
+  xcodex hooks help
   xcodex hooks test --configured-only
   xcodex hooks list
   xcodex hooks paths
@@ -16,4 +19,4 @@ Config: CODEX_HOME/config.toml
 Logs: CODEX_HOME/tmp/hooks/logs
 Payloads: CODEX_HOME/tmp/hooks/payloads
 
-Docs: docs/xcodex/hooks.md and docs/xcodex/hooks-gallery.md
+Docs: docs/xcodex/hooks.md and docs/xcodex/hooks-gallery.md and docs/xcodex/hooks-sdks.md
