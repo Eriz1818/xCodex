@@ -643,6 +643,89 @@ async fn worktree_shared_add_list_and_rm_update_config_and_emit_persist_event() 
 }
 
 #[tokio::test]
+async fn worktree_init_without_args_opens_guided_flow() {
+    use crossterm::event::KeyCode;
+    use crossterm::event::KeyEvent;
+    use crossterm::event::KeyModifiers;
+
+    let temp_dir = tempfile::TempDir::new().expect("tempdir");
+    let repo_path = temp_dir.path().join("repo");
+    std::fs::create_dir_all(&repo_path).unwrap();
+    let status = tokio::process::Command::new("git")
+        .args(["init"])
+        .current_dir(&repo_path)
+        .status()
+        .await
+        .expect("git init");
+    assert!(status.success(), "git init should succeed");
+
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.config.cwd = repo_path.clone();
+
+    chat.bottom_pane
+        .apply_external_edit("/worktree init".to_string());
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+    // With the init wizard open, keystrokes are consumed by the view rather than the composer.
+    chat.handle_key_event(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE));
+    assert!(
+        chat.bottom_pane.composer_text().is_empty(),
+        "expected composer to remain empty while /worktree init wizard is active"
+    );
+}
+
+#[test]
+fn worktree_picker_sort_orders_current_then_workspace_root_then_paths() {
+    use codex_core::git_info::GitHeadState;
+    use codex_core::git_info::GitWorktreeEntry;
+    use pretty_assertions::assert_eq;
+    use std::path::PathBuf;
+
+    let current = PathBuf::from("worktrees/current");
+    let workspace = PathBuf::from("worktrees/workspace");
+    let other_a = PathBuf::from("worktrees/a");
+    let other_z = PathBuf::from("worktrees/z");
+    let bare = PathBuf::from("worktrees/bare");
+
+    let mut worktrees = vec![
+        GitWorktreeEntry {
+            path: bare.clone(),
+            head: GitHeadState::Detached,
+            is_bare: true,
+        },
+        GitWorktreeEntry {
+            path: other_z.clone(),
+            head: GitHeadState::Branch("z".to_string()),
+            is_bare: false,
+        },
+        GitWorktreeEntry {
+            path: current.clone(),
+            head: GitHeadState::Branch("main".to_string()),
+            is_bare: false,
+        },
+        GitWorktreeEntry {
+            path: workspace.clone(),
+            head: GitHeadState::Branch("main".to_string()),
+            is_bare: false,
+        },
+        GitWorktreeEntry {
+            path: other_a.clone(),
+            head: GitHeadState::Branch("a".to_string()),
+            is_bare: false,
+        },
+    ];
+
+    super::ChatWidget::sort_worktrees_for_picker(
+        &mut worktrees,
+        Some(current.as_path()),
+        Some(workspace.as_path()),
+    );
+
+    let paths: Vec<PathBuf> = worktrees.into_iter().map(|w| w.path).collect();
+    assert_eq!(paths, vec![current, workspace, other_a, other_z, bare]);
+}
+
+#[tokio::test]
 async fn test_rate_limit_warnings_monthly() {
     let mut state = RateLimitWarningState::default();
     let mut warnings: Vec<String> = Vec::new();
