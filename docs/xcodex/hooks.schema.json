@@ -1,0 +1,688 @@
+{
+  "hook_payload": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "title": "HookPayload",
+    "type": "object",
+    "oneOf": [
+      {
+        "type": "object",
+        "required": [
+          "cwd",
+          "input-messages",
+          "thread-id",
+          "turn-id",
+          "type"
+        ],
+        "properties": {
+          "cwd": {
+            "type": "string"
+          },
+          "input-messages": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "last-assistant-message": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "thread-id": {
+            "type": "string"
+          },
+          "turn-id": {
+            "type": "string"
+          },
+          "type": {
+            "type": "string",
+            "enum": [
+              "agent-turn-complete"
+            ]
+          }
+        }
+      },
+      {
+        "type": "object",
+        "required": [
+          "kind",
+          "thread-id",
+          "type"
+        ],
+        "properties": {
+          "approval-policy": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/AskForApproval"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "call-id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "command": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            }
+          },
+          "cwd": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "grant-root": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "kind": {
+            "$ref": "#/definitions/ApprovalKind"
+          },
+          "message": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "paths": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            }
+          },
+          "proposed-execpolicy-amendment": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            }
+          },
+          "reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "request-id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "sandbox-policy": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/SandboxPolicy"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "server-name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "thread-id": {
+            "type": "string"
+          },
+          "turn-id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "type": {
+            "type": "string",
+            "enum": [
+              "approval-requested"
+            ]
+          }
+        }
+      },
+      {
+        "type": "object",
+        "required": [
+          "cwd",
+          "session-source",
+          "thread-id",
+          "type"
+        ],
+        "properties": {
+          "cwd": {
+            "type": "string"
+          },
+          "session-source": {
+            "type": "string"
+          },
+          "thread-id": {
+            "type": "string"
+          },
+          "type": {
+            "type": "string",
+            "enum": [
+              "session-start"
+            ]
+          }
+        }
+      },
+      {
+        "type": "object",
+        "required": [
+          "cwd",
+          "session-source",
+          "thread-id",
+          "type"
+        ],
+        "properties": {
+          "cwd": {
+            "type": "string"
+          },
+          "session-source": {
+            "type": "string"
+          },
+          "thread-id": {
+            "type": "string"
+          },
+          "type": {
+            "type": "string",
+            "enum": [
+              "session-end"
+            ]
+          }
+        }
+      },
+      {
+        "type": "object",
+        "required": [
+          "attempt",
+          "cwd",
+          "has-output-schema",
+          "model",
+          "model-request-id",
+          "parallel-tool-calls",
+          "prompt-input-item-count",
+          "provider",
+          "thread-id",
+          "tool-count",
+          "turn-id",
+          "type"
+        ],
+        "properties": {
+          "attempt": {
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0.0
+          },
+          "cwd": {
+            "type": "string"
+          },
+          "has-output-schema": {
+            "type": "boolean"
+          },
+          "model": {
+            "type": "string"
+          },
+          "model-request-id": {
+            "type": "string"
+          },
+          "parallel-tool-calls": {
+            "type": "boolean"
+          },
+          "prompt-input-item-count": {
+            "type": "integer",
+            "format": "uint",
+            "minimum": 0.0
+          },
+          "provider": {
+            "type": "string"
+          },
+          "thread-id": {
+            "type": "string"
+          },
+          "tool-count": {
+            "type": "integer",
+            "format": "uint",
+            "minimum": 0.0
+          },
+          "turn-id": {
+            "type": "string"
+          },
+          "type": {
+            "type": "string",
+            "enum": [
+              "model-request-started"
+            ]
+          }
+        }
+      },
+      {
+        "type": "object",
+        "required": [
+          "attempt",
+          "cwd",
+          "model-request-id",
+          "needs-follow-up",
+          "response-id",
+          "thread-id",
+          "turn-id",
+          "type"
+        ],
+        "properties": {
+          "attempt": {
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0.0
+          },
+          "cwd": {
+            "type": "string"
+          },
+          "model-request-id": {
+            "type": "string"
+          },
+          "needs-follow-up": {
+            "type": "boolean"
+          },
+          "response-id": {
+            "type": "string"
+          },
+          "thread-id": {
+            "type": "string"
+          },
+          "token-usage": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/TokenUsage"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "turn-id": {
+            "type": "string"
+          },
+          "type": {
+            "type": "string",
+            "enum": [
+              "model-response-completed"
+            ]
+          }
+        }
+      },
+      {
+        "type": "object",
+        "required": [
+          "attempt",
+          "call-id",
+          "cwd",
+          "model-request-id",
+          "thread-id",
+          "tool-name",
+          "turn-id",
+          "type"
+        ],
+        "properties": {
+          "attempt": {
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0.0
+          },
+          "call-id": {
+            "type": "string"
+          },
+          "cwd": {
+            "type": "string"
+          },
+          "model-request-id": {
+            "type": "string"
+          },
+          "thread-id": {
+            "type": "string"
+          },
+          "tool-name": {
+            "type": "string"
+          },
+          "turn-id": {
+            "type": "string"
+          },
+          "type": {
+            "type": "string",
+            "enum": [
+              "tool-call-started"
+            ]
+          }
+        }
+      },
+      {
+        "type": "object",
+        "required": [
+          "attempt",
+          "call-id",
+          "cwd",
+          "duration-ms",
+          "model-request-id",
+          "output-bytes",
+          "status",
+          "success",
+          "thread-id",
+          "tool-name",
+          "turn-id",
+          "type"
+        ],
+        "properties": {
+          "attempt": {
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0.0
+          },
+          "call-id": {
+            "type": "string"
+          },
+          "cwd": {
+            "type": "string"
+          },
+          "duration-ms": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0.0
+          },
+          "model-request-id": {
+            "type": "string"
+          },
+          "output-bytes": {
+            "type": "integer",
+            "format": "uint",
+            "minimum": 0.0
+          },
+          "output-preview": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "status": {
+            "$ref": "#/definitions/ToolCallStatus"
+          },
+          "success": {
+            "type": "boolean"
+          },
+          "thread-id": {
+            "type": "string"
+          },
+          "tool-name": {
+            "type": "string"
+          },
+          "turn-id": {
+            "type": "string"
+          },
+          "type": {
+            "type": "string",
+            "enum": [
+              "tool-call-finished"
+            ]
+          }
+        }
+      }
+    ],
+    "required": [
+      "event-id",
+      "schema-version",
+      "timestamp"
+    ],
+    "properties": {
+      "event-id": {
+        "type": "string"
+      },
+      "schema-version": {
+        "type": "integer",
+        "format": "uint32",
+        "minimum": 0.0
+      },
+      "timestamp": {
+        "type": "string"
+      }
+    },
+    "definitions": {
+      "AbsolutePathBuf": {
+        "description": "A path that is guaranteed to be absolute and normalized (though it is not guaranteed to be canonicalized or exist on the filesystem).\n\nIMPORTANT: When deserializing an `AbsolutePathBuf`, a base path must be set using [AbsolutePathBufGuard::new]. If no base path is set, the deserialization will fail unless the path being deserialized is already absolute.",
+        "type": "string"
+      },
+      "ApprovalKind": {
+        "type": "string",
+        "enum": [
+          "exec",
+          "apply-patch",
+          "elicitation"
+        ]
+      },
+      "AskForApproval": {
+        "description": "Determines the conditions under which the user is consulted to approve running the command proposed by Codex.",
+        "oneOf": [
+          {
+            "description": "Under this policy, only \"known safe\" commands—as determined by `is_safe_command()`—that **only read files** are auto‑approved. Everything else will ask the user to approve.",
+            "type": "string",
+            "enum": [
+              "untrusted"
+            ]
+          },
+          {
+            "description": "*All* commands are auto‑approved, but they are expected to run inside a sandbox where network access is disabled and writes are confined to a specific set of paths. If the command fails, it will be escalated to the user to approve execution without a sandbox.",
+            "type": "string",
+            "enum": [
+              "on-failure"
+            ]
+          },
+          {
+            "description": "The model decides when to ask the user for approval.",
+            "type": "string",
+            "enum": [
+              "on-request"
+            ]
+          },
+          {
+            "description": "Never ask the user to approve commands. Failures are immediately returned to the model, and never escalated to the user for approval.",
+            "type": "string",
+            "enum": [
+              "never"
+            ]
+          }
+        ]
+      },
+      "NetworkAccess": {
+        "description": "Represents whether outbound network access is available to the agent.",
+        "type": "string",
+        "enum": [
+          "restricted",
+          "enabled"
+        ]
+      },
+      "SandboxPolicy": {
+        "description": "Determines execution restrictions for model shell commands.",
+        "oneOf": [
+          {
+            "description": "No restrictions whatsoever. Use with caution.",
+            "type": "object",
+            "required": [
+              "type"
+            ],
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "danger-full-access"
+                ]
+              }
+            }
+          },
+          {
+            "description": "Read-only access to the entire file-system.",
+            "type": "object",
+            "required": [
+              "type"
+            ],
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "read-only"
+                ]
+              }
+            }
+          },
+          {
+            "description": "Indicates the process is already in an external sandbox. Allows full disk access while honoring the provided network setting.",
+            "type": "object",
+            "required": [
+              "type"
+            ],
+            "properties": {
+              "network_access": {
+                "description": "Whether the external sandbox permits outbound network traffic.",
+                "default": "restricted",
+                "allOf": [
+                  {
+                    "$ref": "#/definitions/NetworkAccess"
+                  }
+                ]
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "external-sandbox"
+                ]
+              }
+            }
+          },
+          {
+            "description": "Same as `ReadOnly` but additionally grants write access to the current working directory (\"workspace\").",
+            "type": "object",
+            "required": [
+              "type"
+            ],
+            "properties": {
+              "exclude_slash_tmp": {
+                "description": "When set to `true`, will NOT include the `/tmp` among the default writable roots on UNIX. Defaults to `false`.",
+                "default": false,
+                "type": "boolean"
+              },
+              "exclude_tmpdir_env_var": {
+                "description": "When set to `true`, will NOT include the per-user `TMPDIR` environment variable among the default writable roots. Defaults to `false`.",
+                "default": false,
+                "type": "boolean"
+              },
+              "network_access": {
+                "description": "When set to `true`, outbound network access is allowed. `false` by default.",
+                "default": false,
+                "type": "boolean"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "workspace-write"
+                ]
+              },
+              "writable_roots": {
+                "description": "Additional folders (beyond cwd and possibly TMPDIR) that should be writable from within the sandbox.",
+                "type": "array",
+                "items": {
+                  "$ref": "#/definitions/AbsolutePathBuf"
+                }
+              }
+            }
+          }
+        ]
+      },
+      "TokenUsage": {
+        "type": "object",
+        "required": [
+          "cached_input_tokens",
+          "input_tokens",
+          "output_tokens",
+          "reasoning_output_tokens",
+          "total_tokens"
+        ],
+        "properties": {
+          "cached_input_tokens": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "input_tokens": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "output_tokens": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "reasoning_output_tokens": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "total_tokens": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
+      "ToolCallStatus": {
+        "type": "string",
+        "enum": [
+          "completed",
+          "aborted"
+        ]
+      }
+    }
+  },
+  "stdin_envelope": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "title": "HookStdinEnvelope",
+    "type": "object",
+    "required": [
+      "event-id",
+      "payload-path",
+      "schema-version",
+      "timestamp",
+      "type"
+    ],
+    "properties": {
+      "event-id": {
+        "type": "string"
+      },
+      "payload-path": {
+        "type": "string"
+      },
+      "schema-version": {
+        "type": "integer",
+        "format": "uint32",
+        "minimum": 0.0
+      },
+      "timestamp": {
+        "type": "string"
+      },
+      "type": {
+        "type": "string"
+      }
+    }
+  }
+}

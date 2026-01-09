@@ -24,7 +24,7 @@ Notes:
 - `xcodex` uses `$CODEX_HOME` too. When `CODEX_HOME` is unset, `xcodex` defaults to `~/.xcodex` (and upstream `codex` defaults to `~/.codex`), so hooks you configure via xcodex won’t affect upstream codex by default.
 - If you *want* to share hooks/config with upstream codex, explicitly set `CODEX_HOME=~/.codex` before running `xcodex`.
 
-If you want to disable all external hooks for a single run, pass `--no-hooks`:
+If you want to disable all hooks (external and in-process) for a single run, pass `--no-hooks`:
 
 ```sh
 xcodex --no-hooks
@@ -46,6 +46,21 @@ xcodex hooks init
 
 That creates a small set of example scripts under `$CODEX_HOME/hooks/` and prints a config snippet you can paste into `$CODEX_HOME/config.toml`.
 
+To install language helpers/templates for writing typed external hooks, run:
+
+```sh
+xcodex hooks install --list
+xcodex hooks install python
+```
+
+To see a quick overview of hooks commands and SDKs, run:
+
+```sh
+xcodex hooks help
+```
+
+See `docs/xcodex/hooks-sdks.md` for details.
+
 In the interactive TUI/TUI2, you can type `/hooks` to see a quick reminder of the relevant `xcodex hooks ...` commands and where logs/payloads are written under `$CODEX_HOME`.
 
 1. Copy a script into your Codex home:
@@ -61,6 +76,53 @@ cp examples/hooks/log_all_jsonl.py "${CODEX_HOME:-$HOME/.xcodex}/hooks/"
 [hooks]
 agent_turn_complete = [["python3", "/absolute/path/to/log_all_jsonl.py"]]
 ```
+
+Optional (experimental, xcodex): enable a built-in in-process (Rust) hook that logs compact `tool_call_finished` summaries:
+
+```toml
+[hooks]
+inproc = ["tool_call_summary"]
+```
+
+For backward compatibility, you can also enable the same hook via:
+
+```toml
+[hooks]
+inproc_tool_call_summary = true
+```
+
+This appends one line per tool call to `$CODEX_HOME/hooks-tool-calls.log` (same format as `examples/hooks/tool_call_summary.py`).
+This is disabled by `xcodex --no-hooks`.
+
+Optional (experimental, xcodex): enable a built-in in-process (Rust) hook that logs every hook payload to JSONL:
+
+```toml
+[hooks]
+inproc = ["event_log_jsonl"]
+```
+
+This appends one JSON object per hook event to `$CODEX_HOME/hooks.jsonl` (same format as `examples/hooks/log_all_jsonl.py`).
+This is disabled by `xcodex --no-hooks`.
+
+Note: `hooks.jsonl` is not automatically rotated or pruned; manage it externally if you enable this long-term.
+
+## Rust hooks (experimental)
+
+External command hooks remain the supported, user-facing hooks system in xcodex. They are language-agnostic and are expected to stay supported long-term.
+
+In addition, codex-core exposes an **in-process Rust hook API** (observer-only) under `codex_core::hooks`:
+
+- `HookHandler` + `HookContext` for subscribing to events.
+- `HookPayload` + `HookNotification` for receiving typed event data (these serialize to the same JSON shape as external hooks).
+
+Why Rust/PyO3 hooks?
+
+- Typed events (no JSON schema drift between producer/consumer).
+- Stateful hooks (retain per-session state across events).
+- Avoid per-event process spawn overhead.
+- Potential PyO3 bridge for “Python hooks” while still using the Rust hook API.
+
+Security note: in-process hooks run inside the Codex process and should be treated as trusted code (they have the same access as Codex itself). Use external hooks if you need a safer / more isolated integration.
 
 3. Test it:
 
@@ -152,6 +214,58 @@ approval_requested = [
 ]
 ```
 
+### Long-lived hook host (experimental)
+
+In addition to per-event external hooks (`[hooks]`), xcodex can stream hook events to a single **long-lived hook host** process (`[hooks.host]`).
+
+This is intended for stateful hooks in languages like Python without per-event process spawn overhead. The host is **observer-only**: failures never block or fail a run.
+
+Install the reference Python host:
+
+```sh
+xcodex hooks install python
+```
+
+That installs:
+
+- `$CODEX_HOME/hooks/host/python/host.py` (the host runner)
+- `$CODEX_HOME/hooks/host/python/example_hook.py` (an example `on_event(event: dict)` hook module)
+
+To run it manually (for quick debugging):
+
+```sh
+python3 -u "$CODEX_HOME/hooks/host/python/host.py" "$CODEX_HOME/hooks/host/python/example_hook.py"
+```
+
+To enable it in `$CODEX_HOME/config.toml`:
+
+```toml
+[hooks.host]
+enabled = true
+
+# NOTE: This is argv (no shell expansion). Paths are resolved relative to $CODEX_HOME,
+# because the host process is spawned with cwd=$CODEX_HOME.
+command = ["python3", "-u", "hooks/host/python/host.py", "hooks/host/python/example_hook.py"]
+
+# Optional: when unset, inherits the session sandbox policy.
+# sandbox_mode = "read-only" | "workspace-write" | "danger-full-access"
+```
+
+Notes:
+
+- `xcodex --no-hooks` disables both external hooks and the hook host.
+- Host stdout/stderr are written to `$CODEX_HOME/tmp/hooks/host/logs/` (see also `xcodex hooks paths`).
+
+#### Protocol + lifecycle contract (v1)
+
+- Framing: Codex writes **one JSON object per line** to the host process stdin.
+- Event messages:
+  - `{"schema-version":1,"type":"hook-event","seq":123,"event":{...}}`
+  - `event` is the same hook payload schema used for external hooks (see “Supported events” and `docs/xcodex/hooks.schema.json`).
+- Fire-and-forget: Codex does not wait for acks; the host must not assume delivery guarantees.
+- Backpressure: the host input queue is bounded; when full, Codex drops events (best-effort) and continues.
+- Failures: if the host crashes or stdin breaks, Codex kills/restarts it on demand with a circuit breaker for repeated failures.
+
 ### Example: enable all events
 
 ```toml
@@ -183,6 +297,58 @@ Config knobs:
 max_stdin_payload_bytes = 16384
 keep_last_n_payloads = 50
 ```
+
+### Compatibility policy (payload schema)
+
+This policy applies to:
+
+- Hook authors (scripts you run via `[hooks]`)
+- “Typed hook SDKs” (helpers/templates/types that parse the hook JSON)
+
+`schema-version` is currently `1`.
+
+We will only bump `schema-version` for **breaking** changes. Additive fields and new event types should not require a bump.
+
+Machine-readable schema (generated from the Rust source of truth):
+
+- `docs/xcodex/hooks.schema.json`
+
+#### Forward compatibility requirements
+
+External hook consumers should be **forward compatible**:
+
+- Treat unknown fields as ignorable.
+- Treat unknown `"type"` values as ignorable (log/debug if you want), so new event types don’t break older hooks.
+- Prefer `.get(...)` / optional access patterns and safe defaults (missing fields must not crash the hook).
+- Always handle both delivery modes: full payload JSON on stdin **or** a small envelope with `payload-path`.
+
+If you are writing a “typed SDK”, prefer designs that preserve unknown data:
+
+- Include an `extras` / `additional_fields` map on typed events (so unknown fields can be round-tripped or inspected).
+- Include an `Unknown`/`Other` event variant that holds the raw payload when `"type"` is not recognized.
+
+#### What counts as “breaking”
+
+The following are considered **breaking** and require a `schema-version` bump:
+
+- Removing a field that was previously present.
+- Changing a field’s type in a way that cannot be interpreted as the old type.
+- Changing field semantics such that existing hooks would produce wrong behavior (even if parsing still succeeds).
+- Making an optional field effectively required for correct interpretation of an event.
+
+The following should be **non-breaking** (no bump):
+
+- Adding new optional fields.
+- Adding new event types (`"type": "..."`).
+- Adding new values to existing enum-like string fields (as long as old consumers can ignore/handle unknown values).
+
+#### How to use `schema-version` as a consumer
+
+Consumers should not fail solely because `schema-version` is higher than expected. Instead:
+
+- Parse what you understand.
+- Ignore what you don’t.
+- If you depend on specific fields, validate those fields directly (presence/type) rather than gating purely on `schema-version`.
 
 ## Example: log turn summaries to a file
 

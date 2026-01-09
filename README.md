@@ -90,11 +90,27 @@ cat PROMPT.md | xcodex
 
 Hooks can receive event payloads containing metadata like `cwd`, and may include truncated tool output previews. Treat hook payloads/logs as potentially sensitive.
 
+**What xcodex supports**
+
+- External hooks (default): spawn a command on lifecycle events; any language/runtime can be used.
+- Typed hook SDK installers: `xcodex hooks install <sdk>` (Python/Rust/JavaScript/TypeScript/Go/Ruby/Java).
+- In-process built-ins (experimental): `hooks.inproc = ["tool_call_summary", "event_log_jsonl"]` (see `docs/xcodex/hooks.md`).
+
+**Performance (rough numbers)**
+
+Measured on macOS 26.2 (arm64), `cargo run -p codex-core --bin hooks_perf -- --iters 200`:
+
+- External per-event process spawn: ~4.6ms/event (50 events; `/bin/sh -c "cat >/dev/null"`)
+- Out-of-proc host (JSONL over stdin): ~113µs/event (200 events; `/bin/sh` loop + JSON serialize)
+- In-proc (no-op baseline): ~10ns/event (200 iterations)
+- In-proc PyO3: TBD
+
 Start here:
 
 - Hook configuration + supported events: `docs/xcodex/hooks.md`.
+- Typed hook SDKs + installers (Python/Rust/JS/TS/Go/Ruby/Java): `docs/xcodex/hooks-sdks.md`.
 - Copy/paste scripts: `examples/hooks/` and `docs/xcodex/hooks-gallery.md`.
-- Quick smoke test for your hook scripts: `xcodex hooks test --configured-only`.
+- CLI helpers: `xcodex hooks help`, `xcodex hooks test --configured-only`, `xcodex hooks install --list`.
 
 ### Configuration
 

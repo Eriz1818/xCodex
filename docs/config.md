@@ -750,7 +750,58 @@ agent_turn_complete = [["python3", "/Users/alice/.codex/hook.py"]]
 approval_requested = [["python3", "/Users/alice/.codex/hook.py"]]
 ```
 
-To disable external hooks for a single run, pass `--no-hooks`:
+In xcodex, you can also enable built-in in-process (Rust) hooks.
+
+For example, the tool-call summary hook appends compact `tool-call-finished` summaries to `CODEX_HOME/hooks-tool-calls.log`:
+
+```toml
+[hooks]
+inproc = ["tool_call_summary"]
+```
+
+You can also enable `event_log_jsonl`, which appends one JSON object per hook event to `CODEX_HOME/hooks.jsonl` (same format as `examples/hooks/log_all_jsonl.py`):
+
+```toml
+[hooks]
+inproc = ["event_log_jsonl"]
+```
+
+Note: `hooks.jsonl` is not automatically rotated or pruned; manage it externally if you enable this long-term.
+
+#### hooks.host (long-lived hook host)
+
+In addition to per-event external hooks, you can run a **long-lived hook host** process and stream hook events to it over stdin as JSONL.
+This is useful for stateful hooks (e.g. Python) without per-event process spawn overhead.
+
+The host receives one line per event:
+
+- `type = "hook-event"`
+- `event = { ... }` where `event` is the same payload object an external hook would receive on stdin (including `schema-version`, `type`, `event-id`, `timestamp`, etc.)
+
+Example:
+
+```toml
+[hooks.host]
+enabled = true
+command = ["python3", "-u", "/Users/alice/.codex/hooks/host.py"]
+# Optional: override the host sandbox mode (filesystem + network). When unset, the host inherits the session sandbox policy.
+sandbox_mode = "workspace-write"
+```
+
+Notes:
+
+- The hook host is observer-only and best-effort: failures do not fail the run.
+- Events are queued with a bounded buffer; events may be dropped if the host can’t keep up.
+- `sandbox_mode` controls both filesystem and network access for the host when set (no separate network toggle in v1).
+
+For backward compatibility, you can also enable the same hook via:
+
+```toml
+[hooks]
+inproc_tool_call_summary = true
+```
+
+To disable hooks for a single run (external and in-process), pass `--no-hooks`:
 
 ```sh
 codex --no-hooks
@@ -764,6 +815,7 @@ codex hooks test
 ```
 
 Hook payloads include `"schema-version": 1`, a `"type"` field, `"event-id"`, and `"timestamp"`.
+For the forward-compatibility rules (unknown fields/types, when `schema-version` bumps), see `docs/xcodex/hooks.md`.
 
 Supported events:
 
@@ -1052,6 +1104,11 @@ Valid values:
 | `hooks.model_response_completed`                 | array<array<string>>                                              | External programs to spawn after a model response completes.                                                                    |
 | `hooks.tool_call_started`                        | array<array<string>>                                              | External programs to spawn when a tool call begins execution.                                                                   |
 | `hooks.tool_call_finished`                       | array<array<string>>                                              | External programs to spawn when a tool call finishes (success/failure/aborted).                                                 |
+| `hooks.inproc`                                   | array<string>                                                     | Built-in in-process (Rust) hooks to enable by name (e.g. `["tool_call_summary"]`, `["event_log_jsonl"]`).                       |
+| `hooks.inproc_tool_call_summary`                 | boolean                                                           | Back-compat alias for enabling the in-proc `tool_call_summary` hook (default: false).                                           |
+| `hooks.host.enabled`                             | boolean                                                           | Enable the long-lived hook host process (default: false).                                                                       |
+| `hooks.host.command`                             | array<string>                                                     | Command argv to spawn the hook host (required when enabled).                                                                    |
+| `hooks.host.sandbox_mode`                        | `read-only` \| `workspace-write` \| `danger-full-access`           | Optional sandbox override for the hook host; when unset, inherits the session sandbox policy.                                   |
 | `hooks.max_stdin_payload_bytes`                  | integer                                                           | Max payload size (bytes) to send directly via stdin (default: 16384); above this uses `payload-path` file delivery.             |
 | `hooks.keep_last_n_payloads`                     | integer                                                           | Keep only the most recent N payload/log files under CODEX_HOME (default: 50).                                                   |
 | `tui.animations`                                 | boolean                                                           | Enable terminal animations (welcome screen, shimmer, spinner). Defaults to true; set to `false` to disable visual motion.       |
