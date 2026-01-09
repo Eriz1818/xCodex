@@ -36,6 +36,8 @@ mod footer;
 mod list_selection_view;
 mod prompt_args;
 mod skill_popup;
+mod slash_arg_hints;
+mod slash_subcommands;
 mod status_menu_view;
 pub(crate) use list_selection_view::SelectionViewParams;
 mod feedback_view;
@@ -47,10 +49,12 @@ mod queued_user_messages;
 mod scroll_state;
 mod selection_popup_common;
 mod textarea;
+mod worktrees_settings_view;
 pub(crate) use feedback_view::FeedbackNoteView;
 pub(crate) use prompt_args::parse_slash_name;
 pub(crate) use status_menu_view::StatusMenuTab;
 pub(crate) use status_menu_view::StatusMenuView;
+pub(crate) use worktrees_settings_view::WorktreesSettingsView;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum CancellationEvent {
@@ -518,6 +522,11 @@ impl BottomPane {
     /// Update custom prompts available for the slash popup.
     pub(crate) fn set_custom_prompts(&mut self, prompts: Vec<CustomPrompt>) {
         self.composer.set_custom_prompts(prompts);
+        self.request_redraw();
+    }
+
+    pub(crate) fn set_slash_completion_branches(&mut self, branches: Vec<String>) {
+        self.composer.set_slash_completion_branches(branches);
         self.request_redraw();
     }
 

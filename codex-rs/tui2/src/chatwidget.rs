@@ -2533,8 +2533,14 @@ impl ChatWidget {
             && let Some((name, rest)) = parse_slash_name(text.as_str())
             && name == "settings"
         {
-            let _ = rest;
-            self.dispatch_command(SlashCommand::Settings);
+            let args: Vec<&str> = rest.split_whitespace().collect();
+            match args.as_slice() {
+                [] => self.dispatch_command(SlashCommand::Settings),
+                ["worktrees"] => self.open_worktrees_settings_view(),
+                _ => {
+                    self.add_info_message("Usage: /settings [worktrees]".to_string(), None);
+                }
+            }
             return;
         }
 
@@ -3634,6 +3640,7 @@ impl ChatWidget {
                 "/settings status-bar git-branch toggle".cyan(),
             ]
             .into(),
+            vec!["  ".into(), "Try: ".dim(), "/settings worktrees".cyan()].into(),
             vec![
                 "• ".dim(),
                 "xcodex config".cyan(),
@@ -3961,6 +3968,10 @@ impl ChatWidget {
             .set_status_bar_git_context(git_branch, worktree_display);
     }
 
+    pub(crate) fn set_slash_completion_branches(&mut self, branches: Vec<String>) {
+        self.bottom_pane.set_slash_completion_branches(branches);
+    }
+
     pub(crate) fn set_status_bar_git_options(
         &mut self,
         show_git_branch: bool,
@@ -3976,6 +3987,21 @@ impl ChatWidget {
 
     pub(crate) fn set_worktrees_shared_dirs(&mut self, shared_dirs: Vec<String>) {
         self.config.worktrees_shared_dirs = shared_dirs;
+        self.request_redraw();
+    }
+
+    pub(crate) fn set_worktrees_pinned_paths(&mut self, pinned_paths: Vec<String>) {
+        self.config.worktrees_pinned_paths = pinned_paths;
+        self.request_redraw();
+    }
+
+    pub(crate) fn open_worktrees_settings_view(&mut self) {
+        let view = crate::bottom_pane::WorktreesSettingsView::new(
+            self.config.worktrees_shared_dirs.clone(),
+            self.config.worktrees_pinned_paths.clone(),
+            self.app_event_tx.clone(),
+        );
+        self.bottom_pane.show_view(Box::new(view));
         self.request_redraw();
     }
 
@@ -4055,10 +4081,94 @@ impl ChatWidget {
     }
 
     fn open_worktree_picker(&mut self) {
+        #[derive(Clone, Debug)]
+        struct WorktreePickerRow {
+            path: PathBuf,
+            display: String,
+            search_value: String,
+            description: String,
+            selected_description: String,
+            is_current: bool,
+            is_workspace_root: bool,
+            is_bare: bool,
+        }
+
+        fn display_path(path: &Path) -> String {
+            crate::exec_command::relativize_to_home(path)
+                .map(|path| {
+                    if path.as_os_str().is_empty() {
+                        String::from("~")
+                    } else {
+                        format!("~/{}", path.display())
+                    }
+                })
+                .unwrap_or_else(|| path.display().to_string())
+        }
+
+        fn build_worktree_picker_rows(
+            worktrees: &[GitWorktreeEntry],
+            current_root: Option<&Path>,
+            workspace_root: Option<&Path>,
+        ) -> Vec<WorktreePickerRow> {
+            let mut rows: Vec<WorktreePickerRow> = worktrees
+                .iter()
+                .map(|entry| {
+                    let is_current = current_root.is_some_and(|root| root == entry.path.as_path());
+                    let is_workspace_root =
+                        workspace_root.is_some_and(|root| root == entry.path.as_path());
+
+                    let branch_label = match &entry.head {
+                        GitHeadState::Branch(name) => name.clone(),
+                        GitHeadState::Detached => String::from("(detached)"),
+                    };
+
+                    let display = display_path(&entry.path);
+                    let mut search_value = String::new();
+                    search_value.push_str(&branch_label);
+                    search_value.push(' ');
+                    search_value.push_str(&display);
+
+                    let mut description = format!("branch: {branch_label}");
+                    if entry.is_bare {
+                        description.push_str(" (bare repository)");
+                    } else if is_workspace_root {
+                        description.push_str(" (workspace root)");
+                    }
+
+                    let mut selected_description = description.clone();
+                    if is_current {
+                        selected_description.push_str(" (current session)");
+                    }
+
+                    WorktreePickerRow {
+                        path: entry.path.clone(),
+                        display,
+                        search_value,
+                        description,
+                        selected_description,
+                        is_current,
+                        is_workspace_root,
+                        is_bare: entry.is_bare,
+                    }
+                })
+                .collect();
+
+            rows.sort_by(|a, b| {
+                b.is_current
+                    .cmp(&a.is_current)
+                    .then_with(|| b.is_workspace_root.cmp(&a.is_workspace_root))
+                    .then_with(|| a.is_bare.cmp(&b.is_bare))
+                    .then_with(|| a.path.cmp(&b.path))
+            });
+
+            rows
+        }
+
         let mut items: Vec<SelectionItem> = Vec::new();
 
         items.push(SelectionItem {
             name: "Refresh worktrees".to_string(),
+            display_shortcut: Some(crate::key_hint::alt(KeyCode::Char('r'))),
             description: Some("Re-detect worktrees for this session.".to_string()),
             actions: vec![Box::new(|tx: &AppEventSender| {
                 tx.send(AppEvent::WorktreeDetect { open_picker: true });
@@ -4067,39 +4177,63 @@ impl ChatWidget {
             ..Default::default()
         });
 
+        items.push(SelectionItem {
+            name: "Worktrees settings…".to_string(),
+            display_shortcut: Some(crate::key_hint::alt(KeyCode::Char('s'))),
+            description: Some("Edit shared dirs and pinned paths.".to_string()),
+            actions: vec![Box::new(|tx: &AppEventSender| {
+                tx.send(AppEvent::OpenWorktreesSettingsView);
+            })],
+            dismiss_on_select: true,
+            ..Default::default()
+        });
+
+        {
+            let cwd = self.config.cwd.clone();
+            let shared_dirs = self.config.worktrees_shared_dirs.clone();
+            items.push(SelectionItem {
+                name: "Worktree doctor".to_string(),
+                display_shortcut: Some(crate::key_hint::alt(KeyCode::Char('d'))),
+                description: Some(
+                    "Show shared-dir + untracked status for this worktree.".to_string(),
+                ),
+                actions: vec![Box::new(move |tx: &AppEventSender| {
+                    let cwd = cwd.clone();
+                    let shared_dirs = shared_dirs.clone();
+                    let tx = tx.clone();
+                    tokio::spawn(async move {
+                        let lines =
+                            codex_core::git_info::worktree_doctor_lines(&cwd, &shared_dirs, 5)
+                                .await;
+                        let lines = lines.into_iter().map(Line::from).collect();
+                        tx.send(AppEvent::InsertHistoryCell(Box::new(
+                            PlainHistoryCell::new(lines),
+                        )));
+                    });
+                })],
+                dismiss_on_select: true,
+                ..Default::default()
+            });
+        }
+
         let current_root = codex_core::git_info::resolve_git_worktree_head(&self.config.cwd)
             .map(|head| head.worktree_root);
+        let workspace_root = current_root
+            .as_ref()
+            .and_then(|root| codex_core::git_info::resolve_root_git_project_for_trust(root));
 
-        for entry in &self.worktree_list {
-            let path = entry.path.clone();
-            let is_current = current_root.as_ref().is_some_and(|root| root == &path);
-
-            let branch_label = match &entry.head {
-                GitHeadState::Branch(name) => name.clone(),
-                GitHeadState::Detached => String::from("(detached)"),
-            };
-
-            let display = crate::exec_command::relativize_to_home(&path)
-                .map(|path| {
-                    if path.as_os_str().is_empty() {
-                        String::from("~")
-                    } else {
-                        format!("~/{}", path.display())
-                    }
-                })
-                .unwrap_or_else(|| path.display().to_string());
-
-            let mut search = String::new();
-            search.push_str(&branch_label);
-            search.push(' ');
-            search.push_str(&display);
-
-            let dismiss_on_select = !entry.is_bare;
-            let actions: Vec<SelectionAction> = if entry.is_bare {
+        let rows = build_worktree_picker_rows(
+            &self.worktree_list,
+            current_root.as_deref(),
+            workspace_root.as_deref(),
+        );
+        for row in rows {
+            let dismiss_on_select = !row.is_bare;
+            let actions: Vec<SelectionAction> = if row.is_bare {
                 Vec::new()
             } else {
                 vec![Box::new({
-                    let path = path.clone();
+                    let path = row.path.clone();
                     move |tx: &AppEventSender| {
                         tx.send(AppEvent::WorktreeSwitched(path.clone()));
                         tx.send(AppEvent::CodexOp(Op::OverrideTurnContext {
@@ -4119,16 +4253,13 @@ impl ChatWidget {
             };
 
             items.push(SelectionItem {
-                name: display,
-                description: Some(if entry.is_bare {
-                    format!("branch: {branch_label} (bare repository)")
-                } else {
-                    format!("branch: {branch_label}")
-                }),
-                is_current,
+                name: row.display,
+                description: Some(row.description),
+                selected_description: Some(row.selected_description),
+                is_current: row.is_current,
                 actions,
                 dismiss_on_select,
-                search_value: Some(search),
+                search_value: Some(row.search_value),
                 ..Default::default()
             });
         }
@@ -4144,7 +4275,23 @@ impl ChatWidget {
         self.bottom_pane.show_selection_view(SelectionViewParams {
             title: Some("Select a worktree".to_string()),
             subtitle,
-            footer_hint: Some(standard_popup_hint_line()),
+            footer_hint: Some(Line::from(vec![
+                crate::key_hint::plain(KeyCode::Up).into(),
+                "/".into(),
+                crate::key_hint::plain(KeyCode::Down).into(),
+                " select  ".dim(),
+                crate::key_hint::plain(KeyCode::Enter).into(),
+                " open  ".dim(),
+                crate::key_hint::alt(KeyCode::Char('r')).into(),
+                " refresh  ".dim(),
+                crate::key_hint::alt(KeyCode::Char('s')).into(),
+                " settings  ".dim(),
+                crate::key_hint::alt(KeyCode::Char('d')).into(),
+                " doctor  ".dim(),
+                "type to search  ".dim(),
+                crate::key_hint::plain(KeyCode::Esc).into(),
+                " close".dim(),
+            ])),
             items,
             is_searchable: true,
             search_placeholder: Some("Type to search worktrees".to_string()),

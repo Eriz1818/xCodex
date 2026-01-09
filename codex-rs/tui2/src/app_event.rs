@@ -58,6 +58,11 @@ pub(crate) enum AppEvent {
         worktree_root: Option<PathBuf>,
     },
 
+    /// Update cached git branches for slash arg completions (e.g. `/worktree init` branch suggestions).
+    UpdateSlashCompletionBranches {
+        branches: Vec<String>,
+    },
+
     /// Update status bar item toggles (runtime).
     UpdateStatusBarGitOptions {
         show_git_branch: bool,
@@ -72,6 +77,11 @@ pub(crate) enum AppEvent {
         shared_dirs: Vec<String>,
     },
 
+    /// Update `worktrees.pinned_paths` at runtime.
+    UpdateWorktreesPinnedPaths {
+        pinned_paths: Vec<String>,
+    },
+
     /// Replace the cached git worktree list.
     WorktreeListUpdated {
         worktrees: Vec<GitWorktreeEntry>,
@@ -80,6 +90,14 @@ pub(crate) enum AppEvent {
 
     /// Open the `/worktree` command menu in the composer (slash popup).
     OpenWorktreeCommandMenu,
+
+    /// Open a command by inserting it into the composer (when empty).
+    OpenToolsCommand {
+        command: String,
+    },
+
+    /// Open the worktrees settings editor view.
+    OpenWorktreesSettingsView,
 
     /// Refresh the git worktree list for the current session `cwd`.
     WorktreeDetect {
@@ -139,6 +157,11 @@ pub(crate) enum AppEvent {
     /// Persist `worktrees.shared_dirs` to config.
     PersistWorktreesSharedDirs {
         shared_dirs: Vec<String>,
+    },
+
+    /// Persist `worktrees.pinned_paths` to config.
+    PersistWorktreesPinnedPaths {
+        pinned_paths: Vec<String>,
     },
 
     /// Persist the startup timeout for a single MCP server.
