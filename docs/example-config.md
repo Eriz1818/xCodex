@@ -139,6 +139,9 @@ notifications = false
 # Enables welcome/status/spinner animations. Default: true
 animations = true
 
+# Xcodex-only: enable "xtreme mode" styling. Values: auto | on | off. Default: on
+# xtreme_mode = "on"
+
 # Footer status bar items. Defaults: false
 status_bar_show_git_branch = false
 status_bar_show_worktree = false

@@ -14,6 +14,7 @@ use crate::config::types::ShellEnvironmentPolicyToml;
 use crate::config::types::Tui;
 use crate::config::types::UriBasedFileOpener;
 use crate::config::types::Worktrees;
+use crate::config::types::XtremeMode;
 use crate::config_loader::ConfigLayerStack;
 use crate::config_loader::ConfigRequirements;
 use crate::config_loader::LoaderOverrides;
@@ -195,6 +196,9 @@ pub struct Config {
 
     /// Show startup tooltips in the TUI welcome screen.
     pub show_tooltips: bool,
+
+    /// How the TUI should render xcodex "xtreme mode" styling.
+    pub tui_xtreme_mode: XtremeMode,
 
     /// When true, the TUI asks for confirmation before exiting if external hooks are still running.
     pub tui_confirm_exit_with_running_hooks: bool,
@@ -1547,6 +1551,7 @@ impl Config {
                 .unwrap_or_default(),
             animations: cfg.tui.as_ref().map(|t| t.animations).unwrap_or(true),
             show_tooltips: cfg.tui.as_ref().map(|t| t.show_tooltips).unwrap_or(true),
+            tui_xtreme_mode: cfg.tui.as_ref().map(|t| t.xtreme_mode).unwrap_or_default(),
             tui_confirm_exit_with_running_hooks: cfg
                 .tui
                 .as_ref()
@@ -1882,6 +1887,7 @@ persistence = "none"
                 notifications: Notifications::Enabled(true),
                 animations: true,
                 show_tooltips: true,
+                xtreme_mode: XtremeMode::On,
                 mouse_capture: true,
                 verbose_tool_output: false,
                 status_bar_show_git_branch: false,
@@ -3499,6 +3505,7 @@ model_verbosity = "high"
                 tui_notifications: Default::default(),
                 animations: true,
                 show_tooltips: true,
+                tui_xtreme_mode: XtremeMode::On,
                 tui_confirm_exit_with_running_hooks: true,
                 tui_scroll_events_per_tick: None,
                 tui_scroll_wheel_lines: None,
@@ -3591,6 +3598,7 @@ model_verbosity = "high"
             tui_notifications: Default::default(),
             animations: true,
             show_tooltips: true,
+            tui_xtreme_mode: XtremeMode::On,
             tui_confirm_exit_with_running_hooks: true,
             tui_scroll_events_per_tick: None,
             tui_scroll_wheel_lines: None,
@@ -3698,6 +3706,7 @@ model_verbosity = "high"
             tui_notifications: Default::default(),
             animations: true,
             show_tooltips: true,
+            tui_xtreme_mode: XtremeMode::On,
             tui_confirm_exit_with_running_hooks: true,
             tui_scroll_events_per_tick: None,
             tui_scroll_wheel_lines: None,
@@ -3791,6 +3800,7 @@ model_verbosity = "high"
             tui_notifications: Default::default(),
             animations: true,
             show_tooltips: true,
+            tui_xtreme_mode: XtremeMode::On,
             tui_confirm_exit_with_running_hooks: true,
             tui_scroll_events_per_tick: None,
             tui_scroll_wheel_lines: None,

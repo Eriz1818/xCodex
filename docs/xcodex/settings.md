@@ -31,6 +31,9 @@ These keys live under `[tui]`:
 [tui]
 status_bar_show_git_branch = false
 status_bar_show_worktree = false
+
+# Xcodex-only UI styling: auto | on | off (default: on)
+# xtreme_mode = "on"
 ```
 
 See:
