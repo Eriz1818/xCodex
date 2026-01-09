@@ -73,7 +73,7 @@ struct MultitoolCli {
     #[clap(flatten)]
     pub feature_toggles: FeatureToggles,
 
-    /// Disable external hooks for this run.
+    /// Disable hooks (external and in-process) for this run.
     ///
     /// This is useful when running Codex from within a hook script to avoid
     /// recursive hook execution.
@@ -152,6 +152,7 @@ enum Subcommand {
 }
 
 #[derive(Debug, Parser)]
+#[command(disable_help_subcommand = true)]
 struct HooksCommand {
     #[command(subcommand)]
     sub: HooksSubcommand,
@@ -161,6 +162,12 @@ struct HooksCommand {
 enum HooksSubcommand {
     /// Scaffold a small set of example hook scripts under CODEX_HOME.
     Init(HooksInitCommand),
+
+    /// Install language helpers/templates for writing typed external hooks.
+    Install(HooksInstallCommand),
+
+    /// Print a short overview of hooks commands and SDK install options.
+    Help(HooksHelpCommand),
 
     /// List configured hooks from the active config.
     List(HooksListCommand),
@@ -181,6 +188,28 @@ struct HooksInitCommand {
     /// Don't print a config snippet to paste into config.toml.
     #[arg(long = "no-print-config", default_value_t = false)]
     no_print_config: bool,
+}
+
+#[derive(Debug, Parser)]
+struct HooksHelpCommand {}
+
+#[derive(Debug, Parser)]
+struct HooksInstallCommand {
+    /// Which SDK to install.
+    #[arg(value_enum, value_name = "SDK")]
+    sdk: Option<HooksInstallSdk>,
+
+    /// Install all supported SDKs.
+    #[arg(long = "all", default_value_t = false)]
+    all: bool,
+
+    /// Overwrite existing SDK files under CODEX_HOME/hooks.
+    #[arg(long = "force", default_value_t = false)]
+    force: bool,
+
+    /// Print available SDKs and exit.
+    #[arg(long = "list", default_value_t = false)]
+    list: bool,
 }
 
 #[derive(Debug, Parser)]
@@ -220,6 +249,26 @@ enum HooksTestEventCli {
     ModelResponseCompleted,
     ToolCallStarted,
     ToolCallFinished,
+}
+
+#[derive(Debug, Clone, Copy, clap::ValueEnum)]
+enum HooksInstallSdk {
+    #[value(name = "python", alias = "py")]
+    Python,
+    #[value(name = "rust", alias = "rs")]
+    Rust,
+    #[value(name = "javascript", alias = "js", alias = "node")]
+    JavaScript,
+    #[value(name = "typescript", alias = "ts")]
+    TypeScript,
+    #[value(name = "go", alias = "golang")]
+    Go,
+    #[value(name = "ruby", alias = "rb")]
+    Ruby,
+    #[value(name = "java")]
+    Java,
+    #[value(name = "all")]
+    All,
 }
 
 #[derive(Debug, Parser)]
@@ -546,6 +595,9 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
                 "hooks.model_response_completed=[]",
                 "hooks.tool_call_started=[]",
                 "hooks.tool_call_finished=[]",
+                "hooks.inproc_tool_call_summary=false",
+                "hooks.inproc=[]",
+                "hooks.host.enabled=false",
             ]
             .map(ToString::to_string),
         );
@@ -670,6 +722,13 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
             HooksSubcommand::Init(args) => {
                 let codex_home = find_codex_home()?;
                 run_hooks_init(&codex_home, args)?;
+            }
+            HooksSubcommand::Install(args) => {
+                let codex_home = find_codex_home()?;
+                run_hooks_install(&codex_home, args)?;
+            }
+            HooksSubcommand::Help(_args) => {
+                run_hooks_help()?;
             }
             HooksSubcommand::List(args) => {
                 let codex_home = find_codex_home()?;
@@ -1057,11 +1116,38 @@ fn hooks_payloads_dir(codex_home: &std::path::Path) -> std::path::PathBuf {
     codex_home.join("tmp").join("hooks").join("payloads")
 }
 
+fn run_hooks_help() -> anyhow::Result<()> {
+    println!("Hooks commands:");
+    println!("- xcodex hooks init");
+    println!("- xcodex hooks install --list");
+    println!("- xcodex hooks install <sdk>");
+    println!("- xcodex hooks test [--configured-only]");
+    println!("- xcodex hooks list");
+    println!("- xcodex hooks paths");
+    println!();
+    println!("Supported SDKs:");
+    for sdk in codex_common::hooks_sdk_install::all_hook_sdks() {
+        println!("- {}: {}", sdk.id(), sdk.description());
+    }
+    println!();
+    println!("Docs:");
+    println!("- docs/xcodex/hooks.md");
+    println!("- docs/xcodex/hooks-sdks.md");
+    println!("- docs/config.md#hooks");
+    Ok(())
+}
+
 fn run_hooks_init(codex_home: &std::path::Path, args: HooksInitCommand) -> anyhow::Result<()> {
     std::fs::create_dir_all(codex_home)?;
 
     let hooks_dir = hooks_dir(codex_home);
     std::fs::create_dir_all(&hooks_dir)?;
+
+    let _ = codex_common::hooks_sdk_install::install_hook_sdks(
+        codex_home,
+        &[codex_common::hooks_sdk_install::HookSdk::Python],
+        args.force,
+    )?;
 
     let scripts = [
         ("log_all_jsonl.py", hooks_init_template_log_all_jsonl()),
@@ -1152,6 +1238,44 @@ fn run_hooks_init(codex_home: &std::path::Path, args: HooksInitCommand) -> anyho
     Ok(())
 }
 
+fn run_hooks_install(
+    codex_home: &std::path::Path,
+    args: HooksInstallCommand,
+) -> anyhow::Result<()> {
+    use codex_common::hooks_sdk_install;
+
+    if args.list {
+        println!("Available hook SDKs:");
+        for sdk in hooks_sdk_install::all_hook_sdks() {
+            println!("- {}: {}", sdk.id(), sdk.description());
+        }
+        println!("- all: install everything");
+        return Ok(());
+    }
+
+    let targets = if args.all || matches!(args.sdk, Some(HooksInstallSdk::All)) {
+        hooks_sdk_install::all_hook_sdks()
+    } else {
+        let Some(sdk) = args.sdk else {
+            anyhow::bail!("missing SDK; try `xcodex hooks install --list`");
+        };
+        vec![match sdk {
+            HooksInstallSdk::Python => hooks_sdk_install::HookSdk::Python,
+            HooksInstallSdk::Rust => hooks_sdk_install::HookSdk::Rust,
+            HooksInstallSdk::JavaScript => hooks_sdk_install::HookSdk::JavaScript,
+            HooksInstallSdk::TypeScript => hooks_sdk_install::HookSdk::TypeScript,
+            HooksInstallSdk::Go => hooks_sdk_install::HookSdk::Go,
+            HooksInstallSdk::Ruby => hooks_sdk_install::HookSdk::Ruby,
+            HooksInstallSdk::Java => hooks_sdk_install::HookSdk::Java,
+            HooksInstallSdk::All => unreachable!("handled above"),
+        }]
+    };
+
+    let report = hooks_sdk_install::install_hook_sdks(codex_home, &targets, args.force)?;
+    print!("{}", hooks_sdk_install::format_install_report(&report)?);
+    Ok(())
+}
+
 fn print_hooks_list(
     codex_home: &std::path::Path,
     hooks: &codex_core::config::HooksConfig,
@@ -1164,6 +1288,14 @@ fn print_hooks_list(
         hooks.max_stdin_payload_bytes
     );
     println!("hooks.keep_last_n_payloads={}", hooks.keep_last_n_payloads);
+    println!(
+        "hooks.inproc_tool_call_summary={}",
+        hooks.inproc_tool_call_summary
+    );
+    println!("hooks.inproc={:?}", hooks.inproc);
+    println!("hooks.host.enabled={}", hooks.host.enabled);
+    println!("hooks.host.command={:?}", hooks.host.command);
+    println!("hooks.host.sandbox_mode={:?}", hooks.host.sandbox_mode);
 
     let entries: [(&str, &Vec<Vec<String>>); 8] = [
         ("hooks.agent_turn_complete", &hooks.agent_turn_complete),
@@ -1206,7 +1338,20 @@ fn print_hooks_list(
 fn print_hooks_paths(codex_home: &std::path::Path, hooks: &codex_core::config::HooksConfig) {
     println!("CODEX_HOME: {}", codex_home.display());
     println!("Logs: {}", hooks_logs_dir(codex_home).display());
+    println!(
+        "Host logs: {}",
+        codex_home
+            .join("tmp")
+            .join("hooks")
+            .join("host")
+            .join("logs")
+            .display()
+    );
     println!("Payloads: {}", hooks_payloads_dir(codex_home).display());
+    println!(
+        "Tool call summaries (in-proc): {}",
+        codex_home.join("hooks-tool-calls.log").display()
+    );
     println!("hooks.keep_last_n_payloads={}", hooks.keep_last_n_payloads);
     println!(
         "hooks.max_stdin_payload_bytes={}",
@@ -1216,23 +1361,21 @@ fn print_hooks_paths(codex_home: &std::path::Path, hooks: &codex_core::config::H
 
 fn hooks_init_template_log_all_jsonl() -> &'static str {
     r#"#!/usr/bin/env python3
+"""
+Example hook: log every hook payload as one JSON object per line.
+
+Customize by editing `main()` below. This hook is fire-and-forget: failures
+won't stop Codex, but payloads/logs may contain sensitive data.
+"""
 import json
 import os
 import pathlib
-import sys
 
-
-def read_payload() -> dict:
-    raw = sys.stdin.read() or "{}"
-    payload = json.loads(raw)
-    payload_path = payload.get("payload-path")
-    if payload_path:
-        payload = json.loads(pathlib.Path(payload_path).read_text())
-    return payload
+import xcodex_hooks
 
 
 def main() -> int:
-    payload = read_payload()
+    payload = xcodex_hooks.read_payload()
     codex_home = pathlib.Path(os.environ.get("CODEX_HOME", str(pathlib.Path.home() / ".xcodex")))
     out = codex_home / "hooks.jsonl"
     out.parent.mkdir(parents=True, exist_ok=True)
@@ -1248,23 +1391,20 @@ if __name__ == "__main__":
 
 fn hooks_init_template_tool_call_summary() -> &'static str {
     r#"#!/usr/bin/env python3
+"""
+Example hook: log compact tool-call summaries to CODEX_HOME/hooks-tool-calls.log.
+
+Customize by editing `main()` below.
+"""
 import json
 import os
 import pathlib
-import sys
 
-
-def read_payload() -> dict:
-    raw = sys.stdin.read() or "{}"
-    payload = json.loads(raw)
-    payload_path = payload.get("payload-path")
-    if payload_path:
-        payload = json.loads(pathlib.Path(payload_path).read_text())
-    return payload
+import xcodex_hooks
 
 
 def main() -> int:
-    payload = read_payload()
+    payload = xcodex_hooks.read_payload()
     if payload.get("type") != "tool-call-finished":
         return 0
 
@@ -1296,24 +1436,18 @@ if __name__ == "__main__":
 
 fn hooks_init_template_approval_notify_macos_terminal_notifier() -> &'static str {
     r#"#!/usr/bin/env python3
+"""
+Example hook: show a macOS notification on approval requests (if terminal-notifier is installed).
+"""
 import json
-import pathlib
 import shutil
 import subprocess
-import sys
 
-
-def read_payload() -> dict:
-    raw = sys.stdin.read() or "{}"
-    payload = json.loads(raw)
-    payload_path = payload.get("payload-path")
-    if payload_path:
-        payload = json.loads(pathlib.Path(payload_path).read_text())
-    return payload
+import xcodex_hooks
 
 
 def main() -> int:
-    payload = read_payload()
+    payload = xcodex_hooks.read_payload()
     if payload.get("type") != "approval-requested":
         return 0
 
@@ -1337,24 +1471,17 @@ if __name__ == "__main__":
 
 fn hooks_init_template_notify_linux_notify_send() -> &'static str {
     r#"#!/usr/bin/env python3
-import json
-import pathlib
+"""
+Example hook: show a Linux desktop notification via notify-send (if installed).
+"""
 import shutil
 import subprocess
-import sys
 
-
-def read_payload() -> dict:
-    raw = sys.stdin.read() or "{}"
-    payload = json.loads(raw)
-    payload_path = payload.get("payload-path")
-    if payload_path:
-        payload = json.loads(pathlib.Path(payload_path).read_text())
-    return payload
+import xcodex_hooks
 
 
 def main() -> int:
-    payload = read_payload()
+    payload = xcodex_hooks.read_payload()
 
     notify_send = shutil.which("notify-send")
     if notify_send is None:
