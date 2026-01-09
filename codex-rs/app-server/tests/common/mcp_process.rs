@@ -143,7 +143,7 @@ impl McpProcess {
             client_info: ClientInfo {
                 name: "codex-app-server-tests".to_string(),
                 title: None,
-                version: "0.1.0".to_string(),
+                version: env!("CARGO_PKG_VERSION").to_string(),
             },
         })?);
         let req_id = self.send_request("initialize", params).await?;
