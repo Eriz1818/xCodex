@@ -39,6 +39,7 @@ mod skill_popup;
 mod status_menu_view;
 pub(crate) use list_selection_view::SelectionViewParams;
 mod feedback_view;
+pub(crate) use feedback_view::feedback_disabled_params;
 pub(crate) use feedback_view::feedback_selection_params;
 pub(crate) use feedback_view::feedback_upload_consent_params;
 mod paste_burst;

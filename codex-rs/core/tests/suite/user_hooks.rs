@@ -92,7 +92,7 @@ async fn hooks_agent_turn_complete_invoked() -> Result<()> {
             final_output_json_schema: None,
         })
         .await?;
-    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 
     fs_wait::wait_for_path_exists(&hook_file, Duration::from_secs(5)).await?;
     let hook_payload_raw = tokio::fs::read_to_string(&hook_file).await?;
@@ -169,7 +169,7 @@ async fn hooks_approval_requested_invoked_for_exec() -> Result<()> {
             decision: ReviewDecision::Approved,
         })
         .await?;
-    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 
     Ok(())
 }
@@ -232,7 +232,7 @@ async fn hooks_model_request_started_invoked() -> Result<()> {
             final_output_json_schema: None,
         })
         .await?;
-    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 
     fs_wait::wait_for_path_exists(&hook_file, Duration::from_secs(5)).await?;
     let hook_payload_raw = tokio::fs::read_to_string(&hook_file).await?;
@@ -277,7 +277,7 @@ async fn hooks_model_response_completed_invoked() -> Result<()> {
             final_output_json_schema: None,
         })
         .await?;
-    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 
     fs_wait::wait_for_path_exists(&hook_file, Duration::from_secs(5)).await?;
     let hook_payload_raw = tokio::fs::read_to_string(&hook_file).await?;
@@ -343,7 +343,7 @@ async fn hooks_tool_call_started_and_finished_invoked() -> Result<()> {
             final_output_json_schema: None,
         })
         .await?;
-    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 
     fs_wait::wait_for_path_exists(&started_file, Duration::from_secs(5)).await?;
     fs_wait::wait_for_path_exists(&finished_file, Duration::from_secs(5)).await?;

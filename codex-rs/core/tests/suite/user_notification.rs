@@ -22,7 +22,6 @@ async fn notify_emits_deprecation_notice() -> anyhow::Result<()> {
     else {
         unreachable!("wait_for_event filters for DeprecationNotice")
     };
-
     assert!(summary.contains("`notify` is deprecated"));
     Ok(())
 }
