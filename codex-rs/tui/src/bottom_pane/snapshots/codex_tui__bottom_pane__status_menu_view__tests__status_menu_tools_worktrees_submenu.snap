@@ -1,0 +1,22 @@
+---
+source: tui/src/bottom_pane/status_menu_view.rs
+assertion_line: 703
+expression: "render_lines(&view, 60)"
+---
+                                                            
+  [ Status ]  [ Settings ]  [ Tools ]  (bottom-pane)        
+                                                            
+  Tools                                                     
+  Worktrees                                                 
+  Pick a /worktree flow to insert into the composer.        
+                                                            
+  › Select…                                                 
+    Detect                                                  
+    Doctor                                                  
+    Link shared…                                            
+    Shared dirs…                                            
+    Init…                                                   
+                                                            
+  Hint: /worktree: open the worktree picker                 
+                                                            
+  Tab: switch tab  ↑/↓: select/scroll  Enter: toggle/run  Es

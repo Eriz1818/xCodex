@@ -12,7 +12,6 @@ use bottom_pane_view::BottomPaneView;
 use codex_core::features::Features;
 use codex_core::skills::model::SkillMetadata;
 use codex_file_search::FileMatch;
-use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
@@ -38,6 +37,8 @@ mod footer;
 mod list_selection_view;
 mod prompt_args;
 mod skill_popup;
+mod slash_arg_hints;
+mod slash_subcommands;
 mod status_menu_view;
 pub(crate) use list_selection_view::SelectionViewParams;
 mod feedback_view;
@@ -51,8 +52,14 @@ mod scroll_state;
 mod selection_popup_common;
 mod textarea;
 mod unified_exec_footer;
+mod worktree_init_wizard_view;
+mod worktree_link_shared_wizard_view;
+mod worktrees_settings_view;
 pub(crate) use feedback_view::FeedbackNoteView;
 pub(crate) use prompt_args::parse_slash_name;
+pub(crate) use worktree_init_wizard_view::WorktreeInitWizardView;
+pub(crate) use worktree_link_shared_wizard_view::WorktreeLinkSharedWizardView;
+pub(crate) use worktrees_settings_view::WorktreesSettingsView;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum CancellationEvent {
@@ -241,16 +248,14 @@ impl BottomPane {
     pub fn handle_key_event(&mut self, key_event: KeyEvent) -> InputResult {
         // If a modal/view is active, handle it here; otherwise forward to composer.
         if let Some(view) = self.view_stack.last_mut() {
-            if key_event.code == KeyCode::Esc
-                && matches!(view.on_ctrl_c(), CancellationEvent::Handled)
-                && view.is_complete()
+            view.handle_key_event(key_event);
+            if self
+                .view_stack
+                .last()
+                .is_some_and(|view| view.is_complete())
             {
                 self.view_stack.pop();
-                self.on_active_view_complete();
-            } else {
-                view.handle_key_event(key_event);
-                if view.is_complete() {
-                    self.view_stack.clear();
+                if self.view_stack.is_empty() {
                     self.on_active_view_complete();
                 }
             }
@@ -552,6 +557,11 @@ impl BottomPane {
     /// Update custom prompts available for the slash popup.
     pub(crate) fn set_custom_prompts(&mut self, prompts: Vec<CustomPrompt>) {
         self.composer.set_custom_prompts(prompts);
+        self.request_redraw();
+    }
+
+    pub(crate) fn set_slash_completion_branches(&mut self, branches: Vec<String>) {
+        self.composer.set_slash_completion_branches(branches);
         self.request_redraw();
     }
 

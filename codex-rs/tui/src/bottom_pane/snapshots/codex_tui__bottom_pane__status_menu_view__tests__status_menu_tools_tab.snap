@@ -1,19 +1,18 @@
 ---
-source: tui2/src/bottom_pane/status_menu_view.rs
-assertion_line: 670
+source: tui/src/bottom_pane/status_menu_view.rs
+assertion_line: 687
 expression: "render_lines(&view, 60)"
 ---
                                                             
   [ Status ]  [ Settings ]  [ Tools ]  (bottom-pane)        
                                                             
-  Settings                                                  
-  Toggles apply immediately and persist.                    
+  Tools                                                     
+  Quick actions (opens other pickers/popups).               
                                                             
-    [x] Status bar: git branch                              
-    [ ] Status bar: worktree path                           
-  › [x] Transcript: verbose tool output                     
+  › Resume…                                                 
     Worktrees…                                              
+    Approvals…                                              
                                                             
-  Tip: Tab to Tools.                                        
+  Hint: Resume: pick a previous session to continue         
                                                             
   Tab: switch tab  ↑/↓: select/scroll  Enter: toggle/run  Es

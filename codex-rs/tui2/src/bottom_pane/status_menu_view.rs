@@ -31,10 +31,9 @@ pub(crate) enum StatusMenuTab {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum RadioDemo {
-    Alpha,
-    Beta,
-    Gamma,
+enum ToolsMenuMode {
+    Root,
+    Worktrees,
 }
 
 pub(crate) struct StatusMenuView {
@@ -46,7 +45,7 @@ pub(crate) struct StatusMenuView {
     status_scroll_y: u16,
     selected_settings_row: usize,
     selected_tools_row: usize,
-    radio_demo: RadioDemo,
+    tools_mode: ToolsMenuMode,
     app_event_tx: AppEventSender,
     status_cell: Box<dyn HistoryCell>,
 }
@@ -69,7 +68,7 @@ impl StatusMenuView {
             status_scroll_y: 0,
             selected_settings_row: 0,
             selected_tools_row: 0,
-            radio_demo: RadioDemo::Alpha,
+            tools_mode: ToolsMenuMode::Root,
             app_event_tx,
             status_cell,
         }
@@ -87,7 +86,7 @@ impl StatusMenuView {
             ": toggle/run".dim(),
             "  ".into(),
             "Esc".bold(),
-            ": close".dim(),
+            ": back/close".dim(),
         ]
         .into()
     }
@@ -123,7 +122,10 @@ impl StatusMenuView {
     }
 
     fn tools_row_count(&self) -> usize {
-        3
+        match self.tools_mode {
+            ToolsMenuMode::Root => 3,
+            ToolsMenuMode::Worktrees => 6,
+        }
     }
 
     fn clamp_selected_row(&mut self) {
@@ -163,7 +165,19 @@ impl StatusMenuView {
             }
             StatusMenuTab::Tools => {
                 lines.push("Tools".bold().into());
-                lines.push("Quick actions (opens other pickers/popups).".dim().into());
+                match self.tools_mode {
+                    ToolsMenuMode::Root => {
+                        lines.push("Quick actions (opens other pickers/popups).".dim().into());
+                    }
+                    ToolsMenuMode::Worktrees => {
+                        lines.push("Worktrees".bold().into());
+                        lines.push(
+                            "Pick a /worktree flow to insert into the composer."
+                                .dim()
+                                .into(),
+                        );
+                    }
+                }
                 lines.push(Line::from(""));
                 lines.extend(self.build_tools_rows());
                 lines.push(Line::from(""));
@@ -190,14 +204,6 @@ impl StatusMenuView {
                 "[x] ".green()
             } else {
                 "[ ] ".dim()
-            }
-        };
-
-        let radio = |active: bool| -> Span<'static> {
-            if active {
-                "(•) ".green()
-            } else {
-                "( ) ".dim()
             }
         };
 
@@ -240,24 +246,10 @@ impl StatusMenuView {
             );
         }
 
-        // Row 3: demo radio group (placeholder for future settings).
+        // Row 3: Worktrees settings editor.
         {
             let selected = self.selected_settings_row == 3;
-            lines.push(
-                vec![
-                    selected_prefix(selected),
-                    "Demo radio: ".dim(),
-                    radio(matches!(self.radio_demo, RadioDemo::Alpha)),
-                    "Alpha".into(),
-                    "  ".into(),
-                    radio(matches!(self.radio_demo, RadioDemo::Beta)),
-                    "Beta".into(),
-                    "  ".into(),
-                    radio(matches!(self.radio_demo, RadioDemo::Gamma)),
-                    "Gamma".into(),
-                ]
-                .into(),
-            );
+            lines.push(vec![selected_prefix(selected), "Worktrees…".into()].into());
         }
 
         lines.push(Line::from(""));
@@ -277,7 +269,17 @@ impl StatusMenuView {
             }
         };
 
-        let items = ["Resume…", "Worktrees…", "Approvals…"];
+        let items: &[&str] = match self.tools_mode {
+            ToolsMenuMode::Root => &["Resume…", "Worktrees…", "Approvals…"],
+            ToolsMenuMode::Worktrees => &[
+                "Select…",
+                "Detect",
+                "Doctor",
+                "Link shared…",
+                "Shared dirs…",
+                "Init…",
+            ],
+        };
         for (idx, label) in items.iter().enumerate() {
             let selected = self.selected_tools_row == idx;
             lines.push(vec![selected_prefix(selected), (*label).into()].into());
@@ -287,17 +289,29 @@ impl StatusMenuView {
     }
 
     fn selected_tool_hint_lines(&self) -> Vec<Line<'static>> {
-        let hint = match self.selected_tools_row {
-            0 => "Resume: pick a previous session to continue",
-            1 => "Worktrees: switch worktrees and manage shared dirs",
-            2 => "Approvals: review and adjust approval/sandbox presets",
-            _ => return Vec::new(),
+        let hint = match self.tools_mode {
+            ToolsMenuMode::Root => match self.selected_tools_row {
+                0 => "Resume: pick a previous session to continue",
+                1 => "Worktrees: pick a worktree flow",
+                2 => "Approvals: review and adjust approval/sandbox presets",
+                _ => return Vec::new(),
+            },
+            ToolsMenuMode::Worktrees => match self.selected_tools_row {
+                0 => "/worktree: open the worktree picker",
+                1 => "/worktree detect: refresh worktrees + open picker",
+                2 => "/worktree doctor: show shared-dir + untracked status",
+                3 => "/worktree link-shared: apply shared-dir links",
+                4 => "/worktree shared: edit `worktrees.shared_dirs`",
+                5 => "/worktree init: create a new worktree",
+                _ => return Vec::new(),
+            },
         };
 
         vec![vec!["Hint: ".dim(), hint.dim()].into()]
     }
 
     fn switch_tab(&mut self) {
+        self.tools_mode = ToolsMenuMode::Root;
         self.tab = match self.tab {
             StatusMenuTab::Status => StatusMenuTab::Settings,
             StatusMenuTab::Settings => StatusMenuTab::Tools,
@@ -382,23 +396,42 @@ impl StatusMenuView {
                         .send(AppEvent::PersistVerboseToolOutput(self.verbose_tool_output));
                 }
                 3 => {
-                    self.radio_demo = match self.radio_demo {
-                        RadioDemo::Alpha => RadioDemo::Beta,
-                        RadioDemo::Beta => RadioDemo::Gamma,
-                        RadioDemo::Gamma => RadioDemo::Alpha,
-                    };
+                    self.app_event_tx.send(AppEvent::OpenWorktreesSettingsView);
+                    self.complete = true;
                 }
                 _ => {}
             },
-            StatusMenuTab::Tools => {
-                match self.selected_tools_row {
-                    0 => self.app_event_tx.send(AppEvent::OpenResumePicker),
-                    1 => self.app_event_tx.send(AppEvent::OpenWorktreeCommandMenu),
-                    2 => self.app_event_tx.send(AppEvent::OpenApprovalsPopup),
+            StatusMenuTab::Tools => match self.tools_mode {
+                ToolsMenuMode::Root => match self.selected_tools_row {
+                    0 => {
+                        self.app_event_tx.send(AppEvent::OpenResumePicker);
+                        self.complete = true;
+                    }
+                    1 => {
+                        self.tools_mode = ToolsMenuMode::Worktrees;
+                        self.selected_tools_row = 0;
+                    }
+                    2 => {
+                        self.app_event_tx.send(AppEvent::OpenApprovalsPopup);
+                        self.complete = true;
+                    }
                     _ => {}
+                },
+                ToolsMenuMode::Worktrees => {
+                    let command = match self.selected_tools_row {
+                        0 => "/worktree".to_string(),
+                        1 => "/worktree detect".to_string(),
+                        2 => "/worktree doctor".to_string(),
+                        3 => "/worktree link-shared".to_string(),
+                        4 => "/worktree shared ".to_string(),
+                        5 => "/worktree init".to_string(),
+                        _ => return,
+                    };
+                    self.app_event_tx
+                        .send(AppEvent::OpenToolsCommand { command });
+                    self.complete = true;
                 }
-                self.complete = true;
-            }
+            },
             StatusMenuTab::Status => {}
         }
     }
@@ -407,6 +440,18 @@ impl StatusMenuView {
 impl BottomPaneView for StatusMenuView {
     fn handle_key_event(&mut self, key_event: KeyEvent) {
         match key_event {
+            KeyEvent {
+                code: KeyCode::Esc, ..
+            } => {
+                if matches!(self.tab, StatusMenuTab::Tools)
+                    && matches!(self.tools_mode, ToolsMenuMode::Worktrees)
+                {
+                    self.tools_mode = ToolsMenuMode::Root;
+                    self.selected_tools_row = 0;
+                } else {
+                    self.complete = true;
+                }
+            }
             KeyEvent {
                 code: KeyCode::Tab,
                 modifiers: KeyModifiers::NONE,
@@ -603,7 +648,7 @@ mod tests {
     }
 
     #[test]
-    fn status_menu_renders_settings_tab_with_radio_rows() {
+    fn status_menu_renders_settings_tab_with_worktrees_row() {
         let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
         let tx = AppEventSender::new(tx_raw);
         let status_cell = Box::new(crate::history_cell::new_info_event(
@@ -617,5 +662,40 @@ mod tests {
         view.handle_key_event(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
         view.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
         assert_snapshot!("status_menu_settings_tab", render_lines(&view, 60));
+    }
+
+    #[test]
+    fn status_menu_renders_tools_tab() {
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let status_cell = Box::new(crate::history_cell::new_info_event(
+            "Status card".to_string(),
+            None,
+        ));
+        let mut view =
+            StatusMenuView::new(StatusMenuTab::Status, tx, status_cell, true, false, false);
+        view.handle_key_event(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+        view.handle_key_event(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+        assert_snapshot!("status_menu_tools_tab", render_lines(&view, 60));
+    }
+
+    #[test]
+    fn status_menu_renders_worktrees_tools_submenu() {
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let status_cell = Box::new(crate::history_cell::new_info_event(
+            "Status card".to_string(),
+            None,
+        ));
+        let mut view =
+            StatusMenuView::new(StatusMenuTab::Status, tx, status_cell, true, false, false);
+        view.handle_key_event(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+        view.handle_key_event(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+        view.handle_key_event(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+        view.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        assert_snapshot!(
+            "status_menu_tools_worktrees_submenu",
+            render_lines(&view, 60)
+        );
     }
 }

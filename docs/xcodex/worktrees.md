@@ -58,11 +58,7 @@ Then apply them once in each existing worktree:
 /worktree link-shared
 ```
 
-If the worktree already has git-untracked files under a shared dir, migrate + link:
-
-```text
-/worktree link-shared --migrate
-```
+If the worktree already has content under a shared dir, `/worktree link-shared` will guide you through per-dir actions (migrate+link, replace+link, skip).
 
 ## Roots + shared dirs contract
 
@@ -140,12 +136,15 @@ Notes:
 
 - `/worktree doctor` shows link status + untracked summaries for configured `shared_dirs`.
 - `/worktree shared add|rm|list` edits `worktrees.shared_dirs` without opening `config.toml`.
-- `/worktree link-shared` applies shared-dir links to the current worktree.
+- `/worktree link-shared` applies shared-dir links to the current worktree, with a guided workflow for non-empty dirs (migrate+link or replace+link).
+  - Migration includes ignored-but-not-tracked content (e.g. `docs/impl-plans` ignored via `.gitignore` / `.git/info/exclude`).
   - Use this after creating worktrees outside xcodex (e.g. `git worktree add ...`).
-- `/worktree link-shared --migrate` migrates **git-untracked** files from the current worktree into the workspace root (conflict-safe rename), then links.
-- `/worktree init <name> <branch> [<path>]` creates a new git worktree and switches this session to it.
+- `/worktree link-shared --migrate` opens the same workflow but preselects migrate+link actions.
+- `/worktree init` opens a guided worktree creation flow and switches this session to it.
+  - Fast path: `/worktree init <name> <branch> [<path>]` (non-interactive).
   - Default location: `workspace_root/.worktrees/<name>` (if `<path>` is omitted).
   - `<path>` is interpreted relative to the workspace root unless it’s absolute.
+  - Shared dirs: the flow starts from `worktrees.shared_dirs` and does not add defaults; use “Add shared dir…” to add new entries (persisted on success). Recommended: `docs/impl-plans`, `docs/personal`.
 
 ## Untracked files (advanced workflow)
 
@@ -171,6 +170,12 @@ If you want certain repo-relative paths to always resolve to the **workspace roo
 ```toml
 [worktrees]
 pinned_paths = ["docs/impl-plans", "notes/**"]
+```
+
+Edit from the TUI:
+
+```text
+/settings worktrees
 ```
 
 Behavior:

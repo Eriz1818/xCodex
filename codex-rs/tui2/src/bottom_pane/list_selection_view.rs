@@ -140,7 +140,8 @@ impl ListSelectionView {
             .selected_idx
             .and_then(|visible_idx| self.filtered_indices.get(visible_idx).copied())
             .or_else(|| {
-                (!self.is_searchable)
+                self.search_query
+                    .is_empty()
                     .then(|| self.items.iter().position(|item| item.is_current))
                     .flatten()
             })
@@ -272,10 +273,41 @@ impl ListSelectionView {
     fn rows_width(total_width: u16) -> u16 {
         total_width.saturating_sub(2)
     }
+
+    fn handle_display_shortcut(&mut self, key_event: KeyEvent) -> bool {
+        let Some((idx, item)) = self.items.iter().enumerate().find(|(_, item)| {
+            item.display_shortcut
+                .is_some_and(|binding| binding.is_press(key_event))
+        }) else {
+            return false;
+        };
+
+        if let Some(visible_idx) = self
+            .filtered_indices
+            .iter()
+            .position(|actual| *actual == idx)
+        {
+            self.state.selected_idx = Some(visible_idx);
+        }
+
+        self.last_selected_actual_idx = Some(idx);
+        for act in &item.actions {
+            act(&self.app_event_tx);
+        }
+        if item.dismiss_on_select {
+            self.complete = true;
+        }
+
+        true
+    }
 }
 
 impl BottomPaneView for ListSelectionView {
     fn handle_key_event(&mut self, key_event: KeyEvent) {
+        if self.handle_display_shortcut(key_event) {
+            return;
+        }
+
         match key_event {
             // Some terminals (or configurations) send Control key chords as
             // C0 control characters without reporting the CONTROL modifier.
@@ -534,6 +566,9 @@ mod tests {
     use super::*;
     use crate::app_event::AppEvent;
     use crate::bottom_pane::popup_consts::standard_popup_hint_line;
+    use crossterm::event::KeyCode;
+    use crossterm::event::KeyEvent;
+    use crossterm::event::KeyModifiers;
     use insta::assert_snapshot;
     use ratatui::layout::Rect;
     use tokio::sync::mpsc::unbounded_channel;
@@ -671,6 +706,123 @@ mod tests {
         assert!(
             lines.contains("filters"),
             "expected search query line to include rendered query, got {lines:?}"
+        );
+    }
+
+    #[test]
+    fn searchable_views_select_current_by_default() {
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let items = vec![
+            SelectionItem {
+                name: "First".to_string(),
+                description: Some("not current".to_string()),
+                is_current: false,
+                dismiss_on_select: true,
+                ..Default::default()
+            },
+            SelectionItem {
+                name: "Second".to_string(),
+                description: Some("current item".to_string()),
+                is_current: true,
+                dismiss_on_select: true,
+                ..Default::default()
+            },
+        ];
+        let view = ListSelectionView::new(
+            SelectionViewParams {
+                title: Some("Searchable picker".to_string()),
+                footer_hint: Some(standard_popup_hint_line()),
+                items,
+                is_searchable: true,
+                search_placeholder: Some("Type to search".to_string()),
+                ..Default::default()
+            },
+            tx,
+        );
+
+        let rendered = render_lines_with_width(&view, 48);
+        assert!(
+            rendered.contains("› Second (current)"),
+            "expected current item to be selected by default:\n{rendered}"
+        );
+    }
+
+    #[test]
+    fn display_shortcut_triggers_actions_even_when_searchable() {
+        use crate::key_hint;
+
+        let (tx_raw, mut rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let items = vec![SelectionItem {
+            name: "Refresh".to_string(),
+            display_shortcut: Some(key_hint::alt(KeyCode::Char('r'))),
+            dismiss_on_select: true,
+            actions: vec![Box::new(|tx: &AppEventSender| {
+                tx.send(AppEvent::OpenResumePicker);
+            })],
+            ..Default::default()
+        }];
+
+        let mut view = ListSelectionView::new(
+            SelectionViewParams {
+                title: Some("Shortcuts".to_string()),
+                items,
+                is_searchable: true,
+                search_placeholder: Some("Type to search".to_string()),
+                ..Default::default()
+            },
+            tx,
+        );
+
+        view.handle_key_event(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::ALT));
+        assert!(view.is_complete(), "expected shortcut to dismiss the view");
+        assert!(
+            matches!(rx.try_recv(), Ok(AppEvent::OpenResumePicker)),
+            "expected shortcut to trigger selection action"
+        );
+    }
+
+    #[test]
+    fn renders_display_shortcuts() {
+        use crate::key_hint;
+
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let items = vec![
+            SelectionItem {
+                name: "Refresh worktrees".to_string(),
+                display_shortcut: Some(key_hint::alt(KeyCode::Char('r'))),
+                dismiss_on_select: true,
+                ..Default::default()
+            },
+            SelectionItem {
+                name: "Worktrees settings…".to_string(),
+                display_shortcut: Some(key_hint::alt(KeyCode::Char('s'))),
+                dismiss_on_select: true,
+                ..Default::default()
+            },
+            SelectionItem {
+                name: "Worktree doctor".to_string(),
+                display_shortcut: Some(key_hint::alt(KeyCode::Char('d'))),
+                dismiss_on_select: true,
+                ..Default::default()
+            },
+        ];
+
+        let view = ListSelectionView::new(
+            SelectionViewParams {
+                title: Some("Select a worktree".to_string()),
+                footer_hint: Some(standard_popup_hint_line()),
+                items,
+                ..Default::default()
+            },
+            tx,
+        );
+
+        assert_snapshot!(
+            "list_selection_display_shortcuts",
+            render_lines_with_width(&view, 56)
         );
     }
 

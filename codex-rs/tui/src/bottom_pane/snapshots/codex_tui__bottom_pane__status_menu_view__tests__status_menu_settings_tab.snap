@@ -1,5 +1,6 @@
 ---
 source: tui/src/bottom_pane/status_menu_view.rs
+assertion_line: 645
 expression: "render_lines(&view, 60)"
 ---
                                                             
@@ -10,7 +11,7 @@ expression: "render_lines(&view, 60)"
                                                             
     [x] Status bar: git branch                              
   › [x] Status bar: worktree path                           
-    Demo radio: (•) Alpha  ( ) Beta  ( ) Gamma              
+    Worktrees…                                              
                                                             
   Tip: Tab to Tools.                                        
                                                             

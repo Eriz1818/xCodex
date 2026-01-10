@@ -1640,6 +1640,12 @@ impl App {
                     model: self.current_model.clone(),
                 };
                 self.chat_widget = ChatWidget::new(init, self.server.clone());
+                let tx = self.app_event_tx.clone();
+                let cwd = self.config.cwd.clone();
+                tokio::spawn(async move {
+                    let branches = codex_core::git_info::local_git_branches(&cwd).await;
+                    tx.send(AppEvent::UpdateSlashCompletionBranches { branches });
+                });
                 if let Some(summary) = summary {
                     let mut lines: Vec<Line<'static>> = vec![summary.usage_line.clone().into()];
                     if let Some(command) = summary.resume_command {
@@ -1800,6 +1806,10 @@ impl App {
                     .set_status_bar_git_context(git_branch, worktree_root);
                 tui.frame_requester().schedule_frame();
             }
+            AppEvent::UpdateSlashCompletionBranches { branches } => {
+                self.chat_widget.set_slash_completion_branches(branches);
+                tui.frame_requester().schedule_frame();
+            }
             AppEvent::UpdateStatusBarGitOptions {
                 show_git_branch,
                 show_worktree,
@@ -1837,6 +1847,21 @@ impl App {
                 }
                 tui.frame_requester().schedule_frame();
             }
+            AppEvent::OpenToolsCommand { command } => {
+                if self.chat_widget.composer_is_empty() {
+                    self.chat_widget.set_composer_text(command);
+                } else {
+                    self.chat_widget.add_info_message(
+                        "Clear the composer to open tools commands.".to_string(),
+                        None,
+                    );
+                }
+                tui.frame_requester().schedule_frame();
+            }
+            AppEvent::OpenWorktreesSettingsView => {
+                self.chat_widget.open_worktrees_settings_view();
+                tui.frame_requester().schedule_frame();
+            }
             AppEvent::WorktreeListUpdateFailed { error, open_picker } => {
                 self.chat_widget
                     .on_worktree_list_update_failed(error, open_picker);
@@ -1847,6 +1872,13 @@ impl App {
                 self.config.cwd = cwd.clone();
                 self.chat_widget.set_session_cwd(cwd);
                 tui.frame_requester().schedule_frame();
+
+                let tx = self.app_event_tx.clone();
+                let branch_cwd = self.config.cwd.clone();
+                tokio::spawn(async move {
+                    let branches = codex_core::git_info::local_git_branches(&branch_cwd).await;
+                    tx.send(AppEvent::UpdateSlashCompletionBranches { branches });
+                });
 
                 let next_root = codex_core::git_info::resolve_git_worktree_head(&self.config.cwd)
                     .map(|head| head.worktree_root);
@@ -2322,6 +2354,10 @@ impl App {
                 self.config.worktrees_shared_dirs = shared_dirs.clone();
                 self.chat_widget.set_worktrees_shared_dirs(shared_dirs);
             }
+            AppEvent::UpdateWorktreesPinnedPaths { pinned_paths } => {
+                self.config.worktrees_pinned_paths = pinned_paths.clone();
+                self.chat_widget.set_worktrees_pinned_paths(pinned_paths);
+            }
             AppEvent::PersistWorktreesSharedDirs { shared_dirs } => {
                 let mut shared_dirs_array = toml_edit::Array::new();
                 for dir in &shared_dirs {
@@ -2340,6 +2376,28 @@ impl App {
                         tracing::error!(error = %err, "failed to persist worktree shared dirs");
                         self.chat_widget.add_error_message(format!(
                             "Failed to save worktree shared dirs: {err}"
+                        ));
+                    }
+                }
+            }
+            AppEvent::PersistWorktreesPinnedPaths { pinned_paths } => {
+                let mut pinned_paths_array = toml_edit::Array::new();
+                for path in &pinned_paths {
+                    pinned_paths_array.push(path.clone());
+                }
+                match ConfigEditsBuilder::new(&self.config.codex_home)
+                    .with_edits([ConfigEdit::SetPath {
+                        segments: vec!["worktrees".to_string(), "pinned_paths".to_string()],
+                        value: toml_edit::value(pinned_paths_array),
+                    }])
+                    .apply()
+                    .await
+                {
+                    Ok(()) => {}
+                    Err(err) => {
+                        tracing::error!(error = %err, "failed to persist worktree pinned paths");
+                        self.chat_widget.add_error_message(format!(
+                            "Failed to save worktree pinned paths: {err}"
                         ));
                     }
                 }

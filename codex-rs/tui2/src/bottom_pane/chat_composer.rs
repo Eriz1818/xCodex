@@ -143,6 +143,7 @@ pub(crate) struct ChatComposer {
     transcript_copy_feedback: Option<TranscriptCopyFeedback>,
     status_bar_git_branch: Option<String>,
     status_bar_worktree: Option<String>,
+    slash_completion_branches: Vec<String>,
     show_status_bar_git_branch: bool,
     show_status_bar_worktree: bool,
     skills: Option<Vec<SkillMetadata>>,
@@ -202,6 +203,7 @@ impl ChatComposer {
             transcript_copy_feedback: None,
             status_bar_git_branch: None,
             status_bar_worktree: None,
+            slash_completion_branches: Vec::new(),
             show_status_bar_git_branch: false,
             show_status_bar_worktree: false,
             skills: None,
@@ -228,6 +230,9 @@ impl ChatComposer {
     ) {
         self.status_bar_git_branch = git_branch.filter(|branch| !branch.is_empty());
         self.status_bar_worktree = worktree_root.filter(|path| !path.is_empty());
+        if let ActivePopup::Command(popup) = &mut self.active_popup {
+            popup.set_current_git_branch(self.status_bar_git_branch.clone());
+        }
     }
 
     fn layout_areas(&self, area: Rect) -> [Rect; 3] {
@@ -559,6 +564,56 @@ impl ChatComposer {
                                 cursor_target = Some(desired.len());
                             }
                         }
+                        CommandItem::ArgValue {
+                            insert,
+                            insert_trailing_space,
+                            ..
+                        } => {
+                            let text = self.textarea.text();
+                            let first_line_end = text.find('\n').unwrap_or(text.len());
+                            let (first_line, rest) = text.split_at(first_line_end);
+                            let cursor = self.textarea.cursor().min(first_line.len());
+
+                            let mut start = cursor;
+                            while start > 0
+                                && !first_line.as_bytes()[start - 1].is_ascii_whitespace()
+                            {
+                                start -= 1;
+                            }
+                            let mut end = cursor;
+                            while end < first_line.len()
+                                && !first_line.as_bytes()[end].is_ascii_whitespace()
+                            {
+                                end += 1;
+                            }
+
+                            let mut next_first_line = String::with_capacity(
+                                first_line.len() - (end - start) + insert.len() + 1,
+                            );
+                            next_first_line.push_str(&first_line[..start]);
+                            next_first_line.push_str(&insert);
+                            let mut cursor_after_insert = start + insert.len();
+                            next_first_line.push_str(&first_line[end..]);
+
+                            if insert_trailing_space {
+                                let needs_space = next_first_line
+                                    .as_bytes()
+                                    .get(cursor_after_insert)
+                                    .is_none_or(|b| !b.is_ascii_whitespace());
+                                if needs_space {
+                                    next_first_line.insert(cursor_after_insert, ' ');
+                                    cursor_after_insert += 1;
+                                }
+                            }
+
+                            let mut next_text =
+                                String::with_capacity(next_first_line.len() + rest.len());
+                            next_text.push_str(&next_first_line);
+                            next_text.push_str(rest);
+                            self.textarea.set_text(&next_text);
+                            cursor_target = Some(cursor_after_insert);
+                            popup.on_composer_text_change(next_first_line);
+                        }
                         CommandItem::UserPrompt(idx) => {
                             if let Some(prompt) = popup.prompt(idx) {
                                 match prompt_selection_action(
@@ -587,10 +642,63 @@ impl ChatComposer {
                 modifiers: KeyModifiers::NONE,
                 ..
             } => {
+                let first_line = self.textarea.text().lines().next().unwrap_or("");
+                let cursor = self.textarea.cursor();
+                if let Some(CommandItem::ArgValue {
+                    insert,
+                    insert_trailing_space,
+                    ..
+                }) = popup.selected_item()
+                {
+                    let text = self.textarea.text();
+                    let first_line_end = text.find('\n').unwrap_or(text.len());
+                    let (first_line, rest) = text.split_at(first_line_end);
+                    let cursor = cursor.min(first_line.len());
+
+                    let mut start = cursor;
+                    while start > 0 && !first_line.as_bytes()[start - 1].is_ascii_whitespace() {
+                        start -= 1;
+                    }
+                    let mut end = cursor;
+                    while end < first_line.len()
+                        && !first_line.as_bytes()[end].is_ascii_whitespace()
+                    {
+                        end += 1;
+                    }
+
+                    let mut next_first_line =
+                        String::with_capacity(first_line.len() - (end - start) + insert.len() + 1);
+                    next_first_line.push_str(&first_line[..start]);
+                    next_first_line.push_str(&insert);
+                    let mut cursor_after_insert = start + insert.len();
+                    next_first_line.push_str(&first_line[end..]);
+
+                    if insert_trailing_space {
+                        let needs_space = next_first_line
+                            .as_bytes()
+                            .get(cursor_after_insert)
+                            .is_none_or(|b| !b.is_ascii_whitespace());
+                        if needs_space {
+                            next_first_line.insert(cursor_after_insert, ' ');
+                            cursor_after_insert += 1;
+                        }
+                    }
+
+                    let mut next_text = String::with_capacity(next_first_line.len() + rest.len());
+                    next_text.push_str(&next_first_line);
+                    next_text.push_str(rest);
+                    self.textarea.set_text(&next_text);
+                    self.textarea.set_cursor(cursor_after_insert);
+                    popup.on_composer_text_change(next_first_line);
+                    return (InputResult::None, true);
+                }
+                if !Self::cursor_in_slash_name_token(first_line, cursor) {
+                    return self.handle_key_event_without_popup(key_event);
+                }
+
                 // If the current line starts with a custom prompt name and includes
                 // positional args for a numeric-style template, expand and submit
                 // immediately regardless of the popup selection.
-                let first_line = self.textarea.text().lines().next().unwrap_or("");
                 if let Some((name, _rest)) = parse_slash_name(first_line)
                     && let Some(prompt_name) = name.strip_prefix(&format!("{PROMPTS_CMD_PREFIX}:"))
                     && let Some(prompt) = self.custom_prompts.iter().find(|p| p.name == prompt_name)
@@ -627,6 +735,7 @@ impl ChatComposer {
                             self.textarea.set_cursor(cursor);
                             return (InputResult::None, true);
                         }
+                        CommandItem::ArgValue { .. } => {}
                         CommandItem::UserPrompt(idx) => {
                             if let Some(prompt) = popup.prompt(idx) {
                                 match prompt_selection_action(
@@ -1696,11 +1805,12 @@ impl ChatComposer {
             .map(|idx| name_start + idx)
             .unwrap_or_else(|| first_line.len());
 
-        if cursor > name_end && !first_line[name_end..].trim().is_empty() {
+        let name = &first_line[name_start..name_end];
+        let supports_popup = super::command_popup::slash_command_supports_popup(name);
+        if cursor > name_end && !first_line[name_end..].trim().is_empty() && !supports_popup {
             return None;
         }
 
-        let name = &first_line[name_start..name_end];
         let rest_start = first_line[name_end..]
             .find(|c: char| !c.is_whitespace())
             .map(|idx| name_end + idx)
@@ -1708,6 +1818,22 @@ impl ChatComposer {
         let rest = &first_line[rest_start..];
 
         Some((name, rest))
+    }
+
+    /// Returns true when the cursor is still within the initial `/name` token
+    /// (or immediately after it with only whitespace).
+    fn cursor_in_slash_name_token(first_line: &str, cursor: usize) -> bool {
+        if !first_line.starts_with('/') {
+            return false;
+        }
+
+        let name_start = 1usize;
+        let name_end = first_line[name_start..]
+            .find(char::is_whitespace)
+            .map(|idx| name_start + idx)
+            .unwrap_or_else(|| first_line.len());
+
+        cursor <= name_end || first_line[name_end..].trim().is_empty()
     }
 
     /// Heuristic for whether the typed slash command looks like a valid
@@ -1730,9 +1856,10 @@ impl ChatComposer {
         }
 
         let prompt_prefix = format!("{PROMPTS_CMD_PREFIX}:");
-        self.custom_prompts
-            .iter()
-            .any(|p| fuzzy_match(&format!("{prompt_prefix}{}", p.name), name).is_some())
+        self.custom_prompts.iter().any(|p| {
+            fuzzy_match(&p.name, name).is_some()
+                || fuzzy_match(&format!("{prompt_prefix}{}", p.name), name).is_some()
+        })
     }
 
     /// Synchronize `self.command_popup` with the current text in the
@@ -1778,6 +1905,9 @@ impl ChatComposer {
                     let skills_enabled = self.skills_enabled();
                     let mut command_popup =
                         CommandPopup::new(self.custom_prompts.clone(), skills_enabled);
+                    command_popup.set_current_git_branch(self.status_bar_git_branch.clone());
+                    command_popup
+                        .set_slash_completion_branches(self.slash_completion_branches.clone());
                     command_popup.on_composer_text_change(first_line.to_string());
                     self.active_popup = ActivePopup::Command(command_popup);
                 }
@@ -1789,6 +1919,13 @@ impl ChatComposer {
         self.custom_prompts = prompts.clone();
         if let ActivePopup::Command(popup) = &mut self.active_popup {
             popup.set_prompts(prompts);
+        }
+    }
+
+    pub(crate) fn set_slash_completion_branches(&mut self, branches: Vec<String>) {
+        self.slash_completion_branches = branches.clone();
+        if let ActivePopup::Command(popup) = &mut self.active_popup {
+            popup.set_slash_completion_branches(branches);
         }
     }
 
@@ -2851,6 +2988,9 @@ mod tests {
                 Some(CommandItem::BuiltinText { .. }) => {
                     panic!("unexpected builtin text selected for '/mo'")
                 }
+                Some(CommandItem::ArgValue { .. }) => {
+                    panic!("unexpected arg-value suggestion selected for '/mo'")
+                }
                 Some(CommandItem::UserPrompt(_)) => {
                     panic!("unexpected prompt selected for '/mo'")
                 }
@@ -2909,6 +3049,9 @@ mod tests {
                 }
                 Some(CommandItem::BuiltinText { .. }) => {
                     panic!("unexpected builtin text selected for '/res'")
+                }
+                Some(CommandItem::ArgValue { .. }) => {
+                    panic!("unexpected arg-value suggestion selected for '/res'")
                 }
                 Some(CommandItem::UserPrompt(_)) => {
                     panic!("unexpected prompt selected for '/res'")
@@ -4290,6 +4433,20 @@ mod tests {
         assert!(
             matches!(composer.active_popup, ActivePopup::None),
             "'/zzz' should not activate slash popup because it is not a prefix of any built-in command"
+        );
+
+        composer.set_custom_prompts(vec![CustomPrompt {
+            name: "my-prompt".to_string(),
+            path: "/tmp/my-prompt.md".to_string().into(),
+            content: "hello from prompt".to_string(),
+            description: None,
+            argument_hint: None,
+        }]);
+
+        composer.set_text_content("/my".to_string());
+        assert!(
+            matches!(composer.active_popup, ActivePopup::Command(_)),
+            "'/my' should activate slash popup via custom prompt match"
         );
     }
 
