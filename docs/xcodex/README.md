@@ -18,6 +18,7 @@ xcodex (xtreme-codex) is an effort to add features to upstream Codex CLI.
 - Keeping context under control: `docs/xcodex/compact.md`
 - Hiding thoughts: `docs/xcodex/thoughts.md`
 - Background terminals: `docs/xcodex/background-terminals.md`
+- Announcements (startup tips): `docs/xcodex/announcements.md`
 
 ## Local install (as `xcodex`)
 
