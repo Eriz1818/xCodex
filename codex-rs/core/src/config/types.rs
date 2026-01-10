@@ -429,6 +429,27 @@ pub struct Tui {
     #[serde(default)]
     pub xtreme_mode: XtremeMode,
 
+    /// Xcodex-only: rotate between multiple "ramp" status label flows across turns.
+    ///
+    /// When disabled, xcodex falls back to the baseline Hardware ramp:
+    /// `Charging → Spooling → Overclocking → Stabilizing → Overclocked in …`.
+    ///
+    /// Defaults to `true`.
+    #[serde(default = "default_true")]
+    pub ramps_rotate: bool,
+
+    /// Xcodex-only: enable the Build ramp for per-turn rotation.
+    ///
+    /// Defaults to `true`.
+    #[serde(default = "default_true")]
+    pub ramps_build: bool,
+
+    /// Xcodex-only: enable the DevOps ramp for per-turn rotation.
+    ///
+    /// Defaults to `true`.
+    #[serde(default = "default_true")]
+    pub ramps_devops: bool,
+
     /// Enable application mouse capture in TUI2.
     ///
     /// When enabled, TUI2 receives mouse scroll and click events directly. When disabled, terminals

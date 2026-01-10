@@ -34,6 +34,11 @@ status_bar_show_worktree = false
 
 # Xcodex-only UI styling: auto | on | off (default: on)
 # xtreme_mode = "on"
+
+# Xcodex-only: per-turn ramp status flows (defaults: true)
+# ramps_rotate = true
+# ramps_build = true
+# ramps_devops = true
 ```
 
 See:

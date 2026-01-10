@@ -200,6 +200,15 @@ pub struct Config {
     /// How the TUI should render xcodex "xtreme mode" styling.
     pub tui_xtreme_mode: XtremeMode,
 
+    /// Xcodex-only: rotate between multiple "ramp" status label flows across turns.
+    pub tui_ramps_rotate: bool,
+
+    /// Xcodex-only: enable the Build ramp for per-turn rotation.
+    pub tui_ramps_build: bool,
+
+    /// Xcodex-only: enable the DevOps ramp for per-turn rotation.
+    pub tui_ramps_devops: bool,
+
     /// When true, the TUI asks for confirmation before exiting if external hooks are still running.
     pub tui_confirm_exit_with_running_hooks: bool,
 
@@ -1552,6 +1561,9 @@ impl Config {
             animations: cfg.tui.as_ref().map(|t| t.animations).unwrap_or(true),
             show_tooltips: cfg.tui.as_ref().map(|t| t.show_tooltips).unwrap_or(true),
             tui_xtreme_mode: cfg.tui.as_ref().map(|t| t.xtreme_mode).unwrap_or_default(),
+            tui_ramps_rotate: cfg.tui.as_ref().map(|t| t.ramps_rotate).unwrap_or(true),
+            tui_ramps_build: cfg.tui.as_ref().map(|t| t.ramps_build).unwrap_or(true),
+            tui_ramps_devops: cfg.tui.as_ref().map(|t| t.ramps_devops).unwrap_or(true),
             tui_confirm_exit_with_running_hooks: cfg
                 .tui
                 .as_ref()
