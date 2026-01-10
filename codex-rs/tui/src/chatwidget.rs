@@ -3064,6 +3064,9 @@ impl ChatWidget {
                         if lines.first().is_some_and(|line| line == "worktree doctor") {
                             lines.remove(0);
                         }
+                        while lines.first().is_some_and(|line| line.trim().is_empty()) {
+                            lines.remove(0);
+                        }
                         let lines = lines.into_iter().map(Line::from).collect();
                         let command = PlainHistoryCell::new(vec![Line::from(vec![
                             "/worktree doctor".magenta(),
@@ -4688,7 +4691,6 @@ impl ChatWidget {
             let description =
                 (!preset.description.is_empty()).then_some(preset.description.to_string());
             let is_current = preset.model == self.model;
-            let single_supported_effort = preset.supported_reasoning_efforts.len() == 1;
             let preset_for_action = preset.clone();
             let actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
                 let preset_for_event = preset_for_action.clone();
@@ -4702,7 +4704,7 @@ impl ChatWidget {
                 is_current,
                 is_default: preset.is_default,
                 actions,
-                dismiss_on_select: single_supported_effort,
+                dismiss_on_select: true,
                 ..Default::default()
             });
         }
@@ -4713,7 +4715,10 @@ impl ChatWidget {
                 "Access legacy models by running codex -m <model_name> or in your config.toml"
                     .to_string(),
             ),
-            footer_hint: Some("Press enter to select reasoning effort, or esc to dismiss.".into()),
+            footer_hint: Some(
+                "Press enter to select a model (then choose a reasoning level), or esc to dismiss."
+                    .into(),
+            ),
             items,
             ..Default::default()
         });
