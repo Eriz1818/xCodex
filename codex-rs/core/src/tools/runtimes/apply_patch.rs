@@ -232,10 +232,13 @@ impl Sandboxable for ApplyPatchRuntime {
 }
 
 impl Approvable<ApplyPatchRequest> for ApplyPatchRuntime {
-    type ApprovalKey = AbsolutePathBuf;
+    type ApprovalKey = ApprovalKey;
 
     fn approval_keys(&self, req: &ApplyPatchRequest) -> Vec<Self::ApprovalKey> {
-        req.file_paths.clone()
+        req.file_paths
+            .iter()
+            .map(|path| ApprovalKey(path.to_string_lossy().into_owned()))
+            .collect()
     }
 
     fn start_approval_async<'a>(
@@ -287,6 +290,9 @@ impl Approvable<ApplyPatchRequest> for ApplyPatchRuntime {
         Some(req.exec_approval_requirement.clone())
     }
 }
+
+#[derive(serde::Serialize, Clone, Debug, Eq, PartialEq, Hash)]
+pub(crate) struct ApprovalKey(String);
 
 impl ToolRuntime<ApplyPatchRequest, ExecToolCallOutput> for ApplyPatchRuntime {
     async fn run(
