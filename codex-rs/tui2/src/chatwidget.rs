@@ -2849,12 +2849,25 @@ impl ChatWidget {
                     let shared_dirs = self.config.worktrees_shared_dirs.clone();
                     let tx = self.app_event_tx.clone();
                     tokio::spawn(async move {
-                        let lines =
+                        let mut lines =
                             codex_core::git_info::worktree_doctor_lines(&cwd, &shared_dirs, 5)
                                 .await;
+                        if lines.first().is_some_and(|line| line == "worktree doctor") {
+                            lines.remove(0);
+                        }
+                        while lines.first().is_some_and(|line| line.trim().is_empty()) {
+                            lines.remove(0);
+                        }
+
                         let lines = lines.into_iter().map(Line::from).collect();
+                        let command = PlainHistoryCell::new(vec![Line::from(vec![
+                            "/worktree doctor".magenta(),
+                        ])]);
                         tx.send(AppEvent::InsertHistoryCell(Box::new(
-                            PlainHistoryCell::new(lines),
+                            CompositeHistoryCell::new(vec![
+                                Box::new(command),
+                                Box::new(PlainHistoryCell::new(lines)),
+                            ]),
                         )));
                     });
                 }
@@ -2872,103 +2885,43 @@ impl ChatWidget {
                     self.shared_dirs_write_notice_shown = true;
 
                     let cwd = self.config.cwd.clone();
-                    let shared_dirs = self.config.worktrees_shared_dirs.clone();
-                    let tx = self.app_event_tx.clone();
-                    tokio::spawn(async move {
-                        let Some(worktree_root) =
-                            codex_core::git_info::resolve_git_worktree_head(&cwd)
-                                .map(|head| head.worktree_root)
-                        else {
-                            tx.send(AppEvent::InsertHistoryCell(Box::new(
-                                history_cell::new_error_event(String::from(
-                                    "`/worktree link-shared` — not inside a git worktree (start xcodex in a repo/worktree directory, or switch via `/worktree`)",
-                                )),
-                            )));
-                            return;
-                        };
+                    let Some(worktree_root) = codex_core::git_info::resolve_git_worktree_head(&cwd)
+                        .map(|head| head.worktree_root)
+                    else {
+                        self.add_error_message(String::from(
+                            "`/worktree link-shared` — not inside a git worktree (start xcodex in a repo/worktree directory, or switch via `/worktree`)",
+                        ));
+                        return;
+                    };
 
-                        let Some(workspace_root) =
-                            codex_core::git_info::resolve_root_git_project_for_trust(
-                                &worktree_root,
-                            )
-                        else {
-                            tx.send(AppEvent::InsertHistoryCell(Box::new(
-                                history_cell::new_error_event(String::from(
-                                    "`/worktree link-shared` — failed to resolve workspace root (the main worktree root for this repo)",
-                                )),
-                            )));
-                            return;
-                        };
+                    let Some(workspace_root) =
+                        codex_core::git_info::resolve_root_git_project_for_trust(&worktree_root)
+                    else {
+                        self.add_error_message(String::from(
+                            "`/worktree link-shared` — failed to resolve workspace root (the main worktree root for this repo)",
+                        ));
+                        return;
+                    };
 
-                        if worktree_root == workspace_root {
-                            tx.send(AppEvent::InsertHistoryCell(Box::new(
-                                history_cell::new_info_event(
-                                    String::from("Already in the workspace root worktree."),
-                                    None,
-                                ),
-                            )));
-                            return;
-                        }
+                    if worktree_root == workspace_root {
+                        self.add_to_history(history_cell::new_info_event(
+                            String::from("Already in the workspace root worktree."),
+                            None,
+                        ));
+                        return;
+                    }
 
-                        let actions =
-                            codex_core::git_info::link_worktree_shared_dirs_migrating_untracked(
-                                &worktree_root,
-                                &workspace_root,
-                                &shared_dirs,
-                            )
-                            .await;
-
-                        let mut lines: Vec<Line<'static>> = Vec::new();
-                        lines.push(Line::from("worktree link-shared --migrate"));
-                        lines.push(Line::from(format!(
-                            "workspace root: {}",
-                            workspace_root.display()
-                        )));
-                        lines.push(Line::from(format!(
-                            "active worktree: {}",
-                            worktree_root.display()
-                        )));
-                        lines.push(Line::from(""));
-
-                        for action in actions {
-                            let shared_dir = action.shared_dir;
-                            match action.outcome {
-                                codex_core::git_info::SharedDirLinkOutcome::Linked => {
-                                    lines.push(Line::from(format!(
-                                        "- {shared_dir}: linked -> {}",
-                                        action.target_path.display()
-                                    )));
-                                }
-                                codex_core::git_info::SharedDirLinkOutcome::AlreadyLinked => {
-                                    lines.push(Line::from(format!(
-                                        "- {shared_dir}: already linked -> {}",
-                                        action.target_path.display()
-                                    )));
-                                }
-                                codex_core::git_info::SharedDirLinkOutcome::Skipped(reason) => {
-                                    lines.push(Line::from(format!(
-                                        "- {shared_dir}: skipped ({reason})"
-                                    )));
-                                }
-                                codex_core::git_info::SharedDirLinkOutcome::Failed(reason) => {
-                                    lines.push(Line::from(format!(
-                                        "- {shared_dir}: failed ({reason})"
-                                    )));
-                                }
-                            }
-                        }
-
-                        if show_notice {
-                            lines.push(Line::from(""));
-                            lines.push(Line::from(
-                                "Note: shared dirs are linked into the workspace root; writes under them persist across worktrees.",
-                            ));
-                        }
-
-                        tx.send(AppEvent::InsertHistoryCell(Box::new(
-                            PlainHistoryCell::new(lines),
-                        )));
-                    });
+                    let view = crate::bottom_pane::WorktreeLinkSharedWizardView::new(
+                        worktree_root,
+                        workspace_root,
+                        self.config.worktrees_shared_dirs.clone(),
+                        true,
+                        show_notice,
+                        String::from("/worktree link-shared --migrate"),
+                        self.app_event_tx.clone(),
+                    );
+                    self.bottom_pane.show_view(Box::new(view));
+                    self.request_redraw();
                 }
                 ["link-shared"] => {
                     if self.config.worktrees_shared_dirs.is_empty() {
@@ -2984,102 +2937,43 @@ impl ChatWidget {
                     self.shared_dirs_write_notice_shown = true;
 
                     let cwd = self.config.cwd.clone();
-                    let shared_dirs = self.config.worktrees_shared_dirs.clone();
-                    let tx = self.app_event_tx.clone();
-                    tokio::spawn(async move {
-                        let Some(worktree_root) =
-                            codex_core::git_info::resolve_git_worktree_head(&cwd)
-                                .map(|head| head.worktree_root)
-                        else {
-                            tx.send(AppEvent::InsertHistoryCell(Box::new(
-                                history_cell::new_error_event(String::from(
-                                    "`/worktree link-shared` — not inside a git worktree (start xcodex in a repo/worktree directory, or switch via `/worktree`)",
-                                )),
-                            )));
-                            return;
-                        };
+                    let Some(worktree_root) = codex_core::git_info::resolve_git_worktree_head(&cwd)
+                        .map(|head| head.worktree_root)
+                    else {
+                        self.add_error_message(String::from(
+                            "`/worktree link-shared` — not inside a git worktree (start xcodex in a repo/worktree directory, or switch via `/worktree`)",
+                        ));
+                        return;
+                    };
 
-                        let Some(workspace_root) =
-                            codex_core::git_info::resolve_root_git_project_for_trust(
-                                &worktree_root,
-                            )
-                        else {
-                            tx.send(AppEvent::InsertHistoryCell(Box::new(
-                                history_cell::new_error_event(String::from(
-                                    "`/worktree link-shared` — failed to resolve workspace root (the main worktree root for this repo)",
-                                )),
-                            )));
-                            return;
-                        };
+                    let Some(workspace_root) =
+                        codex_core::git_info::resolve_root_git_project_for_trust(&worktree_root)
+                    else {
+                        self.add_error_message(String::from(
+                            "`/worktree link-shared` — failed to resolve workspace root (the main worktree root for this repo)",
+                        ));
+                        return;
+                    };
 
-                        if worktree_root == workspace_root {
-                            tx.send(AppEvent::InsertHistoryCell(Box::new(
-                                history_cell::new_info_event(
-                                    String::from("Already in the workspace root worktree."),
-                                    None,
-                                ),
-                            )));
-                            return;
-                        }
+                    if worktree_root == workspace_root {
+                        self.add_to_history(history_cell::new_info_event(
+                            String::from("Already in the workspace root worktree."),
+                            None,
+                        ));
+                        return;
+                    }
 
-                        let actions = codex_core::git_info::link_worktree_shared_dirs(
-                            &worktree_root,
-                            &workspace_root,
-                            &shared_dirs,
-                        )
-                        .await;
-
-                        let mut lines: Vec<Line<'static>> = Vec::new();
-                        lines.push(Line::from("worktree link-shared"));
-                        lines.push(Line::from(format!(
-                            "workspace root: {}",
-                            workspace_root.display()
-                        )));
-                        lines.push(Line::from(format!(
-                            "active worktree: {}",
-                            worktree_root.display()
-                        )));
-                        lines.push(Line::from(""));
-
-                        for action in actions {
-                            let shared_dir = action.shared_dir;
-                            match action.outcome {
-                                codex_core::git_info::SharedDirLinkOutcome::Linked => {
-                                    lines.push(Line::from(format!(
-                                        "- {shared_dir}: linked -> {}",
-                                        action.target_path.display()
-                                    )));
-                                }
-                                codex_core::git_info::SharedDirLinkOutcome::AlreadyLinked => {
-                                    lines.push(Line::from(format!(
-                                        "- {shared_dir}: already linked -> {}",
-                                        action.target_path.display()
-                                    )));
-                                }
-                                codex_core::git_info::SharedDirLinkOutcome::Skipped(reason) => {
-                                    lines.push(Line::from(format!(
-                                        "- {shared_dir}: skipped ({reason})"
-                                    )));
-                                }
-                                codex_core::git_info::SharedDirLinkOutcome::Failed(reason) => {
-                                    lines.push(Line::from(format!(
-                                        "- {shared_dir}: failed ({reason})"
-                                    )));
-                                }
-                            }
-                        }
-
-                        if show_notice {
-                            lines.push(Line::from(""));
-                            lines.push(Line::from(
-                                "Note: shared dirs are linked into the workspace root; writes under them persist across worktrees.",
-                            ));
-                        }
-
-                        tx.send(AppEvent::InsertHistoryCell(Box::new(
-                            PlainHistoryCell::new(lines),
-                        )));
-                    });
+                    let view = crate::bottom_pane::WorktreeLinkSharedWizardView::new(
+                        worktree_root,
+                        workspace_root,
+                        self.config.worktrees_shared_dirs.clone(),
+                        false,
+                        show_notice,
+                        String::from("/worktree link-shared"),
+                        self.app_event_tx.clone(),
+                    );
+                    self.bottom_pane.show_view(Box::new(view));
+                    self.request_redraw();
                 }
                 [target] => {
                     let matches: Vec<&GitWorktreeEntry> = self
