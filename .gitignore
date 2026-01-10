@@ -59,6 +59,9 @@ yarn-error.log*
 .vercel/
 .netlify/
 
+# bazel
+.bazel/
+
 # patches
 apply_patch/
 
@@ -90,4 +93,3 @@ CHANGELOG.ignore.md
 # Python bytecode files
 __pycache__/
 *.pyc
-
