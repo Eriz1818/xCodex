@@ -57,7 +57,12 @@ CODEX_RS_DIR="$ROOT_DIR/codex-rs"
     fi
 )
 
-BIN="$CODEX_RS_DIR/target/$PROFILE/codex"
+TARGET_DIR="$(
+    cd "$CODEX_RS_DIR"
+    cargo metadata --format-version 1 --no-deps \
+        | python3 -c 'import json, sys; print(json.load(sys.stdin)["target_directory"])'
+)"
+BIN="$TARGET_DIR/$PROFILE/codex"
 if [ ! -f "$BIN" ]; then
     echo "expected built binary at $BIN" >&2
     exit 1
