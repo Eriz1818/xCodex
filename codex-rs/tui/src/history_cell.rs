@@ -2029,18 +2029,24 @@ pub(crate) fn new_reasoning_summary_block(
 #[derive(Debug)]
 pub struct FinalMessageSeparator {
     elapsed_seconds: Option<u64>,
+    show_ramp_separator: bool,
     xtreme_ui_enabled: bool,
+    completion_label: Option<String>,
     turn_summary: Option<TurnSummary>,
 }
 impl FinalMessageSeparator {
     pub(crate) fn new(
         elapsed_seconds: Option<u64>,
+        show_ramp_separator: bool,
         xtreme_ui_enabled: bool,
+        completion_label: Option<String>,
         turn_summary: Option<TurnSummary>,
     ) -> Self {
         Self {
             elapsed_seconds,
+            show_ramp_separator,
             xtreme_ui_enabled,
+            completion_label,
             turn_summary,
         }
     }
@@ -2051,7 +2057,7 @@ impl HistoryCell for FinalMessageSeparator {
             .elapsed_seconds
             .map(super::status_indicator_widget::fmt_elapsed_compact);
         if let Some(elapsed_seconds) = elapsed_seconds {
-            if self.xtreme_ui_enabled {
+            if self.show_ramp_separator {
                 let mut suffix_parts: Vec<String> = Vec::new();
                 if let Some(summary) = self.turn_summary.as_ref()
                     && !summary.is_empty()
@@ -2076,10 +2082,11 @@ impl HistoryCell for FinalMessageSeparator {
                     format!(" · {}", suffix_parts.join(" · "))
                 };
 
+                let completion = self.completion_label.as_deref().unwrap_or("Overclocked");
                 let mut spans: Vec<Span<'static>> = vec![
                     "─ ".dim(),
-                    crate::xtreme::bolt_span(true),
-                    format!(" Overclocked in {elapsed_seconds}{suffix} ").dim(),
+                    crate::xtreme::bolt_span(self.xtreme_ui_enabled),
+                    format!(" {completion} in {elapsed_seconds}{suffix} ").dim(),
                 ];
                 let spans_width: usize =
                     spans.iter().map(|span| span.content.as_ref().width()).sum();
