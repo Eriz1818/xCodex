@@ -131,7 +131,7 @@ async fn auto_compact_disabled_does_not_locally_block_on_context_window() -> Res
         "expected provider context window rejection; got {error_event:?}"
     );
 
-    core_test_support::wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
+    core_test_support::wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 
     assert_eq!(
         response_mock.requests().len(),

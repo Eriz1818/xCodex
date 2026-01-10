@@ -10,8 +10,8 @@ Usage:
   scripts/install-xcodex.sh [--release] [--dest PATH]
 
 Options:
-  --release    Build `target/release/codex` instead of `target/debug/codex`.
-  --debug      Build `target/debug/codex` (default).
+  --release    Build with Bazel `--compilation_mode=opt`.
+  --debug      Build with Bazel `--compilation_mode=dbg` (default).
   --dest PATH  Install path (default: ~/.local/bin/xcodex).
 EOF
 }
@@ -46,18 +46,19 @@ while [ $# -gt 0 ]; do
 done
 
 ROOT_DIR="$(realpath "$(dirname "$0")/..")"
-CODEX_RS_DIR="$ROOT_DIR/codex-rs"
+
+BAZEL_COMPILATION_MODE="dbg"
+if [ "$PROFILE" = "release" ]; then
+    BAZEL_COMPILATION_MODE="opt"
+fi
 
 (
-    cd "$CODEX_RS_DIR"
-    if [ "$PROFILE" = "release" ]; then
-        cargo build -p codex-cli --bin codex --release
-    else
-        cargo build -p codex-cli --bin codex
-    fi
+    cd "$ROOT_DIR"
+    bazel build --compilation_mode="$BAZEL_COMPILATION_MODE" //codex-rs/cli:codex
 )
 
-BIN="$CODEX_RS_DIR/target/$PROFILE/codex"
+BAZEL_BIN="$(bazel info --compilation_mode="$BAZEL_COMPILATION_MODE" bazel-bin)"
+BIN="$BAZEL_BIN/codex-rs/cli/codex"
 if [ ! -f "$BIN" ]; then
     echo "expected built binary at $BIN" >&2
     exit 1
