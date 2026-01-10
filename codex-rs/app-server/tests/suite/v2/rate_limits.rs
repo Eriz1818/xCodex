@@ -12,6 +12,7 @@ use codex_app_server_protocol::RateLimitWindow;
 use codex_app_server_protocol::RequestId;
 use codex_core::auth::AuthCredentialsStoreMode;
 use codex_protocol::account::PlanType as AccountPlanType;
+use core_test_support::skip_if_no_network;
 use pretty_assertions::assert_eq;
 use serde_json::json;
 use std::path::Path;
@@ -81,6 +82,8 @@ async fn get_account_rate_limits_requires_chatgpt_auth() -> Result<()> {
 
 #[tokio::test]
 async fn get_account_rate_limits_returns_snapshot() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
     let codex_home = TempDir::new()?;
     write_chatgpt_auth(
         codex_home.path(),

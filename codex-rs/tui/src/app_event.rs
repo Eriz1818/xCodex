@@ -10,7 +10,9 @@ use codex_protocol::openai_models::ModelPreset;
 
 use crate::bottom_pane::ApprovalRequest;
 use crate::history_cell::HistoryCell;
+use crate::slash_command::SlashCommand;
 
+use codex_core::config::types::XtremeMode;
 use codex_core::features::Feature;
 use codex_core::protocol::AskForApproval;
 use codex_core::protocol::SandboxPolicy;
@@ -39,6 +41,12 @@ pub(crate) enum AppEvent {
 
     /// Open the resume picker inside the running TUI session.
     OpenResumePicker,
+
+    /// Dispatch a local slash command from non-composer UI (e.g. tools menu).
+    DispatchSlashCommand(SlashCommand),
+
+    /// Open transcript overlay (same as pressing Ctrl+T).
+    OpenTranscriptOverlay,
 
     /// Request to exit the application gracefully.
     ExitRequest,
@@ -81,6 +89,19 @@ pub(crate) enum AppEvent {
     UpdateStatusBarGitOptions {
         show_git_branch: bool,
         show_worktree: bool,
+    },
+
+    /// Update whether tool output is shown verbosely in the transcript (runtime).
+    UpdateVerboseToolOutput(bool),
+
+    /// Update whether xtreme mode styling is enabled (runtime).
+    UpdateXtremeMode(XtremeMode),
+
+    /// Update xcodex ramp settings at runtime.
+    UpdateRampsConfig {
+        rotate: bool,
+        build: bool,
+        devops: bool,
     },
 
     /// Update `worktrees.shared_dirs` at runtime.
@@ -170,6 +191,22 @@ pub(crate) enum AppEvent {
         show_git_branch: bool,
         show_worktree: bool,
     },
+
+    /// Persist whether tool output is shown verbosely in the transcript.
+    PersistVerboseToolOutput(bool),
+
+    /// Persist whether xtreme mode styling is enabled.
+    PersistXtremeMode(XtremeMode),
+
+    /// Persist xcodex ramp settings.
+    PersistRampsConfig {
+        rotate: bool,
+        build: bool,
+        devops: bool,
+    },
+
+    /// Open the xcodex ramp settings view.
+    OpenRampsSettingsView,
 
     /// Persist `worktrees.shared_dirs` to config.
     PersistWorktreesSharedDirs {

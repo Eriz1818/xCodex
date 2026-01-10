@@ -32,6 +32,7 @@ pub enum SlashCommand {
     Status,
     Settings,
     StatusMenu,
+    Xtreme,
     Worktree,
     Hooks,
     Mcp,
@@ -66,6 +67,7 @@ impl SlashCommand {
             SlashCommand::Status => "open the status/settings menu",
             SlashCommand::Settings => "open the status/settings menu",
             SlashCommand::StatusMenu => "open the status/settings menu (alias)",
+            SlashCommand::Xtreme => "open the ⚡Tools control panel",
             SlashCommand::Worktree => "switch this session to a different git worktree",
             SlashCommand::Hooks => "learn how to automate xcodex with hooks",
             SlashCommand::Ps => "list background terminals",
@@ -109,6 +111,7 @@ impl SlashCommand {
             | SlashCommand::Status
             | SlashCommand::Settings
             | SlashCommand::StatusMenu
+            | SlashCommand::Xtreme
             | SlashCommand::Worktree
             | SlashCommand::Hooks
             | SlashCommand::Ps
@@ -125,6 +128,7 @@ impl SlashCommand {
 
     fn is_visible(self) -> bool {
         match self {
+            SlashCommand::Xtreme => codex_core::config::is_xcodex_invocation(),
             SlashCommand::Rollout | SlashCommand::TestApproval => cfg!(debug_assertions),
             _ => true,
         }

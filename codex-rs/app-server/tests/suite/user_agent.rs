@@ -1,8 +1,11 @@
 use anyhow::Result;
-use app_test_support::DEFAULT_CLIENT_NAME;
+use app_test_support::MCP_CLIENT_NAME;
+use app_test_support::MCP_CLIENT_VERSION;
 use app_test_support::McpProcess;
 use app_test_support::to_response;
+use codex_app_server_protocol::ClientInfo;
 use codex_app_server_protocol::GetUserAgentResponse;
+use codex_app_server_protocol::InitializeResponse;
 use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::RequestId;
 use pretty_assertions::assert_eq;
@@ -16,7 +19,20 @@ async fn get_user_agent_returns_current_codex_user_agent() -> Result<()> {
     let codex_home = TempDir::new()?;
 
     let mut mcp = McpProcess::new(codex_home.path()).await?;
-    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+    let initialized = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.initialize_with_client_info(ClientInfo {
+            name: MCP_CLIENT_NAME.to_string(),
+            title: None,
+            version: MCP_CLIENT_VERSION.to_string(),
+        }),
+    )
+    .await??;
+    let initialized = match initialized {
+        codex_app_server_protocol::JSONRPCMessage::Response(response) => response,
+        other => anyhow::bail!("Expected initialize response, got {other:?}"),
+    };
+    let initialized: InitializeResponse = to_response(initialized)?;
 
     let request_id = mcp.send_get_user_agent_request().await?;
     let response: JSONRPCResponse = timeout(
@@ -25,18 +41,10 @@ async fn get_user_agent_returns_current_codex_user_agent() -> Result<()> {
     )
     .await??;
 
-    let os_info = os_info::get();
-    let originator = DEFAULT_CLIENT_NAME;
-    let os_type = os_info.os_type();
-    let os_version = os_info.version();
-    let architecture = os_info.architecture().unwrap_or("unknown");
-    let terminal_ua = codex_core::terminal::user_agent();
-    let user_agent = format!(
-        "{originator}/0.0.0 ({os_type} {os_version}; {architecture}) {terminal_ua} ({DEFAULT_CLIENT_NAME}; 0.1.0)"
-    );
-
     let received: GetUserAgentResponse = to_response(response)?;
-    let expected = GetUserAgentResponse { user_agent };
+    let expected = GetUserAgentResponse {
+        user_agent: initialized.user_agent,
+    };
 
     assert_eq!(received, expected);
     Ok(())

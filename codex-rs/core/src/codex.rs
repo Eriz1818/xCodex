@@ -1481,12 +1481,17 @@ impl Session {
         token_usage: Option<&TokenUsage>,
     ) {
         let model_context_window = turn_context.client.get_model_context_window();
+        let full_model_context_window = turn_context.client.get_full_model_context_window();
         let warning_message = 'warning: {
             let mut state = self.state.lock().await;
             let Some(token_usage) = token_usage else {
                 break 'warning None;
             };
-            state.update_token_info_from_usage(token_usage, model_context_window);
+            state.update_token_info_from_usage(
+                token_usage,
+                model_context_window,
+                full_model_context_window,
+            );
 
             let Some(context_window) = model_context_window.filter(|window| *window > 0) else {
                 break 'warning None;
@@ -1550,6 +1555,7 @@ impl Session {
                 total_token_usage: TokenUsage::default(),
                 last_token_usage: TokenUsage::default(),
                 model_context_window: None,
+                full_model_context_window: None,
             });
 
             info.last_token_usage = TokenUsage {
@@ -1559,6 +1565,10 @@ impl Session {
 
             if info.model_context_window.is_none() {
                 info.model_context_window = turn_context.client.get_model_context_window();
+            }
+            if info.full_model_context_window.is_none() {
+                info.full_model_context_window =
+                    turn_context.client.get_full_model_context_window();
             }
 
             state.set_token_info(Some(info));
@@ -1638,11 +1648,17 @@ impl Session {
     }
 
     pub(crate) async fn set_total_tokens_full(&self, turn_context: &TurnContext) {
-        if let Some(context_window) = turn_context.client.get_model_context_window() {
+        let context_window = turn_context.client.get_model_context_window();
+        if let Some(context_window) = context_window {
             let mut state = self.state.lock().await;
-            state.set_token_usage_full(context_window);
+            state.set_token_usage_full(
+                context_window,
+                turn_context.client.get_full_model_context_window(),
+            );
+            drop(state);
+
+            self.send_token_count_event(turn_context).await;
         }
-        self.send_token_count_event(turn_context).await;
     }
 
     pub(crate) async fn record_response_item_and_emit_turn_item(
@@ -3489,6 +3505,7 @@ mod tests {
                 total_tokens: 7,
             },
             model_context_window: Some(1_000),
+            full_model_context_window: Some(1_000),
         };
         let info2 = TokenUsageInfo {
             total_token_usage: TokenUsage {
@@ -3506,6 +3523,7 @@ mod tests {
                 total_tokens: 35,
             },
             model_context_window: Some(2_000),
+            full_model_context_window: Some(2_000),
         };
 
         rollout_items.push(RolloutItem::EventMsg(EventMsg::TokenCount(
@@ -3549,6 +3567,10 @@ mod tests {
             .expect("token info should be seeded from rollout");
         assert_eq!(actual.total_token_usage, info2.total_token_usage);
         assert_eq!(actual.model_context_window, info2.model_context_window);
+        assert_eq!(
+            actual.full_model_context_window,
+            info2.full_model_context_window
+        );
     }
 
     #[tokio::test]

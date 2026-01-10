@@ -1,5 +1,7 @@
+use super::SessionStats;
 use super::new_status_menu_summary_card;
 use super::new_status_output;
+use super::new_status_output_with_session_stats;
 use super::rate_limit_snapshot_display;
 use crate::history_cell::HistoryCell;
 use chrono::Duration as ChronoDuration;
@@ -39,12 +41,17 @@ fn test_auth_manager(config: &Config) -> AuthManager {
 }
 
 fn token_info_for(model_slug: &str, config: &Config, usage: &TokenUsage) -> TokenUsageInfo {
-    let context_window =
-        ModelsManager::construct_model_info_offline(model_slug, config).context_window;
+    let model_info = ModelsManager::construct_model_info_offline(model_slug, config);
+    let full_context_window = model_info.context_window.or(config.model_context_window);
+    let effective_context_window = full_context_window.map(|window| {
+        let percent = model_info.effective_context_window_percent.clamp(1, 100);
+        window.saturating_mul(percent) / 100
+    });
     TokenUsageInfo {
         total_token_usage: usage.clone(),
         last_token_usage: usage.clone(),
-        model_context_window: context_window,
+        model_context_window: effective_context_window,
+        full_model_context_window: full_context_window,
     }
 }
 
@@ -873,6 +880,7 @@ async fn status_context_window_uses_last_usage() {
         total_token_usage: total_usage.clone(),
         last_token_usage: last_usage,
         model_context_window: config.model_context_window,
+        full_model_context_window: config.model_context_window,
     };
     let composite = new_status_output(
         &config,
@@ -899,4 +907,53 @@ async fn status_context_window_uses_last_usage() {
         !context_line.contains("102K"),
         "context line should not use total aggregated tokens, got: {context_line}"
     );
+}
+
+#[tokio::test]
+async fn status_snapshot_includes_session_stats_when_available() {
+    let temp_home = TempDir::new().expect("temp home");
+    let mut config = test_config(&temp_home).await;
+    config.model = Some("gpt-5.1-codex-max".to_string());
+    config.model_provider_id = "openai".to_string();
+
+    let auth_manager = test_auth_manager(&config);
+    let usage = TokenUsage {
+        input_tokens: 1_200,
+        cached_input_tokens: 200,
+        output_tokens: 900,
+        reasoning_output_tokens: 150,
+        total_tokens: 2_250,
+    };
+
+    let captured_at = chrono::Local
+        .with_ymd_and_hms(2024, 1, 2, 3, 4, 5)
+        .single()
+        .expect("timestamp");
+
+    let model_slug = ModelsManager::get_model_offline(config.model.as_deref());
+    let token_info = token_info_for(&model_slug, &config, &usage);
+    let session_stats = SessionStats {
+        turns_completed: 3,
+        exec_commands: 2,
+        mcp_calls: 1,
+        patches: 1,
+        files_changed: 4,
+        approvals_requested: 1,
+        tests_run: 1,
+    };
+
+    let composite = new_status_output_with_session_stats(
+        &config,
+        &auth_manager,
+        Some(&token_info),
+        &usage,
+        &None,
+        Some(&session_stats),
+        None,
+        None,
+        captured_at,
+        &model_slug,
+    );
+    let rendered_lines = sanitize_directory(render_lines(&composite.display_lines(80))).join("\n");
+    assert_snapshot!(rendered_lines);
 }

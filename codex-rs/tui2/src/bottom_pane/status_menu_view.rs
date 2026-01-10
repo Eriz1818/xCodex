@@ -12,6 +12,8 @@ use ratatui::widgets::Block;
 use ratatui::widgets::Paragraph;
 use ratatui::widgets::Widget;
 
+use codex_core::config::types::XtremeMode;
+
 use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
 use crate::history_cell::HistoryCell;
@@ -30,22 +32,17 @@ pub(crate) enum StatusMenuTab {
     Tools,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum ToolsMenuMode {
-    Root,
-    Worktrees,
-}
-
 pub(crate) struct StatusMenuView {
     tab: StatusMenuTab,
     complete: bool,
     status_bar_show_git_branch: bool,
     status_bar_show_worktree: bool,
     verbose_tool_output: bool,
+    xtreme_mode: XtremeMode,
+    xtreme_ui_enabled: bool,
     status_scroll_y: u16,
     selected_settings_row: usize,
     selected_tools_row: usize,
-    tools_mode: ToolsMenuMode,
     app_event_tx: AppEventSender,
     status_cell: Box<dyn HistoryCell>,
 }
@@ -57,18 +54,25 @@ impl StatusMenuView {
         status_cell: Box<dyn HistoryCell>,
         status_bar_show_git_branch: bool,
         status_bar_show_worktree: bool,
+        xtreme_mode: XtremeMode,
         verbose_tool_output: bool,
     ) -> Self {
+        let xtreme_ui_enabled = match xtreme_mode {
+            XtremeMode::Auto => codex_core::config::is_xcodex_invocation(),
+            XtremeMode::On => true,
+            XtremeMode::Off => false,
+        };
         Self {
             tab,
             complete: false,
             status_bar_show_git_branch,
             status_bar_show_worktree,
             verbose_tool_output,
+            xtreme_mode,
+            xtreme_ui_enabled,
             status_scroll_y: 0,
             selected_settings_row: 0,
             selected_tools_row: 0,
-            tools_mode: ToolsMenuMode::Root,
             app_event_tx,
             status_cell,
         }
@@ -101,8 +105,8 @@ impl StatusMenuView {
             StatusMenuTab::Status | StatusMenuTab::Tools => "[ Settings ]".dim(),
         };
         let tools = match self.tab {
-            StatusMenuTab::Tools => "[ Tools ]".bold().cyan(),
-            StatusMenuTab::Status | StatusMenuTab::Settings => "[ Tools ]".dim(),
+            StatusMenuTab::Tools => "[ ⚡Tools ]".bold().cyan(),
+            StatusMenuTab::Status | StatusMenuTab::Settings => "[ ⚡Tools ]".dim(),
         };
 
         vec![
@@ -122,9 +126,10 @@ impl StatusMenuView {
     }
 
     fn tools_row_count(&self) -> usize {
-        match self.tools_mode {
-            ToolsMenuMode::Root => 3,
-            ToolsMenuMode::Worktrees => 6,
+        if codex_core::config::is_xcodex_invocation() {
+            10
+        } else {
+            9
         }
     }
 
@@ -152,7 +157,7 @@ impl StatusMenuView {
                         "Tip: ".dim(),
                         "Tab".bold(),
                         " ".dim(),
-                        "to toggle settings or open tools.".dim(),
+                        "to toggle settings or open ⚡Tools.".dim(),
                     ]
                     .into(),
                 );
@@ -164,20 +169,14 @@ impl StatusMenuView {
                 lines.extend(self.build_settings_rows());
             }
             StatusMenuTab::Tools => {
-                lines.push("Tools".bold().into());
-                match self.tools_mode {
-                    ToolsMenuMode::Root => {
-                        lines.push("Quick actions (opens other pickers/popups).".dim().into());
-                    }
-                    ToolsMenuMode::Worktrees => {
-                        lines.push("Worktrees".bold().into());
-                        lines.push(
-                            "Pick a /worktree flow to insert into the composer."
-                                .dim()
-                                .into(),
-                        );
-                    }
-                }
+                lines.push(
+                    vec![
+                        crate::xtreme::bolt_span(self.xtreme_ui_enabled),
+                        "Tools".bold(),
+                    ]
+                    .into(),
+                );
+                lines.push("Toggles and shortcuts.".dim().into());
                 lines.push(Line::from(""));
                 lines.extend(self.build_tools_rows());
                 lines.push(Line::from(""));
@@ -253,7 +252,7 @@ impl StatusMenuView {
         }
 
         lines.push(Line::from(""));
-        lines.push(vec!["Tip: ".dim(), "Tab".bold(), " ".dim(), "to Tools.".dim()].into());
+        lines.push(vec!["Tip: ".dim(), "Tab".bold(), " ".dim(), "to ⚡Tools.".dim()].into());
 
         lines
     }
@@ -269,19 +268,64 @@ impl StatusMenuView {
             }
         };
 
-        let items: &[&str] = match self.tools_mode {
-            ToolsMenuMode::Root => &["Resume…", "Worktrees…", "Approvals…"],
-            ToolsMenuMode::Worktrees => &[
-                "Select…",
-                "Detect",
-                "Doctor",
-                "Link shared…",
-                "Shared dirs…",
-                "Init…",
-            ],
+        let checkbox = |enabled: bool| -> Span<'static> {
+            if enabled {
+                "[x] ".green()
+            } else {
+                "[ ] ".dim()
+            }
         };
+
+        let xtreme_mode_label = match self.xtreme_mode {
+            XtremeMode::Auto => "auto",
+            XtremeMode::On => "on",
+            XtremeMode::Off => "off",
+        };
+
+        // Row 0: toggle xtreme mode.
+        {
+            let selected = self.selected_tools_row == 0;
+            lines.push(
+                vec![
+                    selected_prefix(selected),
+                    checkbox(self.xtreme_ui_enabled),
+                    "Xtreme mode ".into(),
+                    format!("({xtreme_mode_label})").dim(),
+                ]
+                .into(),
+            );
+        }
+
+        // Row 1: toggle verbose tool output.
+        {
+            let selected = self.selected_tools_row == 1;
+            lines.push(
+                vec![
+                    selected_prefix(selected),
+                    checkbox(self.verbose_tool_output),
+                    "Verbose tool output".into(),
+                ]
+                .into(),
+            );
+        }
+
+        // Rows 2+: quick actions.
+        let ramps_supported = codex_core::config::is_xcodex_invocation();
+        let mut items = vec![
+            "Review…",
+            "Model…",
+            "Approvals…",
+            "Worktrees…",
+            "Hooks…",
+            "Transcript…",
+            "Resume…",
+        ];
+        if ramps_supported {
+            items.insert(3, "Ramps…");
+        }
         for (idx, label) in items.iter().enumerate() {
-            let selected = self.selected_tools_row == idx;
+            let row = idx + 2;
+            let selected = self.selected_tools_row == row;
             lines.push(vec![selected_prefix(selected), (*label).into()].into());
         }
 
@@ -289,29 +333,25 @@ impl StatusMenuView {
     }
 
     fn selected_tool_hint_lines(&self) -> Vec<Line<'static>> {
-        let hint = match self.tools_mode {
-            ToolsMenuMode::Root => match self.selected_tools_row {
-                0 => "Resume: pick a previous session to continue",
-                1 => "Worktrees: pick a worktree flow",
-                2 => "Approvals: review and adjust approval/sandbox presets",
-                _ => return Vec::new(),
-            },
-            ToolsMenuMode::Worktrees => match self.selected_tools_row {
-                0 => "/worktree: open the worktree picker",
-                1 => "/worktree detect: refresh worktrees + open picker",
-                2 => "/worktree doctor: show shared-dir + untracked status",
-                3 => "/worktree link-shared: apply shared-dir links",
-                4 => "/worktree shared: edit `worktrees.shared_dirs`",
-                5 => "/worktree init: create a new worktree",
-                _ => return Vec::new(),
-            },
+        let ramps_supported = codex_core::config::is_xcodex_invocation();
+        let hint = match (ramps_supported, self.selected_tools_row) {
+            (true, 0) | (false, 0) => "Toggle xtreme UI styling (persists).",
+            (true, 1) | (false, 1) => "Toggle verbose tool output in the transcript (persists).",
+            (true, 2) | (false, 2) => "Review your changes and spot issues fast.",
+            (true, 3) | (false, 3) => "Pick a model and reasoning effort.",
+            (true, 4) | (false, 4) => "Review and adjust approval/sandbox presets.",
+            (true, 5) => "Customize xcodex’s per-turn ramp rotation.",
+            (true, 6) | (false, 5) => "Switch worktrees and manage shared dirs.",
+            (true, 7) | (false, 6) => "Automate xcodex with hooks.",
+            (true, 8) | (false, 7) => "Open the full transcript in a scrollable view.",
+            (true, 9) | (false, 8) => "Pick a previous session to continue.",
+            _ => return Vec::new(),
         };
 
-        vec![vec!["Hint: ".dim(), hint.dim()].into()]
+        vec![vec![hint.dim()].into()]
     }
 
     fn switch_tab(&mut self) {
-        self.tools_mode = ToolsMenuMode::Root;
         self.tab = match self.tab {
             StatusMenuTab::Status => StatusMenuTab::Settings,
             StatusMenuTab::Settings => StatusMenuTab::Tools,
@@ -401,37 +441,61 @@ impl StatusMenuView {
                 }
                 _ => {}
             },
-            StatusMenuTab::Tools => match self.tools_mode {
-                ToolsMenuMode::Root => match self.selected_tools_row {
+            StatusMenuTab::Tools => {
+                let ramps_supported = codex_core::config::is_xcodex_invocation();
+                let ramps_row = ramps_supported.then_some(5);
+                let worktrees_row = if ramps_supported { 6 } else { 5 };
+                let hooks_row = if ramps_supported { 7 } else { 6 };
+                let transcript_row = if ramps_supported { 8 } else { 7 };
+                let resume_row = if ramps_supported { 9 } else { 8 };
+
+                match self.selected_tools_row {
                     0 => {
-                        self.app_event_tx.send(AppEvent::OpenResumePicker);
-                        self.complete = true;
+                        self.xtreme_ui_enabled = !self.xtreme_ui_enabled;
+                        self.xtreme_mode = if self.xtreme_ui_enabled {
+                            XtremeMode::On
+                        } else {
+                            XtremeMode::Off
+                        };
+                        self.app_event_tx
+                            .send(AppEvent::UpdateXtremeMode(self.xtreme_mode));
+                        self.app_event_tx
+                            .send(AppEvent::PersistXtremeMode(self.xtreme_mode));
                     }
                     1 => {
-                        self.tools_mode = ToolsMenuMode::Worktrees;
-                        self.selected_tools_row = 0;
+                        self.verbose_tool_output = !self.verbose_tool_output;
+                        self.app_event_tx
+                            .send(AppEvent::UpdateVerboseToolOutput(self.verbose_tool_output));
+                        self.app_event_tx
+                            .send(AppEvent::PersistVerboseToolOutput(self.verbose_tool_output));
                     }
-                    2 => {
-                        self.app_event_tx.send(AppEvent::OpenApprovalsPopup);
-                        self.complete = true;
+                    2 => self.app_event_tx.send(AppEvent::DispatchSlashCommand(
+                        crate::slash_command::SlashCommand::Review,
+                    )),
+                    3 => self.app_event_tx.send(AppEvent::DispatchSlashCommand(
+                        crate::slash_command::SlashCommand::Model,
+                    )),
+                    4 => self.app_event_tx.send(AppEvent::OpenApprovalsPopup),
+                    row if ramps_row.is_some_and(|r| row == r) => {
+                        self.app_event_tx.send(AppEvent::OpenRampsSettingsView);
                     }
+                    row if row == worktrees_row => self
+                        .app_event_tx
+                        .send(AppEvent::WorktreeDetect { open_picker: true }),
+                    row if row == hooks_row => self.app_event_tx.send(
+                        AppEvent::DispatchSlashCommand(crate::slash_command::SlashCommand::Hooks),
+                    ),
+                    row if row == transcript_row => {
+                        self.app_event_tx.send(AppEvent::OpenTranscriptOverlay)
+                    }
+                    row if row == resume_row => self.app_event_tx.send(AppEvent::OpenResumePicker),
                     _ => {}
-                },
-                ToolsMenuMode::Worktrees => {
-                    let command = match self.selected_tools_row {
-                        0 => "/worktree".to_string(),
-                        1 => "/worktree detect".to_string(),
-                        2 => "/worktree doctor".to_string(),
-                        3 => "/worktree link-shared".to_string(),
-                        4 => "/worktree shared ".to_string(),
-                        5 => "/worktree init".to_string(),
-                        _ => return,
-                    };
-                    self.app_event_tx
-                        .send(AppEvent::OpenToolsCommand { command });
+                }
+
+                if self.selected_tools_row >= 2 {
                     self.complete = true;
                 }
-            },
+            }
             StatusMenuTab::Status => {}
         }
     }
@@ -443,14 +507,7 @@ impl BottomPaneView for StatusMenuView {
             KeyEvent {
                 code: KeyCode::Esc, ..
             } => {
-                if matches!(self.tab, StatusMenuTab::Tools)
-                    && matches!(self.tools_mode, ToolsMenuMode::Worktrees)
-                {
-                    self.tools_mode = ToolsMenuMode::Root;
-                    self.selected_tools_row = 0;
-                } else {
-                    self.complete = true;
-                }
+                self.complete = true;
             }
             KeyEvent {
                 code: KeyCode::Tab,
@@ -608,6 +665,7 @@ impl Renderable for StatusMenuView {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::app_event::AppEvent;
     use insta::assert_snapshot;
     use ratatui::layout::Rect;
     use tokio::sync::mpsc::unbounded_channel;
@@ -643,7 +701,15 @@ mod tests {
             "Status card".to_string(),
             None,
         ));
-        let view = StatusMenuView::new(StatusMenuTab::Status, tx, status_cell, true, false, false);
+        let view = StatusMenuView::new(
+            StatusMenuTab::Status,
+            tx,
+            status_cell,
+            true,
+            false,
+            XtremeMode::On,
+            false,
+        );
         assert_snapshot!("status_menu_status_tab", render_lines(&view, 60));
     }
 
@@ -655,8 +721,15 @@ mod tests {
             "Status card".to_string(),
             None,
         ));
-        let mut view =
-            StatusMenuView::new(StatusMenuTab::Status, tx, status_cell, true, false, false);
+        let mut view = StatusMenuView::new(
+            StatusMenuTab::Status,
+            tx,
+            status_cell,
+            true,
+            false,
+            XtremeMode::On,
+            false,
+        );
         view.handle_key_event(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
         view.handle_key_event(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
         view.handle_key_event(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
@@ -672,30 +745,46 @@ mod tests {
             "Status card".to_string(),
             None,
         ));
-        let mut view =
-            StatusMenuView::new(StatusMenuTab::Status, tx, status_cell, true, false, false);
-        view.handle_key_event(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
-        view.handle_key_event(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+        let view = StatusMenuView::new(
+            StatusMenuTab::Tools,
+            tx,
+            status_cell,
+            true,
+            false,
+            XtremeMode::On,
+            false,
+        );
         assert_snapshot!("status_menu_tools_tab", render_lines(&view, 60));
     }
 
     #[test]
-    fn status_menu_renders_worktrees_tools_submenu() {
-        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+    fn tools_tab_toggle_xtreme_mode_sends_update_and_persist() {
+        let (tx_raw, mut rx) = unbounded_channel::<AppEvent>();
         let tx = AppEventSender::new(tx_raw);
         let status_cell = Box::new(crate::history_cell::new_info_event(
             "Status card".to_string(),
             None,
         ));
-        let mut view =
-            StatusMenuView::new(StatusMenuTab::Status, tx, status_cell, true, false, false);
-        view.handle_key_event(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
-        view.handle_key_event(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
-        view.handle_key_event(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
-        view.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
-        assert_snapshot!(
-            "status_menu_tools_worktrees_submenu",
-            render_lines(&view, 60)
+        let mut view = StatusMenuView::new(
+            StatusMenuTab::Tools,
+            tx,
+            status_cell,
+            true,
+            false,
+            XtremeMode::On,
+            false,
         );
+
+        view.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+        assert!(matches!(
+            rx.try_recv(),
+            Ok(AppEvent::UpdateXtremeMode(XtremeMode::Off))
+        ));
+        assert!(matches!(
+            rx.try_recv(),
+            Ok(AppEvent::PersistXtremeMode(XtremeMode::Off))
+        ));
+        assert!(rx.try_recv().is_err());
     }
 }

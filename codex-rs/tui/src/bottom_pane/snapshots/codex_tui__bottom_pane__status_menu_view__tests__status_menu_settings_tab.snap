@@ -4,7 +4,7 @@ assertion_line: 645
 expression: "render_lines(&view, 60)"
 ---
                                                             
-  [ Status ]  [ Settings ]  [ Tools ]  (bottom-pane)        
+  [ Status ]  [ Settings ]  [ ⚡ Tools ]  (bottom-pane)      
                                                             
   Settings                                                  
   Toggles apply immediately and persist.                    
@@ -13,6 +13,6 @@ expression: "render_lines(&view, 60)"
   › [x] Status bar: worktree path                           
     Worktrees…                                              
                                                             
-  Tip: Tab to Tools.                                        
+  Tip: Tab to ⚡ Tools.                                      
                                                             
   Tab: switch tab  ↑/↓: select/scroll  Enter: toggle/run  Es

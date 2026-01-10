@@ -123,6 +123,7 @@ pub(crate) struct ChatComposer {
     has_focus: bool,
     attached_images: Vec<AttachedImage>,
     placeholder_text: String,
+    xtreme_ui_enabled: bool,
     is_task_running: bool,
     /// When false, the composer is temporarily read-only (e.g. during sandbox setup).
     input_enabled: bool,
@@ -186,6 +187,7 @@ impl ChatComposer {
             has_focus: has_input_focus,
             attached_images: Vec::new(),
             placeholder_text,
+            xtreme_ui_enabled: false,
             is_task_running: false,
             input_enabled: true,
             input_disabled_placeholder: None,
@@ -212,6 +214,10 @@ impl ChatComposer {
         // Apply configuration via the setter to keep side-effects centralized.
         this.set_disable_paste_burst(disable_paste_burst);
         this
+    }
+
+    pub(crate) fn set_xtreme_ui_enabled(&mut self, enabled: bool) {
+        self.xtreme_ui_enabled = enabled;
     }
 
     pub fn set_skill_mentions(&mut self, skills: Option<Vec<SkillMetadata>>) {
@@ -2113,7 +2119,7 @@ impl Renderable for ChatComposer {
         let style = user_message_style();
         Block::default().style(style).render_ref(composer_rect, buf);
         if !textarea_rect.is_empty() {
-            let prompt = if self.input_enabled {
+            let prefix = if self.input_enabled {
                 "›".bold()
             } else {
                 "›".dim()
@@ -2121,7 +2127,7 @@ impl Renderable for ChatComposer {
             buf.set_span(
                 textarea_rect.x - LIVE_PREFIX_COLS,
                 textarea_rect.y,
-                &prompt,
+                &prefix,
                 textarea_rect.width,
             );
         }

@@ -10,7 +10,7 @@ expression: terminal.backend()
 "                                                                                                    "
 "                                                                                                    "
 "                                                                                                    "
-"  / for commands                            ctrl + o for tools                                      "
+"  / for commands                            ctrl + o for ⚡Tools                                    " Hidden by multi-width symbols: [(58, " ")]
 "  ! for shell commands                      shift + enter for newline                               "
 "  @ for file paths                          ctrl + v to paste images                                "
 "  esc again to edit previous message        ctrl + c to exit                                        "

@@ -1058,6 +1058,23 @@ fn hooks_payloads_dir(codex_home: &std::path::Path) -> std::path::PathBuf {
     codex_home.join("tmp").join("hooks").join("payloads")
 }
 
+fn toml_basic_string(value: &str) -> String {
+    let mut out = String::with_capacity(value.len() + 2);
+    out.push('"');
+    for ch in value.chars() {
+        match ch {
+            '\\' => out.push_str("\\\\"),
+            '"' => out.push_str("\\\""),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            _ => out.push(ch),
+        }
+    }
+    out.push('"');
+    out
+}
+
 fn run_hooks_init(codex_home: &std::path::Path, args: HooksInitCommand) -> anyhow::Result<()> {
     std::fs::create_dir_all(codex_home)?;
 
@@ -1126,26 +1143,20 @@ fn run_hooks_init(codex_home: &std::path::Path, args: HooksInitCommand) -> anyho
         let approval_macos = hooks_dir.join("approval_notify_macos_terminal_notifier.py");
         let notify_linux = hooks_dir.join("notify_linux_notify_send.py");
 
+        let python3 = toml_basic_string("python3");
+        let log_all = toml_basic_string(&log_all.display().to_string());
+        let tool_summary = toml_basic_string(&tool_summary.display().to_string());
+        let approval_macos = toml_basic_string(&approval_macos.display().to_string());
+        let notify_linux = toml_basic_string(&notify_linux.display().to_string());
+
         println!();
         println!("Paste this into {}/config.toml:", codex_home.display());
         println!();
         println!("[hooks]");
-        println!(
-            "agent_turn_complete = [[\"python3\", \"{}\"]]",
-            log_all.display()
-        );
-        println!(
-            "tool_call_finished = [[\"python3\", \"{}\"]]",
-            tool_summary.display()
-        );
-        println!(
-            "# approval_requested = [[\"python3\", \"{}\"]]",
-            approval_macos.display()
-        );
-        println!(
-            "# approval_requested = [[\"python3\", \"{}\"]]",
-            notify_linux.display()
-        );
+        println!("agent_turn_complete = [[{python3}, {log_all}]]");
+        println!("tool_call_finished = [[{python3}, {tool_summary}]]");
+        println!("# approval_requested = [[{python3}, {approval_macos}]]");
+        println!("# approval_requested = [[{python3}, {notify_linux}]]");
         println!();
         println!("Then run: xcodex hooks test --configured-only");
     }

@@ -66,6 +66,7 @@ pub mod onboarding;
 mod oss_selection;
 mod pager_overlay;
 pub mod public_widgets;
+mod ramps;
 mod render;
 mod resume_picker;
 mod selection_list;
@@ -86,6 +87,7 @@ mod update_prompt;
 mod updates;
 mod version;
 mod xcodex_first_run_wizard;
+mod xtreme;
 
 mod wrapping;
 

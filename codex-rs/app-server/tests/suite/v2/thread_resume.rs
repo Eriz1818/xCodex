@@ -15,6 +15,7 @@ use codex_app_server_protocol::TurnStatus;
 use codex_app_server_protocol::UserInput;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
+use core_test_support::skip_if_no_network;
 use std::path::PathBuf;
 use tempfile::TempDir;
 use tokio::time::timeout;
@@ -23,6 +24,8 @@ const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs
 
 #[tokio::test]
 async fn thread_resume_returns_original_thread() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
     let server = create_mock_responses_server_repeating_assistant("Done").await;
     let codex_home = TempDir::new()?;
     create_config_toml(codex_home.path(), &server.uri())?;
@@ -66,6 +69,8 @@ async fn thread_resume_returns_original_thread() -> Result<()> {
 
 #[tokio::test]
 async fn thread_resume_returns_rollout_history() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
     let server = create_mock_responses_server_repeating_assistant("Done").await;
     let codex_home = TempDir::new()?;
     create_config_toml(codex_home.path(), &server.uri())?;
@@ -130,6 +135,8 @@ async fn thread_resume_returns_rollout_history() -> Result<()> {
 
 #[tokio::test]
 async fn thread_resume_prefers_path_over_thread_id() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
     let server = create_mock_responses_server_repeating_assistant("Done").await;
     let codex_home = TempDir::new()?;
     create_config_toml(codex_home.path(), &server.uri())?;
@@ -174,6 +181,8 @@ async fn thread_resume_prefers_path_over_thread_id() -> Result<()> {
 
 #[tokio::test]
 async fn thread_resume_supports_history_and_overrides() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
     let server = create_mock_responses_server_repeating_assistant("Done").await;
     let codex_home = TempDir::new()?;
     create_config_toml(codex_home.path(), &server.uri())?;

@@ -16,6 +16,7 @@ use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::RawResponseItemEvent;
 use core_test_support::responses;
+use core_test_support::skip_if_no_network;
 use pretty_assertions::assert_eq;
 use std::path::Path;
 use tempfile::TempDir;
@@ -25,6 +26,8 @@ const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs
 
 #[tokio::test]
 async fn test_send_message_success() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
     // Spin up a mock responses server that immediately ends the Codex turn.
     // Two Codex turns hit the mock model (session start + send-user-message). Provide two SSE responses.
     let server = responses::start_mock_server().await;
@@ -142,6 +145,8 @@ async fn send_message(
 
 #[tokio::test]
 async fn test_send_message_raw_notifications_opt_in() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
     let server = responses::start_mock_server().await;
     let body = responses::sse(vec![
         responses::ev_response_created("resp-1"),

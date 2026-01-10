@@ -139,6 +139,17 @@ notifications = false
 # Enables welcome/status/spinner animations. Default: true
 animations = true
 
+# Xcodex-only: enable "xtreme mode" styling. Values: auto | on | off. Default: on
+# xtreme_mode = "on"
+
+# Xcodex-only: rotate between ramp status flows across turns. Default: true
+# When disabled, xcodex uses the baseline Hardware ramp only.
+# ramps_rotate = true
+
+# Xcodex-only: enable/disable additional ramp flows used for rotation. Defaults: true
+# ramps_build = true
+# ramps_devops = true
+
 # Footer status bar items. Defaults: false
 status_bar_show_git_branch = false
 status_bar_show_worktree = false

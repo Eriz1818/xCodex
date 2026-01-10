@@ -24,14 +24,17 @@ use crate::version::CODEX_CLI_VERSION;
 use crate::wrapping::RtOptions;
 use crate::wrapping::word_wrap_line;
 use crate::wrapping::word_wrap_lines;
+use crate::xtreme;
 use base64::Engine;
 use codex_common::format_env_display::format_env_display;
 use codex_core::config::Config;
 use codex_core::config::types::McpServerTransportConfig;
+use codex_core::protocol::AskForApproval;
 use codex_core::protocol::FileChange;
 use codex_core::protocol::McpAuthStatus;
 use codex_core::protocol::McpInvocation;
 use codex_core::protocol::McpStartupStatus;
+use codex_core::protocol::SandboxPolicy;
 use codex_core::protocol::SessionConfiguredEvent;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::plan_tool::PlanItemArg;
@@ -988,10 +991,49 @@ impl HistoryCell for TooltipHistoryCell {
             .max(1);
         let mut lines: Vec<Line<'static>> = Vec::new();
         append_markdown(
-            &format!("**Tip:** {}", self.tip),
+            &format!("**Tip:** {tip}", tip = self.tip),
             Some(wrap_width),
             &mut lines,
         );
+
+        prefix_lines(lines, indent.into(), indent.into())
+    }
+}
+
+#[derive(Debug)]
+struct XcodexTooltipsHistoryCell {
+    xcodex_tip: Option<&'static str>,
+    codex_tip: Option<String>,
+}
+
+impl XcodexTooltipsHistoryCell {
+    fn new(xcodex_tip: Option<&'static str>, codex_tip: Option<String>) -> Option<Self> {
+        if xcodex_tip.is_some() || codex_tip.is_some() {
+            Some(Self {
+                xcodex_tip,
+                codex_tip,
+            })
+        } else {
+            None
+        }
+    }
+}
+
+impl HistoryCell for XcodexTooltipsHistoryCell {
+    fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
+        let indent = "  ";
+        let indent_width = UnicodeWidthStr::width(indent);
+        let wrap_width = usize::from(width.max(1))
+            .saturating_sub(indent_width)
+            .max(1);
+        let mut lines: Vec<Line<'static>> = Vec::new();
+
+        if let Some(tip) = self.xcodex_tip {
+            append_markdown(&format!("**⚡Tips:** {tip}"), Some(wrap_width), &mut lines);
+        }
+        if let Some(tip) = self.codex_tip.as_deref() {
+            append_markdown(&format!("**Tips:** {tip}"), Some(wrap_width), &mut lines);
+        }
 
         prefix_lines(lines, indent.into(), indent.into())
     }
@@ -1031,6 +1073,9 @@ pub(crate) fn new_session_info(
         reasoning_effort,
         config.cwd.clone(),
         CODEX_CLI_VERSION,
+        config.approval_policy.value(),
+        config.sandbox_policy.get().clone(),
+        xtreme::xtreme_ui_enabled(config),
     );
     let mut parts: Vec<Box<dyn HistoryCell>> = vec![Box::new(header)];
 
@@ -1081,6 +1126,14 @@ pub(crate) fn new_session_info(
         parts.push(Box::new(PlainHistoryCell { lines: help_lines }));
     } else {
         if config.show_tooltips
+            && codex_core::config::is_xcodex_invocation()
+            && let Some(tooltips) = XcodexTooltipsHistoryCell::new(
+                tooltips::random_xcodex_tooltip(),
+                tooltips::random_tooltip(),
+            )
+        {
+            parts.push(Box::new(tooltips));
+        } else if config.show_tooltips
             && let Some(tooltips) = tooltips::random_tooltip().map(TooltipHistoryCell::new)
         {
             parts.push(Box::new(tooltips));
@@ -1108,6 +1161,9 @@ struct SessionHeaderHistoryCell {
     model: String,
     reasoning_effort: Option<ReasoningEffortConfig>,
     directory: PathBuf,
+    approval: AskForApproval,
+    sandbox: SandboxPolicy,
+    xtreme_ui_enabled: bool,
 }
 
 impl SessionHeaderHistoryCell {
@@ -1116,12 +1172,18 @@ impl SessionHeaderHistoryCell {
         reasoning_effort: Option<ReasoningEffortConfig>,
         directory: PathBuf,
         version: &'static str,
+        approval: AskForApproval,
+        sandbox: SandboxPolicy,
+        xtreme_ui_enabled: bool,
     ) -> Self {
         Self {
             version,
             model,
             reasoning_effort,
             directory,
+            approval,
+            sandbox,
+            xtreme_ui_enabled,
         }
     }
 
@@ -1172,18 +1234,26 @@ impl HistoryCell for SessionHeaderHistoryCell {
 
         let make_row = |spans: Vec<Span<'static>>| Line::from(spans);
 
-        // Title line rendered inside the box: ">_ xtreme-Codex (vX)"
-        let title_spans: Vec<Span<'static>> = vec![
-            Span::from(">_ ").dim(),
+        // Title line rendered inside the box: "⚡ xtreme-Codex (vX)"
+        let mut title_spans: Vec<Span<'static>> =
+            xtreme::title_prefix_spans(self.xtreme_ui_enabled);
+        title_spans.extend([
             Span::from("xtreme-Codex").bold(),
             Span::from(" ").dim(),
             Span::from(format!("(v{})", self.version)).dim(),
-        ];
+        ]);
 
         const CHANGE_MODEL_HINT_COMMAND: &str = "/model";
         const CHANGE_MODEL_HINT_EXPLANATION: &str = " to change";
         const DIR_LABEL: &str = "directory:";
         let label_width = DIR_LABEL.len();
+
+        let power_spans = xtreme::power_meter_spans(
+            self.xtreme_ui_enabled,
+            self.approval,
+            &self.sandbox,
+            label_width,
+        );
         let model_label = format!(
             "{model_label:<label_width$}",
             model_label = "model:",
@@ -1209,12 +1279,14 @@ impl HistoryCell for SessionHeaderHistoryCell {
         let dir = self.format_directory(Some(dir_max_width));
         let dir_spans = vec![Span::from(dir_prefix).dim(), Span::from(dir)];
 
-        let lines = vec![
-            make_row(title_spans),
-            make_row(Vec::new()),
-            make_row(model_spans),
-            make_row(dir_spans),
-        ];
+        let mut lines = Vec::new();
+        lines.push(make_row(title_spans));
+        lines.push(make_row(Vec::new()));
+        if let Some(spans) = power_spans {
+            lines.push(make_row(spans));
+        }
+        lines.push(make_row(model_spans));
+        lines.push(make_row(dir_spans));
 
         with_border(lines)
     }
@@ -1964,10 +2036,26 @@ pub(crate) fn new_reasoning_summary_block(
 #[derive(Debug)]
 pub struct FinalMessageSeparator {
     elapsed_seconds: Option<u64>,
+    show_ramp_separator: bool,
+    xtreme_ui_enabled: bool,
+    completion_label: Option<String>,
+    turn_summary: Option<TurnSummary>,
 }
 impl FinalMessageSeparator {
-    pub(crate) fn new(elapsed_seconds: Option<u64>) -> Self {
-        Self { elapsed_seconds }
+    pub(crate) fn new(
+        elapsed_seconds: Option<u64>,
+        show_ramp_separator: bool,
+        xtreme_ui_enabled: bool,
+        completion_label: Option<String>,
+        turn_summary: Option<TurnSummary>,
+    ) -> Self {
+        Self {
+            elapsed_seconds,
+            show_ramp_separator,
+            xtreme_ui_enabled,
+            completion_label,
+            turn_summary,
+        }
     }
 }
 impl HistoryCell for FinalMessageSeparator {
@@ -1976,6 +2064,47 @@ impl HistoryCell for FinalMessageSeparator {
             .elapsed_seconds
             .map(super::status_indicator_widget::fmt_elapsed_compact);
         if let Some(elapsed_seconds) = elapsed_seconds {
+            if self.show_ramp_separator {
+                let mut suffix_parts: Vec<String> = Vec::new();
+                if let Some(summary) = self.turn_summary.as_ref()
+                    && !summary.is_empty()
+                {
+                    if summary.exec_commands > 0 {
+                        suffix_parts.push(format!("{} cmds", summary.exec_commands));
+                    }
+                    if summary.mcp_calls > 0 {
+                        suffix_parts.push(format!("{} tools", summary.mcp_calls));
+                    }
+                    if summary.patches > 0 {
+                        suffix_parts.push(format!("{} edits", summary.patches));
+                    }
+                    if summary.files_changed > 0 {
+                        suffix_parts.push(format!("{} files", summary.files_changed));
+                    }
+                }
+
+                let suffix = if suffix_parts.is_empty() {
+                    String::new()
+                } else {
+                    format!(" · {}", suffix_parts.join(" · "))
+                };
+
+                let completion = self.completion_label.as_deref().unwrap_or("Overclocked");
+                let mut spans: Vec<Span<'static>> = vec![
+                    "─ ".dim(),
+                    crate::xtreme::bolt_span(self.xtreme_ui_enabled),
+                    format!(" {completion} in {elapsed_seconds}{suffix} ").dim(),
+                ];
+                let spans_width: usize =
+                    spans.iter().map(|span| span.content.as_ref().width()).sum();
+                spans.push(
+                    "─"
+                        .repeat((width as usize).saturating_sub(spans_width))
+                        .dim(),
+                );
+                return vec![Line::from(spans)];
+            }
+
             let worked_for = format!("─ Worked for {elapsed_seconds} ─");
             let worked_for_width = worked_for.width();
             vec![
@@ -1988,6 +2117,23 @@ impl HistoryCell for FinalMessageSeparator {
         } else {
             vec![Line::from_iter(["─".repeat(width as usize).dim()])]
         }
+    }
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct TurnSummary {
+    pub exec_commands: usize,
+    pub mcp_calls: usize,
+    pub patches: usize,
+    pub files_changed: usize,
+}
+
+impl TurnSummary {
+    pub fn is_empty(&self) -> bool {
+        self.exec_commands == 0
+            && self.mcp_calls == 0
+            && self.patches == 0
+            && self.files_changed == 0
     }
 }
 
@@ -2059,6 +2205,17 @@ mod tests {
 
     fn render_transcript(cell: &dyn HistoryCell) -> Vec<String> {
         render_lines(&cell.transcript_lines(u16::MAX))
+    }
+
+    #[test]
+    fn xcodex_tooltips_history_cell_renders_both_lines() {
+        let cell =
+            XcodexTooltipsHistoryCell::new(Some("xcodex tip"), Some("codex tip".to_string()))
+                .unwrap();
+        assert_eq!(
+            render_lines(&cell.display_lines(80)),
+            vec!["  ⚡Tips: xcodex tip", "  Tips: codex tip"],
+        );
     }
 
     #[test]
@@ -2532,6 +2689,9 @@ mod tests {
             Some(ReasoningEffortConfig::High),
             std::env::temp_dir(),
             "test",
+            AskForApproval::OnRequest,
+            SandboxPolicy::ReadOnly,
+            true,
         );
 
         let lines = render_lines(&cell.display_lines(80));

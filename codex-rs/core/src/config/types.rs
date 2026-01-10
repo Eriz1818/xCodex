@@ -404,6 +404,24 @@ impl Default for ScrollInputMode {
     }
 }
 
+/// How the TUI should render xcodex "xtreme mode" styling.
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum XtremeMode {
+    /// Enable xtreme styling when invoked as `xcodex`.
+    Auto,
+    /// Always enable xtreme styling.
+    On,
+    /// Disable xtreme styling (prefer upstream-like visuals).
+    Off,
+}
+
+impl Default for XtremeMode {
+    fn default() -> Self {
+        Self::On
+    }
+}
+
 /// Collection of settings that are specific to the TUI.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default)]
 pub struct Tui {
@@ -421,6 +439,35 @@ pub struct Tui {
     /// Defaults to `true`.
     #[serde(default = "default_true")]
     pub show_tooltips: bool,
+
+    /// Xcodex-only: enable "xtreme mode" styling in the TUI.
+    ///
+    /// - `on`: always enable xtreme styling (default)
+    /// - `off`: disable xtreme styling
+    /// - `auto`: enable xtreme styling when invoked as `xcodex`
+    #[serde(default)]
+    pub xtreme_mode: XtremeMode,
+
+    /// Xcodex-only: rotate between multiple "ramp" status label flows across turns.
+    ///
+    /// When disabled, xcodex falls back to the baseline Hardware ramp:
+    /// `Charging → Spooling → Overclocking → Stabilizing → Overclocked in …`.
+    ///
+    /// Defaults to `true`.
+    #[serde(default = "default_true")]
+    pub ramps_rotate: bool,
+
+    /// Xcodex-only: enable the Build ramp for per-turn rotation.
+    ///
+    /// Defaults to `true`.
+    #[serde(default = "default_true")]
+    pub ramps_build: bool,
+
+    /// Xcodex-only: enable the DevOps ramp for per-turn rotation.
+    ///
+    /// Defaults to `true`.
+    #[serde(default = "default_true")]
+    pub ramps_devops: bool,
 
     /// Enable application mouse capture in TUI2.
     ///

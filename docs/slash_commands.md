@@ -45,6 +45,7 @@ Control Codex’s behavior during an interactive session with slash commands.
 If you're using `xcodex`, run:
 
 - `/help xcodex` — quick index of xcodex-only features available in your current UI.
+- `/xtreme` — open the ⚡Tools control panel (same view as `Ctrl+O`, tools-first).
 - `/ps` and `/ps-kill` — background terminals (availability may depend on UI frontend); see `docs/xcodex/background-terminals.md`.
 
 More xcodex docs:
