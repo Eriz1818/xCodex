@@ -135,7 +135,11 @@ impl StatusMenuView {
     }
 
     fn tools_row_count(&self) -> usize {
-        9
+        if codex_core::config::is_xcodex_invocation() {
+            10
+        } else {
+            9
+        }
     }
 
     fn clamp_selected_row(&mut self) {
@@ -337,7 +341,8 @@ impl StatusMenuView {
         }
 
         // Rows 2+: quick actions.
-        let items = [
+        let ramps_supported = codex_core::config::is_xcodex_invocation();
+        let mut items = vec![
             "Review…",
             "Model…",
             "Approvals…",
@@ -346,6 +351,10 @@ impl StatusMenuView {
             "Transcript…",
             "Resume…",
         ];
+        if ramps_supported {
+            items.insert(3, "Ramps…");
+        }
+
         for (idx, label) in items.iter().enumerate() {
             let row = idx + 2;
             let selected = self.selected_tools_row == row;
@@ -356,16 +365,18 @@ impl StatusMenuView {
     }
 
     fn selected_tool_hint_lines(&self) -> Vec<Line<'static>> {
-        let hint = match self.selected_tools_row {
-            0 => "Toggle xtreme UI styling (persists).",
-            1 => "Toggle verbose tool output in the transcript (persists).",
-            2 => "Review your changes and spot issues fast.",
-            3 => "Pick a model and reasoning effort.",
-            4 => "Review and adjust approval/sandbox presets.",
-            5 => "Switch worktrees and manage shared dirs.",
-            6 => "Automate xcodex with hooks.",
-            7 => "Open the full transcript in a scrollable view.",
-            8 => "Pick a previous session to continue.",
+        let ramps_supported = codex_core::config::is_xcodex_invocation();
+        let hint = match (ramps_supported, self.selected_tools_row) {
+            (true, 0) | (false, 0) => "Toggle xtreme UI styling (persists).",
+            (true, 1) | (false, 1) => "Toggle verbose tool output in the transcript (persists).",
+            (true, 2) | (false, 2) => "Review your changes and spot issues fast.",
+            (true, 3) | (false, 3) => "Pick a model and reasoning effort.",
+            (true, 4) | (false, 4) => "Review and adjust approval/sandbox presets.",
+            (true, 5) => "Customize xcodex’s per-turn ramp rotation.",
+            (true, 6) | (false, 5) => "Switch worktrees and manage shared dirs.",
+            (true, 7) | (false, 6) => "Automate xcodex with hooks.",
+            (true, 8) | (false, 7) => "Open the full transcript in a scrollable view.",
+            (true, 9) | (false, 8) => "Pick a previous session to continue.",
             _ => return Vec::new(),
         };
 
@@ -466,6 +477,12 @@ impl StatusMenuView {
                 _ => {}
             },
             StatusMenuTab::Tools => {
+                let ramps_supported = codex_core::config::is_xcodex_invocation();
+                let ramps_row = ramps_supported.then_some(5);
+                let worktrees_row = if ramps_supported { 6 } else { 5 };
+                let hooks_row = if ramps_supported { 7 } else { 6 };
+                let transcript_row = if ramps_supported { 8 } else { 7 };
+                let resume_row = if ramps_supported { 9 } else { 8 };
                 match self.selected_tools_row {
                     0 => {
                         self.xtreme_ui_enabled = !self.xtreme_ui_enabled;
@@ -493,12 +510,19 @@ impl StatusMenuView {
                         crate::slash_command::SlashCommand::Model,
                     )),
                     4 => self.app_event_tx.send(AppEvent::OpenApprovalsPopup),
-                    5 => self.app_event_tx.send(AppEvent::OpenWorktreeCommandMenu),
-                    6 => self.app_event_tx.send(AppEvent::DispatchSlashCommand(
-                        crate::slash_command::SlashCommand::Hooks,
-                    )),
-                    7 => self.app_event_tx.send(AppEvent::OpenTranscriptOverlay),
-                    8 => self.app_event_tx.send(AppEvent::OpenResumePicker),
+                    row if ramps_row.is_some_and(|r| row == r) => {
+                        self.app_event_tx.send(AppEvent::OpenRampsSettingsView);
+                    }
+                    row if row == worktrees_row => {
+                        self.app_event_tx.send(AppEvent::OpenWorktreeCommandMenu)
+                    }
+                    row if row == hooks_row => self.app_event_tx.send(
+                        AppEvent::DispatchSlashCommand(crate::slash_command::SlashCommand::Hooks),
+                    ),
+                    row if row == transcript_row => {
+                        self.app_event_tx.send(AppEvent::OpenTranscriptOverlay)
+                    }
+                    row if row == resume_row => self.app_event_tx.send(AppEvent::OpenResumePicker),
                     _ => {}
                 }
                 if self.selected_tools_row >= 2 {

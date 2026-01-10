@@ -1836,6 +1836,17 @@ impl App {
                 self.chat_widget.set_xtreme_mode(mode);
                 tui.frame_requester().schedule_frame();
             }
+            AppEvent::UpdateRampsConfig {
+                rotate,
+                build,
+                devops,
+            } => {
+                self.config.tui_ramps_rotate = rotate;
+                self.config.tui_ramps_build = build;
+                self.config.tui_ramps_devops = devops;
+                self.chat_widget.set_ramps_config(rotate, build, devops);
+                tui.frame_requester().schedule_frame();
+            }
             AppEvent::WorktreeListUpdated {
                 worktrees,
                 open_picker,
@@ -1856,6 +1867,10 @@ impl App {
                         None,
                     );
                 }
+                tui.frame_requester().schedule_frame();
+            }
+            AppEvent::OpenRampsSettingsView => {
+                self.chat_widget.open_ramps_settings_view();
                 tui.frame_requester().schedule_frame();
             }
             AppEvent::WorktreeListUpdateFailed { error, open_picker } => {
@@ -2286,6 +2301,45 @@ impl App {
                         } else {
                             self.chat_widget
                                 .add_error_message(format!("Failed to save xtreme mode: {err}"));
+                        }
+                    }
+                }
+            }
+            AppEvent::PersistRampsConfig {
+                rotate,
+                build,
+                devops,
+            } => {
+                let profile = self.active_profile.as_deref();
+                match ConfigEditsBuilder::new(&self.config.codex_home)
+                    .with_profile(profile)
+                    .with_edits([
+                        ConfigEdit::SetPath {
+                            segments: vec!["tui".to_string(), "ramps_rotate".to_string()],
+                            value: toml_edit::value(rotate),
+                        },
+                        ConfigEdit::SetPath {
+                            segments: vec!["tui".to_string(), "ramps_build".to_string()],
+                            value: toml_edit::value(build),
+                        },
+                        ConfigEdit::SetPath {
+                            segments: vec!["tui".to_string(), "ramps_devops".to_string()],
+                            value: toml_edit::value(devops),
+                        },
+                    ])
+                    .apply()
+                    .await
+                {
+                    Ok(()) => {}
+                    Err(err) => {
+                        tracing::error!(error = %err, "failed to persist xcodex ramps config");
+                        if let Some(profile) = profile {
+                            self.chat_widget.add_error_message(format!(
+                                "Failed to save ramps config for profile `{profile}`: {err}"
+                            ));
+                        } else {
+                            self.chat_widget
+                                .add_error_message(format!("Failed to save ramps config: {err}"));
                         }
                     }
                 }

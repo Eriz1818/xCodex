@@ -78,6 +78,13 @@ pub(crate) enum AppEvent {
     /// Update whether xtreme mode styling is enabled (runtime).
     UpdateXtremeMode(XtremeMode),
 
+    /// Update xcodex ramp settings at runtime.
+    UpdateRampsConfig {
+        rotate: bool,
+        build: bool,
+        devops: bool,
+    },
+
     /// Update `worktrees.shared_dirs` at runtime.
     UpdateWorktreesSharedDirs {
         shared_dirs: Vec<String>,
@@ -149,6 +156,16 @@ pub(crate) enum AppEvent {
 
     /// Persist whether xtreme mode styling is enabled.
     PersistXtremeMode(XtremeMode),
+
+    /// Persist xcodex ramp settings.
+    PersistRampsConfig {
+        rotate: bool,
+        build: bool,
+        devops: bool,
+    },
+
+    /// Open the xcodex ramp settings view.
+    OpenRampsSettingsView,
 
     /// Persist `worktrees.shared_dirs` to config.
     PersistWorktreesSharedDirs {
