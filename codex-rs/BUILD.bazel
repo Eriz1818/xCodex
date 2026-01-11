@@ -1,1 +1,47 @@
 
+# Generates a Rust `rustc_env_files` file containing Cargo-style version env vars
+# based on `codex-rs/Cargo.toml`'s `[workspace.package]` version.
+genrule(
+    name = "cargo_workspace_env_vars",
+    srcs = ["Cargo.toml"],
+    outs = ["cargo_workspace_env_vars.env"],
+    cmd = """
+set -euo pipefail
+
+toml="$(location Cargo.toml)"
+
+ver="$$(awk '
+  $$0 == \"[workspace.package]\" { in_pkg = 1; next }
+  in_pkg && $$1 == \"version\" {
+    line = $$0
+    sub(/^[^\"]*\"/, \"\", line)
+    sub(/\".*$$/, \"\", line)
+    print line
+    exit
+  }
+' "$$toml")"
+
+if [ -z "$$ver" ]; then
+  echo "failed to extract workspace.package.version from $$toml" >&2
+  exit 1
+fi
+
+base="$${ver%%-*}"
+IFS='.' read -r major minor patch <<<"$$base"
+
+pre=""
+if [[ "$$ver" == *-* ]]; then
+  pre="$${ver#*-}"
+fi
+
+out="$@"
+{
+  echo "CARGO_PKG_VERSION=$$ver"
+  echo "CARGO_PKG_VERSION_MAJOR=$$major"
+  echo "CARGO_PKG_VERSION_MINOR=$$minor"
+  echo "CARGO_PKG_VERSION_PATCH=$$patch"
+  echo "CARGO_PKG_VERSION_PRE=$$pre"
+} > "$$out"
+""",
+    visibility = ["//visibility:public"],
+)

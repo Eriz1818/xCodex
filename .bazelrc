@@ -20,6 +20,12 @@ common:windows --@rules_rust//rust/settings:experimental_use_sh_toolchain_for_bo
 # common --@rules_rust//rust/settings:pipelined_compilation
 
 common --incompatible_strict_action_env
+
+# Expose Cargo version env vars to actions (used by env!("CARGO_PKG_VERSION")).
+common --action_env=CARGO_PKG_VERSION
+common --action_env=CARGO_PKG_VERSION_MAJOR
+common --action_env=CARGO_PKG_VERSION_MINOR
+common --action_env=CARGO_PKG_VERSION_PATCH
 # Not ideal, but We need to allow dotslash to be found
 common --test_env=PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin
 

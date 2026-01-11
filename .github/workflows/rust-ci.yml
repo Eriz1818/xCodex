@@ -67,6 +67,43 @@ jobs:
       - name: Verify codegen for mcp-types
         run: ./mcp-types/check_lib_rs.py
 
+
+  bazel_build:
+    name: Bazel build (cli)
+    runs-on: ubuntu-24.04
+    needs: changed
+    if: ${{ needs.changed.outputs.codex == 'true' || needs.changed.outputs.workflows == 'true' || github.event_name == 'push' }}
+    steps:
+      - uses: actions/checkout@v6
+
+      # Some builds rely on DotSlash being installed.
+      - uses: facebook/install-dotslash@v2
+
+      - name: Make DotSlash available in PATH
+        run: sudo cp "$(which dotslash)" /usr/local/bin
+
+      - name: Set Cargo version env (for Bazel)
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo_ver="$(grep -m1 '^version' codex-rs/Cargo.toml | sed -E 's/version *= *"([^"]+)".*/\1/')"
+          base_ver="${cargo_ver%%-*}"
+          IFS='.' read -r major minor patch <<<"$base_ver"
+
+          echo "CARGO_PKG_VERSION=$cargo_ver" >> "$GITHUB_ENV"
+          echo "CARGO_PKG_VERSION_MAJOR=$major" >> "$GITHUB_ENV"
+          echo "CARGO_PKG_VERSION_MINOR=$minor" >> "$GITHUB_ENV"
+          echo "CARGO_PKG_VERSION_PATCH=$patch" >> "$GITHUB_ENV"
+
+      - name: Set up Bazel
+        uses: bazelbuild/setup-bazelisk@v3
+
+      - name: bazel build //codex-rs/cli:codex (local)
+        shell: bash
+        run: |
+          set -euo pipefail
+          bazel build             --bes_backend=             --bes_results_url=             --remote_cache=             --remote_executor=             //codex-rs/cli:codex
+
   cargo_shear:
     name: cargo shear
     runs-on: ubuntu-24.04

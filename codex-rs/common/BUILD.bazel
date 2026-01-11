@@ -8,4 +8,5 @@ codex_rust_crate(
         "elapsed",
         "sandbox_summary",
     ],
+    compile_data = ["src/whats_new.md"],
 )

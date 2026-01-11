@@ -97,6 +97,19 @@ jobs:
           # Use a very short path to reduce argv/path length issues.
           "BAZEL_STARTUP_ARGS=--output_user_root=C:\" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
+
+      - name: Set Cargo version env (for Bazel)
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo_ver="$(grep -m1 '^version' codex-rs/Cargo.toml | sed -E 's/version *= *"([^"]+)".*/\1/')"
+          base_ver="${cargo_ver%%-*}"
+          IFS='.' read -r major minor patch <<<"$base_ver"
+
+          echo "CARGO_PKG_VERSION=$cargo_ver" >> "$GITHUB_ENV"
+          echo "CARGO_PKG_VERSION_MAJOR=$major" >> "$GITHUB_ENV"
+          echo "CARGO_PKG_VERSION_MINOR=$minor" >> "$GITHUB_ENV"
+          echo "CARGO_PKG_VERSION_PATCH=$patch" >> "$GITHUB_ENV"
       - name: bazel test //...
         env:
           BUILDBUDDY_API_KEY: ${{ secrets.BUILDBUDDY_API_KEY }}
