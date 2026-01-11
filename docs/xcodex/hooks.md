@@ -122,6 +122,23 @@ Python Host (“py-box”) receives JSONL lines that wrap the same payload:
 
 See `docs/xcodex/hooks.schema.json` for the full payload schema.
 
+Approval requested example:
+
+```json
+{
+  "schema_version": 1,
+  "event_id": "evt-...",
+  "timestamp": "2026-01-11T23:59:59Z",
+  "session_id": "thread-...",
+  "cwd": "/path/to/repo",
+  "hook_event_name": "approval_requested",
+  "xcodex_event_type": "approval-requested",
+  "kind": "exec",
+  "command": "rm -rf node_modules",
+  "proposed_execpolicy_amendment": null
+}
+```
+
 ## Configuration
 
 See `docs/config.md#hooks` for the full config surface. High-level:
@@ -165,6 +182,36 @@ inproc = ["pyo3"]
 script_path = "hooks/pyo3_hook.py"
 callable = "on_event"
 ```
+
+### Hooks config reference (keys + variations)
+
+This is a quick, “everything hooks-related” cheat sheet. The canonical source remains `docs/config.md#hooks`.
+
+- External (legacy argv arrays):
+  - `hooks.agent_turn_complete`, `hooks.approval_requested`, `hooks.session_start`, `hooks.session_end`
+  - `hooks.user_prompt_submit`, `hooks.pre_compact`, `hooks.notification`, `hooks.subagent_stop`
+  - `hooks.model_request_started`, `hooks.model_response_completed`
+  - `hooks.tool_call_started`, `hooks.tool_call_finished`
+- External (recommended matcher config):
+  - `hooks.command.default_timeout_sec`
+  - `hooks.command.<event>`: matcher entries; each entry has `matcher = "..."` and `hooks = [{ argv | command, timeout_sec?, payload? }]`
+  - `hooks.command.<event>.hooks[*].payload`: `xcodex` | `claude` (use `claude` only when running scripts that expect Claude-shaped JSON)
+- In-process built-ins (Rust):
+  - `hooks.inproc = ["tool_call_summary"]` / `["event_log_jsonl"]`
+  - `hooks.inproc_tool_call_summary = true` (back-compat alias)
+- PyO3 in-process (advanced; separate build):
+  - `hooks.enable_unsafe_inproc = true` (required gate)
+  - `hooks.pyo3.script_path`, `hooks.pyo3.callable`, `hooks.pyo3.batch_size`, `hooks.pyo3.timeout_sec`
+  - `hooks.pyo3.filters.<event>` (optional matcher filters; same semantics as `hooks.command`)
+- Python Host (“py-box”, persistent process):
+  - `hooks.host.enabled = true`
+  - `hooks.host.command = ["python3", "-u", "..."]`
+  - `hooks.host.sandbox_mode` (optional override; otherwise inherits the session sandbox policy)
+  - `hooks.host.timeout_sec` (optional per-event write timeout)
+  - `hooks.host.filters.<event>` (optional matcher filters; same semantics as `hooks.command`)
+- Delivery/retention:
+  - `hooks.max_stdin_payload_bytes` (above this, hooks receive a `payload_path` envelope)
+  - `hooks.keep_last_n_payloads` (prunes hook payload/log files under `CODEX_HOME/tmp/hooks/`)
 
 ## Where hook code lives
 
