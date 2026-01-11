@@ -67,6 +67,7 @@ pub(crate) struct CommandPopup {
     slash_completion_branches: Vec<String>,
     current_git_branch: Option<String>,
     state: ScrollState,
+    selection_locked: bool,
 }
 
 impl CommandPopup {
@@ -89,6 +90,7 @@ impl CommandPopup {
             slash_completion_branches: Vec::new(),
             current_git_branch: None,
             state: ScrollState::new(),
+            selection_locked: false,
         }
     }
 
@@ -122,6 +124,9 @@ impl CommandPopup {
     pub(crate) fn on_composer_text_change(&mut self, text: String) {
         let first_line = text.lines().next().unwrap_or("");
 
+        let prev_filter = self.command_filter.clone();
+        let prev_line = self.command_line.clone();
+
         if let Some(stripped) = first_line.strip_prefix('/') {
             // Extract the *first* token (sequence of non-whitespace
             // characters) after the slash so that `/clear something` still
@@ -141,21 +146,28 @@ impl CommandPopup {
             self.command_line.clear();
         }
 
+        let command_changed = self.command_filter != prev_filter || self.command_line != prev_line;
+        if command_changed {
+            self.selection_locked = false;
+        }
+
         // Reset or clamp selected index based on new filtered list.
         let matches = self.filtered();
         let matches_len = matches.len();
         self.state.clamp_selection(matches_len);
-        if let Some(idx) = matches
-            .iter()
-            .position(|(item, _, _)| matches!(item, CommandItem::ArgValue { .. }))
-        {
-            self.state.selected_idx = Some(idx);
-        } else if self.should_default_select_subcommand()
-            && let Some(idx) = matches
+        if !self.selection_locked {
+            if let Some(idx) = matches
                 .iter()
-                .position(|(item, _, _)| matches!(item, CommandItem::BuiltinText { .. }))
-        {
-            self.state.selected_idx = Some(idx);
+                .position(|(item, _, _)| matches!(item, CommandItem::ArgValue { .. }))
+            {
+                self.state.selected_idx = Some(idx);
+            } else if self.should_default_select_subcommand()
+                && let Some(idx) = matches
+                    .iter()
+                    .position(|(item, _, _)| matches!(item, CommandItem::BuiltinText { .. }))
+            {
+                self.state.selected_idx = Some(idx);
+            }
         }
         self.state
             .ensure_visible(matches_len, MAX_POPUP_ROWS.min(matches_len));
@@ -469,6 +481,7 @@ impl CommandPopup {
     /// Move the selection cursor one step up.
     pub(crate) fn move_up(&mut self) {
         let len = self.filtered_items().len();
+        self.selection_locked = true;
         self.state.move_up_wrap(len);
         self.state.ensure_visible(len, MAX_POPUP_ROWS.min(len));
     }
@@ -476,6 +489,7 @@ impl CommandPopup {
     /// Move the selection cursor one step down.
     pub(crate) fn move_down(&mut self) {
         let matches_len = self.filtered_items().len();
+        self.selection_locked = true;
         self.state.move_down_wrap(matches_len);
         self.state
             .ensure_visible(matches_len, MAX_POPUP_ROWS.min(matches_len));
