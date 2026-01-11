@@ -23,6 +23,6 @@ expression: rendered_lines
 │  Session stats:    3 turns · 2 cmds · 1 tools · 1 edits · 4 files · 1 tests  │
 │                                                                              │
 │  Token usage:      1.9K total  (1K input + 900 output)                       │
-│  Context window:   [████████████████████] 99% left (2.25K used / 272K)       │
+│  Context window:   [████████████████████] 99% left (2.25K used / 272K, budge │
 │  Limits:           data not available yet                                    │
 ╰──────────────────────────────────────────────────────────────────────────────╯

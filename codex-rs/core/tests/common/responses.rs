@@ -23,6 +23,12 @@ pub struct ResponseMock {
     requests: Arc<Mutex<Vec<ResponsesRequest>>>,
 }
 
+impl Default for ResponseMock {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ResponseMock {
     pub fn new() -> Self {
         Self {
