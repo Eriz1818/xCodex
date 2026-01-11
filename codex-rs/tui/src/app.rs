@@ -68,6 +68,8 @@ use tokio::sync::mpsc::unbounded_channel;
 
 #[cfg(not(debug_assertions))]
 use crate::history_cell::UpdateAvailableHistoryCell;
+#[cfg(not(debug_assertions))]
+use crate::history_cell::WhatsNewHistoryCell;
 
 const EXTERNAL_EDITOR_HINT: &str = "Save and close external editor to continue.";
 
@@ -84,7 +86,7 @@ fn session_summary(token_usage: TokenUsage, thread_id: Option<ThreadId>) -> Opti
     }
 
     let usage_line = FinalOutput::from(token_usage).to_string();
-    let resume_command = thread_id.map(|thread_id| format!("codex resume {thread_id}"));
+    let resume_command = thread_id.map(|thread_id| format!("xcodex resume {thread_id}"));
     Some(SessionSummary {
         usage_line,
         resume_command,
@@ -423,6 +425,8 @@ impl App {
         let file_search = FileSearchManager::new(config.cwd.clone(), app_event_tx.clone());
         #[cfg(not(debug_assertions))]
         let upgrade_version = crate::updates::get_upgrade_version(&config);
+        #[cfg(not(debug_assertions))]
+        let whats_new = crate::whats_new::get_whats_new_on_startup(&config);
 
         let mut app = Self {
             server: thread_manager.clone(),
@@ -478,6 +482,18 @@ impl App {
                 AppEvent::InsertHistoryCell(Box::new(UpdateAvailableHistoryCell::new(
                     latest_version,
                     crate::update_action::get_update_action(),
+                ))),
+            )
+            .await?;
+        }
+
+        #[cfg(not(debug_assertions))]
+        if let Some(whats_new) = whats_new {
+            app.handle_event(
+                tui,
+                AppEvent::InsertHistoryCell(Box::new(WhatsNewHistoryCell::new(
+                    whats_new.version,
+                    whats_new.bullets,
                 ))),
             )
             .await?;
@@ -2334,7 +2350,7 @@ mod tests {
         );
         assert_eq!(
             summary.resume_command,
-            Some("codex resume 123e4567-e89b-12d3-a456-426614174000".to_string())
+            Some("xcodex resume 123e4567-e89b-12d3-a456-426614174000".to_string())
         );
     }
 }

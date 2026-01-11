@@ -552,7 +552,7 @@ impl HistoryCell for UpdateAvailableHistoryCell {
         } else {
             line![
                 "See ",
-                "https://github.com/openai/codex".cyan().underlined(),
+                "https://github.com/Eriz1818/xcodex".cyan().underlined(),
                 " for installation options."
             ]
         };
@@ -567,11 +567,57 @@ impl HistoryCell for UpdateAvailableHistoryCell {
             update_instruction,
             "",
             "See full release notes:",
-            "https://github.com/openai/codex/releases/latest"
+            "https://github.com/Eriz1818/xcodex/releases/latest"
                 .cyan()
                 .underlined(),
         ];
 
+        let inner_width = content
+            .width()
+            .min(usize::from(width.saturating_sub(4)))
+            .max(1);
+        with_border_with_inner_width(content.lines, inner_width)
+    }
+}
+
+#[cfg_attr(debug_assertions, allow(dead_code))]
+#[derive(Debug)]
+pub(crate) struct WhatsNewHistoryCell {
+    version: String,
+    bullets: Vec<String>,
+}
+
+#[cfg_attr(debug_assertions, allow(dead_code))]
+impl WhatsNewHistoryCell {
+    pub(crate) fn new(version: String, bullets: Vec<String>) -> Self {
+        Self { version, bullets }
+    }
+}
+
+impl HistoryCell for WhatsNewHistoryCell {
+    fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
+        use ratatui_macros::line;
+
+        let mut lines = Vec::new();
+        lines.push(line![
+            padded_emoji("⚡").bold().cyan(),
+            format!("What's new in ⚡xtreme-Codex v{}", self.version).bold(),
+        ]);
+        lines.push(line![""]);
+
+        for bullet in &self.bullets {
+            lines.push(line!["• ".dim(), bullet.clone()]);
+        }
+
+        lines.push(line![""]);
+        lines.push(line![
+            "Read more: ".dim(),
+            "https://github.com/Eriz1818/xcodex/releases/latest"
+                .cyan()
+                .underlined(),
+        ]);
+
+        let content: Text<'static> = lines.into();
         let inner_width = content
             .width()
             .min(usize::from(width.saturating_sub(4)))

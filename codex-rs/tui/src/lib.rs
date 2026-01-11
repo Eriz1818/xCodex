@@ -86,6 +86,7 @@ pub mod update_action;
 mod update_prompt;
 mod updates;
 mod version;
+mod whats_new;
 mod xcodex_first_run_wizard;
 mod xtreme;
 
@@ -486,7 +487,7 @@ async fn run_ratatui_app(
                 let _ = tui.terminal.clear();
                 if let Err(err) = writeln!(
                     std::io::stdout(),
-                    "No saved session found with ID {id_str}. Run `codex resume` without an ID to choose from existing sessions."
+                    "No saved session found with ID {id_str}. Run `xcodex resume` without an ID to choose from existing sessions."
                 ) {
                     error!("Failed to write resume error message: {err}");
                 }

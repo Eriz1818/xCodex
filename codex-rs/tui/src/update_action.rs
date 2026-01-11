@@ -1,21 +1,23 @@
 /// Update action the CLI should perform after the TUI exits.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UpdateAction {
-    /// Update via `npm install -g @openai/codex@latest`.
+    /// Update via `npm install -g <package>`.
     NpmGlobalLatest,
-    /// Update via `bun install -g @openai/codex@latest`.
+    /// Update via `bun install -g <package>`.
     BunGlobalLatest,
     /// Update via `brew upgrade codex`.
     BrewUpgrade,
 }
 
+const XCODEX_NPM_ARGS: [&str; 3] = ["install", "-g", "@Eriz1818/xcodex"];
+
 impl UpdateAction {
     /// Returns the list of command-line arguments for invoking the update.
     pub fn command_args(self) -> (&'static str, &'static [&'static str]) {
         match self {
-            UpdateAction::NpmGlobalLatest => ("npm", &["install", "-g", "@openai/codex"]),
-            UpdateAction::BunGlobalLatest => ("bun", &["install", "-g", "@openai/codex"]),
-            UpdateAction::BrewUpgrade => ("brew", &["upgrade", "codex"]),
+            UpdateAction::NpmGlobalLatest
+            | UpdateAction::BunGlobalLatest
+            | UpdateAction::BrewUpgrade => ("npm", &XCODEX_NPM_ARGS),
         }
     }
 
@@ -33,12 +35,14 @@ pub(crate) fn get_update_action() -> Option<UpdateAction> {
     let managed_by_npm = std::env::var_os("CODEX_MANAGED_BY_NPM").is_some();
     let managed_by_bun = std::env::var_os("CODEX_MANAGED_BY_BUN").is_some();
 
-    detect_update_action(
+    let action = detect_update_action(
         cfg!(target_os = "macos"),
         &exe,
         managed_by_npm,
         managed_by_bun,
-    )
+    );
+
+    action.or(Some(UpdateAction::NpmGlobalLatest))
 }
 
 #[cfg(any(not(debug_assertions), test))]
