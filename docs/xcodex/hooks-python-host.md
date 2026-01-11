@@ -1,10 +1,45 @@
-# Python Host hooks (long-lived “python box”)
+# Python Host hooks (long-lived “python box” / “py-box”)
 
-Python Host hooks are a **long-lived** hook process that receives hook events over stdin as JSONL.
+Python Host hooks are a **single long-lived** hook process (“py-box”) that receives hook events over stdin as JSONL.
 
-This is the recommended way to write **stateful Python hooks** without paying per-event process spawn overhead, and without needing a separately built PyO3-enabled binary.
+This is the recommended way to write **stateful Python hooks** without per-event process spawn overhead, and without needing a separately built PyO3-enabled binary.
+
+Key property: the host process is started once and stays up for the session, so you don’t pay “process creation per event”. The sandbox stays in effect for the lifetime of the host.
 
 Event parity: the host receives the same event types as external hooks. Each JSONL line contains an `event` object that matches the external hook payload shape.
+
+## Why “py-box” is high throughput
+
+The host is spawned once (sandboxed), and xcodex keeps an open stdin pipe and streams events as JSONL. Compared to “spawn a Python process per event”, this removes process startup overhead and makes the host feel “in-proc” from a throughput perspective, while still keeping Python out-of-process.
+
+## Use cases
+
+- Maintain in-memory state across events (counters, dedupe, caching, routing rules).
+- Do heavier parsing/formatting without paying per-event process startup.
+- Send notifications or metrics while keeping a single warm Python process.
+- Implement richer automations than “one shell command per event”, while still isolating Python from xcodex itself.
+
+## What is the host script?
+
+The “host script” is a small runner (Python) that:
+
+- reads one JSON object per line from stdin,
+- extracts the `event` payload,
+- calls your hook function (example: `on_event(event: dict) -> None`),
+- writes any stdout/stderr to hook log files while the TUI is running.
+
+The sample installer provides a reference host implementation and an example hook script you can customize.
+
+### Minimal example hook (Python)
+
+The sample installer includes an example hook script. A minimal “log one line per event” hook looks like:
+
+```python
+def on_event(event: dict) -> None:
+    event_type = event.get("xcodex_event_type")
+    tool = event.get("tool_name")
+    print(f"{event_type} tool={tool}")
+```
 
 ## Quickstart (no code required)
 
@@ -17,6 +52,14 @@ xcodex hooks install samples python-host
 This shows a plan and asks for confirmation before writing files (use `--yes` to skip the prompt).
 
 2) Paste the printed snippet into `CODEX_HOME/config.toml` (defaults to `~/.xcodex/config.toml`).
+
+If you want to configure it manually, a minimal example looks like:
+
+```toml
+[hooks.host]
+enabled = true
+command = ["python3", "-u", "hooks/host/python/host.py", "hooks/host/python/example_hook.py"]
+```
 
 3) Test the configured host without running a full session:
 

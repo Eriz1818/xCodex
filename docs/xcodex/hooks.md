@@ -1,12 +1,12 @@
 # xcodex hooks (automation)
 
-xcodex includes an “automation hooks” system: it can emit lifecycle events and either:
+xcodex includes an “automation hooks” system: it emits lifecycle events and can either:
 
 - spawn one-shot external commands (default),
-- stream events to a long-lived host process (recommended for stateful Python), or
+- stream events to a long-lived “py-box” host process (recommended for stateful Python), or
 - run an experimental in-process PyO3 hook bridge (advanced; separate build).
 
-Hooks are **observer-only** and **fire-and-forget**: failures are logged and do not block the run.
+Hooks are **observer-only** and **fire-and-forget**: failures are logged and do not block or modify the run.
 
 The authoritative configuration reference is `docs/config.md#hooks`.
 
@@ -14,8 +14,8 @@ The authoritative configuration reference is `docs/config.md#hooks`.
 
 | Mode | What it is | When to use | Docs |
 |---|---|---|---|
-| External hooks (spawn per event) | Spawn a command for each event; payload JSON on stdin (envelope for large payloads) | Safest/most portable; easiest to debug | `docs/xcodex/hooks-sdks.md` |
-| Python Host hooks (long-lived) | One long-lived process receives hook events as JSONL | Stateful Python hooks without per-event spawn overhead | `docs/xcodex/hooks-python-host.md` |
+| External hooks (spawn per event) | Spawn a command for each event; payload JSON on stdin (envelope for large payloads) | Safest/most portable; easiest to debug | `docs/xcodex/hooks-external.md` |
+| Python Host hooks (“py-box”, long-lived) | One long-lived process receives hook events as JSONL | Stateful Python hooks without per-event spawn overhead | `docs/xcodex/hooks-python-host.md` |
 | PyO3 hooks (in-proc) | Python runs inside xcodex via PyO3 | Advanced power users; trusted code only | `docs/xcodex/hooks-pyo3.md` |
 
 ## Performance
@@ -46,27 +46,22 @@ PYO3_PYTHON=$PY cargo run -p codex-core --bin hooks_perf --release --features py
 
 Use `--payload-bytes 12020`, `20020`, and `200020` to reproduce the larger-payload rows.
 
-## Quickstart (guided)
-
-The easiest way to start is the guided menu:
+## Quickstart (install + test)
 
 ```sh
 xcodex hooks init
-```
-
-Pass `--edit-config` to have `xcodex` update `CODEX_HOME/config.toml` directly (best-effort); otherwise it prints a snippet to paste.
-
-Then:
-
-```sh
 xcodex hooks list
 xcodex hooks paths
+
 xcodex hooks install sdks list
 xcodex hooks install samples list
+
 xcodex hooks test external --configured-only
 xcodex hooks test python-host --configured-only
 xcodex hooks test pyo3 --configured-only
 ```
+
+Use `--edit-config` with `xcodex hooks init` to have xcodex update `CODEX_HOME/config.toml` directly (best-effort), otherwise it prints a snippet to paste.
 
 ## Supported events
 
@@ -84,6 +79,10 @@ Supported xcodex event types (via `xcodex_event_type`):
 
 - `session-start`
 - `session-end`
+- `user-prompt-submit`
+- `pre-compact`
+- `notification`
+- `subagent-stop`
 - `model-request-started`
 - `model-response-completed`
 - `tool-call-started`
@@ -93,6 +92,36 @@ Supported xcodex event types (via `xcodex_event_type`):
 
 Event parity: these same event types are emitted regardless of hook mode (external, Python Host, or PyO3). Python Host wraps the payload in a JSONL object with an `event` field; the `event` value is the same payload object external hooks receive.
 
+## Payload samples
+
+Minimal example (tool call finished):
+
+```json
+{
+  "schema_version": 1,
+  "event_id": "evt-...",
+  "timestamp": "2026-01-11T23:59:59Z",
+  "session_id": "thread-...",
+  "turn_id": "turn-...",
+  "cwd": "/path/to/repo",
+  "hook_event_name": "tool_call_finished",
+  "xcodex_event_type": "tool-call-finished",
+  "tool_name": "exec_command",
+  "tool_input": { "cmd": "rg -n \"hooks\" README.md" },
+  "duration_ms": 123,
+  "success": true,
+  "output_preview": "…"
+}
+```
+
+Python Host (“py-box”) receives JSONL lines that wrap the same payload:
+
+```json
+{"schema_version":1,"type":"event","seq":1,"event":{"xcodex_event_type":"tool-call-finished","tool_name":"exec_command","tool_input":{"cmd":"…"}}}
+```
+
+See `docs/xcodex/hooks.schema.json` for the full payload schema.
+
 ## Configuration
 
 See `docs/config.md#hooks` for the full config surface. High-level:
@@ -100,7 +129,42 @@ See `docs/config.md#hooks` for the full config surface. High-level:
 - External hooks: prefer `hooks.command` (matcher + per-hook options); legacy `[hooks]` argv arrays are still supported.
 - Python Host hooks: configure `[hooks.host]` and a `command = [...]` argv to start the host process.
 - PyO3 hooks: require `hooks.enable_unsafe_inproc = true`, `hooks.inproc = ["pyo3"]`, and a separately-built PyO3-enabled binary.
-- Claude/OpenCode config compatibility: configure Claude-style events/matchers in `hooks.command`. See `docs/xcodex/hooks-claude-compat.md`.
+- Compatibility: see `docs/xcodex/hooks-claude-compat.md`.
+
+### Common setup patterns
+
+External hooks (spawn per event) using `hooks.command`:
+
+```toml
+[hooks.command]
+default_timeout_sec = 30
+
+[[hooks.command.tool_call_finished]]
+matcher = "write_file|edit_block"
+  [[hooks.command.tool_call_finished.hooks]]
+  argv = ["python3", "/absolute/path/to/tool_call_summary.py"]
+  timeout_sec = 10
+```
+
+Python Host (“py-box”):
+
+```toml
+[hooks.host]
+enabled = true
+command = ["python3", "-u", "hooks/host/python/host.py", "hooks/host/python/example_hook.py"]
+```
+
+PyO3 (in-process; requires separate build):
+
+```toml
+[hooks]
+enable_unsafe_inproc = true
+inproc = ["pyo3"]
+
+[hooks.pyo3]
+script_path = "hooks/pyo3_hook.py"
+callable = "on_event"
+```
 
 ## Where hook code lives
 
@@ -125,6 +189,18 @@ For small payloads, xcodex writes the full JSON payload to stdin.
 For large payloads, xcodex writes the full payload JSON to a file under `CODEX_HOME` and writes a small JSON envelope to stdin containing `payload_path`. Hook scripts should handle both cases.
 
 While the TUI is running, hook stdout/stderr are redirected to log files under `CODEX_HOME` so hooks do not corrupt the terminal UI.
+
+## Installation helpers (SDKs + samples)
+
+xcodex ships “installer” commands that copy templates into your `CODEX_HOME`:
+
+- Typed SDKs: `xcodex hooks install sdks <sdk|all|list>`
+- Runnable samples: `xcodex hooks install samples <external|python-host|pyo3|all|list>`
+
+See:
+
+- `docs/xcodex/hooks-sdks.md`
+- `docs/xcodex/hooks-gallery.md`
 
 ## Testing hooks before running a session
 

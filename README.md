@@ -22,9 +22,9 @@ When filing issues, include repro steps and attach the files printed by `/feedba
 
 - Keep context under control with `/compact` and `/autocompact` (see [`docs/xcodex/compact.md`](docs/xcodex/compact.md)).
 - Hide/show agent thoughts in the TUI with `/thoughts` (see [`docs/xcodex/thoughts.md`](docs/xcodex/thoughts.md)).
-- Track your worktrees and branches in the status bar with `/settings` (see [`docs/xcodex/settings.md`](docs/xcodex/settings.md)).
-- Switch a session between git worktrees with `/worktree` (see [`docs/xcodex/worktrees.md`](docs/xcodex/worktrees.md)).
-- Automate xcodex with hooks (see [`docs/xcodex/hooks.md`](docs/xcodex/hooks.md) and [`docs/xcodex/hooks-python-host.md`](docs/xcodex/hooks-python-host.md)).
+- Switch a session between git worktrees with `/worktree` and manage shared dirs (see [`docs/xcodex/worktrees.md`](docs/xcodex/worktrees.md)).
+- Open ⚡Tools with `Ctrl+O` (or `/xtreme`) and customize the status bar with `/settings` (see [`docs/xcodex/settings.md`](docs/xcodex/settings.md)).
+- Automate xcodex with **three levels of hooks**: external (spawn), Python Host “py-box” (persistent), and in-proc PyO3 (advanced) (start at [`docs/xcodex/hooks.md`](docs/xcodex/hooks.md)).
 - Manage background terminals with `/ps` (list) and `/ps-kill` (terminate) (see [`docs/xcodex/background-terminals.md`](docs/xcodex/background-terminals.md)).
 
 **Fork-only docs**
@@ -96,9 +96,7 @@ Hooks can receive event payloads containing metadata like `cwd`, and may include
 
 **What xcodex supports**
 
-- External hooks (default): spawn a command on lifecycle events; any language/runtime can be used.
-- Python Host hooks (recommended for stateful Python): long-lived host process, JSONL over stdin.
-- PyO3 hooks (advanced): in-process Python via a separately-built binary.
+- Hooks (3 levels): external (spawn), Python Host “py-box” (persistent), and PyO3 (in-proc; separate build).
 - Typed hook SDK installers: `xcodex hooks install sdks <sdk>` (Python/Rust/JavaScript/TypeScript/Go/Ruby/Java).
 
 **Performance (rough numbers)**
@@ -118,6 +116,7 @@ PYO3_PYTHON=$(command -v python3.11) cargo run -p codex-core --bin hooks_perf --
 Start here:
 
 - Hook configuration + supported events: `docs/xcodex/hooks.md`.
+- External hooks (spawn-per-event): `docs/xcodex/hooks-external.md`.
 - Typed hook SDKs + installers (Python/Rust/JS/TS/Go/Ruby/Java): `docs/xcodex/hooks-sdks.md`.
 - Python Host hooks (long-lived “python box”): `docs/xcodex/hooks-python-host.md`.
 - PyO3 hooks (in-process; separately built): `docs/xcodex/hooks-pyo3.md`.

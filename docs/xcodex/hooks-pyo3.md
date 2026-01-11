@@ -7,10 +7,17 @@ Important:
 - PyO3 support is not included in the default `xcodex` build.
 - You must build/install a separate PyO3-enabled binary (this is effectively “build xcodex from source with PyO3 enabled”).
 - PyO3 hooks are gated at runtime by `hooks.enable_unsafe_inproc = true`.
+- You choose the Python version by selecting the interpreter used for the build (`--python` / `PYO3_PYTHON`).
 
 For most Python automation, prefer **Python Host hooks** (`docs/xcodex/hooks-python-host.md`): similar performance, but out-of-process.
 
 Event parity: your PyO3 hook callable receives the same event payload object shape and event types as external hooks.
+
+## Use cases
+
+- Ultra-low overhead hooks at high event rates (no per-event IPC, no per-event `json.loads` if you use batching).
+- Trusted “power user” automations that need direct access to in-process state (advanced).
+- Environments where you want strict control over the embedded Python version (you build the binary yourself).
 
 ## Quickstart (guided)
 
@@ -28,6 +35,17 @@ xcodex hooks build pyo3
 
 This flow clones the repo and compiles an `xcodex-pyo3` binary (it does not modify your existing `xcodex`).
 By default, it checks out a pinned commit for reproducibility (override with `xcodex hooks build pyo3 --ref <commit|tag|branch>`).
+To explicitly choose your Python interpreter:
+
+```sh
+xcodex hooks build pyo3 --python "$(command -v python3.11)"
+```
+
+For a non-interactive, reproducible build (recommended for testing before release):
+
+```sh
+xcodex hooks build pyo3 --yes --python "$(command -v python3.11)" --ref 31aadee0612bd56d81e22b3973fbdd44d4b5729f
+```
 
 3) Install a runnable sample hook script into your `CODEX_HOME`:
 
@@ -68,6 +86,14 @@ PyO3 hooks are configured via `hooks.pyo3.script_path` in `config.toml`.
 ```sh
 cd codex-rs
 cargo test -p codex-cli --test hooks
+```
+
+## Alternative build helper (repo script)
+
+If you already have the repo checked out and just want to build/install a local PyO3-enabled binary from your working tree:
+
+```sh
+./scripts/install-xcodex-pyo3.sh --release --python "$(command -v python3.11)"
 ```
 
 If you have a local PyO3 setup and want to run the feature-gated test:

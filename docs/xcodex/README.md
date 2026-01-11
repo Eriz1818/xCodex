@@ -6,7 +6,7 @@ xcodex (xtreme-codex) is an effort to add features to upstream Codex CLI.
 
 - Slash commands: `/help xcodex`, `/status`, `/settings`, `/compact`, `/autocompact`, and `/thoughts` are working.
 - Background terminals: `/ps` lists running background terminals and hooks; `/ps-kill` can terminate background terminals.
-- Hooks: basic automation hooks are in place.
+- Hooks: 3 levels of automation hooks (external, Python Host “py-box”, and PyO3 in-proc) are in place.
 - Other features are in progress; expect rough edges and some churn.
 
 ## What’s here
@@ -14,6 +14,9 @@ xcodex (xtreme-codex) is an effort to add features to upstream Codex CLI.
 - Settings: `docs/xcodex/settings.md`
 - Worktrees: `docs/xcodex/worktrees.md` (quickstart + shared-dirs contract at the top)
 - Hooks: `docs/xcodex/hooks.md`
+- External hooks: `docs/xcodex/hooks-external.md`
+- Python Host hooks (“py-box”): `docs/xcodex/hooks-python-host.md`
+- PyO3 hooks (in-proc; separate build): `docs/xcodex/hooks-pyo3.md`
 - Hooks gallery: `docs/xcodex/hooks-gallery.md`
 - Keeping context under control: `docs/xcodex/compact.md`
 - Hiding thoughts: `docs/xcodex/thoughts.md`
