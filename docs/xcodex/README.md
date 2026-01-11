@@ -26,6 +26,10 @@ To build the current working tree and install it as `xcodex` locally:
 
 ```sh
 just xcodex-install
+
+# Default: local Bazel build (no BuildBuddy/remote cache).
+# Opt into remote cache/BEP: just xcodex-install --remote
+# Avoid all network fetches (requires deps already cached): just xcodex-install --offline
 ```
 
 This installs to `~/.local/bin/xcodex` by default.

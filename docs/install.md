@@ -34,6 +34,9 @@ cargo run --bin codex -- "explain this codebase to me"
 
 # Install this fork locally as `xcodex` (default: ~/.local/bin/xcodex).
 just xcodex-install --release
+# Default: local Bazel build (no BuildBuddy/remote cache).
+# Opt into remote cache/BEP: just xcodex-install --release --remote
+# Avoid all network fetches (requires deps already cached): just xcodex-install --release --offline
 xcodex --version
 
 # After making changes, use the root justfile helpers (they default to codex-rs):

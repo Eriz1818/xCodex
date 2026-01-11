@@ -61,6 +61,10 @@ cargo install just
 cd codex-rs
 just xcodex-install --release
 
+# Default: local Bazel build (no BuildBuddy/remote cache).
+# Opt into remote cache/BEP: just xcodex-install --release --remote
+# Avoid all network fetches (requires deps already cached): just xcodex-install --release --offline
+
 xcodex --version
 xcodex
 ```
