@@ -292,6 +292,7 @@ async fn context_indicator_shows_used_tokens_when_window_unknown() {
         total_token_usage: token_usage.clone(),
         last_token_usage: token_usage,
         model_context_window: None,
+        full_model_context_window: None,
     };
 
     chat.handle_codex_event(Event {
@@ -553,6 +554,7 @@ fn make_token_info(total_tokens: i64, context_window: i64) -> TokenUsageInfo {
         total_token_usage: usage(total_tokens),
         last_token_usage: usage(total_tokens),
         model_context_window: Some(context_window),
+        full_model_context_window: Some(context_window),
     }
 }
 
