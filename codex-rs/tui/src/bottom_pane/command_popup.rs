@@ -811,6 +811,25 @@ mod tests {
     }
 
     #[test]
+    fn arrow_key_selection_is_not_reset_by_popup_sync() {
+        let mut popup = CommandPopup::new(Vec::new(), false);
+        popup.on_composer_text_change("/worktree ".to_string());
+
+        let first = popup.selected_item();
+        popup.move_down();
+        let moved = popup.selected_item();
+        assert_ne!(first, moved, "expected move_down to change selection");
+
+        // Simulate redundant sync calls (e.g. after an Up/Down key event).
+        popup.on_composer_text_change("/worktree ".to_string());
+        assert_eq!(
+            popup.selected_item(),
+            moved,
+            "expected selection to persist across redundant sync"
+        );
+    }
+
+    #[test]
     fn worktree_subcommands_filter_by_prefix() {
         let mut popup = CommandPopup::new(Vec::new(), false);
         popup.on_composer_text_change("/worktree d".to_string());
