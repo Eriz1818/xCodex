@@ -21,6 +21,10 @@ tui *args:
 # Build and install the CLI as `xcodex` (defaults to ~/.local/bin/xcodex).
 xcodex-install *args:
     bash ../scripts/install-xcodex.sh "$@"
+
+# Build and install a PyO3-enabled CLI as `xcodex-pyo3` (defaults to ~/.local/bin/xcodex-pyo3).
+xcodex-pyo3-install *args:
+    bash ../scripts/install-xcodex-pyo3.sh "$@"
 # Run the CLI version of the file-search crate.
 file-search *args:
     cargo run --bin codex-file-search -- "$@"
@@ -35,10 +39,14 @@ fmt:
     cargo fmt -- --config imports_granularity=Item
 
 fix *args:
-    cargo clippy --fix --all-features --tests --allow-dirty "$@"
+    bash -lc 'set -euo pipefail; \
+      if [[ -z "${PYO3_PYTHON:-}" ]] && command -v python3.11 >/dev/null; then export PYO3_PYTHON="$(command -v python3.11)"; fi; \
+      cargo clippy --fix --all-features --tests --allow-dirty "$@"'
 
 clippy:
-    cargo clippy --all-features --tests "$@"
+    bash -lc 'set -euo pipefail; \
+      if [[ -z "${PYO3_PYTHON:-}" ]] && command -v python3.11 >/dev/null; then export PYO3_PYTHON="$(command -v python3.11)"; fi; \
+      cargo clippy --all-features --tests "$@"'
 
 hooks-codegen:
     cargo run -p codex-core --bin hooks_schema --features hooks-schema --quiet > ../docs/xcodex/hooks.schema.json
@@ -70,8 +78,8 @@ hooks-templates-smoke:
         cp /ws/codex-rs/common/src/hooks_sdk_assets/python/xcodex_hooks_types.py "$CODEX_HOME/hooks/"; \
         cp /ws/codex-rs/common/src/hooks_sdk_assets/python/template_hook.py "$CODEX_HOME/hooks/templates/python/log_jsonl.py"; \
         payload_path="$CODEX_HOME/payload.json"; \
-        printf "%s" "{\"schema-version\":1,\"type\":\"tool-call-finished\",\"event-id\":\"e\",\"timestamp\":\"t\",\"thread-id\":\"th\",\"turn-id\":\"tu\",\"cwd\":\"/tmp\",\"model-request-id\":\"m\",\"attempt\":1,\"tool-name\":\"exec\",\"call-id\":\"c\",\"status\":\"completed\",\"duration-ms\":1,\"success\":true,\"output-bytes\":0,\"__marker__\":\"py\"}" > "$payload_path"; \
-        printf "%s" "{\"payload-path\":\"$payload_path\"}" | python3 "$CODEX_HOME/hooks/templates/python/log_jsonl.py"; \
+        printf "%s" "{\"schema_version\":1,\"event_id\":\"e\",\"timestamp\":\"t\",\"session_id\":\"th\",\"transcript_path\":\"\",\"permission_mode\":\"default\",\"hook_event_name\":\"PostToolUse\",\"xcodex_event_type\":\"tool-call-finished\",\"turn_id\":\"tu\",\"cwd\":\"/tmp\",\"tool_name\":\"Bash\",\"tool_use_id\":\"c\",\"tool_response\":null,\"status\":\"completed\",\"duration_ms\":1,\"success\":true,\"output_bytes\":0,\"__marker__\":\"py\"}" > "$payload_path"; \
+        printf "%s" "{\"payload_path\":\"$payload_path\"}" | python3 "$CODEX_HOME/hooks/templates/python/log_jsonl.py"; \
         grep -Eq "\"__marker__\"[[:space:]]*:[[:space:]]*\"py\"" "$CODEX_HOME/hooks.jsonl"; \
       '"'"'; }; \
       run_node() { docker run --rm -v "{{invocation_directory()}}:/ws" node:22 bash -lc '"'"'set -euo pipefail; CODEX_HOME="$(mktemp -d)"; export CODEX_HOME; \
@@ -79,8 +87,8 @@ hooks-templates-smoke:
         cp /ws/codex-rs/common/src/hooks_sdk_assets/js/xcodex_hooks.mjs "$CODEX_HOME/hooks/"; \
         cp /ws/codex-rs/common/src/hooks_sdk_assets/js/template_hook.mjs "$CODEX_HOME/hooks/templates/js/log_jsonl.mjs"; \
         payload_path="$CODEX_HOME/payload.json"; \
-        printf "%s" "{\"schema-version\":1,\"type\":\"tool-call-finished\",\"event-id\":\"e\",\"timestamp\":\"t\",\"thread-id\":\"th\",\"turn-id\":\"tu\",\"cwd\":\"/tmp\",\"model-request-id\":\"m\",\"attempt\":1,\"tool-name\":\"exec\",\"call-id\":\"c\",\"status\":\"completed\",\"duration-ms\":1,\"success\":true,\"output-bytes\":0,\"__marker__\":\"node\"}" > "$payload_path"; \
-        printf "%s" "{\"payload-path\":\"$payload_path\"}" | node "$CODEX_HOME/hooks/templates/js/log_jsonl.mjs"; \
+        printf "%s" "{\"schema_version\":1,\"event_id\":\"e\",\"timestamp\":\"t\",\"session_id\":\"th\",\"transcript_path\":\"\",\"permission_mode\":\"default\",\"hook_event_name\":\"PostToolUse\",\"xcodex_event_type\":\"tool-call-finished\",\"turn_id\":\"tu\",\"cwd\":\"/tmp\",\"tool_name\":\"Bash\",\"tool_use_id\":\"c\",\"tool_response\":null,\"status\":\"completed\",\"duration_ms\":1,\"success\":true,\"output_bytes\":0,\"__marker__\":\"node\"}" > "$payload_path"; \
+        printf "%s" "{\"payload_path\":\"$payload_path\"}" | node "$CODEX_HOME/hooks/templates/js/log_jsonl.mjs"; \
         grep -Eq "\"__marker__\"[[:space:]]*:[[:space:]]*\"node\"" "$CODEX_HOME/hooks.jsonl"; \
       '"'"'; }; \
       run_ruby() { docker run --rm -v "{{invocation_directory()}}:/ws" ruby:3.3 bash -lc '"'"'set -euo pipefail; CODEX_HOME="$(mktemp -d)"; export CODEX_HOME; \
@@ -88,32 +96,32 @@ hooks-templates-smoke:
         cp /ws/codex-rs/common/src/hooks_sdk_assets/ruby/xcodex_hooks.rb "$CODEX_HOME/hooks/"; \
         cp /ws/codex-rs/common/src/hooks_sdk_assets/ruby/template_hook.rb "$CODEX_HOME/hooks/templates/ruby/log_jsonl.rb"; \
         payload_path="$CODEX_HOME/payload.json"; \
-        printf "%s" "{\"schema-version\":1,\"type\":\"tool-call-finished\",\"event-id\":\"e\",\"timestamp\":\"t\",\"thread-id\":\"th\",\"turn-id\":\"tu\",\"cwd\":\"/tmp\",\"model-request-id\":\"m\",\"attempt\":1,\"tool-name\":\"exec\",\"call-id\":\"c\",\"status\":\"completed\",\"duration-ms\":1,\"success\":true,\"output-bytes\":0,\"__marker__\":\"rb\"}" > "$payload_path"; \
-        printf "%s" "{\"payload-path\":\"$payload_path\"}" | ruby "$CODEX_HOME/hooks/templates/ruby/log_jsonl.rb"; \
+        printf "%s" "{\"schema_version\":1,\"event_id\":\"e\",\"timestamp\":\"t\",\"session_id\":\"th\",\"transcript_path\":\"\",\"permission_mode\":\"default\",\"hook_event_name\":\"PostToolUse\",\"xcodex_event_type\":\"tool-call-finished\",\"turn_id\":\"tu\",\"cwd\":\"/tmp\",\"tool_name\":\"Bash\",\"tool_use_id\":\"c\",\"tool_response\":null,\"status\":\"completed\",\"duration_ms\":1,\"success\":true,\"output_bytes\":0,\"__marker__\":\"rb\"}" > "$payload_path"; \
+        printf "%s" "{\"payload_path\":\"$payload_path\"}" | ruby "$CODEX_HOME/hooks/templates/ruby/log_jsonl.rb"; \
         grep -Eq "\"__marker__\"[[:space:]]*:[[:space:]]*\"rb\"" "$CODEX_HOME/hooks.jsonl"; \
       '"'"'; }; \
       run_go() { docker run --rm -v "{{invocation_directory()}}:/ws" -w /ws/codex-rs/common/src/hooks_sdk_assets/go golang:1.22 bash -lc '"'"'set -euo pipefail; \
         /usr/local/go/bin/go build -o /tmp/hook ./cmd/log_jsonl; \
         CODEX_HOME="$(mktemp -d)"; export CODEX_HOME; \
         payload_path="$CODEX_HOME/payload.json"; \
-        printf "%s" "{\"schema-version\":1,\"type\":\"tool-call-finished\",\"event-id\":\"e\",\"timestamp\":\"t\",\"thread-id\":\"th\",\"turn-id\":\"tu\",\"cwd\":\"/tmp\",\"model-request-id\":\"m\",\"attempt\":1,\"tool-name\":\"exec\",\"call-id\":\"c\",\"status\":\"completed\",\"duration-ms\":1,\"success\":true,\"output-bytes\":0,\"__marker__\":\"go\"}" > "$payload_path"; \
-        printf "%s" "{\"payload-path\":\"$payload_path\"}" | /tmp/hook; \
+        printf "%s" "{\"schema_version\":1,\"event_id\":\"e\",\"timestamp\":\"t\",\"session_id\":\"th\",\"transcript_path\":\"\",\"permission_mode\":\"default\",\"hook_event_name\":\"PostToolUse\",\"xcodex_event_type\":\"tool-call-finished\",\"turn_id\":\"tu\",\"cwd\":\"/tmp\",\"tool_name\":\"Bash\",\"tool_use_id\":\"c\",\"tool_response\":null,\"status\":\"completed\",\"duration_ms\":1,\"success\":true,\"output_bytes\":0,\"__marker__\":\"go\"}" > "$payload_path"; \
+        printf "%s" "{\"payload_path\":\"$payload_path\"}" | /tmp/hook; \
         grep -Eq "\"__marker__\"[[:space:]]*:[[:space:]]*\"go\"" "$CODEX_HOME/hooks.jsonl"; \
       '"'"'; }; \
       run_java() { docker run --rm -v "{{invocation_directory()}}:/ws" -w /ws/codex-rs/common/src/hooks_sdk_assets/java maven:3.9-eclipse-temurin-17 bash -lc '"'"'set -euo pipefail; \
         mvn -q -DskipTests -pl template -am package dependency:copy-dependencies; \
         CODEX_HOME="$(mktemp -d)"; export CODEX_HOME; \
         payload_path="$CODEX_HOME/payload.json"; \
-        printf "%s" "{\"schema-version\":1,\"type\":\"tool-call-finished\",\"event-id\":\"e\",\"timestamp\":\"t\",\"thread-id\":\"th\",\"turn-id\":\"tu\",\"cwd\":\"/tmp\",\"model-request-id\":\"m\",\"attempt\":1,\"tool-name\":\"exec\",\"call-id\":\"c\",\"status\":\"completed\",\"duration-ms\":1,\"success\":true,\"output-bytes\":0,\"__marker__\":\"java\"}" > "$payload_path"; \
-        printf "%s" "{\"payload-path\":\"$payload_path\"}" | java -cp "template/target/classes:template/target/dependency/*" dev.xcodex.hooks.LogJsonlHook; \
+        printf "%s" "{\"schema_version\":1,\"event_id\":\"e\",\"timestamp\":\"t\",\"session_id\":\"th\",\"transcript_path\":\"\",\"permission_mode\":\"default\",\"hook_event_name\":\"PostToolUse\",\"xcodex_event_type\":\"tool-call-finished\",\"turn_id\":\"tu\",\"cwd\":\"/tmp\",\"tool_name\":\"Bash\",\"tool_use_id\":\"c\",\"tool_response\":null,\"status\":\"completed\",\"duration_ms\":1,\"success\":true,\"output_bytes\":0,\"__marker__\":\"java\"}" > "$payload_path"; \
+        printf "%s" "{\"payload_path\":\"$payload_path\"}" | java -cp "template/target/classes:template/target/dependency/*" dev.xcodex.hooks.LogJsonlHook; \
         grep -Eq "\"__marker__\"[[:space:]]*:[[:space:]]*\"java\"" "$CODEX_HOME/hooks.jsonl"; \
       '"'"'; }; \
       run_rust() { docker run --rm -v "{{invocation_directory()}}:/ws" -w /ws/codex-rs/common/src/hooks_sdk_assets/rust rust:1.90 bash -lc '"'"'set -euo pipefail; \
         /usr/local/cargo/bin/cargo build --release; \
         CODEX_HOME="$(mktemp -d)"; export CODEX_HOME; \
         payload_path="$CODEX_HOME/payload.json"; \
-        printf "%s" "{\"schema-version\":1,\"type\":\"tool-call-finished\",\"event-id\":\"e\",\"timestamp\":\"t\",\"thread-id\":\"th\",\"turn-id\":\"tu\",\"cwd\":\"/tmp\",\"model-request-id\":\"m\",\"attempt\":1,\"tool-name\":\"exec\",\"call-id\":\"c\",\"status\":\"completed\",\"duration-ms\":1,\"success\":true,\"output-bytes\":0,\"__marker__\":\"rust\"}" > "$payload_path"; \
-        printf "%s" "{\"payload-path\":\"$payload_path\"}" | ./target/release/xcodex-hooks-rust-template; \
+        printf "%s" "{\"schema_version\":1,\"event_id\":\"e\",\"timestamp\":\"t\",\"session_id\":\"th\",\"transcript_path\":\"\",\"permission_mode\":\"default\",\"hook_event_name\":\"PostToolUse\",\"xcodex_event_type\":\"tool-call-finished\",\"turn_id\":\"tu\",\"cwd\":\"/tmp\",\"tool_name\":\"Bash\",\"tool_use_id\":\"c\",\"tool_response\":null,\"status\":\"completed\",\"duration_ms\":1,\"success\":true,\"output_bytes\":0,\"__marker__\":\"rust\"}" > "$payload_path"; \
+        printf "%s" "{\"payload_path\":\"$payload_path\"}" | ./target/release/xcodex-hooks-rust-template; \
         grep -Eq "\"__marker__\"[[:space:]]*:[[:space:]]*\"rust\"" "$CODEX_HOME/hooks.jsonl"; \
       '"'"'; }; \
       run_python; run_node; run_ruby; run_go; run_java; run_rust; echo "ok";'
