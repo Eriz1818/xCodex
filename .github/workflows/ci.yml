@@ -36,14 +36,13 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          # Use a rust-release version that includes all native binaries.
-          CODEX_VERSION=0.74.0
+          XCODEX_VERSION="$(grep -m1 '^version' codex-rs/Cargo.toml | sed -E 's/version *= *\"([^\"]+)\".*/\\1/')"
           OUTPUT_DIR="${RUNNER_TEMP}"
           python3 ./scripts/stage_npm_packages.py \
-            --release-version "$CODEX_VERSION" \
-            --package codex \
+            --release-version "$XCODEX_VERSION" \
+            --package xcodex \
             --output-dir "$OUTPUT_DIR"
-          PACK_OUTPUT="${OUTPUT_DIR}/codex-npm-${CODEX_VERSION}.tgz"
+          PACK_OUTPUT="${OUTPUT_DIR}/xcodex-npm-${XCODEX_VERSION}.tgz"
           echo "pack_output=$PACK_OUTPUT" >> "$GITHUB_OUTPUT"
 
       - name: Upload staged npm package artifact
