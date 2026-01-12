@@ -49,6 +49,77 @@ jobs:
           echo "✅  Tag and Cargo.toml agree (${tag_ver})"
           echo "::endgroup::"
 
+      - name: Preflight native artifact targets
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          python3 - <<'PY'
+          from __future__ import annotations
+
+          import ast
+          import re
+          from pathlib import Path
+
+          repo_root = Path(".").resolve()
+          installer_path = repo_root / "codex-cli" / "scripts" / "install_native_deps.py"
+          workflow_path = repo_root / ".github" / "workflows" / "xcodex-release.yml"
+
+          installer_src = installer_path.read_text(encoding="utf-8")
+          mod = ast.parse(installer_src, filename=str(installer_path))
+
+          binary_targets: list[str] | None = None
+          for node in mod.body:
+            if not isinstance(node, ast.Assign):
+              continue
+            for target in node.targets:
+              if isinstance(target, ast.Name) and target.id == "BINARY_TARGETS":
+                binary_targets = ast.literal_eval(node.value)
+                break
+            if binary_targets is not None:
+              break
+
+          if binary_targets is None:
+            raise SystemExit(f"Could not find BINARY_TARGETS in {installer_path}")
+          if not isinstance(binary_targets, tuple) or not all(isinstance(x, str) for x in binary_targets):
+            raise SystemExit(f"Unexpected BINARY_TARGETS value in {installer_path}: {binary_targets!r}")
+
+          workflow_src = workflow_path.read_text(encoding="utf-8")
+          workflow_targets = set(re.findall(r"^\\s*target:\\s*([^\\s]+)\\s*$", workflow_src, flags=re.MULTILINE))
+
+          expected = set(binary_targets)
+          missing = sorted(expected - workflow_targets)
+          extra = sorted(workflow_targets - expected)
+
+          if missing or extra:
+            lines = [
+              "Native target mismatch between install_native_deps.py and workflow matrix.",
+              f"Expected (from {installer_path}): {sorted(expected)}",
+              f"Found (from {workflow_path}): {sorted(workflow_targets)}",
+            ]
+            if missing:
+              lines.append(f"Missing targets in workflow: {missing}")
+            if extra:
+              lines.append(f"Extra targets in workflow: {extra}")
+            raise SystemExit("\\n".join(lines))
+
+          # Guardrail: ARM targets should run on ARM-capable runners to avoid cross-compile surprises.
+          pairs = re.findall(r"^\\s*-\\s*runner:\\s*([^\\s]+)\\s*$\\n\\s*target:\\s*([^\\s]+)\\s*$", workflow_src, flags=re.MULTILINE)
+          pair_map = {(runner, target) for runner, target in pairs}
+          required_pairs = {
+            ("ubuntu-24.04-arm", "aarch64-unknown-linux-musl"),
+            ("windows-11-arm", "aarch64-pc-windows-msvc"),
+          }
+          missing_pairs = sorted(required_pairs - pair_map)
+          if missing_pairs:
+            raise SystemExit(
+              "ARM runner mapping mismatch; expected these (runner, target) pairs:\n"
+              + "\n".join(f"- {runner} / {target}" for runner, target in missing_pairs)
+            )
+
+          print("✅ Native artifact target preflight passed.")
+          PY
+
   build:
     needs: tag-check
     name: Build - ${{ matrix.runner }} - ${{ matrix.target }}
