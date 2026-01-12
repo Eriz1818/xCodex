@@ -1,6 +1,5 @@
 #![cfg(not(debug_assertions))]
 
-use crate::update_action;
 use chrono::DateTime;
 use chrono::Duration;
 use chrono::Utc;
@@ -110,6 +109,7 @@ fn is_newer(latest: &str, current: &str) -> Option<bool> {
     }
 }
 
+#[cfg(test)]
 fn extract_version_from_cask(cask_contents: &str) -> anyhow::Result<String> {
     cask_contents
         .lines()

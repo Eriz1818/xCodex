@@ -574,12 +574,14 @@ impl BottomPane {
         }
     }
 
+    #[allow(dead_code)]
     pub(crate) fn set_unified_exec_processes(&mut self, processes: Vec<String>) {
         if self.unified_exec_footer.set_processes(processes) {
             self.request_redraw();
         }
     }
 
+    #[allow(dead_code)]
     pub(crate) fn set_unified_exec_hooks(&mut self, hooks: Vec<String>) {
         if self.unified_exec_footer.set_hooks(hooks) {
             self.request_redraw();

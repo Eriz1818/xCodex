@@ -1680,10 +1680,6 @@ fn print_completion(cmd: CompletionCommand) {
     generate(cmd.shell, &mut app, name, &mut std::io::stdout());
 }
 
-fn hooks_dir(codex_home: &std::path::Path) -> std::path::PathBuf {
-    codex_home.join("hooks")
-}
-
 fn hooks_logs_dir(codex_home: &std::path::Path) -> std::path::PathBuf {
     codex_home.join("tmp").join("hooks").join("logs")
 }

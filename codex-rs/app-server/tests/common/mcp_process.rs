@@ -72,8 +72,6 @@ pub struct McpProcess {
     strict_request_ids: bool,
 }
 
-pub const DEFAULT_CLIENT_NAME: &str = "codex-app-server-tests";
-
 impl McpProcess {
     pub async fn new(codex_home: &Path) -> anyhow::Result<Self> {
         Self::new_with_env(codex_home, &[]).await

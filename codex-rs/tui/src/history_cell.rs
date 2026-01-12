@@ -803,6 +803,7 @@ impl HistoryCell for UnifiedExecProcessesCell {
     }
 }
 
+#[cfg(test)]
 pub(crate) fn new_unified_exec_sessions_output(
     processes: Vec<BackgroundActivityEntry>,
     hooks: Vec<BackgroundActivityEntry>,

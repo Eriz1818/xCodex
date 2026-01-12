@@ -121,9 +121,11 @@ pub(crate) enum AppEvent {
     },
 
     /// Open the `/worktree` command menu in the composer (slash popup).
+    #[allow(dead_code)]
     OpenWorktreeCommandMenu,
 
     /// Open a command by inserting it into the composer (when empty).
+    #[allow(dead_code)]
     OpenToolsCommand {
         command: String,
     },

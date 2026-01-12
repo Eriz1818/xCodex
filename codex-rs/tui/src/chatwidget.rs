@@ -2997,26 +2997,23 @@ impl ChatWidget {
                 }
                 ["init"] => {
                     use codex_common::hooks_samples_install::HookSample;
-                    let mut lines = Vec::new();
-                    lines.push(vec!["/hooks init".magenta()].into());
-                    lines.push(Line::from(""));
-                    lines.push(vec!["Choose a hook mode:".magenta().bold()].into());
-                    lines.push(vec!["1) ".dim(), HookSample::External.title().into()].into());
-                    lines.push(vec!["   ".into(), HookSample::External.description().dim()].into());
-                    lines.push(Line::from(""));
-                    lines.push(vec!["2) ".dim(), HookSample::PythonHost.title().into()].into());
-                    lines.push(
+                    let lines = vec![
+                        vec!["/hooks init".magenta()].into(),
+                        Line::from(""),
+                        vec!["Choose a hook mode:".magenta().bold()].into(),
+                        vec!["1) ".dim(), HookSample::External.title().into()].into(),
+                        vec!["   ".into(), HookSample::External.description().dim()].into(),
+                        Line::from(""),
+                        vec!["2) ".dim(), HookSample::PythonHost.title().into()].into(),
                         vec!["   ".into(), HookSample::PythonHost.description().dim()].into(),
-                    );
-                    lines.push(Line::from(""));
-                    lines.push(vec!["3) ".dim(), HookSample::Pyo3.title().into()].into());
-                    lines.push(vec!["   ".into(), HookSample::Pyo3.description().dim()].into());
-                    lines.push(Line::from(""));
-                    lines.push(vec!["Run: ".dim(), "/hooks init external".cyan()].into());
-                    lines.push(vec!["Run: ".dim(), "/hooks init python-host".cyan()].into());
-                    lines.push(vec!["Run: ".dim(), "/hooks init pyo3".cyan()].into());
-                    lines.push(Line::from(""));
-                    lines.push(
+                        Line::from(""),
+                        vec!["3) ".dim(), HookSample::Pyo3.title().into()].into(),
+                        vec!["   ".into(), HookSample::Pyo3.description().dim()].into(),
+                        Line::from(""),
+                        vec!["Run: ".dim(), "/hooks init external".cyan()].into(),
+                        vec!["Run: ".dim(), "/hooks init python-host".cyan()].into(),
+                        vec!["Run: ".dim(), "/hooks init pyo3".cyan()].into(),
+                        Line::from(""),
                         vec![
                             "Note: ".dim(),
                             "installing writes files; re-run with ".dim(),
@@ -3024,7 +3021,7 @@ impl ChatWidget {
                             " to apply.".dim(),
                         ]
                         .into(),
-                    );
+                    ];
                     self.add_plain_history_lines(lines);
                 }
                 ["init", mode, rest @ ..] => {

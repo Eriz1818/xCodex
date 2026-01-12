@@ -365,7 +365,7 @@ impl WorktreeInitWizardView {
         }
     }
 
-    fn header(&self) -> ColumnRenderable {
+    fn header(&self) -> ColumnRenderable<'_> {
         let mut header = ColumnRenderable::new();
         header.push(Line::from(self.step_title().bold()));
         header.push(Line::from(vec![
