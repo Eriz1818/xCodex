@@ -2,7 +2,6 @@
 
 use codex_apply_patch::APPLY_PATCH_TOOL_INSTRUCTIONS;
 use codex_core::features::Feature;
-use codex_core::models_manager::model_info::BASE_INSTRUCTIONS;
 use codex_core::protocol::AskForApproval;
 use codex_core::protocol::ENVIRONMENT_CONTEXT_OPEN_TAG;
 use codex_core::protocol::EventMsg;
@@ -160,7 +159,12 @@ async fn codex_mini_latest_tools() -> anyhow::Result<()> {
     let req1 = mount_sse_once(&server, sse_completed("resp-1")).await;
     let req2 = mount_sse_once(&server, sse_completed("resp-2")).await;
 
-    let TestCodex { codex, .. } = test_codex()
+    let TestCodex {
+        codex,
+        config,
+        thread_manager,
+        ..
+    } = test_codex()
         .with_config(|config| {
             config.user_instructions = Some("be consistent and helpful".to_string());
             config.features.disable(Feature::ApplyPatchFreeform);
@@ -190,7 +194,17 @@ async fn codex_mini_latest_tools() -> anyhow::Result<()> {
 
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 
-    let expected_instructions = [BASE_INSTRUCTIONS, APPLY_PATCH_TOOL_INSTRUCTIONS].join("\n");
+    let expected_instructions = thread_manager
+        .get_models_manager()
+        .construct_model_info(
+            config
+                .model
+                .as_deref()
+                .expect("test config should have a model"),
+            &config,
+        )
+        .await
+        .base_instructions;
 
     let body0 = req1.single_request().body_json();
     let instructions0 = body0["instructions"]

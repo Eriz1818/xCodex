@@ -1986,18 +1986,11 @@ async fn auto_compact_triggers_after_function_call_over_95_percent_usage() {
     wait_for_event(&codex, |msg| matches!(msg, EventMsg::TurnComplete(_))).await;
 
     // Assert first request captured expected user message that triggers function call.
-    let first_request = first_turn_mock.single_request().input();
+    let user_messages = first_turn_mock.single_request().message_input_texts("user");
     assert!(
-        first_request.iter().any(|item| {
-            item.get("type").and_then(|value| value.as_str()) == Some("message")
-                && item
-                    .get("content")
-                    .and_then(|content| content.as_array())
-                    .and_then(|entries| entries.first())
-                    .and_then(|entry| entry.get("text"))
-                    .and_then(|value| value.as_str())
-                    == Some(FUNCTION_CALL_LIMIT_MSG)
-        }),
+        user_messages
+            .iter()
+            .any(|message| message == FUNCTION_CALL_LIMIT_MSG),
         "first request should include the user message that triggers the function call"
     );
 
