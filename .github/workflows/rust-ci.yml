@@ -365,6 +365,18 @@ jobs:
         with:
           targets: ${{ matrix.target }}
           components: clippy
+      - name: Setup Python (macOS)
+        if: ${{ startsWith(matrix.runner, 'macos') }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Pin PyO3 interpreter (macOS)
+        if: ${{ startsWith(matrix.runner, 'macos') }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -V
+          echo "PYO3_PYTHON=$(python -c 'import sys; print(sys.executable)')" >> "$GITHUB_ENV"
 
       - name: Compute lockfile hash
         id: lockhash
@@ -606,6 +618,18 @@ jobs:
       - uses: dtolnay/rust-toolchain@1.90
         with:
           targets: ${{ matrix.target }}
+      - name: Setup Python (macOS)
+        if: ${{ startsWith(matrix.runner, 'macos') }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Pin PyO3 interpreter (macOS)
+        if: ${{ startsWith(matrix.runner, 'macos') }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -V
+          echo "PYO3_PYTHON=$(python -c 'import sys; print(sys.executable)')" >> "$GITHUB_ENV"
 
       - name: Compute lockfile hash
         id: lockhash
