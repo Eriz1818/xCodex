@@ -33,6 +33,8 @@ xcodex hooks doctor pyo3
 xcodex hooks build pyo3
 ```
 
+This usually takes a few minutes the first time (it compiles a full Rust binary).
+
 This flow clones the repo and compiles an `xcodex-pyo3` binary (it does not modify your existing `xcodex`).
 By default, it checks out a pinned commit for reproducibility (override with `xcodex hooks build pyo3 --ref <commit|tag|branch>`).
 If the pinned commit ever stops building for your environment, try `--ref main` (or a known-good commit).
