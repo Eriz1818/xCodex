@@ -29,6 +29,7 @@ use crate::stream_events_utils::handle_non_tool_response_item;
 use crate::stream_events_utils::handle_output_item_done;
 use crate::terminal;
 use crate::truncate::TruncationPolicy;
+use crate::user_notification::UserNotification;
 use crate::user_notification::UserNotifier;
 use crate::util::error_or_panic;
 use async_channel::Receiver;
@@ -1856,6 +1857,10 @@ impl Session {
         &self.services.user_hooks
     }
 
+    pub(crate) fn notifier(&self) -> &UserNotifier {
+        &self.services.notifier
+    }
+
     pub(crate) fn user_shell(&self) -> Arc<shell::Shell> {
         Arc::clone(&self.services.user_shell)
     }
@@ -2952,13 +2957,22 @@ pub(crate) async fn run_turn(
 
                 if !needs_follow_up {
                     last_agent_message = turn_last_agent_message;
+                    let input_messages = turn_input_messages;
                     sess.user_hooks().agent_turn_complete(
                         sess.conversation_id.to_string(),
                         turn_context.sub_id.clone(),
                         turn_context.cwd.display().to_string(),
-                        turn_input_messages,
+                        input_messages.clone(),
                         last_agent_message.clone(),
                     );
+                    sess.notifier()
+                        .notify(&UserNotification::AgentTurnComplete {
+                            thread_id: sess.conversation_id.to_string(),
+                            turn_id: turn_context.sub_id.clone(),
+                            cwd: turn_context.cwd.display().to_string(),
+                            input_messages,
+                            last_assistant_message: last_agent_message.clone(),
+                        });
                     break;
                 }
                 continue;
