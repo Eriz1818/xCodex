@@ -30,9 +30,6 @@ common --action_env=CARGO_PKG_VERSION_PATCH
 common --test_env=PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin
 
 common --test_output=errors
-common --bes_results_url=https://app.buildbuddy.io/invocation/
-common --bes_backend=grpcs://remote.buildbuddy.io
-common --remote_cache=grpcs://remote.buildbuddy.io
 common --remote_download_toplevel
 common --nobuild_runfile_links
 common --remote_timeout=3600
@@ -45,7 +42,9 @@ common --grpc_keepalive_time=30s
 # memory in exchange for higher download concurrency.
 common --jobs=30
 
-common:remote --extra_execution_platforms=//:rbe
-common:remote --remote_executor=grpcs://remote.buildbuddy.io
-common:remote --jobs=800
-
+common:buildbuddy --bes_results_url=https://app.buildbuddy.io/invocation/
+common:buildbuddy --bes_backend=grpcs://remote.buildbuddy.io
+common:buildbuddy --remote_cache=grpcs://remote.buildbuddy.io
+common:buildbuddy --remote_executor=grpcs://remote.buildbuddy.io
+common:buildbuddy --extra_execution_platforms=//:rbe
+common:buildbuddy --jobs=800

@@ -125,6 +125,7 @@ jobs:
           )
 
           if [[ -n "${BUILDBUDDY_API_KEY:-}" ]]; then
+            args+=("--config=buildbuddy")
             args+=("--remote_header=x-buildbuddy-api-key=$BUILDBUDDY_API_KEY")
           else
             echo "BUILDBUDDY_API_KEY is not set; running without BuildBuddy remote header."
