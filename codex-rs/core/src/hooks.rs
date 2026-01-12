@@ -1532,16 +1532,26 @@ async fn spawn_hook_host_process(
         &cfg.codex_linux_sandbox_exe,
     );
 
-    let mut cmd = tokio::process::Command::new(&invocation.program);
+    let mut std_cmd = std::process::Command::new(&invocation.program);
     if let Some(arg0) = invocation.arg0_override {
-        cmd.arg0(arg0);
+        #[cfg(unix)]
+        {
+            use std::os::unix::process::CommandExt as _;
+            std_cmd.arg0(arg0);
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = arg0;
+        }
     }
-    cmd.args(invocation.args);
-    cmd.current_dir(command_cwd);
-    cmd.env("CODEX_HOME", cfg.codex_home.as_os_str());
-    cmd.stdin(Stdio::piped());
-    cmd.stdout(stdout);
-    cmd.stderr(stderr);
+    std_cmd.args(invocation.args);
+    std_cmd.current_dir(command_cwd);
+    std_cmd.env("CODEX_HOME", cfg.codex_home.as_os_str());
+    std_cmd.stdin(Stdio::piped());
+    std_cmd.stdout(stdout);
+    std_cmd.stderr(stderr);
+
+    let mut cmd = tokio::process::Command::from(std_cmd);
     cmd.kill_on_drop(true);
 
     let mut child = cmd.spawn()?;
