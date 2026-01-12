@@ -1782,6 +1782,97 @@ fn run_command_capture(mut cmd: std::process::Command) -> anyhow::Result<std::pr
         .map_err(|err| anyhow::anyhow!("failed to run command: {printed}: {err}"))
 }
 
+fn run_command_capture_with_echo(
+    mut cmd: std::process::Command,
+    echo: bool,
+) -> anyhow::Result<std::process::Output> {
+    use std::io::Write;
+    use std::process::Stdio;
+
+    let printed = format_command(&cmd);
+    let mut child = cmd
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|err| anyhow::anyhow!("failed to run command: {printed}: {err}"))?;
+
+    let Some(stdout) = child.stdout.take() else {
+        anyhow::bail!("failed to capture stdout for command: {printed}");
+    };
+    let Some(stderr) = child.stderr.take() else {
+        anyhow::bail!("failed to capture stderr for command: {printed}");
+    };
+
+    let (tx, rx) = std::sync::mpsc::channel::<(bool, Vec<u8>)>();
+
+    let stdout_tx = tx.clone();
+    let stdout_handle = std::thread::spawn(move || {
+        let mut reader = std::io::BufReader::new(stdout);
+        let mut buf = vec![0_u8; 8 * 1024];
+        loop {
+            let Ok(n) = std::io::Read::read(&mut reader, &mut buf) else {
+                break;
+            };
+            if n == 0 {
+                break;
+            }
+            if stdout_tx.send((false, buf[..n].to_vec())).is_err() {
+                break;
+            }
+        }
+    });
+
+    let stderr_tx = tx.clone();
+    let stderr_handle = std::thread::spawn(move || {
+        let mut reader = std::io::BufReader::new(stderr);
+        let mut buf = vec![0_u8; 8 * 1024];
+        loop {
+            let Ok(n) = std::io::Read::read(&mut reader, &mut buf) else {
+                break;
+            };
+            if n == 0 {
+                break;
+            }
+            if stderr_tx.send((true, buf[..n].to_vec())).is_err() {
+                break;
+            }
+        }
+    });
+
+    drop(tx);
+
+    let mut stdout_buf = Vec::new();
+    let mut stderr_buf = Vec::new();
+    while let Ok((is_stderr, bytes)) = rx.recv() {
+        if is_stderr {
+            stderr_buf.extend_from_slice(&bytes);
+            if echo {
+                let _ = std::io::stderr().write_all(&bytes);
+                let _ = std::io::stderr().flush();
+            }
+        } else {
+            stdout_buf.extend_from_slice(&bytes);
+            if echo {
+                let _ = std::io::stdout().write_all(&bytes);
+                let _ = std::io::stdout().flush();
+            }
+        }
+    }
+
+    let _ = stdout_handle.join();
+    let _ = stderr_handle.join();
+
+    let status = child
+        .wait()
+        .map_err(|err| anyhow::anyhow!("failed to run command: {printed}: {err}"))?;
+
+    Ok(std::process::Output {
+        status,
+        stdout: stdout_buf,
+        stderr: stderr_buf,
+    })
+}
+
 fn format_command(cmd: &std::process::Command) -> String {
     let mut parts = Vec::new();
     parts.push(cmd.get_program().to_string_lossy().to_string());
@@ -1799,6 +1890,67 @@ fn write_pyo3_bootstrap_report(
         std::fs::create_dir_all(parent)?;
     }
     std::fs::write(report_path, contents)?;
+    Ok(())
+}
+
+fn apply_pyo3_bootstrap_patches(
+    codex_rs_dir: &std::path::Path,
+    transcript: &mut String,
+) -> anyhow::Result<()> {
+    use toml_edit::DocumentMut;
+    use toml_edit::InlineTable;
+    use toml_edit::Item;
+    use toml_edit::Table;
+    use toml_edit::Value;
+
+    let cli_cargo_toml_path = codex_rs_dir.join("cli").join("Cargo.toml");
+    let cli_cargo_toml = std::fs::read_to_string(&cli_cargo_toml_path).map_err(|err| {
+        anyhow::anyhow!("failed to read {}: {err}", cli_cargo_toml_path.display())
+    })?;
+
+    let mut doc = cli_cargo_toml.parse::<DocumentMut>().map_err(|err| {
+        anyhow::anyhow!("failed to parse {}: {err}", cli_cargo_toml_path.display())
+    })?;
+
+    let root = doc.as_table_mut();
+    if !root.contains_key("dependencies") {
+        root["dependencies"] = Item::Table(Table::new());
+    }
+
+    let deps = root
+        .get_mut("dependencies")
+        .and_then(Item::as_table_mut)
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "{} has a non-table [dependencies]",
+                cli_cargo_toml_path.display()
+            )
+        })?;
+
+    let mut changed = false;
+    for crate_name in ["ctor", "codex-process-hardening"] {
+        if deps.contains_key(crate_name) {
+            continue;
+        }
+
+        let mut tbl = InlineTable::new();
+        tbl.insert("workspace", Value::from(true));
+        deps[crate_name] = Item::Value(Value::InlineTable(tbl));
+        changed = true;
+    }
+
+    if changed {
+        std::fs::write(&cli_cargo_toml_path, doc.to_string()).map_err(|err| {
+            anyhow::anyhow!("failed to write {}: {err}", cli_cargo_toml_path.display())
+        })?;
+        transcript.push_str(&format!(
+            "applied_bootstrap_patch=added_missing_cli_deps path={}\n",
+            cli_cargo_toml_path.display()
+        ));
+    } else {
+        transcript.push_str("applied_bootstrap_patch=none\n");
+    }
+
     Ok(())
 }
 
@@ -2039,15 +2191,28 @@ fn run_hooks_pyo3_bootstrap(
     transcript.push_str(&format!("issues_url={}\n", pyo3_bootstrap_issues_url()));
     transcript.push('\n');
 
-    if repo_dir.exists() {
-        return Err(pyo3_bootstrap_fail(
-            &report_path,
-            &transcript,
-            anyhow::anyhow!("repo dir already exists: {}", repo_dir.display()),
-        ));
+    let reuse_repo_dir = repo_dir.exists();
+    if reuse_repo_dir {
+        if !repo_dir.join(".git").exists() {
+            return Err(pyo3_bootstrap_fail(
+                &report_path,
+                &transcript,
+                anyhow::anyhow!(
+                    "repo dir already exists but does not look like a git repo: {}",
+                    repo_dir.display()
+                ),
+            ));
+        }
+
+        println!(
+            "Note: repo dir already exists; reusing: {}",
+            repo_dir.display()
+        );
+        transcript.push_str(&format!("reuse_repo_dir={}\n\n", repo_dir.display()));
     }
 
     // 1) Prereqs (minimal).
+    println!("Step 1/4: Checking prerequisites...");
     for (label, program, args) in [
         ("git", "git", vec!["--version"]),
         ("cargo", "cargo", vec!["--version"]),
@@ -2096,7 +2261,9 @@ fn run_hooks_pyo3_bootstrap(
     }
 
     // 2) Clone + checkout.
-    {
+    println!();
+    println!("Step 2/4: Cloning and checking out {git_ref}...");
+    if !reuse_repo_dir {
         let mut cmd = std::process::Command::new("git");
         cmd.args([
             "clone",
@@ -2107,7 +2274,7 @@ fn run_hooks_pyo3_bootstrap(
         ]);
         let printed = format_command(&cmd);
         transcript.push_str(&format!("$ {printed}\n"));
-        match run_command_capture(cmd) {
+        match run_command_capture_with_echo(cmd, interactive) {
             Ok(output) => {
                 transcript.push_str(&String::from_utf8_lossy(&output.stdout));
                 transcript.push_str(&String::from_utf8_lossy(&output.stderr));
@@ -2124,12 +2291,33 @@ fn run_hooks_pyo3_bootstrap(
         transcript.push('\n');
     }
 
+    if reuse_repo_dir {
+        let mut cmd = std::process::Command::new("git");
+        cmd.current_dir(&repo_dir)
+            .args(["fetch", "--all", "--tags"]);
+        let printed = format_command(&cmd);
+        transcript.push_str(&format!("$ {printed}\n"));
+        match run_command_capture_with_echo(cmd, interactive) {
+            Ok(output) => {
+                transcript.push_str(&String::from_utf8_lossy(&output.stdout));
+                transcript.push_str(&String::from_utf8_lossy(&output.stderr));
+                if !output.status.success() {
+                    eprintln!("Warning: git fetch failed; continuing with local refs.");
+                }
+            }
+            Err(err) => {
+                eprintln!("Warning: git fetch failed: {err:#}; continuing with local refs.");
+            }
+        }
+        transcript.push('\n');
+    }
+
     {
         let mut cmd = std::process::Command::new("git");
         cmd.current_dir(&repo_dir).args(["checkout", &git_ref]);
         let printed = format_command(&cmd);
         transcript.push_str(&format!("$ {printed}\n"));
-        match run_command_capture(cmd) {
+        match run_command_capture_with_echo(cmd, interactive) {
             Ok(output) => {
                 transcript.push_str(&String::from_utf8_lossy(&output.stdout));
                 transcript.push_str(&String::from_utf8_lossy(&output.stderr));
@@ -2167,6 +2355,8 @@ fn run_hooks_pyo3_bootstrap(
     };
 
     // 3) Build.
+    println!();
+    println!("Step 3/4: Building {bin_name} (this may take a few minutes)...");
     let codex_rs_dir = repo_dir.join("codex-rs");
     if !codex_rs_dir.exists() {
         return Err(pyo3_bootstrap_fail(
@@ -2178,6 +2368,11 @@ fn run_hooks_pyo3_bootstrap(
             ),
         ));
     }
+
+    println!("Preparing build (applying bootstrap patches if needed)...");
+    apply_pyo3_bootstrap_patches(&codex_rs_dir, &mut transcript)
+        .map_err(|err| pyo3_bootstrap_fail(&report_path, &transcript, err))?;
+    transcript.push('\n');
 
     {
         let mut cmd = std::process::Command::new("cargo");
@@ -2192,7 +2387,7 @@ fn run_hooks_pyo3_bootstrap(
 
         let printed = format_command(&cmd);
         transcript.push_str(&format!("$ {printed}\n"));
-        match run_command_capture(cmd) {
+        match run_command_capture_with_echo(cmd, interactive) {
             Ok(output) => {
                 transcript.push_str(&String::from_utf8_lossy(&output.stdout));
                 transcript.push_str(&String::from_utf8_lossy(&output.stderr));
@@ -2210,6 +2405,8 @@ fn run_hooks_pyo3_bootstrap(
     }
 
     // 4) Install side-by-side binary.
+    println!();
+    println!("Step 4/4: Installing {bin_name}...");
     let built_bin = codex_rs_dir
         .join("target")
         .join(match profile {
@@ -2242,10 +2439,14 @@ fn run_hooks_pyo3_bootstrap(
     println!("Installed {bin_name} to: {}", dest_path.display());
     println!("Pinned commit: {resolved_commit}");
     println!("Try: {} --version", dest_path.display());
+    println!("Try: {bin_name} --version");
+    println!("Regular binary: xcodex");
     println!(
         "If you want to run it as `{bin_name}` from anywhere, add {} to PATH.",
         install_dir.display()
     );
+
+    let _ = write_pyo3_bootstrap_report(&report_path, &format!("{transcript}\nsuccess=1\n"));
     Ok(())
 }
 
