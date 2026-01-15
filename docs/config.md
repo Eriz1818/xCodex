@@ -1254,3 +1254,14 @@ Valid values:
 | `forced_login_method`                            | `chatgpt` \| `api`                                                | Only allow Codex to be used with ChatGPT or API keys.                                                                           |
 | `forced_chatgpt_workspace_id`                    | string (uuid)                                                     | Only allow Codex to be used with the specified ChatGPT workspace.                                                               |
 | `cli_auth_credentials_store`                     | `file` \| `keyring` \| `auto`                                     | Where to store CLI login credentials (default: `file`).                                                                         |
+- https://developers.openai.com/codex/config-reference
+
+## JSON Schema
+
+The generated JSON Schema for `config.toml` lives at `codex-rs/core/config.schema.json`.
+
+## Notices
+
+Codex stores "do not show again" flags for some UI prompts under the `[notice]` table.
+
+Ctrl+C/Ctrl+D quitting uses a ~1 second double-press hint (`ctrl + c again to quit`).

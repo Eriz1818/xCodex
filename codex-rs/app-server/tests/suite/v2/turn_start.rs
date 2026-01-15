@@ -80,6 +80,7 @@ async fn turn_start_sends_originator_header() -> Result<()> {
             thread_id: thread.id.clone(),
             input: vec![V2UserInput::Text {
                 text: "Hello".to_string(),
+                text_elements: Vec::new(),
             }],
             ..Default::default()
         })
@@ -151,6 +152,7 @@ async fn turn_start_emits_notifications_and_accepts_model_override() -> Result<(
             thread_id: thread.id.clone(),
             input: vec![V2UserInput::Text {
                 text: "Hello".to_string(),
+                text_elements: Vec::new(),
             }],
             ..Default::default()
         })
@@ -183,6 +185,7 @@ async fn turn_start_emits_notifications_and_accepts_model_override() -> Result<(
             thread_id: thread.id.clone(),
             input: vec![V2UserInput::Text {
                 text: "Second".to_string(),
+                text_elements: Vec::new(),
             }],
             model: Some("mock-model-override".to_string()),
             ..Default::default()
@@ -335,6 +338,7 @@ async fn turn_start_exec_approval_toggle_v2() -> Result<()> {
             thread_id: thread.id.clone(),
             input: vec![V2UserInput::Text {
                 text: "run python".to_string(),
+                text_elements: Vec::new(),
             }],
             ..Default::default()
         })
@@ -380,6 +384,7 @@ async fn turn_start_exec_approval_toggle_v2() -> Result<()> {
             thread_id: thread.id.clone(),
             input: vec![V2UserInput::Text {
                 text: "run python again".to_string(),
+                text_elements: Vec::new(),
             }],
             approval_policy: Some(codex_app_server_protocol::AskForApproval::Never),
             sandbox_policy: Some(codex_app_server_protocol::SandboxPolicy::DangerFullAccess),
@@ -456,6 +461,7 @@ async fn turn_start_exec_approval_decline_v2() -> Result<()> {
             thread_id: thread.id.clone(),
             input: vec![V2UserInput::Text {
                 text: "run python".to_string(),
+                text_elements: Vec::new(),
             }],
             cwd: Some(workspace.clone()),
             ..Default::default()
@@ -604,6 +610,7 @@ async fn turn_start_updates_sandbox_and_cwd_between_turns_v2() -> Result<()> {
             thread_id: thread.id.clone(),
             input: vec![V2UserInput::Text {
                 text: "first turn".to_string(),
+                text_elements: Vec::new(),
             }],
             cwd: Some(first_cwd.clone()),
             approval_policy: Some(codex_app_server_protocol::AskForApproval::Never),
@@ -637,6 +644,7 @@ async fn turn_start_updates_sandbox_and_cwd_between_turns_v2() -> Result<()> {
             thread_id: thread.id.clone(),
             input: vec![V2UserInput::Text {
                 text: "second turn".to_string(),
+                text_elements: Vec::new(),
             }],
             cwd: Some(second_cwd.clone()),
             approval_policy: Some(codex_app_server_protocol::AskForApproval::Never),
@@ -737,6 +745,7 @@ async fn turn_start_file_change_approval_v2() -> Result<()> {
             thread_id: thread.id.clone(),
             input: vec![V2UserInput::Text {
                 text: "apply patch".into(),
+                text_elements: Vec::new(),
             }],
             cwd: Some(workspace.clone()),
             ..Default::default()
@@ -914,6 +923,7 @@ async fn turn_start_file_change_approval_accept_for_session_persists_v2() -> Res
             thread_id: thread.id.clone(),
             input: vec![V2UserInput::Text {
                 text: "apply patch 1".into(),
+                text_elements: Vec::new(),
             }],
             cwd: Some(workspace.clone()),
             ..Default::default()
@@ -990,6 +1000,7 @@ async fn turn_start_file_change_approval_accept_for_session_persists_v2() -> Res
             thread_id: thread.id.clone(),
             input: vec![V2UserInput::Text {
                 text: "apply patch 2".into(),
+                text_elements: Vec::new(),
             }],
             cwd: Some(workspace.clone()),
             ..Default::default()
@@ -1087,6 +1098,7 @@ async fn turn_start_file_change_approval_decline_v2() -> Result<()> {
             thread_id: thread.id.clone(),
             input: vec![V2UserInput::Text {
                 text: "apply patch".into(),
+                text_elements: Vec::new(),
             }],
             cwd: Some(workspace.clone()),
             ..Default::default()
@@ -1234,6 +1246,7 @@ unified_exec = true
             thread_id: thread.id.clone(),
             input: vec![V2UserInput::Text {
                 text: "run a command".to_string(),
+                text_elements: Vec::new(),
             }],
             ..Default::default()
         })

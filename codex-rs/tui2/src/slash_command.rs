@@ -21,6 +21,7 @@ pub enum SlashCommand {
     Review,
     New,
     Resume,
+    Fork,
     Init,
     Compact,
     Autocompact,
@@ -57,6 +58,7 @@ impl SlashCommand {
             SlashCommand::Thoughts => "toggle showing agent thoughts/reasoning (persists)",
             SlashCommand::Review => "review my current changes and find issues",
             SlashCommand::Resume => "resume a saved chat",
+            SlashCommand::Fork => "fork a saved chat",
             // SlashCommand::Undo => "ask Codex to undo a turn",
             SlashCommand::Quit | SlashCommand::Exit => "exit xcodex",
             SlashCommand::Diff => "show git diff (including untracked files)",
@@ -92,6 +94,7 @@ impl SlashCommand {
         match self {
             SlashCommand::New
             | SlashCommand::Resume
+            | SlashCommand::Fork
             | SlashCommand::Init
             | SlashCommand::Compact
             | SlashCommand::Autocompact

@@ -47,10 +47,40 @@ enum CopyFeedback {
 }
 
 #[derive(Debug, Clone)]
-pub enum ResumeSelection {
+pub enum SessionSelection {
     StartFresh,
     Resume(PathBuf),
+    Fork(PathBuf),
     Exit,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub enum SessionPickerAction {
+    Resume,
+    Fork,
+}
+
+impl SessionPickerAction {
+    fn title(self) -> &'static str {
+        match self {
+            SessionPickerAction::Resume => "Resume a previous session",
+            SessionPickerAction::Fork => "Fork a previous session",
+        }
+    }
+
+    fn action_label(self) -> &'static str {
+        match self {
+            SessionPickerAction::Resume => "resume",
+            SessionPickerAction::Fork => "fork",
+        }
+    }
+
+    fn selection(self, path: PathBuf) -> SessionSelection {
+        match self {
+            SessionPickerAction::Resume => SessionSelection::Resume(path),
+            SessionPickerAction::Fork => SessionSelection::Fork(path),
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -80,7 +110,40 @@ pub async fn run_resume_picker(
     codex_home: &Path,
     default_provider: &str,
     show_all: bool,
-) -> Result<ResumeSelection> {
+) -> Result<SessionSelection> {
+    run_session_picker(
+        tui,
+        codex_home,
+        default_provider,
+        show_all,
+        SessionPickerAction::Resume,
+    )
+    .await
+}
+
+pub async fn run_fork_picker(
+    tui: &mut Tui,
+    codex_home: &Path,
+    default_provider: &str,
+    show_all: bool,
+) -> Result<SessionSelection> {
+    run_session_picker(
+        tui,
+        codex_home,
+        default_provider,
+        show_all,
+        SessionPickerAction::Fork,
+    )
+    .await
+}
+
+async fn run_session_picker(
+    tui: &mut Tui,
+    codex_home: &Path,
+    default_provider: &str,
+    show_all: bool,
+    action: SessionPickerAction,
+) -> Result<SessionSelection> {
     let alt = AltScreenGuard::enter(tui);
     let (bg_tx, bg_rx) = mpsc::unbounded_channel();
 
@@ -116,6 +179,7 @@ pub async fn run_resume_picker(
         default_provider.clone(),
         show_all,
         filter_cwd,
+        action,
     );
     state.start_initial_load();
     state.request_frame();
@@ -154,7 +218,7 @@ pub async fn run_resume_picker(
     }
 
     // Fallback – treat as cancel/new
-    Ok(ResumeSelection::StartFresh)
+    Ok(SessionSelection::StartFresh)
 }
 
 /// RAII guard that ensures we leave the alt-screen on scope exit.
@@ -194,6 +258,7 @@ struct PickerState {
     show_all: bool,
     filter_cwd: Option<PathBuf>,
     copy_feedback: Option<CopyFeedback>,
+    action: SessionPickerAction,
 }
 
 struct PaginationState {
@@ -263,6 +328,7 @@ impl PickerState {
         default_provider: String,
         show_all: bool,
         filter_cwd: Option<PathBuf>,
+        action: SessionPickerAction,
     ) -> Self {
         Self {
             codex_home,
@@ -288,10 +354,11 @@ impl PickerState {
             show_all,
             filter_cwd,
             copy_feedback: None,
+            action,
         }
     }
 
-    fn copy_selected_resume_command(&self) -> CopyFeedback {
+    fn copy_selected_command(&self) -> CopyFeedback {
         let Some(row) = self.filtered_rows.get(self.selected) else {
             return CopyFeedback::Error("No session selected".to_string());
         };
@@ -300,8 +367,8 @@ impl PickerState {
             return CopyFeedback::Error("Could not determine session id".to_string());
         };
 
-        let resume_cmd = format!("xcodex resume {session_id}");
-        match clipboard_copy::copy_text(resume_cmd) {
+        let command = format!("xcodex {} {session_id}", self.action.action_label());
+        match clipboard_copy::copy_text(command) {
             Ok(()) => CopyFeedback::Copied,
             Err(err) => CopyFeedback::Error(format!("Failed to copy command: {err}")),
         }
@@ -329,7 +396,7 @@ impl PickerState {
         self.requester.schedule_frame();
     }
 
-    async fn handle_key(&mut self, key: KeyEvent) -> Result<Option<ResumeSelection>> {
+    async fn handle_key(&mut self, key: KeyEvent) -> Result<Option<SessionSelection>> {
         if !matches!(
             key,
             KeyEvent {
@@ -342,25 +409,25 @@ impl PickerState {
         }
 
         match key.code {
-            KeyCode::Esc => return Ok(Some(ResumeSelection::StartFresh)),
+            KeyCode::Esc => return Ok(Some(SessionSelection::StartFresh)),
             KeyCode::Char('c')
                 if key
                     .modifiers
                     .contains(crossterm::event::KeyModifiers::CONTROL) =>
             {
-                return Ok(Some(ResumeSelection::Exit));
+                return Ok(Some(SessionSelection::Exit));
             }
             KeyCode::Char('y')
                 if key
                     .modifiers
                     .contains(crossterm::event::KeyModifiers::CONTROL) =>
             {
-                self.copy_feedback = Some(self.copy_selected_resume_command());
+                self.copy_feedback = Some(self.copy_selected_command());
                 self.request_frame();
             }
             KeyCode::Enter => {
                 if let Some(row) = self.filtered_rows.get(self.selected) {
-                    return Ok(Some(ResumeSelection::Resume(row.path.clone())));
+                    return Ok(Some(self.action.selection(row.path.clone())));
                 }
             }
             KeyCode::Up => {
@@ -794,9 +861,10 @@ fn preview_from_head(head: &[serde_json::Value]) -> Option<String> {
 }
 
 fn hint_line(state: &PickerState) -> Line<'static> {
+    let action_label = state.action.action_label();
     let mut hint_spans: Vec<Span<'static>> = vec![
         key_hint::plain(KeyCode::Enter).into(),
-        " resume ".dim(),
+        Span::from(format!(" {action_label} ")).dim(),
         "  ".into(),
         key_hint::plain(KeyCode::Esc).into(),
         " new ".dim(),
@@ -849,7 +917,7 @@ fn draw_picker(tui: &mut Tui, state: &PickerState) -> std::io::Result<()> {
         };
         frame.render_widget_ref(
             Line::from(vec![
-                "Resume session".bold().cyan(),
+                state.action.title().bold().cyan(),
                 " — ".dim(),
                 scope.dim(),
             ]),
@@ -1339,6 +1407,7 @@ mod tests {
             String::from("openai"),
             true,
             None,
+            SessionPickerAction::Resume,
         );
 
         let now = Utc::now();
@@ -1488,6 +1557,7 @@ mod tests {
             String::from("openai"),
             true,
             None,
+            SessionPickerAction::Resume,
         );
 
         let page = RolloutRecorder::list_threads(
@@ -1561,6 +1631,7 @@ mod tests {
             String::from("openai"),
             true,
             None,
+            SessionPickerAction::Resume,
         );
 
         state.reset_pagination();
@@ -1629,6 +1700,7 @@ mod tests {
             String::from("openai"),
             true,
             None,
+            SessionPickerAction::Resume,
         );
         state.reset_pagination();
         state.ingest_page(page(
@@ -1660,6 +1732,7 @@ mod tests {
             String::from("openai"),
             true,
             None,
+            SessionPickerAction::Resume,
         );
 
         let mut items = Vec::new();
@@ -1704,6 +1777,7 @@ mod tests {
             String::from("openai"),
             true,
             None,
+            SessionPickerAction::Resume,
         );
 
         let mut items = Vec::new();
@@ -1748,6 +1822,7 @@ mod tests {
             String::from("openai"),
             true,
             None,
+            SessionPickerAction::Resume,
         );
         state.reset_pagination();
         state.ingest_page(page(
