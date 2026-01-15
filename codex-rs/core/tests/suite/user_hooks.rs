@@ -90,6 +90,7 @@ async fn hooks_agent_turn_complete_invoked() -> Result<()> {
         .submit(Op::UserInput {
             items: vec![UserInput::Text {
                 text: "hello world".into(),
+                text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
         })
@@ -150,6 +151,7 @@ async fn hooks_approval_requested_invoked_for_exec() -> Result<()> {
         .submit(Op::UserInput {
             items: vec![UserInput::Text {
                 text: "run a shell command".into(),
+                text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
         })
@@ -233,6 +235,7 @@ async fn hooks_model_request_started_invoked() -> Result<()> {
         .submit(Op::UserInput {
             items: vec![UserInput::Text {
                 text: "hello world".into(),
+                text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
         })
@@ -279,6 +282,7 @@ async fn hooks_model_response_completed_invoked() -> Result<()> {
         .submit(Op::UserInput {
             items: vec![UserInput::Text {
                 text: "hello world".into(),
+                text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
         })
@@ -352,6 +356,7 @@ async fn hooks_tool_call_started_and_finished_invoked() -> Result<()> {
         .submit(Op::UserInput {
             items: vec![UserInput::Text {
                 text: "run a shell command".into(),
+                text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
         })
@@ -464,6 +469,7 @@ async fn hooks_tool_call_finished_emits_hook_process_events() -> Result<()> {
         .submit(Op::UserInput {
             items: vec![UserInput::Text {
                 text: "run a shell command".into(),
+                text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
         })

@@ -75,6 +75,9 @@
         "apply_patch_freeform": {
           "type": "boolean"
         },
+        "child_agents_md": {
+          "type": "boolean"
+        },
         "collab": {
           "type": "boolean"
         },
@@ -97,9 +100,6 @@
           "type": "boolean"
         },
         "experimental_windows_sandbox": {
-          "type": "boolean"
-        },
-        "child_agents_md": {
           "type": "boolean"
         },
         "include_apply_patch_tool": {
@@ -196,6 +196,50 @@
         }
       ]
     },
+    "hooks": {
+      "description": "Optional external hook commands to spawn on specific lifecycle events.",
+      "default": {
+        "agent_turn_complete": [],
+        "approval_requested": [],
+        "command": {
+          "default_timeout_sec": 30
+        },
+        "enable_unsafe_inproc": false,
+        "host": {
+          "command": [],
+          "enabled": false,
+          "filters": {},
+          "sandbox_mode": null,
+          "timeout_sec": null
+        },
+        "inproc": [],
+        "inproc_tool_call_summary": false,
+        "keep_last_n_payloads": 50,
+        "max_stdin_payload_bytes": 16384,
+        "model_request_started": [],
+        "model_response_completed": [],
+        "notification": [],
+        "pre_compact": [],
+        "pyo3": {
+          "batch_size": null,
+          "callable": null,
+          "filters": {},
+          "script_path": null,
+          "timeout_sec": null
+        },
+        "session_end": [],
+        "session_start": [],
+        "subagent_stop": [],
+        "tool_call_finished": [],
+        "tool_call_started": [],
+        "user_prompt_submit": []
+      },
+      "allOf": [
+        {
+          "$ref": "#/definitions/HooksConfig"
+        }
+      ]
+    },
     "instructions": {
       "description": "System instructions.",
       "type": "string"
@@ -276,7 +320,7 @@
       ]
     },
     "notify": {
-      "description": "Optional external command to spawn for end-user notifications.",
+      "description": "Deprecated (xcodex): legacy external command to spawn for notifications.",
       "default": null,
       "type": "array",
       "items": {
@@ -406,6 +450,14 @@
     "windows_wsl_setup_acknowledged": {
       "description": "Tracks whether the Windows onboarding screen has been acknowledged.",
       "type": "boolean"
+    },
+    "worktrees": {
+      "description": "Settings that affect worktree behavior.",
+      "allOf": [
+        {
+          "$ref": "#/definitions/Worktrees"
+        }
+      ]
     }
   },
   "additionalProperties": false,
@@ -543,6 +595,9 @@
             "apply_patch_freeform": {
               "type": "boolean"
             },
+            "child_agents_md": {
+              "type": "boolean"
+            },
             "collab": {
               "type": "boolean"
             },
@@ -565,9 +620,6 @@
               "type": "boolean"
             },
             "experimental_windows_sandbox": {
-              "type": "boolean"
-            },
-            "child_agents_md": {
               "type": "boolean"
             },
             "include_apply_patch_tool": {
@@ -727,6 +779,400 @@
           ]
         }
       ]
+    },
+    "HookEventFiltersConfig": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "array",
+        "items": {
+          "$ref": "#/definitions/HookEventMatcherConfig"
+        }
+      }
+    },
+    "HookEventMatcherConfig": {
+      "type": "object",
+      "properties": {
+        "matcher": {
+          "description": "Matcher expression using Claude semantics (`*`, exact, or regex).",
+          "default": null,
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "HookHostConfig": {
+      "type": "object",
+      "properties": {
+        "command": {
+          "description": "Command to start the host process.\n\nExample:\n\n```toml [hooks.host] enabled = true command = [\"python3\", \"-u\", \"$CODEX_HOME/hooks/host/python/host.py\"] ```",
+          "default": [],
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "enabled": {
+          "description": "Enable the hook host.\n\nDisabled by default. When enabled, `command` must be non-empty.",
+          "default": false,
+          "type": "boolean"
+        },
+        "filters": {
+          "description": "Optional matcher filters to restrict which events are delivered to the hook host.\n\nWhen unset/empty, all events are delivered.",
+          "default": {},
+          "allOf": [
+            {
+              "$ref": "#/definitions/HookEventFiltersConfig"
+            }
+          ]
+        },
+        "sandbox_mode": {
+          "description": "Optional sandbox override for the host process.\n\nWhen unset, the host inherits the session sandbox policy.",
+          "default": null,
+          "allOf": [
+            {
+              "$ref": "#/definitions/SandboxMode"
+            }
+          ]
+        },
+        "timeout_sec": {
+          "description": "Optional timeout for writing a single hook event to the host stdin (seconds).\n\nWhen unset, writes are best-effort and may block until the host is killed.",
+          "default": null,
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        }
+      },
+      "additionalProperties": false
+    },
+    "HookPayloadFormat": {
+      "type": "string",
+      "enum": [
+        "xcodex",
+        "claude"
+      ]
+    },
+    "HooksCommandConfig": {
+      "type": "object",
+      "properties": {
+        "default_timeout_sec": {
+          "description": "Default timeout applied to command hooks when `timeout_sec` is unset (seconds).",
+          "default": 30,
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        }
+      },
+      "additionalProperties": {
+        "type": "array",
+        "items": {
+          "$ref": "#/definitions/HooksCommandMatcherConfig"
+        }
+      }
+    },
+    "HooksCommandHookConfig": {
+      "type": "object",
+      "properties": {
+        "argv": {
+          "description": "Execute a command via argv.",
+          "default": null,
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "command": {
+          "description": "Execute a command string via a shell wrapper (`bash -lc ...` / `cmd.exe /C ...`).",
+          "default": null,
+          "type": "string"
+        },
+        "payload": {
+          "description": "Payload format to send on stdin.\n\nDeprecated: payloads are always emitted as a Claude-first superset with snake_case keys.",
+          "default": "xcodex",
+          "allOf": [
+            {
+              "$ref": "#/definitions/HookPayloadFormat"
+            }
+          ]
+        },
+        "timeout_sec": {
+          "description": "Optional timeout for this hook (seconds). When unset, uses `hooks.command.default_timeout_sec`.",
+          "default": null,
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        }
+      },
+      "additionalProperties": false
+    },
+    "HooksCommandMatcherConfig": {
+      "type": "object",
+      "properties": {
+        "hooks": {
+          "description": "Hooks to execute when this matcher matches.",
+          "default": [],
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/HooksCommandHookConfig"
+          }
+        },
+        "matcher": {
+          "description": "Matcher expression using Claude semantics (`*`, exact, or regex).",
+          "default": null,
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "HooksConfig": {
+      "description": "Hook configuration loaded from `config.toml`.",
+      "type": "object",
+      "properties": {
+        "agent_turn_complete": {
+          "description": "Hooks invoked after each completed turn.",
+          "default": [],
+          "type": "array",
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "approval_requested": {
+          "description": "Hooks invoked when Codex requests an approval (exec/apply_patch/MCP elicitation).",
+          "default": [],
+          "type": "array",
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "command": {
+          "description": "Command hooks with matcher + per-hook options.\n\nThis is a higher-level (Claude-style) config surface that complements the legacy per-event argv arrays above.",
+          "default": {
+            "default_timeout_sec": 30
+          },
+          "allOf": [
+            {
+              "$ref": "#/definitions/HooksCommandConfig"
+            }
+          ]
+        },
+        "enable_unsafe_inproc": {
+          "description": "Gate user-provided in-process hooks (for example, experimental PyO3 hooks) behind an explicit acknowledgement.\n\nFirst-party in-process hooks remain configurable without this flag.",
+          "default": false,
+          "type": "boolean"
+        },
+        "host": {
+          "description": "Long-lived external hook host (optional).\n\nThis is a separate provider from the per-event external hooks configured above. When enabled, Codex spawns a single process and streams hook events to it over stdin as newline-delimited JSON (JSONL).",
+          "default": {
+            "command": [],
+            "enabled": false,
+            "filters": {},
+            "sandbox_mode": null,
+            "timeout_sec": null
+          },
+          "allOf": [
+            {
+              "$ref": "#/definitions/HookHostConfig"
+            }
+          ]
+        },
+        "inproc": {
+          "description": "Enable built-in in-process (Rust) hooks by name.\n\nThis is additive with `hooks.inproc_tool_call_summary` for backward compatibility.\n\nExample:\n\n```toml [hooks] inproc = [\"tool_call_summary\"] ```",
+          "default": [],
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "inproc_tool_call_summary": {
+          "description": "Enable the in-process (Rust) hook that appends compact `tool_call_finished` summaries to `CODEX_HOME/hooks-tool-calls.log`.",
+          "default": false,
+          "type": "boolean"
+        },
+        "keep_last_n_payloads": {
+          "description": "Keep only the most recent N payload/log files (global) under CODEX_HOME.",
+          "default": 50,
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0.0
+        },
+        "max_stdin_payload_bytes": {
+          "description": "Maximum payload size (in bytes) to send directly via stdin.\n\nWhen the serialized payload exceeds this threshold, Codex writes it to a file under CODEX_HOME and writes a small JSON envelope to stdin that includes `payload_path`.",
+          "default": 16384,
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0.0
+        },
+        "model_request_started": {
+          "description": "Hooks invoked immediately before issuing a model request.",
+          "default": [],
+          "type": "array",
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "model_response_completed": {
+          "description": "Hooks invoked after a model response has completed.",
+          "default": [],
+          "type": "array",
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "notification": {
+          "description": "Hooks invoked when Codex emits a notification.",
+          "default": [],
+          "type": "array",
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "pre_compact": {
+          "description": "Hooks invoked before Codex performs a compact operation.",
+          "default": [],
+          "type": "array",
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "pyo3": {
+          "description": "Experimental PyO3 hook configuration.",
+          "default": {
+            "batch_size": null,
+            "callable": null,
+            "filters": {},
+            "script_path": null,
+            "timeout_sec": null
+          },
+          "allOf": [
+            {
+              "$ref": "#/definitions/HooksPyo3Config"
+            }
+          ]
+        },
+        "session_end": {
+          "description": "Hooks invoked when a session is ending (best-effort during shutdown).",
+          "default": [],
+          "type": "array",
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "session_start": {
+          "description": "Hooks invoked when a session has started (after `SessionConfigured` is emitted).",
+          "default": [],
+          "type": "array",
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "subagent_stop": {
+          "description": "Hooks invoked when a subagent task completes.",
+          "default": [],
+          "type": "array",
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "tool_call_finished": {
+          "description": "Hooks invoked when a tool call has finished (success/failure/aborted).",
+          "default": [],
+          "type": "array",
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "tool_call_started": {
+          "description": "Hooks invoked when a tool call begins execution.",
+          "default": [],
+          "type": "array",
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "user_prompt_submit": {
+          "description": "Hooks invoked when the user submits a prompt/input.",
+          "default": [],
+          "type": "array",
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "HooksPyo3Config": {
+      "type": "object",
+      "properties": {
+        "batch_size": {
+          "description": "Optional batch size to reduce Rust→Python calls for high-volume events.\n\nWhen set to N>1 and the script defines `on_events(events: list[dict]) -> None`, Codex will call `on_events` with batches of up to N events (preserving order). If the script does not define `on_events`, Codex falls back to per-event `callable`.",
+          "default": null,
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0.0
+        },
+        "callable": {
+          "description": "Name of the callable in the module to invoke for each hook event.\n\nSignature: `callable(event: dict) -> None`",
+          "default": null,
+          "type": "string"
+        },
+        "filters": {
+          "description": "Optional matcher filters to restrict which events are delivered to PyO3.\n\nWhen unset/empty, all events are delivered.",
+          "default": {},
+          "allOf": [
+            {
+              "$ref": "#/definitions/HookEventFiltersConfig"
+            }
+          ]
+        },
+        "script_path": {
+          "description": "Path to a Python file containing the hook implementation.\n\nThe module must define the configured callable (default: `on_event`).",
+          "default": null,
+          "type": "string"
+        },
+        "timeout_sec": {
+          "description": "Optional timeout for a single PyO3 hook invocation (seconds).\n\nWhen unset, Codex uses the default in-process hook timeout.",
+          "default": null,
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        }
+      },
+      "additionalProperties": false
     },
     "ModelProviderInfo": {
       "description": "Serializable representation of a provider definition.",
@@ -1329,6 +1775,16 @@
           "default": true,
           "type": "boolean"
         },
+        "confirm_exit_with_running_hooks": {
+          "description": "When true, the TUI asks for confirmation before exiting if external hooks are still running. Defaults to `true`.",
+          "default": true,
+          "type": "boolean"
+        },
+        "mouse_capture": {
+          "description": "Enable application mouse capture in TUI2.\n\nWhen enabled, TUI2 receives mouse scroll and click events directly. When disabled, terminals can use native mouse selection/copy, but TUI2 will not receive mouse wheel/trackpad events.\n\nDefaults to `true`.",
+          "default": true,
+          "type": "boolean"
+        },
         "notifications": {
           "description": "Enable desktop notifications from the TUI when the terminal is unfocused. Defaults to `true`.",
           "default": true,
@@ -1337,6 +1793,21 @@
               "$ref": "#/definitions/Notifications"
             }
           ]
+        },
+        "ramps_build": {
+          "description": "Xcodex-only: enable the Build ramp for per-turn rotation.\n\nDefaults to `true`.",
+          "default": true,
+          "type": "boolean"
+        },
+        "ramps_devops": {
+          "description": "Xcodex-only: enable the DevOps ramp for per-turn rotation.\n\nDefaults to `true`.",
+          "default": true,
+          "type": "boolean"
+        },
+        "ramps_rotate": {
+          "description": "Xcodex-only: rotate between multiple \"ramp\" status label flows across turns.\n\nWhen disabled, xcodex falls back to the baseline Hardware ramp: `Charging → Spooling → Overclocking → Stabilizing → Overclocked in …`.\n\nDefaults to `true`.",
+          "default": true,
+          "type": "boolean"
         },
         "scroll_events_per_tick": {
           "description": "Override the *wheel* event density used to normalize TUI2 scrolling.\n\nTerminals generally deliver both mouse wheels and trackpads as discrete `scroll up/down` mouse events with direction but no magnitude. Unfortunately, the *number* of raw events per physical wheel notch varies by terminal (commonly 1, 3, or 9+). TUI2 uses this value to normalize that raw event density into consistent \"wheel tick\" behavior.\n\nWheel math (conceptually):\n\n- A single event contributes `1 / scroll_events_per_tick` tick-equivalents. - Wheel-like streams then scale that by `scroll_wheel_lines` so one physical notch scrolls a fixed number of lines.\n\nTrackpad math is intentionally *not* fully tied to this value: in trackpad-like mode, TUI2 uses `min(scroll_events_per_tick, 3)` as the divisor so terminals with dense wheel ticks (e.g. 9 events per notch) do not make trackpads feel artificially slow.\n\nDefaults are derived per terminal from [`crate::terminal::TerminalInfo`] when TUI2 starts. See `codex-rs/tui2/docs/scroll_input_model.md` for the probe data and rationale.",
@@ -1398,6 +1869,30 @@
           "description": "Show startup tooltips in the TUI welcome screen. Defaults to `true`.",
           "default": true,
           "type": "boolean"
+        },
+        "status_bar_show_git_branch": {
+          "description": "Show the current git branch in the bottom status bar. Defaults to `false`.",
+          "default": false,
+          "type": "boolean"
+        },
+        "status_bar_show_worktree": {
+          "description": "Show the active git worktree root (repo root) in the bottom status bar. Defaults to `false`.",
+          "default": false,
+          "type": "boolean"
+        },
+        "verbose_tool_output": {
+          "description": "When true, show verbose tool output in the transcript (including large file reads).\n\nDefaults to `false` (quiet by default).",
+          "default": false,
+          "type": "boolean"
+        },
+        "xtreme_mode": {
+          "description": "Xcodex-only: enable \"xtreme mode\" styling in the TUI.\n\n- `on`: always enable xtreme styling (default) - `off`: disable xtreme styling - `auto`: enable xtreme styling when invoked as `xcodex`",
+          "default": "on",
+          "allOf": [
+            {
+              "$ref": "#/definitions/XtremeMode"
+            }
+          ]
         }
       },
       "additionalProperties": false
@@ -1461,6 +1956,60 @@
           "type": "string",
           "enum": [
             "chat"
+          ]
+        }
+      ]
+    },
+    "Worktrees": {
+      "description": "Collection of settings that affect git worktree behavior.",
+      "type": "object",
+      "properties": {
+        "auto_link_shared_dirs": {
+          "description": "When true, xcodex may automatically ensure shared dirs are linked when switching worktrees. Defaults to `false` (opt-in).",
+          "default": false,
+          "type": "boolean"
+        },
+        "pinned_paths": {
+          "description": "Optional list of repo-relative paths/prefixes that should resolve to a stable workspace root for structured file tools (e.g. apply_patch/read_file/list_dir/grep_files), even while switching worktrees.\n\nThis does not affect shell behavior; for shell ergonomics, use [`Worktrees::shared_dirs`] and `/worktree link-shared`.\n\nDefaults to empty (opt-in).",
+          "default": [],
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "shared_dirs": {
+          "description": "Optional list of repo-relative directories to share across worktrees.\n\nWhen enabled by higher-level features (e.g. `/worktree link-shared`), these directories can be linked to a stable workspace root (symlink on macOS/Linux; junction on Windows) so untracked files under them are not stranded inside disposable worktrees.\n\nDefaults to empty (opt-in).",
+          "default": [],
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "XtremeMode": {
+      "description": "How the TUI should render xcodex \"xtreme mode\" styling.",
+      "oneOf": [
+        {
+          "description": "Enable xtreme styling when invoked as `xcodex`.",
+          "type": "string",
+          "enum": [
+            "auto"
+          ]
+        },
+        {
+          "description": "Always enable xtreme styling.",
+          "type": "string",
+          "enum": [
+            "on"
+          ]
+        },
+        {
+          "description": "Disable xtreme styling (prefer upstream-like visuals).",
+          "type": "string",
+          "enum": [
+            "off"
           ]
         }
       ]

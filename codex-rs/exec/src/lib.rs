@@ -596,6 +596,79 @@ fn load_output_schema(path: Option<PathBuf>) -> Option<Value> {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum PromptDecodeError {
+    InvalidUtf8 { valid_up_to: usize },
+    InvalidUtf16 { encoding: &'static str },
+    UnsupportedBom { encoding: &'static str },
+}
+
+impl std::fmt::Display for PromptDecodeError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            PromptDecodeError::InvalidUtf8 { valid_up_to } => write!(
+                f,
+                "input is not valid UTF-8 (invalid byte at offset {valid_up_to}). Convert it to UTF-8 and retry (e.g., `iconv -f <ENC> -t UTF-8 prompt.txt`)."
+            ),
+            PromptDecodeError::InvalidUtf16 { encoding } => write!(
+                f,
+                "input looked like {encoding} but could not be decoded. Convert it to UTF-8 and retry."
+            ),
+            PromptDecodeError::UnsupportedBom { encoding } => write!(
+                f,
+                "input appears to be {encoding}. Convert it to UTF-8 and retry."
+            ),
+        }
+    }
+}
+
+fn decode_prompt_bytes(input: &[u8]) -> Result<String, PromptDecodeError> {
+    let input = input.strip_prefix(&[0xEF, 0xBB, 0xBF]).unwrap_or(input);
+
+    if input.starts_with(&[0xFF, 0xFE, 0x00, 0x00]) {
+        return Err(PromptDecodeError::UnsupportedBom {
+            encoding: "UTF-32LE",
+        });
+    }
+
+    if input.starts_with(&[0x00, 0x00, 0xFE, 0xFF]) {
+        return Err(PromptDecodeError::UnsupportedBom {
+            encoding: "UTF-32BE",
+        });
+    }
+
+    if let Some(rest) = input.strip_prefix(&[0xFF, 0xFE]) {
+        return decode_utf16(rest, "UTF-16LE", u16::from_le_bytes);
+    }
+
+    if let Some(rest) = input.strip_prefix(&[0xFE, 0xFF]) {
+        return decode_utf16(rest, "UTF-16BE", u16::from_be_bytes);
+    }
+
+    std::str::from_utf8(input)
+        .map(str::to_string)
+        .map_err(|e| PromptDecodeError::InvalidUtf8 {
+            valid_up_to: e.valid_up_to(),
+        })
+}
+
+fn decode_utf16(
+    input: &[u8],
+    encoding: &'static str,
+    decode_unit: fn([u8; 2]) -> u16,
+) -> Result<String, PromptDecodeError> {
+    if !input.len().is_multiple_of(2) {
+        return Err(PromptDecodeError::InvalidUtf16 { encoding });
+    }
+
+    let units: Vec<u16> = input
+        .chunks_exact(2)
+        .map(|chunk| decode_unit([chunk[0], chunk[1]]))
+        .collect();
+
+    String::from_utf16(&units).map_err(|_| PromptDecodeError::InvalidUtf16 { encoding })
+}
+
 fn resolve_prompt(prompt_arg: Option<String>, prompt_file: Option<PathBuf>) -> String {
     let should_announce_stdin_read =
         prompt_file.is_none() && prompt_arg.is_none() && !std::io::stdin().is_terminal();
@@ -608,9 +681,9 @@ fn resolve_prompt(prompt_arg: Option<String>, prompt_file: Option<PathBuf>) -> S
         prompt_file,
         || std::io::stdin().is_terminal(),
         || {
-            let mut buffer = String::new();
-            std::io::stdin().read_to_string(&mut buffer)?;
-            Ok(buffer)
+            let mut bytes = Vec::new();
+            std::io::stdin().read_to_end(&mut bytes)?;
+            Ok(bytes)
         },
     ) {
         Ok(prompt) => prompt,
@@ -625,11 +698,14 @@ fn resolve_prompt_inner(
     prompt_arg: Option<String>,
     prompt_file: Option<PathBuf>,
     stdin_is_terminal: impl FnOnce() -> bool,
-    read_stdin_to_string: impl FnOnce() -> std::io::Result<String>,
+    read_stdin_to_bytes: impl FnOnce() -> std::io::Result<Vec<u8>>,
 ) -> anyhow::Result<String> {
     if let Some(path) = prompt_file {
         if path.as_os_str() == "-" {
-            let buffer = read_stdin_to_string()?;
+            let bytes = read_stdin_to_bytes()
+                .map_err(|err| anyhow::anyhow!("Failed to read prompt from stdin: {err}"))?;
+            let buffer = decode_prompt_bytes(&bytes)
+                .map_err(|err| anyhow::anyhow!("Failed to read prompt from stdin: {err}"))?;
             if buffer.trim().is_empty() {
                 anyhow::bail!("No prompt provided via stdin.");
             }
@@ -655,7 +731,9 @@ fn resolve_prompt_inner(
                 );
             }
 
-            let buffer = read_stdin_to_string()
+            let bytes = read_stdin_to_bytes()
+                .map_err(|err| anyhow::anyhow!("Failed to read prompt from stdin: {err}"))?;
+            let buffer = decode_prompt_bytes(&bytes)
                 .map_err(|err| anyhow::anyhow!("Failed to read prompt from stdin: {err}"))?;
             if buffer.trim().is_empty() {
                 anyhow::bail!("No prompt provided via stdin.");
@@ -711,7 +789,7 @@ mod tests {
             None,
             Some(tmp.path().to_path_buf()),
             || true,
-            || Ok("should not be read".to_string()),
+            || Ok(Vec::new()),
         )
         .expect("resolve prompt");
 
@@ -724,7 +802,7 @@ mod tests {
             Some("-".to_string()),
             None,
             || true,
-            || Ok("stdin".to_string()),
+            || Ok(b"stdin".to_vec()),
         )
         .expect("resolve prompt");
 
@@ -733,8 +811,8 @@ mod tests {
 
     #[test]
     fn resolves_prompt_from_stdin_when_piped() {
-        let prompt = resolve_prompt_inner(None, None, || false, || Ok("piped".to_string()))
-            .expect("resolve");
+        let prompt =
+            resolve_prompt_inner(None, None, || false, || Ok(b"piped".to_vec())).expect("resolve");
 
         assert_eq!(prompt, "piped");
     }
@@ -745,7 +823,8 @@ mod tests {
         let payload = "a".repeat(size) + "\n";
 
         let prompt =
-            resolve_prompt_inner(None, None, || false, || Ok(payload.clone())).expect("resolve");
+            resolve_prompt_inner(None, None, || false, || Ok(payload.clone().into_bytes()))
+                .expect("resolve");
 
         assert_eq!(prompt.len(), payload.len());
         assert_eq!(prompt, payload);
@@ -760,7 +839,7 @@ mod tests {
             None,
             Some(PathBuf::from("-")),
             || true,
-            || Ok(payload.clone()),
+            || Ok(payload.clone().into_bytes()),
         )
         .expect("resolve");
 
@@ -770,8 +849,8 @@ mod tests {
 
     #[test]
     fn errors_when_no_prompt_and_tty_stdin() {
-        let err = resolve_prompt_inner(None, None, || true, || Ok("".to_string()))
-            .expect_err("should error");
+        let err =
+            resolve_prompt_inner(None, None, || true, || Ok(Vec::new())).expect_err("should error");
 
         assert_eq!(
             err.to_string(),
@@ -842,5 +921,80 @@ mod tests {
         };
 
         assert_eq!(request, expected);
+    }
+
+    #[test]
+    fn decode_prompt_bytes_strips_utf8_bom() {
+        let input = [0xEF, 0xBB, 0xBF, b'h', b'i', b'\n'];
+
+        let out = decode_prompt_bytes(&input).expect("decode utf-8 with BOM");
+
+        assert_eq!(out, "hi\n");
+    }
+
+    #[test]
+    fn decode_prompt_bytes_decodes_utf16le_bom() {
+        // UTF-16LE BOM + "hi\n"
+        let input = [0xFF, 0xFE, b'h', 0x00, b'i', 0x00, b'\n', 0x00];
+
+        let out = decode_prompt_bytes(&input).expect("decode utf-16le with BOM");
+
+        assert_eq!(out, "hi\n");
+    }
+
+    #[test]
+    fn decode_prompt_bytes_decodes_utf16be_bom() {
+        // UTF-16BE BOM + "hi\n"
+        let input = [0xFE, 0xFF, 0x00, b'h', 0x00, b'i', 0x00, b'\n'];
+
+        let out = decode_prompt_bytes(&input).expect("decode utf-16be with BOM");
+
+        assert_eq!(out, "hi\n");
+    }
+
+    #[test]
+    fn decode_prompt_bytes_rejects_utf32le_bom() {
+        // UTF-32LE BOM + "hi\n"
+        let input = [
+            0xFF, 0xFE, 0x00, 0x00, b'h', 0x00, 0x00, 0x00, b'i', 0x00, 0x00, 0x00, b'\n', 0x00,
+            0x00, 0x00,
+        ];
+
+        let err = decode_prompt_bytes(&input).expect_err("utf-32le should be rejected");
+
+        assert_eq!(
+            err,
+            PromptDecodeError::UnsupportedBom {
+                encoding: "UTF-32LE"
+            }
+        );
+    }
+
+    #[test]
+    fn decode_prompt_bytes_rejects_utf32be_bom() {
+        // UTF-32BE BOM + "hi\n"
+        let input = [
+            0x00, 0x00, 0xFE, 0xFF, 0x00, 0x00, 0x00, b'h', 0x00, 0x00, 0x00, b'i', 0x00, 0x00,
+            0x00, b'\n',
+        ];
+
+        let err = decode_prompt_bytes(&input).expect_err("utf-32be should be rejected");
+
+        assert_eq!(
+            err,
+            PromptDecodeError::UnsupportedBom {
+                encoding: "UTF-32BE"
+            }
+        );
+    }
+
+    #[test]
+    fn decode_prompt_bytes_rejects_invalid_utf8() {
+        // Invalid UTF-8 sequence: 0xC3 0x28
+        let input = [0xC3, 0x28];
+
+        let err = decode_prompt_bytes(&input).expect_err("invalid utf-8 should fail");
+
+        assert_eq!(err, PromptDecodeError::InvalidUtf8 { valid_up_to: 0 });
     }
 }

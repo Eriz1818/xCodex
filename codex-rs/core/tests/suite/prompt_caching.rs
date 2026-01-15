@@ -87,7 +87,7 @@ async fn prompt_tools_are_consistent_across_requests() -> anyhow::Result<()> {
             config.user_instructions = Some("be consistent and helpful".to_string());
             config.model = Some("gpt-5.1-codex-max".to_string());
             // Keep tool expectations stable when the default web_search mode changes.
-            config.web_search_mode = WebSearchMode::Cached;
+            config.web_search_mode = Some(WebSearchMode::Cached);
         })
         .build(&server)
         .await?;
@@ -207,7 +207,7 @@ async fn codex_mini_latest_tools() -> anyhow::Result<()> {
 
     let expected_instructions = thread_manager
         .get_models_manager()
-        .construct_model_info(
+        .get_model_info(
             config
                 .model
                 .as_deref()

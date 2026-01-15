@@ -3101,7 +3101,7 @@ mod tests {
             interactive,
             config_overrides: root_overrides,
             subcommand,
-            feature_toggles: _,
+            ..
         } = cli;
 
         let Subcommand::Fork(ForkCommand {

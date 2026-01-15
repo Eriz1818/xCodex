@@ -1,3 +1,4 @@
+use std::ffi::OsString;
 use std::io::ErrorKind;
 use std::path::Path;
 use std::path::PathBuf;
@@ -75,13 +76,21 @@ impl Drop for ShellSnapshot {
 }
 
 pub async fn write_shell_snapshot(shell_type: ShellType, output_path: &Path) -> Result<PathBuf> {
+    write_shell_snapshot_with_env(shell_type, output_path, &[]).await
+}
+
+pub async fn write_shell_snapshot_with_env(
+    shell_type: ShellType,
+    output_path: &Path,
+    extra_env: &[(OsString, OsString)],
+) -> Result<PathBuf> {
     if shell_type == ShellType::PowerShell || shell_type == ShellType::Cmd {
         bail!("Shell snapshot not supported yet for {shell_type:?}");
     }
     let shell = get_shell(shell_type.clone(), None)
         .with_context(|| format!("No available shell for {shell_type:?}"))?;
 
-    let raw_snapshot = capture_snapshot(&shell).await?;
+    let raw_snapshot = capture_snapshot(&shell, extra_env).await?;
     let snapshot = strip_snapshot_preamble(&raw_snapshot)?;
 
     if let Some(parent) = output_path.parent() {
@@ -99,13 +108,15 @@ pub async fn write_shell_snapshot(shell_type: ShellType, output_path: &Path) -> 
     Ok(output_path.to_path_buf())
 }
 
-async fn capture_snapshot(shell: &Shell) -> Result<String> {
+async fn capture_snapshot(shell: &Shell, extra_env: &[(OsString, OsString)]) -> Result<String> {
     let shell_type = shell.shell_type.clone();
     match shell_type {
-        ShellType::Zsh => run_shell_script(shell, zsh_snapshot_script()).await,
-        ShellType::Bash => run_shell_script(shell, bash_snapshot_script()).await,
-        ShellType::Sh => run_shell_script(shell, sh_snapshot_script()).await,
-        ShellType::PowerShell => run_shell_script(shell, powershell_snapshot_script()).await,
+        ShellType::Zsh => run_shell_script(shell, zsh_snapshot_script(), extra_env).await,
+        ShellType::Bash => run_shell_script(shell, bash_snapshot_script(), extra_env).await,
+        ShellType::Sh => run_shell_script(shell, sh_snapshot_script(), extra_env).await,
+        ShellType::PowerShell => {
+            run_shell_script(shell, powershell_snapshot_script(), extra_env).await
+        }
         ShellType::Cmd => bail!("Shell snapshotting is not yet supported for {shell_type:?}"),
     }
 }
@@ -119,14 +130,19 @@ fn strip_snapshot_preamble(snapshot: &str) -> Result<String> {
     Ok(snapshot[start..].to_string())
 }
 
-async fn run_shell_script(shell: &Shell, script: &str) -> Result<String> {
-    run_shell_script_with_timeout(shell, script, SNAPSHOT_TIMEOUT).await
+async fn run_shell_script(
+    shell: &Shell,
+    script: &str,
+    extra_env: &[(OsString, OsString)],
+) -> Result<String> {
+    run_shell_script_with_timeout(shell, script, SNAPSHOT_TIMEOUT, extra_env).await
 }
 
 async fn run_shell_script_with_timeout(
     shell: &Shell,
     script: &str,
     snapshot_timeout: Duration,
+    extra_env: &[(OsString, OsString)],
 ) -> Result<String> {
     let args = shell.derive_exec_args(script, true);
     let shell_name = shell.name();
@@ -135,6 +151,9 @@ async fn run_shell_script_with_timeout(
     // returns a ref of handler.
     let mut handler = Command::new(&args[0]);
     handler.args(&args[1..]);
+    for (key, value) in extra_env {
+        handler.env(key, value);
+    }
     handler.kill_on_drop(true);
     let output = timeout(snapshot_timeout, handler.output())
         .await
@@ -375,7 +394,18 @@ mod tests {
     async fn get_snapshot(shell_type: ShellType) -> Result<String> {
         let dir = tempdir()?;
         let path = dir.path().join("snapshot.sh");
-        write_shell_snapshot(shell_type, &path).await?;
+        let mut _zdotdir_guard = None;
+        let mut extra_env = Vec::new();
+        if shell_type == ShellType::Zsh {
+            let zdotdir = tempdir()?;
+            fs::write(zdotdir.path().join(".zshrc"), "").await?;
+            extra_env.push((
+                OsString::from("ZDOTDIR"),
+                zdotdir.path().as_os_str().to_owned(),
+            ));
+            _zdotdir_guard = Some(zdotdir);
+        }
+        write_shell_snapshot_with_env(shell_type, &path, &extra_env).await?;
         let content = fs::read_to_string(&path).await?;
         Ok(content)
     }

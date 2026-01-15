@@ -205,6 +205,7 @@ mod tests {
             yield_time_ms: 10_000,
             max_output_tokens: None,
             workdir: None,
+            tty: false,
             sandbox_permissions: SandboxPermissions::UseDefault,
             justification: None,
         };
