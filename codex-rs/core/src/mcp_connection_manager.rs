@@ -293,8 +293,14 @@ impl AsyncManagedClient {
                 return Err(error.into());
             }
 
-            let client =
-                Arc::new(make_rmcp_client(&server_name, config.transport, store_mode).await?);
+            let client = match make_rmcp_client(&server_name, config.transport, store_mode)
+                .or_cancel(&cancel_token)
+                .await
+            {
+                Ok(Ok(client)) => Arc::new(client),
+                Ok(Err(err)) => return Err(err),
+                Err(CancelErr::Cancelled) => return Err(StartupOutcomeError::Cancelled),
+            };
             match start_server_task(
                 server_name,
                 client,
