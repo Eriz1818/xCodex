@@ -83,29 +83,72 @@ def collect_native_components(packages: list[str]) -> set[str]:
 
 
 def resolve_release_workflow(*, version: str, tag_prefix: str, workflow_file: str) -> dict:
-    stdout = subprocess.check_output(
+    tag = f"{tag_prefix}{version}"
+
+    def query(args: list[str]) -> dict | None:
+        stdout = subprocess.check_output(args, cwd=REPO_ROOT, text=True)
+        return json.loads(stdout or "null")
+
+    workflow = query(
         [
             "gh",
             "run",
             "list",
             "--branch",
-            f"{tag_prefix}{version}",
+            tag,
             "--json",
             "workflowName,url,headSha",
             "--workflow",
             workflow_file,
             "--jq",
             "first(.[])",
-        ],
-        cwd=REPO_ROOT,
-        text=True,
+        ]
     )
-    workflow = json.loads(stdout or "null")
     if not workflow:
-        raise RuntimeError(
-            f"Unable to find workflow {workflow_file} for tag {tag_prefix}{version}."
+        tag_sha = (
+            subprocess.check_output(["git", "rev-parse", f"{tag}^{{}}"], cwd=REPO_ROOT, text=True)
+            .strip()
         )
+        workflow = query(
+            [
+                "gh",
+                "run",
+                "list",
+                "--json",
+                "workflowName,url,headSha",
+                "--workflow",
+                workflow_file,
+                "--jq",
+                f'first(map(select(.headSha == "{tag_sha}")))',
+            ]
+        )
+    if not workflow:
+        raise RuntimeError(f"Unable to find workflow {workflow_file} for tag {tag}.")
     return workflow
+
+
+def _infer_current_workflow_url(
+    *, version: str, tag_prefix: str
+) -> tuple[str, str | None] | None:
+    """Infer the current GitHub Actions workflow URL when staging the current tag."""
+
+    if os.environ.get("GITHUB_ACTIONS") != "true":
+        return None
+
+    expected_ref = f"{tag_prefix}{version}"
+    if (
+        os.environ.get("GITHUB_REF_TYPE") != "tag"
+        or os.environ.get("GITHUB_REF_NAME") != expected_ref
+    ):
+        return None
+
+    server_url = os.environ.get("GITHUB_SERVER_URL")
+    repo = os.environ.get("GITHUB_REPOSITORY")
+    run_id = os.environ.get("GITHUB_RUN_ID")
+    if not (server_url and repo and run_id):
+        return None
+
+    return f"{server_url}/{repo}/actions/runs/{run_id}", os.environ.get("GITHUB_SHA")
 
 
 def resolve_workflow_url(
@@ -117,6 +160,10 @@ def resolve_workflow_url(
 ) -> tuple[str, str | None]:
     if override:
         return override, None
+
+    inferred = _infer_current_workflow_url(version=version, tag_prefix=tag_prefix)
+    if inferred is not None:
+        return inferred
 
     workflow = resolve_release_workflow(
         version=version, tag_prefix=tag_prefix, workflow_file=workflow_file

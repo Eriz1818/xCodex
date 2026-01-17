@@ -2,6 +2,8 @@ use crate::auth::AuthCredentialsStoreMode;
 use crate::config::types::DEFAULT_OTEL_ENVIRONMENT;
 use crate::config::types::History;
 use crate::config::types::McpServerConfig;
+use crate::config::types::McpServerDisabledReason;
+use crate::config::types::McpServerTransportConfig;
 use crate::config::types::Notice;
 use crate::config::types::Notifications;
 use crate::config::types::OtelConfig;
@@ -18,6 +20,9 @@ use crate::config::types::XtremeMode;
 use crate::config_loader::ConfigLayerStack;
 use crate::config_loader::ConfigRequirements;
 use crate::config_loader::LoaderOverrides;
+use crate::config_loader::McpServerIdentity;
+use crate::config_loader::McpServerRequirement;
+use crate::config_loader::Sourced;
 use crate::config_loader::load_config_layers_state;
 use crate::features::Feature;
 use crate::features::FeatureOverrides;
@@ -26,6 +31,7 @@ use crate::features::FeaturesToml;
 use crate::git_info::resolve_root_git_project_for_trust;
 use crate::model_provider_info::LMSTUDIO_OSS_PROVIDER_ID;
 use crate::model_provider_info::ModelProviderInfo;
+use crate::model_provider_info::OLLAMA_CHAT_PROVIDER_ID;
 use crate::model_provider_info::OLLAMA_OSS_PROVIDER_ID;
 use crate::model_provider_info::built_in_model_providers;
 use crate::project_doc::DEFAULT_PROJECT_DOC_FILENAME;
@@ -40,11 +46,13 @@ use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::config_types::SandboxMode;
 use codex_protocol::config_types::TrustLevel;
 use codex_protocol::config_types::Verbosity;
+use codex_protocol::config_types::WebSearchMode;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_rmcp_client::OAuthCredentialsStoreMode;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_absolute_path::AbsolutePathBufGuard;
 use dirs::home_dir;
+use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Serialize;
 use similar::DiffableStr;
@@ -64,6 +72,7 @@ use toml_edit::DocumentMut;
 mod constraint;
 pub mod edit;
 pub mod profile;
+pub mod schema;
 pub mod service;
 pub mod types;
 pub use constraint::Constrained;
@@ -72,8 +81,6 @@ pub use constraint::ConstraintResult;
 
 pub use service::ConfigService;
 pub use service::ConfigServiceError;
-
-const OPENAI_DEFAULT_REVIEW_MODEL: &str = "gpt-5.1-codex-max";
 
 pub use codex_git::GhostSnapshotConfig;
 
@@ -105,8 +112,8 @@ pub struct Config {
     /// Optional override of model selection.
     pub model: Option<String>,
 
-    /// Model used specifically for review sessions. Defaults to "gpt-5.1-codex-max".
-    pub review_model: String,
+    /// Model used specifically for review sessions.
+    pub review_model: Option<String>,
 
     /// Size of the context window for the model, in tokens.
     pub model_context_window: Option<i64>,
@@ -184,7 +191,7 @@ pub struct Config {
     ///
     /// Hooks are fire-and-forget: failures are logged and do not affect the
     /// session. Hook commands receive event JSON on stdin. For large payloads,
-    /// stdin contains a small JSON envelope including `payload-path` pointing
+    /// stdin contains a small JSON envelope including `payload_path` pointing
     /// at the full payload under CODEX_HOME.
     pub hooks: HooksConfig,
 
@@ -322,7 +329,7 @@ pub struct Config {
     pub cli_auth_credentials_store_mode: AuthCredentialsStoreMode,
 
     /// Definition for MCP servers that Codex can reach out to for tool calls.
-    pub mcp_servers: HashMap<String, McpServerConfig>,
+    pub mcp_servers: Constrained<HashMap<String, McpServerConfig>>,
 
     /// Preferred store for MCP OAuth credentials.
     /// keyring: Use an OS-specific keyring service.
@@ -332,6 +339,11 @@ pub struct Config {
     ///       This file will be readable to Codex and other applications running as the same user.
     /// auto (default): keyring if available, otherwise file.
     pub mcp_oauth_credentials_store_mode: OAuthCredentialsStoreMode,
+
+    /// Optional fixed port to use for the local HTTP callback server used during MCP OAuth login.
+    ///
+    /// When unset, Codex will bind to an ephemeral port chosen by the OS.
+    pub mcp_oauth_callback_port: Option<u16>,
 
     /// Combined provider map (defaults merged with user-defined overrides).
     pub model_providers: HashMap<String, ModelProviderInfo>,
@@ -392,7 +404,8 @@ pub struct Config {
     /// model info's default preference.
     pub include_apply_patch_tool: bool,
 
-    pub tools_web_search_request: bool,
+    /// Explicit or feature-derived web search mode.
+    pub web_search_mode: Option<WebSearchMode>,
 
     /// If set to `true`, used only the experimental unified exec tool.
     pub use_experimental_unified_exec_tool: bool,
@@ -514,6 +527,28 @@ impl Config {
             .await
     }
 
+    /// Load a default configuration when user config files are invalid.
+    pub fn load_default_with_cli_overrides(
+        cli_overrides: Vec<(String, TomlValue)>,
+    ) -> std::io::Result<Self> {
+        let codex_home = find_codex_home()?;
+        let mut merged = toml::Value::try_from(ConfigToml::default()).map_err(|e| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!("failed to serialize default config: {e}"),
+            )
+        })?;
+        let cli_layer = crate::config_loader::build_cli_overrides_layer(&cli_overrides);
+        crate::config_loader::merge_toml_values(&mut merged, &cli_layer);
+        let config_toml = deserialize_config_toml_with_base(merged, &codex_home)?;
+        Self::load_config_with_layer_stack(
+            config_toml,
+            ConfigOverrides::default(),
+            codex_home,
+            ConfigLayerStack::default(),
+        )
+    }
+
     /// This is a secondary way of creating [Config], which is appropriate when
     /// the harness is meant to be used with a specific configuration that
     /// ignores user settings. For example, the `codex exec` subcommand is
@@ -568,6 +603,66 @@ fn deserialize_config_toml_with_base(
     root_value
         .try_into()
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
+}
+
+fn filter_mcp_servers_by_requirements(
+    mcp_servers: &mut HashMap<String, McpServerConfig>,
+    mcp_requirements: Option<&Sourced<BTreeMap<String, McpServerRequirement>>>,
+) {
+    let Some(allowlist) = mcp_requirements else {
+        return;
+    };
+
+    let source = allowlist.source.clone();
+    for (name, server) in mcp_servers.iter_mut() {
+        let allowed = allowlist
+            .value
+            .get(name)
+            .is_some_and(|requirement| mcp_server_matches_requirement(requirement, server));
+        if allowed {
+            server.disabled_reason = None;
+        } else {
+            server.enabled = false;
+            server.disabled_reason = Some(McpServerDisabledReason::Requirements {
+                source: source.clone(),
+            });
+        }
+    }
+}
+
+fn constrain_mcp_servers(
+    mcp_servers: HashMap<String, McpServerConfig>,
+    mcp_requirements: Option<&Sourced<BTreeMap<String, McpServerRequirement>>>,
+) -> ConstraintResult<Constrained<HashMap<String, McpServerConfig>>> {
+    if mcp_requirements.is_none() {
+        return Ok(Constrained::allow_any(mcp_servers));
+    }
+
+    let mcp_requirements = mcp_requirements.cloned();
+    Constrained::normalized(mcp_servers, move |mut servers| {
+        filter_mcp_servers_by_requirements(&mut servers, mcp_requirements.as_ref());
+        servers
+    })
+}
+
+fn mcp_server_matches_requirement(
+    requirement: &McpServerRequirement,
+    server: &McpServerConfig,
+) -> bool {
+    match &requirement.identity {
+        McpServerIdentity::Command {
+            command: want_command,
+        } => matches!(
+            &server.transport,
+            McpServerTransportConfig::Stdio { command: got_command, .. }
+                if got_command == want_command
+        ),
+        McpServerIdentity::Url { url: want_url } => matches!(
+            &server.transport,
+            McpServerTransportConfig::StreamableHttp { url: got_url, .. }
+                if got_url == want_url
+        ),
+    }
 }
 
 pub async fn load_global_mcp_servers(
@@ -708,14 +803,14 @@ pub fn set_project_trust_level(
 pub fn set_default_oss_provider(codex_home: &Path, provider: &str) -> std::io::Result<()> {
     // Validate that the provider is one of the known OSS providers
     match provider {
-        LMSTUDIO_OSS_PROVIDER_ID | OLLAMA_OSS_PROVIDER_ID => {
+        LMSTUDIO_OSS_PROVIDER_ID | OLLAMA_OSS_PROVIDER_ID | OLLAMA_CHAT_PROVIDER_ID => {
             // Valid provider, continue
         }
         _ => {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,
                 format!(
-                    "Invalid OSS provider '{provider}'. Must be one of: {LMSTUDIO_OSS_PROVIDER_ID}, {OLLAMA_OSS_PROVIDER_ID}"
+                    "Invalid OSS provider '{provider}'. Must be one of: {LMSTUDIO_OSS_PROVIDER_ID}, {OLLAMA_OSS_PROVIDER_ID}, {OLLAMA_CHAT_PROVIDER_ID}"
                 ),
             ));
         }
@@ -747,7 +842,8 @@ pub fn set_default_oss_provider(codex_home: &Path, provider: &str) -> std::io::R
 }
 
 /// Base config deserialized from ~/.codex/config.toml.
-#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, JsonSchema)]
+#[schemars(deny_unknown_fields)]
 pub struct ConfigToml {
     /// Optional override of model selection.
     pub model: Option<String>,
@@ -810,6 +906,8 @@ pub struct ConfigToml {
 
     /// Definition for MCP servers that Codex can reach out to for tool calls.
     #[serde(default)]
+    // Uses the raw MCP input shape (custom deserialization) rather than `McpServerConfig`.
+    #[schemars(schema_with = "crate::config::schema::mcp_servers_schema")]
     pub mcp_servers: HashMap<String, McpServerConfig>,
 
     /// Preferred backend for storing MCP OAuth credentials.
@@ -819,6 +917,10 @@ pub struct ConfigToml {
     /// auto (default): Use the OS-specific keyring service if available, otherwise use a file.
     #[serde(default)]
     pub mcp_oauth_credentials_store: Option<OAuthCredentialsStoreMode>,
+
+    /// Optional fixed port for the local HTTP callback server used during MCP OAuth login.
+    /// When unset, Codex will bind to an ephemeral port chosen by the OS.
+    pub mcp_oauth_callback_port: Option<u16>,
 
     /// User-defined provider entries that extend/override the built-in list.
     #[serde(default)]
@@ -875,11 +977,16 @@ pub struct ConfigToml {
 
     pub projects: Option<HashMap<String, ProjectConfig>>,
 
+    /// Controls the web search tool mode: disabled, cached, or live.
+    pub web_search: Option<WebSearchMode>,
+
     /// Nested tools section for feature toggles
     pub tools: Option<ToolsToml>,
 
     /// Centralized feature flags (new). Prefer this over individual toggles.
     #[serde(default)]
+    // Injects known feature keys into the schema and forbids unknown keys.
+    #[schemars(schema_with = "crate::config::schema::features_schema")]
     pub features: Option<FeaturesToml>,
 
     /// Settings for ghost snapshots (used for undo).
@@ -924,7 +1031,7 @@ pub struct ConfigToml {
     pub experimental_compact_prompt_file: Option<AbsolutePathBuf>,
     pub experimental_use_unified_exec_tool: Option<bool>,
     pub experimental_use_freeform_apply_patch: Option<bool>,
-    /// Preferred OSS provider for local models, e.g. "lmstudio" or "ollama".
+    /// Preferred OSS provider for local models, e.g. "lmstudio", "ollama", or "ollama-chat".
     pub oss_provider: Option<String>,
 }
 
@@ -953,7 +1060,8 @@ impl From<ConfigToml> for UserSavedConfig {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema)]
+#[schemars(deny_unknown_fields)]
 pub struct ProjectConfig {
     pub trust_level: Option<TrustLevel>,
 }
@@ -968,7 +1076,8 @@ impl ProjectConfig {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, JsonSchema)]
+#[schemars(deny_unknown_fields)]
 pub struct ToolsToml {
     #[serde(default, alias = "web_search_request")]
     pub web_search: Option<bool>,
@@ -987,7 +1096,8 @@ impl From<ToolsToml> for Tools {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
+#[schemars(deny_unknown_fields)]
 pub struct GhostSnapshotToml {
     /// Exclude untracked files larger than this many bytes from ghost snapshots.
     #[serde(alias = "ignore_untracked_files_over_bytes")]
@@ -1127,7 +1237,8 @@ pub struct ConfigOverrides {
 }
 
 /// Hook configuration loaded from `config.toml`.
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema)]
+#[schemars(deny_unknown_fields)]
 pub struct HooksConfig {
     /// Hooks invoked after each completed turn.
     #[serde(default)]
@@ -1145,6 +1256,22 @@ pub struct HooksConfig {
     #[serde(default)]
     pub session_end: Vec<Vec<String>>,
 
+    /// Hooks invoked when the user submits a prompt/input.
+    #[serde(default)]
+    pub user_prompt_submit: Vec<Vec<String>>,
+
+    /// Hooks invoked before Codex performs a compact operation.
+    #[serde(default)]
+    pub pre_compact: Vec<Vec<String>>,
+
+    /// Hooks invoked when Codex emits a notification.
+    #[serde(default)]
+    pub notification: Vec<Vec<String>>,
+
+    /// Hooks invoked when a subagent task completes.
+    #[serde(default)]
+    pub subagent_stop: Vec<Vec<String>>,
+
     /// Hooks invoked immediately before issuing a model request.
     #[serde(default)]
     pub model_request_started: Vec<Vec<String>>,
@@ -1161,17 +1288,230 @@ pub struct HooksConfig {
     #[serde(default)]
     pub tool_call_finished: Vec<Vec<String>>,
 
+    /// Command hooks with matcher + per-hook options.
+    ///
+    /// This is a higher-level (Claude-style) config surface that complements the
+    /// legacy per-event argv arrays above.
+    #[serde(default)]
+    pub command: HooksCommandConfig,
+
+    /// Enable the in-process (Rust) hook that appends compact `tool_call_finished`
+    /// summaries to `CODEX_HOME/hooks-tool-calls.log`.
+    #[serde(default)]
+    pub inproc_tool_call_summary: bool,
+
+    /// Enable built-in in-process (Rust) hooks by name.
+    ///
+    /// This is additive with `hooks.inproc_tool_call_summary` for backward
+    /// compatibility.
+    ///
+    /// Example:
+    ///
+    /// ```toml
+    /// [hooks]
+    /// inproc = ["tool_call_summary"]
+    /// ```
+    #[serde(default)]
+    pub inproc: Vec<String>,
+
+    /// Gate user-provided in-process hooks (for example, experimental PyO3
+    /// hooks) behind an explicit acknowledgement.
+    ///
+    /// First-party in-process hooks remain configurable without this flag.
+    #[serde(default)]
+    pub enable_unsafe_inproc: bool,
+
+    /// Experimental PyO3 hook configuration.
+    #[serde(default)]
+    pub pyo3: HooksPyo3Config,
+
+    /// Long-lived external hook host (optional).
+    ///
+    /// This is a separate provider from the per-event external hooks configured
+    /// above. When enabled, Codex spawns a single process and streams hook
+    /// events to it over stdin as newline-delimited JSON (JSONL).
+    #[serde(default)]
+    pub host: HookHostConfig,
+
     /// Maximum payload size (in bytes) to send directly via stdin.
     ///
     /// When the serialized payload exceeds this threshold, Codex writes it to a
     /// file under CODEX_HOME and writes a small JSON envelope to stdin that
-    /// includes `payload-path`.
+    /// includes `payload_path`.
     #[serde(default = "HooksConfig::default_max_stdin_payload_bytes")]
     pub max_stdin_payload_bytes: usize,
 
     /// Keep only the most recent N payload/log files (global) under CODEX_HOME.
     #[serde(default = "HooksConfig::default_keep_last_n_payloads")]
     pub keep_last_n_payloads: usize,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct HooksPyo3Config {
+    /// Path to a Python file containing the hook implementation.
+    ///
+    /// The module must define the configured callable (default: `on_event`).
+    #[serde(default)]
+    pub script_path: Option<String>,
+
+    /// Name of the callable in the module to invoke for each hook event.
+    ///
+    /// Signature: `callable(event: dict) -> None`
+    #[serde(default)]
+    pub callable: Option<String>,
+
+    /// Optional batch size to reduce Rust→Python calls for high-volume events.
+    ///
+    /// When set to N>1 and the script defines `on_events(events: list[dict]) -> None`,
+    /// Codex will call `on_events` with batches of up to N events (preserving order).
+    /// If the script does not define `on_events`, Codex falls back to per-event `callable`.
+    #[serde(default)]
+    pub batch_size: Option<usize>,
+
+    /// Optional timeout for a single PyO3 hook invocation (seconds).
+    ///
+    /// When unset, Codex uses the default in-process hook timeout.
+    #[serde(default)]
+    pub timeout_sec: Option<u64>,
+
+    /// Optional matcher filters to restrict which events are delivered to PyO3.
+    ///
+    /// When unset/empty, all events are delivered.
+    #[serde(default)]
+    pub filters: HookEventFiltersConfig,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct HookHostConfig {
+    /// Enable the hook host.
+    ///
+    /// Disabled by default. When enabled, `command` must be non-empty.
+    #[serde(default)]
+    pub enabled: bool,
+
+    /// Command to start the host process.
+    ///
+    /// Example:
+    ///
+    /// ```toml
+    /// [hooks.host]
+    /// enabled = true
+    /// command = ["python3", "-u", "$CODEX_HOME/hooks/host/python/host.py"]
+    /// ```
+    #[serde(default)]
+    pub command: Vec<String>,
+
+    /// Optional sandbox override for the host process.
+    ///
+    /// When unset, the host inherits the session sandbox policy.
+    #[serde(default)]
+    pub sandbox_mode: Option<SandboxMode>,
+
+    /// Optional timeout for writing a single hook event to the host stdin (seconds).
+    ///
+    /// When unset, writes are best-effort and may block until the host is killed.
+    #[serde(default)]
+    pub timeout_sec: Option<u64>,
+
+    /// Optional matcher filters to restrict which events are delivered to the hook host.
+    ///
+    /// When unset/empty, all events are delivered.
+    #[serde(default)]
+    pub filters: HookEventFiltersConfig,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct HooksCommandConfig {
+    /// Default timeout applied to command hooks when `timeout_sec` is unset (seconds).
+    #[serde(default = "HooksCommandConfig::default_timeout_sec")]
+    pub default_timeout_sec: u64,
+
+    /// Per-event matcher entries.
+    ///
+    /// Keys are event names (canonical xcodex event keys or aliases like `PostToolUse`).
+    /// Values are arrays of matchers, each with an array of hooks.
+    #[serde(flatten)]
+    pub events: HashMap<String, Vec<HooksCommandMatcherConfig>>,
+}
+
+impl HooksCommandConfig {
+    fn default_timeout_sec() -> u64 {
+        30
+    }
+}
+
+impl Default for HooksCommandConfig {
+    fn default() -> Self {
+        Self {
+            default_timeout_sec: Self::default_timeout_sec(),
+            events: HashMap::new(),
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct HooksCommandMatcherConfig {
+    /// Matcher expression using Claude semantics (`*`, exact, or regex).
+    #[serde(default)]
+    pub matcher: Option<String>,
+
+    /// Hooks to execute when this matcher matches.
+    #[serde(default)]
+    pub hooks: Vec<HooksCommandHookConfig>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct HooksCommandHookConfig {
+    /// Payload format to send on stdin.
+    ///
+    /// Deprecated: payloads are always emitted as a Claude-first superset with snake_case keys.
+    #[serde(default)]
+    pub payload: HookPayloadFormat,
+
+    /// Execute a command via argv.
+    #[serde(default)]
+    pub argv: Option<Vec<String>>,
+
+    /// Execute a command string via a shell wrapper (`bash -lc ...` / `cmd.exe /C ...`).
+    #[serde(default)]
+    pub command: Option<String>,
+
+    /// Optional timeout for this hook (seconds). When unset, uses `hooks.command.default_timeout_sec`.
+    #[serde(default)]
+    pub timeout_sec: Option<u64>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+#[derive(Default)]
+pub enum HookPayloadFormat {
+    #[default]
+    Xcodex,
+    Claude,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct HookEventFiltersConfig {
+    /// Per-event matcher entries.
+    ///
+    /// Keys are event names (canonical xcodex event keys or aliases like `PostToolUse`).
+    /// Values are arrays of matchers; an event is delivered when any matcher matches.
+    #[serde(flatten)]
+    pub events: HashMap<String, Vec<HookEventMatcherConfig>>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct HookEventMatcherConfig {
+    /// Matcher expression using Claude semantics (`*`, exact, or regex).
+    #[serde(default)]
+    pub matcher: Option<String>,
 }
 
 impl HooksConfig {
@@ -1191,10 +1531,20 @@ impl Default for HooksConfig {
             approval_requested: Vec::new(),
             session_start: Vec::new(),
             session_end: Vec::new(),
+            user_prompt_submit: Vec::new(),
+            pre_compact: Vec::new(),
+            notification: Vec::new(),
+            subagent_stop: Vec::new(),
             model_request_started: Vec::new(),
             model_response_completed: Vec::new(),
             tool_call_started: Vec::new(),
             tool_call_finished: Vec::new(),
+            command: HooksCommandConfig::default(),
+            inproc_tool_call_summary: false,
+            inproc: Vec::new(),
+            enable_unsafe_inproc: false,
+            pyo3: HooksPyo3Config::default(),
+            host: HookHostConfig::default(),
             max_stdin_payload_bytes: Self::default_max_stdin_payload_bytes(),
             keep_last_n_payloads: Self::default_keep_last_n_payloads(),
         }
@@ -1227,6 +1577,24 @@ pub fn resolve_oss_provider(
             config_toml.oss_provider.clone()
         }
     }
+}
+
+/// Resolve the web search mode from explicit config and feature flags.
+fn resolve_web_search_mode(
+    config_toml: &ConfigToml,
+    config_profile: &ConfigProfile,
+    features: &Features,
+) -> Option<WebSearchMode> {
+    if let Some(mode) = config_profile.web_search.or(config_toml.web_search) {
+        return Some(mode);
+    }
+    if features.enabled(Feature::WebSearchCached) {
+        return Some(WebSearchMode::Cached);
+    }
+    if features.enabled(Feature::WebSearchRequest) {
+        return Some(WebSearchMode::Live);
+    }
+    None
 }
 
 impl Config {
@@ -1293,6 +1661,7 @@ impl Config {
         };
 
         let features = Features::from_config(&cfg, &config_profile, feature_overrides);
+        let web_search_mode = resolve_web_search_mode(&cfg, &config_profile, &features);
         #[cfg(target_os = "windows")]
         {
             // Base flag controls sandbox on/off; elevated only applies when base is enabled.
@@ -1412,7 +1781,6 @@ impl Config {
         };
 
         let include_apply_patch_tool_flag = features.enabled(Feature::ApplyPatchFreeform);
-        let tools_web_search_request = features.enabled(Feature::WebSearchRequest);
         let use_experimental_unified_exec_tool = features.enabled(Feature::UnifiedExec);
 
         let forced_chatgpt_workspace_id =
@@ -1462,10 +1830,7 @@ impl Config {
         )?;
         let compact_prompt = compact_prompt.or(file_compact_prompt);
 
-        // Default review model when not set in config; allow CLI override to take precedence.
-        let review_model = override_review_model
-            .or(cfg.review_model)
-            .unwrap_or_else(default_review_model);
+        let review_model = override_review_model.or(cfg.review_model);
 
         let check_for_update_on_startup = cfg.check_for_update_on_startup.unwrap_or(true);
 
@@ -1474,6 +1839,7 @@ impl Config {
         let ConfigRequirements {
             approval_policy: mut constrained_approval_policy,
             sandbox_policy: mut constrained_sandbox_policy,
+            mcp_servers,
         } = requirements;
 
         constrained_approval_policy
@@ -1481,6 +1847,9 @@ impl Config {
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, format!("{e}")))?;
         constrained_sandbox_policy
             .set(sandbox_policy)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, format!("{e}")))?;
+
+        let mcp_servers = constrain_mcp_servers(cfg.mcp_servers.clone(), mcp_servers.as_ref())
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, format!("{e}")))?;
 
         let config = Self {
@@ -1520,10 +1889,11 @@ impl Config {
             // The config.toml omits "_mode" because it's a config file. However, "_mode"
             // is important in code to differentiate the mode from the store implementation.
             cli_auth_credentials_store_mode: cfg.cli_auth_credentials_store.unwrap_or_default(),
-            mcp_servers: cfg.mcp_servers,
+            mcp_servers,
             // The config.toml omits "_mode" because it's a config file. However, "_mode"
             // is important in code to differentiate the mode from the store implementation.
             mcp_oauth_credentials_store_mode: cfg.mcp_oauth_credentials_store.unwrap_or_default(),
+            mcp_oauth_callback_port: cfg.mcp_oauth_callback_port,
             model_providers,
             project_doc_max_bytes: cfg.project_doc_max_bytes.unwrap_or(PROJECT_DOC_MAX_BYTES),
             project_doc_fallback_filenames: cfg
@@ -1567,7 +1937,7 @@ impl Config {
             forced_chatgpt_workspace_id,
             forced_login_method,
             include_apply_patch_tool: include_apply_patch_tool_flag,
-            tools_web_search_request,
+            web_search_mode,
             use_experimental_unified_exec_tool,
             ghost_snapshot,
             features,
@@ -1729,10 +2099,6 @@ impl Config {
     }
 }
 
-fn default_review_model() -> String {
-    OPENAI_DEFAULT_REVIEW_MODEL.to_string()
-}
-
 const CODEX_DEFAULT_HOME_DIRNAME: &str = ".codex";
 const XCODEX_DEFAULT_HOME_DIRNAME: &str = ".xcodex";
 const XCODEX_EXE_STEM: &str = "xcodex";
@@ -1800,7 +2166,6 @@ fn should_run_xcodex_first_run_wizard_impl(
 pub fn should_run_xcodex_first_run_wizard(codex_home: &Path) -> std::io::Result<bool> {
     should_run_xcodex_first_run_wizard_impl(codex_home, is_xcodex_invocation())
 }
-
 /// Returns the path to the Codex configuration directory, which can be
 /// specified by the `CODEX_HOME` environment variable. If not set, defaults to
 /// `~/.codex` (or `~/.xcodex` when invoked as `xcodex`).
@@ -1845,12 +2210,15 @@ mod tests {
     use crate::config::types::HistoryPersistence;
     use crate::config::types::McpServerTransportConfig;
     use crate::config::types::Notifications;
+    use crate::config_loader::RequirementSource;
     use crate::features::Feature;
 
     use super::*;
     use core_test_support::test_absolute_path;
     use pretty_assertions::assert_eq;
 
+    use std::collections::BTreeMap;
+    use std::collections::HashMap;
     use std::time::Duration;
     use tempfile::TempDir;
     use tempfile::tempdir;
@@ -1899,6 +2267,41 @@ mod tests {
         );
 
         Ok(())
+    }
+
+    fn stdio_mcp(command: &str) -> McpServerConfig {
+        McpServerConfig {
+            transport: McpServerTransportConfig::Stdio {
+                command: command.to_string(),
+                args: Vec::new(),
+                env: None,
+                env_vars: Vec::new(),
+                cwd: None,
+            },
+            enabled: true,
+            disabled_reason: None,
+            startup_timeout_sec: None,
+            tool_timeout_sec: None,
+            enabled_tools: None,
+            disabled_tools: None,
+        }
+    }
+
+    fn http_mcp(url: &str) -> McpServerConfig {
+        McpServerConfig {
+            transport: McpServerTransportConfig::StreamableHttp {
+                url: url.to_string(),
+                bearer_token_env_var: None,
+                http_headers: None,
+                env_http_headers: None,
+            },
+            enabled: true,
+            disabled_reason: None,
+            startup_timeout_sec: None,
+            tool_timeout_sec: None,
+            enabled_tools: None,
+            disabled_tools: None,
+        }
     }
 
     #[test]
@@ -2115,6 +2518,140 @@ trust_level = "trusted"
     }
 
     #[test]
+    fn filter_mcp_servers_by_allowlist_enforces_identity_rules() {
+        const MISMATCHED_COMMAND_SERVER: &str = "mismatched-command-should-disable";
+        const MISMATCHED_URL_SERVER: &str = "mismatched-url-should-disable";
+        const MATCHED_COMMAND_SERVER: &str = "matched-command-should-allow";
+        const MATCHED_URL_SERVER: &str = "matched-url-should-allow";
+        const DIFFERENT_NAME_SERVER: &str = "different-name-should-disable";
+
+        const GOOD_CMD: &str = "good-cmd";
+        const GOOD_URL: &str = "https://example.com/good";
+
+        let mut servers = HashMap::from([
+            (MISMATCHED_COMMAND_SERVER.to_string(), stdio_mcp("docs-cmd")),
+            (
+                MISMATCHED_URL_SERVER.to_string(),
+                http_mcp("https://example.com/mcp"),
+            ),
+            (MATCHED_COMMAND_SERVER.to_string(), stdio_mcp(GOOD_CMD)),
+            (MATCHED_URL_SERVER.to_string(), http_mcp(GOOD_URL)),
+            (DIFFERENT_NAME_SERVER.to_string(), stdio_mcp("same-cmd")),
+        ]);
+        let source = RequirementSource::LegacyManagedConfigTomlFromMdm;
+        let requirements = Sourced::new(
+            BTreeMap::from([
+                (
+                    MISMATCHED_URL_SERVER.to_string(),
+                    McpServerRequirement {
+                        identity: McpServerIdentity::Url {
+                            url: "https://example.com/other".to_string(),
+                        },
+                    },
+                ),
+                (
+                    MISMATCHED_COMMAND_SERVER.to_string(),
+                    McpServerRequirement {
+                        identity: McpServerIdentity::Command {
+                            command: "other-cmd".to_string(),
+                        },
+                    },
+                ),
+                (
+                    MATCHED_URL_SERVER.to_string(),
+                    McpServerRequirement {
+                        identity: McpServerIdentity::Url {
+                            url: GOOD_URL.to_string(),
+                        },
+                    },
+                ),
+                (
+                    MATCHED_COMMAND_SERVER.to_string(),
+                    McpServerRequirement {
+                        identity: McpServerIdentity::Command {
+                            command: GOOD_CMD.to_string(),
+                        },
+                    },
+                ),
+            ]),
+            source.clone(),
+        );
+        filter_mcp_servers_by_requirements(&mut servers, Some(&requirements));
+
+        let reason = Some(McpServerDisabledReason::Requirements { source });
+        assert_eq!(
+            servers
+                .iter()
+                .map(|(name, server)| (
+                    name.clone(),
+                    (server.enabled, server.disabled_reason.clone())
+                ))
+                .collect::<HashMap<String, (bool, Option<McpServerDisabledReason>)>>(),
+            HashMap::from([
+                (MISMATCHED_URL_SERVER.to_string(), (false, reason.clone())),
+                (
+                    MISMATCHED_COMMAND_SERVER.to_string(),
+                    (false, reason.clone()),
+                ),
+                (MATCHED_URL_SERVER.to_string(), (true, None)),
+                (MATCHED_COMMAND_SERVER.to_string(), (true, None)),
+                (DIFFERENT_NAME_SERVER.to_string(), (false, reason)),
+            ])
+        );
+    }
+
+    #[test]
+    fn filter_mcp_servers_by_allowlist_allows_all_when_unset() {
+        let mut servers = HashMap::from([
+            ("server-a".to_string(), stdio_mcp("cmd-a")),
+            ("server-b".to_string(), http_mcp("https://example.com/b")),
+        ]);
+
+        filter_mcp_servers_by_requirements(&mut servers, None);
+
+        assert_eq!(
+            servers
+                .iter()
+                .map(|(name, server)| (
+                    name.clone(),
+                    (server.enabled, server.disabled_reason.clone())
+                ))
+                .collect::<HashMap<String, (bool, Option<McpServerDisabledReason>)>>(),
+            HashMap::from([
+                ("server-a".to_string(), (true, None)),
+                ("server-b".to_string(), (true, None)),
+            ])
+        );
+    }
+
+    #[test]
+    fn filter_mcp_servers_by_allowlist_blocks_all_when_empty() {
+        let mut servers = HashMap::from([
+            ("server-a".to_string(), stdio_mcp("cmd-a")),
+            ("server-b".to_string(), http_mcp("https://example.com/b")),
+        ]);
+
+        let source = RequirementSource::LegacyManagedConfigTomlFromMdm;
+        let requirements = Sourced::new(BTreeMap::new(), source.clone());
+        filter_mcp_servers_by_requirements(&mut servers, Some(&requirements));
+
+        let reason = Some(McpServerDisabledReason::Requirements { source });
+        assert_eq!(
+            servers
+                .iter()
+                .map(|(name, server)| (
+                    name.clone(),
+                    (server.enabled, server.disabled_reason.clone())
+                ))
+                .collect::<HashMap<String, (bool, Option<McpServerDisabledReason>)>>(),
+            HashMap::from([
+                ("server-a".to_string(), (false, reason.clone())),
+                ("server-b".to_string(), (false, reason)),
+            ])
+        );
+    }
+
+    #[test]
     fn add_dir_override_extends_workspace_writable_roots() -> std::io::Result<()> {
         let temp_dir = TempDir::new()?;
         let frontend = temp_dir.path().join("frontend");
@@ -2242,6 +2779,47 @@ trust_level = "trusted"
         assert_eq!(config.feedback_enabled, true);
 
         Ok(())
+    }
+
+    #[test]
+    fn web_search_mode_uses_none_if_unset() {
+        let cfg = ConfigToml::default();
+        let profile = ConfigProfile::default();
+        let features = Features::with_defaults();
+
+        assert_eq!(resolve_web_search_mode(&cfg, &profile, &features), None);
+    }
+
+    #[test]
+    fn web_search_mode_prefers_profile_over_legacy_flags() {
+        let cfg = ConfigToml::default();
+        let profile = ConfigProfile {
+            web_search: Some(WebSearchMode::Live),
+            ..Default::default()
+        };
+        let mut features = Features::with_defaults();
+        features.enable(Feature::WebSearchCached);
+
+        assert_eq!(
+            resolve_web_search_mode(&cfg, &profile, &features),
+            Some(WebSearchMode::Live)
+        );
+    }
+
+    #[test]
+    fn web_search_mode_disabled_overrides_legacy_request() {
+        let cfg = ConfigToml {
+            web_search: Some(WebSearchMode::Disabled),
+            ..Default::default()
+        };
+        let profile = ConfigProfile::default();
+        let mut features = Features::with_defaults();
+        features.enable(Feature::WebSearchRequest);
+
+        assert_eq!(
+            resolve_web_search_mode(&cfg, &profile, &features),
+            Some(WebSearchMode::Disabled)
+        );
     }
 
     #[test]
@@ -2490,6 +3068,7 @@ trust_level = "trusted"
                     cwd: None,
                 },
                 enabled: true,
+                disabled_reason: None,
                 startup_timeout_sec: Some(Duration::from_secs(3)),
                 tool_timeout_sec: Some(Duration::from_secs(5)),
                 enabled_tools: None,
@@ -2643,6 +3222,7 @@ bearer_token = "secret"
                     cwd: None,
                 },
                 enabled: true,
+                disabled_reason: None,
                 startup_timeout_sec: None,
                 tool_timeout_sec: None,
                 enabled_tools: None,
@@ -2711,6 +3291,7 @@ ZIG_VAR = "3"
                     cwd: None,
                 },
                 enabled: true,
+                disabled_reason: None,
                 startup_timeout_sec: None,
                 tool_timeout_sec: None,
                 enabled_tools: None,
@@ -2759,6 +3340,7 @@ ZIG_VAR = "3"
                     cwd: Some(cwd_path.clone()),
                 },
                 enabled: true,
+                disabled_reason: None,
                 startup_timeout_sec: None,
                 tool_timeout_sec: None,
                 enabled_tools: None,
@@ -2805,6 +3387,7 @@ ZIG_VAR = "3"
                     env_http_headers: None,
                 },
                 enabled: true,
+                disabled_reason: None,
                 startup_timeout_sec: Some(Duration::from_secs(2)),
                 tool_timeout_sec: None,
                 enabled_tools: None,
@@ -2867,6 +3450,7 @@ startup_timeout_sec = 2.0
                     )])),
                 },
                 enabled: true,
+                disabled_reason: None,
                 startup_timeout_sec: Some(Duration::from_secs(2)),
                 tool_timeout_sec: None,
                 enabled_tools: None,
@@ -2941,6 +3525,7 @@ X-Auth = "DOCS_AUTH"
                     )])),
                 },
                 enabled: true,
+                disabled_reason: None,
                 startup_timeout_sec: Some(Duration::from_secs(2)),
                 tool_timeout_sec: None,
                 enabled_tools: None,
@@ -2968,6 +3553,7 @@ X-Auth = "DOCS_AUTH"
                     env_http_headers: None,
                 },
                 enabled: true,
+                disabled_reason: None,
                 startup_timeout_sec: None,
                 tool_timeout_sec: None,
                 enabled_tools: None,
@@ -3033,6 +3619,7 @@ url = "https://example.com/mcp"
                         )])),
                     },
                     enabled: true,
+                    disabled_reason: None,
                     startup_timeout_sec: Some(Duration::from_secs(2)),
                     tool_timeout_sec: None,
                     enabled_tools: None,
@@ -3050,6 +3637,7 @@ url = "https://example.com/mcp"
                         cwd: None,
                     },
                     enabled: true,
+                    disabled_reason: None,
                     startup_timeout_sec: None,
                     tool_timeout_sec: None,
                     enabled_tools: None,
@@ -3130,6 +3718,7 @@ url = "https://example.com/mcp"
                     cwd: None,
                 },
                 enabled: false,
+                disabled_reason: None,
                 startup_timeout_sec: None,
                 tool_timeout_sec: None,
                 enabled_tools: None,
@@ -3172,6 +3761,7 @@ url = "https://example.com/mcp"
                     cwd: None,
                 },
                 enabled: true,
+                disabled_reason: None,
                 startup_timeout_sec: None,
                 tool_timeout_sec: None,
                 enabled_tools: Some(vec!["allowed".to_string()]),
@@ -3541,7 +4131,7 @@ model_verbosity = "high"
         assert_eq!(
             Config {
                 model: Some("o3".to_string()),
-                review_model: OPENAI_DEFAULT_REVIEW_MODEL.to_string(),
+                review_model: None,
                 model_context_window: None,
                 model_auto_compact_token_limit: None,
                 model_provider_id: "openai".to_string(),
@@ -3559,8 +4149,9 @@ model_verbosity = "high"
                 worktrees_pinned_paths: Vec::new(),
                 worktrees_auto_link_shared_dirs: false,
                 cli_auth_credentials_store_mode: Default::default(),
-                mcp_servers: HashMap::new(),
+                mcp_servers: Constrained::allow_any(HashMap::new()),
                 mcp_oauth_credentials_store_mode: Default::default(),
+                mcp_oauth_callback_port: None,
                 model_providers: fixture.model_provider_map.clone(),
                 project_doc_max_bytes: PROJECT_DOC_MAX_BYTES,
                 project_doc_fallback_filenames: Vec::new(),
@@ -3583,7 +4174,7 @@ model_verbosity = "high"
                 forced_chatgpt_workspace_id: None,
                 forced_login_method: None,
                 include_apply_patch_tool: false,
-                tools_web_search_request: false,
+                web_search_mode: None,
                 use_experimental_unified_exec_tool: false,
                 ghost_snapshot: GhostSnapshotConfig::default(),
                 features: Features::with_defaults(),
@@ -3640,7 +4231,7 @@ model_verbosity = "high"
         )?;
         let expected_gpt3_profile_config = Config {
             model: Some("gpt-3.5-turbo".to_string()),
-            review_model: OPENAI_DEFAULT_REVIEW_MODEL.to_string(),
+            review_model: None,
             model_context_window: None,
             model_auto_compact_token_limit: None,
             model_provider_id: "openai-chat-completions".to_string(),
@@ -3658,8 +4249,9 @@ model_verbosity = "high"
             worktrees_pinned_paths: Vec::new(),
             worktrees_auto_link_shared_dirs: false,
             cli_auth_credentials_store_mode: Default::default(),
-            mcp_servers: HashMap::new(),
+            mcp_servers: Constrained::allow_any(HashMap::new()),
             mcp_oauth_credentials_store_mode: Default::default(),
+            mcp_oauth_callback_port: None,
             model_providers: fixture.model_provider_map.clone(),
             project_doc_max_bytes: PROJECT_DOC_MAX_BYTES,
             project_doc_fallback_filenames: Vec::new(),
@@ -3682,7 +4274,7 @@ model_verbosity = "high"
             forced_chatgpt_workspace_id: None,
             forced_login_method: None,
             include_apply_patch_tool: false,
-            tools_web_search_request: false,
+            web_search_mode: None,
             use_experimental_unified_exec_tool: false,
             ghost_snapshot: GhostSnapshotConfig::default(),
             features: Features::with_defaults(),
@@ -3754,7 +4346,7 @@ model_verbosity = "high"
         )?;
         let expected_zdr_profile_config = Config {
             model: Some("o3".to_string()),
-            review_model: OPENAI_DEFAULT_REVIEW_MODEL.to_string(),
+            review_model: None,
             model_context_window: None,
             model_auto_compact_token_limit: None,
             model_provider_id: "openai".to_string(),
@@ -3772,8 +4364,9 @@ model_verbosity = "high"
             worktrees_pinned_paths: Vec::new(),
             worktrees_auto_link_shared_dirs: false,
             cli_auth_credentials_store_mode: Default::default(),
-            mcp_servers: HashMap::new(),
+            mcp_servers: Constrained::allow_any(HashMap::new()),
             mcp_oauth_credentials_store_mode: Default::default(),
+            mcp_oauth_callback_port: None,
             model_providers: fixture.model_provider_map.clone(),
             project_doc_max_bytes: PROJECT_DOC_MAX_BYTES,
             project_doc_fallback_filenames: Vec::new(),
@@ -3796,7 +4389,7 @@ model_verbosity = "high"
             forced_chatgpt_workspace_id: None,
             forced_login_method: None,
             include_apply_patch_tool: false,
-            tools_web_search_request: false,
+            web_search_mode: None,
             use_experimental_unified_exec_tool: false,
             ghost_snapshot: GhostSnapshotConfig::default(),
             features: Features::with_defaults(),
@@ -3854,7 +4447,7 @@ model_verbosity = "high"
         )?;
         let expected_gpt5_profile_config = Config {
             model: Some("gpt-5.1".to_string()),
-            review_model: OPENAI_DEFAULT_REVIEW_MODEL.to_string(),
+            review_model: None,
             model_context_window: None,
             model_auto_compact_token_limit: None,
             model_provider_id: "openai".to_string(),
@@ -3872,8 +4465,9 @@ model_verbosity = "high"
             worktrees_pinned_paths: Vec::new(),
             worktrees_auto_link_shared_dirs: false,
             cli_auth_credentials_store_mode: Default::default(),
-            mcp_servers: HashMap::new(),
+            mcp_servers: Constrained::allow_any(HashMap::new()),
             mcp_oauth_credentials_store_mode: Default::default(),
+            mcp_oauth_callback_port: None,
             model_providers: fixture.model_provider_map.clone(),
             project_doc_max_bytes: PROJECT_DOC_MAX_BYTES,
             project_doc_fallback_filenames: Vec::new(),
@@ -3896,7 +4490,7 @@ model_verbosity = "high"
             forced_chatgpt_workspace_id: None,
             forced_login_method: None,
             include_apply_patch_tool: false,
-            tools_web_search_request: false,
+            web_search_mode: None,
             use_experimental_unified_exec_tool: false,
             ghost_snapshot: GhostSnapshotConfig::default(),
             features: Features::with_defaults(),
@@ -4194,6 +4788,34 @@ trust_level = "untrusted"
             Some("test-profile".to_string()),
         );
         assert_eq!(result, Some("explicit-provider".to_string()));
+    }
+
+    #[test]
+    fn config_toml_deserializes_mcp_oauth_callback_port() {
+        let toml = r#"mcp_oauth_callback_port = 4321"#;
+        let cfg: ConfigToml =
+            toml::from_str(toml).expect("TOML deserialization should succeed for callback port");
+        assert_eq!(cfg.mcp_oauth_callback_port, Some(4321));
+    }
+
+    #[test]
+    fn config_loads_mcp_oauth_callback_port_from_toml() -> std::io::Result<()> {
+        let codex_home = TempDir::new()?;
+        let toml = r#"
+model = "gpt-5.1"
+mcp_oauth_callback_port = 5678
+"#;
+        let cfg: ConfigToml =
+            toml::from_str(toml).expect("TOML deserialization should succeed for callback port");
+
+        let config = Config::load_from_base_config_with_overrides(
+            cfg,
+            ConfigOverrides::default(),
+            codex_home.path().to_path_buf(),
+        )?;
+
+        assert_eq!(config.mcp_oauth_callback_port, Some(5678));
+        Ok(())
     }
 
     #[test]

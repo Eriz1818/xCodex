@@ -46,6 +46,7 @@ async fn interrupt_recomputes_prompt_estimate_after_history_grows() -> Result<()
         .submit(Op::UserInput {
             items: vec![UserInput::Text {
                 text: "x".repeat(5_000),
+                text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
         })
@@ -113,6 +114,7 @@ async fn auto_compact_disabled_does_not_locally_block_on_context_window() -> Res
         .submit(Op::UserInput {
             items: vec![UserInput::Text {
                 text: "trigger context overflow".into(),
+                text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
         })
@@ -181,6 +183,7 @@ async fn resume_emits_prompt_estimate_consistent_with_aborted_history() -> Resul
         .submit(Op::UserInput {
             items: vec![UserInput::Text {
                 text: "x".repeat(5_000),
+                text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
         })

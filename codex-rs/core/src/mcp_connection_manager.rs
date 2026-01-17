@@ -14,8 +14,8 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
+use crate::hooks::UserHooks;
 use crate::mcp::auth::McpAuthStatusEntry;
-use crate::user_notification::UserHooks;
 use anyhow::Context;
 use anyhow::Result;
 use anyhow::anyhow;
@@ -293,12 +293,27 @@ impl AsyncManagedClient {
                 return Err(error.into());
             }
 
-            let client =
-                Arc::new(make_rmcp_client(&server_name, config.transport, store_mode).await?);
+            let startup_timeout = config.startup_timeout_sec.or(Some(DEFAULT_STARTUP_TIMEOUT));
+
+            let client_fut = make_rmcp_client(&server_name, config.transport, store_mode);
+            let client_result = match startup_timeout {
+                Some(duration) => {
+                    tokio::time::timeout(duration, client_fut.or_cancel(&cancel_token))
+                        .await
+                        .map_err(|_| anyhow!("request timed out after {duration:?}"))?
+                }
+                None => client_fut.or_cancel(&cancel_token).await,
+            };
+
+            let client = match client_result {
+                Ok(Ok(client)) => Arc::new(client),
+                Ok(Err(err)) => return Err(err),
+                Err(CancelErr::Cancelled) => return Err(StartupOutcomeError::Cancelled),
+            };
             match start_server_task(
                 server_name,
                 client,
-                config.startup_timeout_sec.or(Some(DEFAULT_STARTUP_TIMEOUT)),
+                startup_timeout,
                 config.tool_timeout_sec.unwrap_or(DEFAULT_TOOL_TIMEOUT),
                 tool_filter,
                 tx_event,
@@ -352,7 +367,7 @@ impl McpConnectionManager {
     #[allow(clippy::too_many_arguments)]
     pub async fn initialize(
         &mut self,
-        mcp_servers: HashMap<String, McpServerConfig>,
+        mcp_servers: &HashMap<String, McpServerConfig>,
         store_mode: OAuthCredentialsStoreMode,
         auth_entries: HashMap<String, McpAuthStatusEntry>,
         tx_event: Sender<Event>,
@@ -366,6 +381,7 @@ impl McpConnectionManager {
         let mut clients = HashMap::new();
         let mut join_set = JoinSet::new();
         let elicitation_requests = ElicitationRequestManager::default();
+        let mcp_servers = mcp_servers.clone();
         for (server_name, cfg) in mcp_servers.into_iter().filter(|(_, cfg)| cfg.enabled) {
             let cancel_token = cancel_token.child_token();
             let hook_context = hook_context.clone();
@@ -1326,6 +1342,7 @@ mod tests {
                     env_http_headers: None,
                 },
                 enabled: true,
+                disabled_reason: None,
                 startup_timeout_sec: None,
                 tool_timeout_sec: None,
                 enabled_tools: None,
@@ -1370,6 +1387,7 @@ mod tests {
                     env_http_headers: None,
                 },
                 enabled: true,
+                disabled_reason: None,
                 startup_timeout_sec: None,
                 tool_timeout_sec: None,
                 enabled_tools: None,

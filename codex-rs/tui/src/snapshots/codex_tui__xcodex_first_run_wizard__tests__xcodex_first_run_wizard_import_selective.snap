@@ -1,6 +1,5 @@
 ---
 source: tui/src/xcodex_first_run_wizard.rs
-assertion_line: 1618
 expression: snapshot
 ---
 

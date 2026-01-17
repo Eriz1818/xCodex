@@ -16,7 +16,7 @@ pub use sandbox_mode_cli_arg::SandboxModeCliArg;
 #[cfg(feature = "cli")]
 pub mod format_env_display;
 
-#[cfg(any(feature = "cli", test))]
+#[cfg(feature = "cli")]
 mod config_override;
 
 #[cfg(feature = "cli")]
@@ -37,3 +37,8 @@ pub mod fuzzy_match;
 pub mod approval_presets;
 // Shared OSS provider utilities used by TUI and exec
 pub mod oss;
+// Shared hook SDK installer used by CLI + TUI/TUI2.
+pub mod hooks_sdk_install;
+// Shared sample installer used by CLI + TUI/TUI2.
+pub mod hooks_samples_install;
+pub mod whats_new;

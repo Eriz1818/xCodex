@@ -326,7 +326,7 @@ checksum = "a23eb6b1614318a8071c9b2521f36b424b2c83db5eb3a0fead4a6c0809af6e61"
 
 [[package]]
 name = "app_test_support"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "base64",
@@ -360,7 +360,7 @@ dependencies = [
  "objc2-foundation",
  "parking_lot",
  "percent-encoding",
- "windows-sys 0.60.2",
+ "windows-sys 0.52.0",
  "wl-clipboard-rs",
  "x11rb",
 ]
@@ -891,9 +891,9 @@ dependencies = [
 
 [[package]]
 name = "clap"
-version = "4.5.53"
+version = "4.5.54"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c9e340e012a1bf4935f5282ed1436d1489548e8f72308207ea5df0e23d2d03f8"
+checksum = "c6e6ff9dcd79cff5cd969a17a545d79e84ab086e444102a591e288a8aa3ce394"
 dependencies = [
  "clap_builder",
  "clap_derive",
@@ -901,9 +901,9 @@ dependencies = [
 
 [[package]]
 name = "clap_builder"
-version = "4.5.53"
+version = "4.5.54"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d76b5d13eaa18c901fd2f7fca939fefe3a0727a953561fefdf3b2922b8569d00"
+checksum = "fa42cf4d2b7a41bc8f663a7cab4031ebafa1bf3875705bfaf8466dc60ab52c00"
 dependencies = [
  "anstream",
  "anstyle",
@@ -956,7 +956,7 @@ checksum = "e9b18233253483ce2f65329a24072ec414db782531bdbb7d0bbc4bd2ce6b7e21"
 
 [[package]]
 name = "codex-ansi-escape"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "ansi-to-tui",
  "ratatui",
@@ -965,7 +965,7 @@ dependencies = [
 
 [[package]]
 name = "codex-api"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "assert_matches",
@@ -985,14 +985,16 @@ dependencies = [
  "thiserror 2.0.17",
  "tokio",
  "tokio-test",
+ "tokio-tungstenite",
  "tokio-util",
  "tracing",
+ "url",
  "wiremock",
 ]
 
 [[package]]
 name = "codex-app-server"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "app_test_support",
@@ -1012,7 +1014,6 @@ dependencies = [
  "codex-utils-json-to-toml",
  "core_test_support",
  "mcp-types",
- "os_info",
  "pretty_assertions",
  "serde",
  "serde_json",
@@ -1029,7 +1030,7 @@ dependencies = [
 
 [[package]]
 name = "codex-app-server-protocol"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -1048,7 +1049,7 @@ dependencies = [
 
 [[package]]
 name = "codex-app-server-test-client"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -1061,7 +1062,7 @@ dependencies = [
 
 [[package]]
 name = "codex-apply-patch"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "assert_cmd",
@@ -1077,7 +1078,7 @@ dependencies = [
 
 [[package]]
 name = "codex-arg0"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "codex-apply-patch",
@@ -1090,7 +1091,7 @@ dependencies = [
 
 [[package]]
 name = "codex-async-utils"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "async-trait",
  "pretty_assertions",
@@ -1100,7 +1101,7 @@ dependencies = [
 
 [[package]]
 name = "codex-backend-client"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "codex-backend-openapi-models",
@@ -1114,7 +1115,7 @@ dependencies = [
 
 [[package]]
 name = "codex-backend-openapi-models"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -1123,7 +1124,7 @@ dependencies = [
 
 [[package]]
 name = "codex-chatgpt"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -1139,7 +1140,7 @@ dependencies = [
 
 [[package]]
 name = "codex-cli"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "assert_cmd",
@@ -1157,6 +1158,7 @@ dependencies = [
  "codex-execpolicy",
  "codex-login",
  "codex-mcp-server",
+ "codex-process-hardening",
  "codex-protocol",
  "codex-responses-api-proxy",
  "codex-rmcp-client",
@@ -1166,6 +1168,7 @@ dependencies = [
  "codex-utils-absolute-path",
  "codex-utils-cargo-bin",
  "codex-windows-sandbox",
+ "ctor 0.5.0",
  "libc",
  "owo-colors",
  "predicates",
@@ -1177,6 +1180,7 @@ dependencies = [
  "tempfile",
  "tokio",
  "toml 0.9.5",
+ "toml_edit 0.24.0+spec-1.1.0",
  "tracing",
  "which",
  "winsplit",
@@ -1184,7 +1188,7 @@ dependencies = [
 
 [[package]]
 name = "codex-client"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "async-trait",
  "bytes",
@@ -1207,7 +1211,7 @@ dependencies = [
 
 [[package]]
 name = "codex-cloud-tasks"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1236,7 +1240,7 @@ dependencies = [
 
 [[package]]
 name = "codex-cloud-tasks-client"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1251,7 +1255,7 @@ dependencies = [
 
 [[package]]
 name = "codex-common"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "clap",
  "codex-core",
@@ -1261,12 +1265,13 @@ dependencies = [
  "codex-utils-absolute-path",
  "pretty_assertions",
  "serde",
+ "tempfile",
  "toml 0.9.5",
 ]
 
 [[package]]
 name = "codex-core"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "arc-swap",
@@ -1277,6 +1282,7 @@ dependencies = [
  "base64",
  "chardetng",
  "chrono",
+ "clap",
  "codex-api",
  "codex-app-server-protocol",
  "codex-apply-patch",
@@ -1310,6 +1316,7 @@ dependencies = [
  "image",
  "include_dir",
  "indexmap 2.12.0",
+ "indoc",
  "keyring",
  "landlock",
  "libc",
@@ -1320,10 +1327,12 @@ dependencies = [
  "os_info",
  "predicates",
  "pretty_assertions",
+ "pyo3",
  "rand 0.9.2",
  "regex",
  "regex-lite",
  "reqwest",
+ "schemars 0.8.22",
  "seccompiler",
  "serde",
  "serde_json",
@@ -1358,7 +1367,7 @@ dependencies = [
 
 [[package]]
 name = "codex-debug-client"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -1370,7 +1379,7 @@ dependencies = [
 
 [[package]]
 name = "codex-exec"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "assert_cmd",
@@ -1403,7 +1412,7 @@ dependencies = [
 
 [[package]]
 name = "codex-exec-server"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1431,7 +1440,7 @@ dependencies = [
 
 [[package]]
 name = "codex-execpolicy"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -1447,7 +1456,7 @@ dependencies = [
 
 [[package]]
 name = "codex-execpolicy-legacy"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "allocative",
  "anyhow",
@@ -1467,7 +1476,7 @@ dependencies = [
 
 [[package]]
 name = "codex-feedback"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "codex-protocol",
@@ -1479,7 +1488,7 @@ dependencies = [
 
 [[package]]
 name = "codex-file-search"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -1493,7 +1502,7 @@ dependencies = [
 
 [[package]]
 name = "codex-git"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "assert_matches",
  "once_cell",
@@ -1508,8 +1517,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "codex-hooks-sdk"
+version = "0.2.0"
+dependencies = [
+ "pretty_assertions",
+ "serde",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
 name = "codex-keyring-store"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "keyring",
  "tracing",
@@ -1517,13 +1536,14 @@ dependencies = [
 
 [[package]]
 name = "codex-linux-sandbox"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "clap",
  "codex-core",
  "codex-utils-absolute-path",
  "landlock",
  "libc",
+ "pretty_assertions",
  "seccompiler",
  "tempfile",
  "tokio",
@@ -1531,7 +1551,7 @@ dependencies = [
 
 [[package]]
 name = "codex-lmstudio"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "codex-core",
  "reqwest",
@@ -1544,7 +1564,7 @@ dependencies = [
 
 [[package]]
 name = "codex-login"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "base64",
@@ -1568,7 +1588,7 @@ dependencies = [
 
 [[package]]
 name = "codex-mcp-server"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "codex-arg0",
@@ -1579,7 +1599,6 @@ dependencies = [
  "core_test_support",
  "mcp-types",
  "mcp_test_support",
- "os_info",
  "pretty_assertions",
  "schemars 0.8.22",
  "serde",
@@ -1594,14 +1613,16 @@ dependencies = [
 
 [[package]]
 name = "codex-ollama"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "assert_matches",
  "async-stream",
  "bytes",
  "codex-core",
  "futures",
+ "pretty_assertions",
  "reqwest",
+ "semver",
  "serde_json",
  "tokio",
  "tracing",
@@ -1610,7 +1631,7 @@ dependencies = [
 
 [[package]]
 name = "codex-otel"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "chrono",
  "codex-api",
@@ -1638,7 +1659,7 @@ dependencies = [
 
 [[package]]
 name = "codex-process-hardening"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "libc",
  "pretty_assertions",
@@ -1646,7 +1667,7 @@ dependencies = [
 
 [[package]]
 name = "codex-protocol"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "codex-git",
@@ -1673,7 +1694,7 @@ dependencies = [
 
 [[package]]
 name = "codex-responses-api-proxy"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -1689,7 +1710,7 @@ dependencies = [
 
 [[package]]
 name = "codex-rmcp-client"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -1704,6 +1725,7 @@ dependencies = [
  "pretty_assertions",
  "reqwest",
  "rmcp",
+ "schemars 0.8.22",
  "serde",
  "serde_json",
  "serial_test",
@@ -1719,7 +1741,7 @@ dependencies = [
 
 [[package]]
 name = "codex-stdio-to-uds"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "assert_cmd",
@@ -1731,7 +1753,7 @@ dependencies = [
 
 [[package]]
 name = "codex-tui"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "arboard",
@@ -1743,6 +1765,7 @@ dependencies = [
  "codex-app-server-protocol",
  "codex-arg0",
  "codex-backend-client",
+ "codex-cli",
  "codex-common",
  "codex-core",
  "codex-feedback",
@@ -1750,6 +1773,8 @@ dependencies = [
  "codex-login",
  "codex-protocol",
  "codex-utils-absolute-path",
+ "codex-utils-cargo-bin",
+ "codex-utils-pty",
  "codex-windows-sandbox",
  "color-eyre",
  "crossterm",
@@ -1804,7 +1829,7 @@ dependencies = [
 
 [[package]]
 name = "codex-tui2"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "arboard",
@@ -1817,6 +1842,7 @@ dependencies = [
  "codex-app-server-protocol",
  "codex-arg0",
  "codex-backend-client",
+ "codex-cli",
  "codex-common",
  "codex-core",
  "codex-feedback",
@@ -1825,6 +1851,8 @@ dependencies = [
  "codex-protocol",
  "codex-tui",
  "codex-utils-absolute-path",
+ "codex-utils-cargo-bin",
+ "codex-utils-pty",
  "codex-windows-sandbox",
  "color-eyre",
  "crossterm",
@@ -1877,7 +1905,7 @@ dependencies = [
 
 [[package]]
 name = "codex-utils-absolute-path"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "path-absolutize",
  "schemars 0.8.22",
@@ -1889,7 +1917,7 @@ dependencies = [
 
 [[package]]
 name = "codex-utils-cache"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "lru 0.16.3",
  "sha1",
@@ -1898,7 +1926,7 @@ dependencies = [
 
 [[package]]
 name = "codex-utils-cargo-bin"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "assert_cmd",
  "path-absolutize",
@@ -1907,7 +1935,7 @@ dependencies = [
 
 [[package]]
 name = "codex-utils-image"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "base64",
  "codex-utils-cache",
@@ -1919,7 +1947,7 @@ dependencies = [
 
 [[package]]
 name = "codex-utils-json-to-toml"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "pretty_assertions",
  "serde_json",
@@ -1928,13 +1956,15 @@ dependencies = [
 
 [[package]]
 name = "codex-utils-pty"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "filedescriptor",
  "lazy_static",
+ "libc",
  "log",
  "portable-pty",
+ "pretty_assertions",
  "shared_library",
  "tokio",
  "winapi",
@@ -1942,7 +1972,7 @@ dependencies = [
 
 [[package]]
 name = "codex-utils-readiness"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "assert_matches",
  "async-trait",
@@ -1953,11 +1983,11 @@ dependencies = [
 
 [[package]]
 name = "codex-utils-string"
-version = "0.1.0"
+version = "0.2.0"
 
 [[package]]
 name = "codex-windows-sandbox"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "base64",
@@ -2126,7 +2156,7 @@ checksum = "773648b94d0e5d620f64f280777445740e61fe701025087ec8b57f45c791888b"
 
 [[package]]
 name = "core_test_support"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "assert_cmd",
@@ -2135,6 +2165,7 @@ dependencies = [
  "codex-protocol",
  "codex-utils-absolute-path",
  "codex-utils-cargo-bin",
+ "futures",
  "notify",
  "pretty_assertions",
  "regex-lite",
@@ -2143,6 +2174,7 @@ dependencies = [
  "shlex",
  "tempfile",
  "tokio",
+ "tokio-tungstenite",
  "walkdir",
  "wiremock",
 ]
@@ -2369,6 +2401,12 @@ dependencies = [
  "quote",
  "syn 2.0.104",
 ]
+
+[[package]]
+name = "data-encoding"
+version = "2.10.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d7a1e2f27636f116493b8b860f5546edb47c8d8f8ea73e1d2a20be88e28d1fea"
 
 [[package]]
 name = "dbus"
@@ -2773,6 +2811,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "env_home"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c7f84e12ccf0a7ddc17a6c41c93326024c42920d7ee630d04950e6926645c0fe"
+
+[[package]]
 name = "env_logger"
 version = "0.11.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2807,7 +2851,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "778e2ac28f6c47af28e4907f13ffd1e1ddbd400980a9abd7c8df189bf578a5ad"
 dependencies = [
  "libc",
- "windows-sys 0.60.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -2850,7 +2894,7 @@ dependencies = [
 
 [[package]]
 name = "exec_server_test_support"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "codex-core",
@@ -2904,7 +2948,7 @@ checksum = "0ce92ff622d6dadf7349484f42c93271a0d49b7cc4d466a936405bacbe10aa78"
 dependencies = [
  "cfg-if",
  "rustix 1.0.8",
- "windows-sys 0.59.0",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -3845,7 +3889,7 @@ checksum = "e04d7f318608d35d4b61ddd75cbdaee86b023ebe2bd5a66ee0915f0bf93095a9"
 dependencies = [
  "hermit-abi",
  "libc",
- "windows-sys 0.59.0",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -4225,7 +4269,7 @@ checksum = "47e1ffaa40ddd1f3ed91f717a33c8c0ee23fff369e3aa8772b9605cc1d22f4c3"
 
 [[package]]
 name = "mcp-types"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "schemars 0.8.22",
  "serde",
@@ -4235,7 +4279,7 @@ dependencies = [
 
 [[package]]
 name = "mcp_test_support"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "codex-core",
@@ -4243,7 +4287,6 @@ dependencies = [
  "codex-utils-cargo-bin",
  "core_test_support",
  "mcp-types",
- "os_info",
  "pretty_assertions",
  "serde",
  "serde_json",
@@ -5281,6 +5324,69 @@ dependencies = [
 ]
 
 [[package]]
+name = "pyo3"
+version = "0.22.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f402062616ab18202ae8319da13fa4279883a2b8a9d9f83f20dbade813ce1884"
+dependencies = [
+ "cfg-if",
+ "indoc",
+ "libc",
+ "memoffset 0.9.1",
+ "once_cell",
+ "portable-atomic",
+ "pyo3-build-config",
+ "pyo3-ffi",
+ "pyo3-macros",
+ "unindent",
+]
+
+[[package]]
+name = "pyo3-build-config"
+version = "0.22.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b14b5775b5ff446dd1056212d778012cbe8a0fbffd368029fd9e25b514479c38"
+dependencies = [
+ "once_cell",
+ "target-lexicon",
+]
+
+[[package]]
+name = "pyo3-ffi"
+version = "0.22.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9ab5bcf04a2cdcbb50c7d6105de943f543f9ed92af55818fd17b660390fc8636"
+dependencies = [
+ "libc",
+ "pyo3-build-config",
+]
+
+[[package]]
+name = "pyo3-macros"
+version = "0.22.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0fd24d897903a9e6d80b968368a34e1525aeb719d568dba8b3d4bfa5dc67d453"
+dependencies = [
+ "proc-macro2",
+ "pyo3-macros-backend",
+ "quote",
+ "syn 2.0.104",
+]
+
+[[package]]
+name = "pyo3-macros-backend"
+version = "0.22.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "36c011a03ba1e50152b4b394b479826cad97e7a21eb52df179cd91ac411cbfbe"
+dependencies = [
+ "heck",
+ "proc-macro2",
+ "pyo3-build-config",
+ "quote",
+ "syn 2.0.104",
+]
+
+[[package]]
 name = "quick-error"
 version = "2.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5356,7 +5462,7 @@ dependencies = [
  "once_cell",
  "socket2 0.6.1",
  "tracing",
- "windows-sys 0.60.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -5735,7 +5841,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys 0.4.15",
- "windows-sys 0.59.0",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -5748,7 +5854,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys 0.9.4",
- "windows-sys 0.60.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -6782,6 +6888,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "target-lexicon"
+version = "0.12.16"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "61c41af27dd6d1e27b1b16b489db798443478cef1f06a660c96db617ba5de3b1"
+
+[[package]]
 name = "tempfile"
 version = "3.23.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7121,10 +7233,22 @@ dependencies = [
 ]
 
 [[package]]
-name = "tokio-util"
-version = "0.7.16"
+name = "tokio-tungstenite"
+version = "0.21.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "14307c986784f72ef81c89db7d9e28d6ac26d16213b109ea501696195e6e3ce5"
+checksum = "c83b561d025642014097b66e6c1bb422783339e0909e4429cde4749d1990bc38"
+dependencies = [
+ "futures-util",
+ "log",
+ "tokio",
+ "tungstenite",
+]
+
+[[package]]
+name = "tokio-util"
+version = "0.7.18"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9ae9cec805b01e8fc3fd2fe289f89149a9b66dd16786abd8b19cfa7b48cb0098"
 dependencies = [
  "bytes",
  "futures-core",
@@ -7482,9 +7606,9 @@ checksum = "e421abadd41a4225275504ea4d6566923418b7f05506fbc9c0fe86ba7396114b"
 
 [[package]]
 name = "ts-rs"
-version = "11.0.1"
+version = "11.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6ef1b7a6d914a34127ed8e1fa927eb7088903787bcded4fa3eef8f85ee1568be"
+checksum = "4994acea2522cd2b3b85c1d9529a55991e3ad5e25cdcd3de9d505972c4379424"
 dependencies = [
  "serde_json",
  "thiserror 2.0.17",
@@ -7494,9 +7618,9 @@ dependencies = [
 
 [[package]]
 name = "ts-rs-macros"
-version = "11.0.1"
+version = "11.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e9d4ed7b4c18cc150a6a0a1e9ea1ecfa688791220781af6e119f9599a8502a0a"
+checksum = "ee6ff59666c9cbaec3533964505d39154dc4e0a56151fdea30a09ed0301f62e2"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -7506,12 +7630,31 @@ dependencies = [
 
 [[package]]
 name = "tui-scrollbar"
-version = "0.2.1"
+version = "0.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c42613099915b2e30e9f144670666e858e2538366f77742e1cf1c2f230efcacd"
+checksum = "0e4267311b5c7999a996ea94939b6d2b1b44a9e5cc11e76cbbb6dcca4c281df4"
 dependencies = [
  "document-features",
  "ratatui-core",
+]
+
+[[package]]
+name = "tungstenite"
+version = "0.21.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9ef1a641ea34f399a848dea702823bbecfb4c486f911735368f1f137cb8257e1"
+dependencies = [
+ "byteorder",
+ "bytes",
+ "data-encoding",
+ "http 1.3.1",
+ "httparse",
+ "log",
+ "rand 0.8.5",
+ "sha1",
+ "thiserror 1.0.69",
+ "url",
+ "utf-8",
 ]
 
 [[package]]
@@ -7609,6 +7752,12 @@ name = "unicode-xid"
 version = "0.2.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ebc1c04c71510c7f702b52b7c350734c9ff1295c464a03335b00bb84fc54f853"
+
+[[package]]
+name = "unindent"
+version = "0.2.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7264e107f553ccae879d21fbea1d6724ac785e8c3bfc762137959b5802826ef3"
 
 [[package]]
 name = "unsafe-libyaml"
@@ -7998,13 +8147,12 @@ checksum = "a751b3277700db47d3e574514de2eced5e54dc8a5436a3bf7a0b248b2cee16f3"
 
 [[package]]
 name = "which"
-version = "6.0.3"
+version = "8.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b4ee928febd44d98f2f459a4a79bd4d928591333a494a10a868418ac1b39cf1f"
+checksum = "d3fabb953106c3c8eea8306e4393700d7657561cb43122571b172bbfb7c7ba1d"
 dependencies = [
- "either",
- "home",
- "rustix 0.38.44",
+ "env_home",
+ "rustix 1.0.8",
  "winsafe",
 ]
 
@@ -8036,7 +8184,7 @@ version = "0.1.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cf221c93e13a30d793f7645a0e7762c55d169dbb0a49671918a2319d289b10bb"
 dependencies = [
- "windows-sys 0.59.0",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]

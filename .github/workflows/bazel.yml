@@ -22,19 +22,15 @@ jobs:
       matrix:
         include:
           # macOS
-          - os: macos-15-xlarge
+          - os: macos-latest
             target: aarch64-apple-darwin
-          - os: macos-15-xlarge
+          - os: macos-latest
             target: x86_64-apple-darwin
 
           # Linux
-          - os: ubuntu-24.04-arm
-            target: aarch64-unknown-linux-gnu
-          - os: ubuntu-24.04
+          - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
-          - os: ubuntu-24.04-arm
-            target: aarch64-unknown-linux-musl
-          - os: ubuntu-24.04
+          - os: ubuntu-latest
             target: x86_64-unknown-linux-musl
           # TODO: Enable Windows once we fix the toolchain issues there.
           #- os: windows-latest
@@ -45,7 +41,7 @@ jobs:
     name: Local Bazel build on ${{ matrix.os }} for ${{ matrix.target }}
 
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v4
 
       # Some integration tests rely on DotSlash being installed.
       # See https://github.com/openai/codex/pull/7617.
@@ -97,14 +93,42 @@ jobs:
           # Use a very short path to reduce argv/path length issues.
           "BAZEL_STARTUP_ARGS=--output_user_root=C:\" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
+
+      - name: Set Cargo version env (for Bazel)
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo_ver="$(grep -m1 '^version' codex-rs/Cargo.toml | sed -E 's/version *= *"([^"]+)".*/\1/')"
+          base_ver="${cargo_ver%%-*}"
+          IFS='.' read -r major minor patch <<<"$base_ver"
+
+          echo "CARGO_PKG_VERSION=$cargo_ver" >> "$GITHUB_ENV"
+          echo "CARGO_PKG_VERSION_MAJOR=$major" >> "$GITHUB_ENV"
+          echo "CARGO_PKG_VERSION_MINOR=$minor" >> "$GITHUB_ENV"
+          echo "CARGO_PKG_VERSION_PATCH=$patch" >> "$GITHUB_ENV"
       - name: bazel test //...
         env:
           BUILDBUDDY_API_KEY: ${{ secrets.BUILDBUDDY_API_KEY }}
         shell: bash
         run: |
-          bazel $BAZEL_STARTUP_ARGS --bazelrc=.github/workflows/ci.bazelrc test //... \
-            --build_metadata=REPO_URL=https://github.com/openai/codex.git \
-            --build_metadata=COMMIT_SHA=$(git rev-parse HEAD) \
-            --build_metadata=ROLE=CI \
-            --build_metadata=VISIBILITY=PUBLIC \
-            "--remote_header=x-buildbuddy-api-key=$BUILDBUDDY_API_KEY"
+          set -euo pipefail
+
+          args=(
+            ${BAZEL_STARTUP_ARGS:-}
+            --bazelrc=.github/workflows/ci.bazelrc
+            test
+            //...
+            --build_metadata=REPO_URL=https://github.com/Eriz1818/xCodex.git
+            --build_metadata=COMMIT_SHA=$(git rev-parse HEAD)
+            --build_metadata=ROLE=CI
+            --build_metadata=VISIBILITY=PUBLIC
+          )
+
+          if [[ -n "${BUILDBUDDY_API_KEY:-}" ]]; then
+            args+=("--config=buildbuddy")
+            args+=("--remote_header=x-buildbuddy-api-key=$BUILDBUDDY_API_KEY")
+          else
+            echo "BUILDBUDDY_API_KEY is not set; running without BuildBuddy remote header."
+          fi
+
+          bazel "${args[@]}"

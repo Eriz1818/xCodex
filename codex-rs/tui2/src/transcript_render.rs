@@ -183,6 +183,7 @@ pub(crate) fn build_wrapped_transcript_lines(
 ///
 /// `has_emitted_lines` tracks whether the output already contains any non-spacer lines and is used
 /// to decide when to insert an inter-cell spacer row.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn append_wrapped_transcript_cell(
     out: &mut TranscriptLines,
     has_emitted_lines: &mut bool,

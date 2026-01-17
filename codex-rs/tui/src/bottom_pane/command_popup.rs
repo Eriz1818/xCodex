@@ -7,7 +7,6 @@ use super::scroll_state::ScrollState;
 use super::selection_popup_common::GenericDisplayRow;
 use super::selection_popup_common::render_rows;
 use super::slash_arg_hints;
-use super::slash_subcommands::SubcommandMatch;
 use super::slash_subcommands::build_subcommand_matches;
 use super::slash_subcommands::slash_command_supports_subcommands as subcommands_supported;
 use super::slash_subcommands::subcommand_list_hint;
@@ -154,8 +153,10 @@ impl CommandPopup {
         // Reset or clamp selected index based on new filtered list.
         let matches = self.filtered();
         let matches_len = matches.len();
+        let had_selection = self.state.selected_idx.is_some();
         self.state.clamp_selection(matches_len);
-        if !self.selection_locked {
+
+        if !had_selection {
             if let Some(idx) = matches
                 .iter()
                 .position(|(item, _, _)| matches!(item, CommandItem::ArgValue { .. }))
@@ -192,8 +193,8 @@ impl CommandPopup {
     fn filtered(&self) -> Vec<(CommandItem, Option<Vec<usize>>, i32)> {
         let filter = self.command_filter.trim();
         let mut out: Vec<(CommandItem, Option<Vec<usize>>, i32)> = Vec::new();
-        let mut subcommand_matches_by_anchor: Vec<(SlashCommand, Vec<SubcommandMatch>)> =
-            Vec::new();
+        let subcommand_matches_by_anchor =
+            build_subcommand_matches(&self.command_filter, &self.command_line);
         if filter.is_empty() {
             // Built-ins first, in presentation order.
             for (_, cmd) in self.builtins.iter() {
@@ -206,19 +207,44 @@ impl CommandPopup {
             return out;
         }
 
+        if !subcommand_matches_by_anchor.is_empty() {
+            out.extend(self.arg_value_completions());
+            for (_anchor, mut matches) in subcommand_matches_by_anchor {
+                if matches.len() > 1 {
+                    matches.sort_by(|a, b| {
+                        a.score
+                            .cmp(&b.score)
+                            .then_with(|| a.full_name.cmp(b.full_name))
+                    });
+                }
+                out.extend(matches.into_iter().map(|m| {
+                    (
+                        CommandItem::BuiltinText {
+                            name: m.full_name,
+                            description: m.description,
+                            run_on_enter: m.run_on_enter,
+                            insert_trailing_space: m.insert_trailing_space,
+                        },
+                        m.indices,
+                        m.score,
+                    )
+                }));
+            }
+            return out;
+        }
+
         for (_, cmd) in self.builtins.iter() {
             if let Some((indices, score)) = fuzzy_match(cmd.command(), filter) {
                 out.push((CommandItem::Builtin(*cmd), Some(indices), score));
             }
         }
 
-        for (anchor, matches) in
-            build_subcommand_matches(&self.command_filter, &self.command_line).into_iter()
-        {
+        for (anchor, _matches) in subcommand_matches_by_anchor.iter() {
             // When the user has entered a subcommand context (e.g. `/worktree ...`),
             // prefer showing subcommands over the root command to reduce confusion.
-            out.retain(|(item, _, _)| !matches!(item, CommandItem::Builtin(cmd) if *cmd == anchor));
-            subcommand_matches_by_anchor.push((anchor, matches));
+            out.retain(
+                |(item, _, _)| !matches!(item, CommandItem::Builtin(cmd) if *cmd == *anchor),
+            );
         }
         // Support both search styles:
         // - Typing "name" should surface "/prompts:name" results.
@@ -269,28 +295,6 @@ impl CommandPopup {
 
         out.extend(self.arg_value_completions());
 
-        for (_anchor, mut matches) in subcommand_matches_by_anchor {
-            if matches.len() > 1 {
-                matches.sort_by(|a, b| {
-                    a.score
-                        .cmp(&b.score)
-                        .then_with(|| a.full_name.cmp(b.full_name))
-                });
-            }
-
-            out.extend(matches.into_iter().map(|m| {
-                (
-                    CommandItem::BuiltinText {
-                        name: m.full_name,
-                        description: m.description,
-                        run_on_enter: m.run_on_enter,
-                        insert_trailing_space: m.insert_trailing_space,
-                    },
-                    m.indices,
-                    m.score,
-                )
-            }));
-        }
         out
     }
 
@@ -846,6 +850,47 @@ mod tests {
         assert!(
             subcommands.contains(&"worktree detect") && subcommands.contains(&"worktree doctor"),
             "expected /worktree d to suggest detect/doctor, got {subcommands:?}"
+        );
+    }
+
+    #[test]
+    fn subcommand_context_hides_other_root_suggestions() {
+        let prompts = vec![CustomPrompt {
+            name: "worktree-helper".to_string(),
+            path: "/tmp/worktree-helper.md".to_string().into(),
+            content: "hello".to_string(),
+            description: None,
+            argument_hint: None,
+        }];
+        let mut popup = CommandPopup::new(prompts, false);
+        popup.on_composer_text_change("/worktree d".to_string());
+
+        let items = popup.filtered_items();
+        assert!(
+            items.iter().all(|item| {
+                matches!(
+                    item,
+                    CommandItem::BuiltinText { .. } | CommandItem::ArgValue { .. }
+                )
+            }),
+            "expected subcommand context to hide other root suggestions, got {items:?}"
+        );
+    }
+
+    #[test]
+    fn selection_does_not_reset_when_refreshing_popup() {
+        let mut popup = CommandPopup::new(Vec::new(), false);
+        popup.on_composer_text_change("/worktree ".to_string());
+
+        popup.move_down();
+        let moved = popup.selected_item();
+        assert!(moved.is_some(), "expected selection after moving down");
+
+        popup.on_composer_text_change("/worktree ".to_string());
+        assert_eq!(
+            popup.selected_item(),
+            moved,
+            "expected selection to persist across refresh"
         );
     }
 

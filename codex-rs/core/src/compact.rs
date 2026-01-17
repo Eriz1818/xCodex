@@ -44,7 +44,11 @@ pub(crate) async fn run_inline_auto_compact_task(
     turn_context: Arc<TurnContext>,
 ) {
     let prompt = turn_context.compact_prompt().to_string();
-    let input = vec![UserInput::Text { text: prompt }];
+    let input = vec![UserInput::Text {
+        text: prompt,
+        // Plain text conversion has no UI element ranges.
+        text_elements: Vec::new(),
+    }];
 
     run_compact_task_inner(sess, turn_context, input).await;
 }
@@ -305,7 +309,8 @@ async fn drain_to_completed(
     turn_context: &TurnContext,
     prompt: &Prompt,
 ) -> CodexResult<()> {
-    let mut stream = turn_context.client.clone().stream(prompt).await?;
+    let mut client_session = turn_context.client.new_session();
+    let mut stream = client_session.stream(prompt).await?;
     loop {
         let maybe_event = stream.next().await;
         let Some(event) = maybe_event else {

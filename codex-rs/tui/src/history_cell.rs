@@ -1,3 +1,15 @@
+//! Transcript/history cells for the Codex TUI.
+//!
+//! A `HistoryCell` is the unit of display in the conversation UI, representing both committed
+//! transcript entries and, transiently, an in-flight active cell that can mutate in place while
+//! streaming.
+//!
+//! The transcript overlay (`Ctrl+T`) appends a cached live tail derived from the active cell, and
+//! that cached tail is refreshed based on an active-cell cache key. Cells that change based on
+//! elapsed time expose `transcript_animation_tick()`, and code that mutates the active cell in place
+//! bumps the active-cell revision tracked by `ChatWidget`, so the cache key changes whenever the
+//! rendered transcript output can change.
+
 use crate::diff_render::create_diff_summary;
 use crate::diff_render::display_path_for;
 use crate::exec_cell::CommandOutput;
@@ -110,6 +122,20 @@ pub(crate) trait HistoryCell: std::fmt::Debug + Send + Sync + Any {
 
     fn is_stream_continuation(&self) -> bool {
         false
+    }
+
+    /// Returns a coarse "animation tick" when transcript output is time-dependent.
+    ///
+    /// The transcript overlay caches the rendered output of the in-flight active cell, so cells
+    /// that include time-based UI (spinner, shimmer, etc.) should return a tick that changes over
+    /// time to signal that the cached tail should be recomputed. Returning `None` means the
+    /// transcript lines are stable, while returning `Some(tick)` during an in-flight animation
+    /// allows the overlay to keep up with the main viewport.
+    ///
+    /// If a cell uses time-based visuals but always returns `None`, `Ctrl+T` can appear "frozen" on
+    /// the first rendered frame even though the main viewport is animating.
+    fn transcript_animation_tick(&self) -> Option<u64> {
+        None
     }
 }
 
@@ -320,7 +346,7 @@ impl HistoryCell for UpdateAvailableHistoryCell {
         } else {
             line![
                 "See ",
-                "https://github.com/openai/codex".cyan().underlined(),
+                "https://github.com/Eriz1818/xcodex".cyan().underlined(),
                 " for installation options."
             ]
         };
@@ -335,11 +361,57 @@ impl HistoryCell for UpdateAvailableHistoryCell {
             update_instruction,
             "",
             "See full release notes:",
-            "https://github.com/openai/codex/releases/latest"
+            "https://github.com/Eriz1818/xcodex/releases/latest"
                 .cyan()
                 .underlined(),
         ];
 
+        let inner_width = content
+            .width()
+            .min(usize::from(width.saturating_sub(4)))
+            .max(1);
+        with_border_with_inner_width(content.lines, inner_width)
+    }
+}
+
+#[cfg_attr(debug_assertions, allow(dead_code))]
+#[derive(Debug)]
+pub(crate) struct WhatsNewHistoryCell {
+    version: String,
+    bullets: Vec<String>,
+}
+
+#[cfg_attr(debug_assertions, allow(dead_code))]
+impl WhatsNewHistoryCell {
+    pub(crate) fn new(version: String, bullets: Vec<String>) -> Self {
+        Self { version, bullets }
+    }
+}
+
+impl HistoryCell for WhatsNewHistoryCell {
+    fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
+        use ratatui_macros::line;
+
+        let mut lines = Vec::new();
+        lines.push(line![
+            padded_emoji("⚡").bold().cyan(),
+            format!("What's new in ⚡xtreme-Codex v{}", self.version).bold(),
+        ]);
+        lines.push(line![""]);
+
+        for bullet in &self.bullets {
+            lines.push(line!["• ".dim(), bullet.clone()]);
+        }
+
+        lines.push(line![""]);
+        lines.push(line![
+            "Read more: ".dim(),
+            "https://github.com/Eriz1818/xcodex/releases/latest"
+                .cyan()
+                .underlined(),
+        ]);
+
+        let content: Text<'static> = lines.into();
         let inner_width = content
             .width()
             .min(usize::from(width.saturating_sub(4)))
@@ -757,6 +829,7 @@ impl HistoryCell for UnifiedExecProcessesCell {
     }
 }
 
+#[cfg(test)]
 pub(crate) fn new_unified_exec_sessions_output(
     processes: Vec<BackgroundActivityEntry>,
     hooks: Vec<BackgroundActivityEntry>,
@@ -1156,9 +1229,10 @@ pub(crate) fn new_user_prompt(message: String) -> UserHistoryCell {
 }
 
 #[derive(Debug)]
-struct SessionHeaderHistoryCell {
+pub(crate) struct SessionHeaderHistoryCell {
     version: &'static str,
     model: String,
+    model_style: Style,
     reasoning_effort: Option<ReasoningEffortConfig>,
     directory: PathBuf,
     approval: AskForApproval,
@@ -1167,8 +1241,30 @@ struct SessionHeaderHistoryCell {
 }
 
 impl SessionHeaderHistoryCell {
-    fn new(
+    pub(crate) fn new(
         model: String,
+        reasoning_effort: Option<ReasoningEffortConfig>,
+        directory: PathBuf,
+        version: &'static str,
+        approval: AskForApproval,
+        sandbox: SandboxPolicy,
+        xtreme_ui_enabled: bool,
+    ) -> Self {
+        Self::new_with_style(
+            model,
+            Style::default(),
+            reasoning_effort,
+            directory,
+            version,
+            approval,
+            sandbox,
+            xtreme_ui_enabled,
+        )
+    }
+
+    pub(crate) fn new_with_style(
+        model: String,
+        model_style: Style,
         reasoning_effort: Option<ReasoningEffortConfig>,
         directory: PathBuf,
         version: &'static str,
@@ -1179,6 +1275,7 @@ impl SessionHeaderHistoryCell {
         Self {
             version,
             model,
+            model_style,
             reasoning_effort,
             directory,
             approval,
@@ -1234,14 +1331,15 @@ impl HistoryCell for SessionHeaderHistoryCell {
 
         let make_row = |spans: Vec<Span<'static>>| Line::from(spans);
 
-        // Title line rendered inside the box: "⚡ xtreme-Codex (vX)"
         let mut title_spans: Vec<Span<'static>> =
             xtreme::title_prefix_spans(self.xtreme_ui_enabled);
-        title_spans.extend([
-            Span::from("xtreme-Codex").bold(),
-            Span::from(" ").dim(),
-            Span::from(format!("(v{})", self.version)).dim(),
-        ]);
+        title_spans.push(Span::from("xtreme-Codex").bold());
+        if codex_core::build_info::pyo3_hooks_enabled() {
+            title_spans.push(Span::from(" ").dim());
+            title_spans.push(Span::from("(with PyO3)").magenta());
+        }
+        title_spans.push(Span::from(" ").dim());
+        title_spans.push(Span::from(format!("(v{})", self.version)).dim());
 
         const CHANGE_MODEL_HINT_COMMAND: &str = "/model";
         const CHANGE_MODEL_HINT_EXPLANATION: &str = " to change";
@@ -1262,7 +1360,7 @@ impl HistoryCell for SessionHeaderHistoryCell {
         let reasoning_label = self.reasoning_label();
         let mut model_spans: Vec<Span<'static>> = vec![
             Span::from(format!("{model_label} ")).dim(),
-            Span::from(self.model.clone()),
+            Span::styled(self.model.clone(), self.model_style),
         ];
         if let Some(reasoning) = reasoning_label {
             model_spans.push(Span::from(" "));
@@ -1286,6 +1384,17 @@ impl HistoryCell for SessionHeaderHistoryCell {
             lines.push(make_row(spans));
         }
         lines.push(make_row(model_spans));
+        if let Some(version) = codex_core::build_info::pyo3_python_version() {
+            let python_label = format!(
+                "{python_label:<label_width$}",
+                python_label = "python:",
+                label_width = label_width
+            );
+            lines.push(make_row(vec![
+                Span::from(format!("{python_label} ")).dim(),
+                Span::from(version),
+            ]));
+        }
         lines.push(make_row(dir_spans));
 
         with_border(lines)
@@ -1488,6 +1597,13 @@ impl HistoryCell for McpToolCallCell {
 
         lines
     }
+
+    fn transcript_animation_tick(&self) -> Option<u64> {
+        if !self.animations_enabled || self.result.is_some() {
+            return None;
+        }
+        Some((self.start_time.elapsed().as_millis() / 50) as u64)
+    }
 }
 
 pub(crate) fn new_active_mcp_tool_call(
@@ -1683,6 +1799,9 @@ pub(crate) fn new_mcp_tools_output(
             header.push(" ".into());
             header.push("(disabled)".red());
             lines.push(header.into());
+            if let Some(reason) = cfg.disabled_reason.as_ref().map(ToString::to_string) {
+                lines.push(vec!["    • Reason: ".into(), reason.dim()].into());
+            }
             lines.push(Line::from(""));
             continue;
         }
@@ -2034,6 +2153,11 @@ pub(crate) fn new_reasoning_summary_block(
 }
 
 #[derive(Debug)]
+/// A visual divider between turns, optionally showing how long the assistant "worked for".
+///
+/// This separator is only emitted for turns that performed concrete work (e.g., running commands,
+/// applying patches, making MCP tool calls), so purely conversational turns do not show an empty
+/// divider.
 pub struct FinalMessageSeparator {
     elapsed_seconds: Option<u64>,
     show_ramp_separator: bool,
@@ -2244,13 +2368,6 @@ mod tests {
     }
 
     #[test]
-    fn unified_exec_wait_cell_renders_wait() {
-        let cell = new_unified_exec_wait_live(None, false);
-        let lines = render_transcript(&cell);
-        assert_eq!(lines, vec!["• Waiting for background terminal"],);
-    }
-
-    #[test]
     fn ps_output_empty_snapshot() {
         let cell = new_unified_exec_processes_output(Vec::new(), Vec::new());
         let rendered = render_lines(&cell.display_lines(60)).join("\n");
@@ -2335,12 +2452,14 @@ mod tests {
                 cwd: None,
             },
             enabled: true,
+            disabled_reason: None,
             startup_timeout_sec: None,
             tool_timeout_sec: None,
             enabled_tools: None,
             disabled_tools: None,
         };
-        config.mcp_servers.insert("docs".to_string(), stdio_config);
+        let mut servers = config.mcp_servers.get().clone();
+        servers.insert("docs".to_string(), stdio_config);
 
         let mut headers = HashMap::new();
         headers.insert("Authorization".to_string(), "Bearer secret".to_string());
@@ -2354,12 +2473,17 @@ mod tests {
                 env_http_headers: Some(env_headers),
             },
             enabled: true,
+            disabled_reason: None,
             startup_timeout_sec: None,
             tool_timeout_sec: None,
             enabled_tools: None,
             disabled_tools: None,
         };
-        config.mcp_servers.insert("http".to_string(), http_config);
+        servers.insert("http".to_string(), http_config);
+        config
+            .mcp_servers
+            .set(servers)
+            .expect("test mcp servers should accept any configuration");
 
         let mut tools: HashMap<String, Tool> = HashMap::new();
         tools.insert(

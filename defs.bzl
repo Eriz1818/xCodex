@@ -13,6 +13,8 @@ PLATFORMS = [
     "windows_arm64",
 ]
 
+CODEX_WORKSPACE_RUSTC_ENV_FILES = ["//codex-rs:cargo_workspace_env_vars"]
+
 def multiplatform_binaries(name, platforms = PLATFORMS):
     for platform in platforms:
         platform_data(
@@ -100,6 +102,7 @@ def codex_rust_crate(
             deps = all_crate_deps(build = True),
             proc_macro_deps = all_crate_deps(build_proc_macro = True),
             data = build_script_data,
+            rustc_env_files = CODEX_WORKSPACE_RUSTC_ENV_FILES,
             # Some build script deps sniff version-related env vars...
             version = "0.0.0",
         )
@@ -117,6 +120,7 @@ def codex_rust_crate(
             srcs = lib_srcs,
             edition = crate_edition,
             rustc_env = rustc_env,
+            rustc_env_files = CODEX_WORKSPACE_RUSTC_ENV_FILES,
             visibility = ["//visibility:public"],
         )
 
@@ -127,6 +131,7 @@ def codex_rust_crate(
             deps = deps + dev_deps,
             proc_macro_deps = proc_macro_deps + proc_macro_dev_deps,
             rustc_env = rustc_env,
+            rustc_env_files = CODEX_WORKSPACE_RUSTC_ENV_FILES,
             data = test_data_extra,
             tags = test_tags,
         )
@@ -151,6 +156,7 @@ def codex_rust_crate(
             edition = crate_edition,
             srcs = native.glob(["src/**/*.rs"]),
             visibility = ["//visibility:public"],
+            rustc_env_files = CODEX_WORKSPACE_RUSTC_ENV_FILES,
         )
 
     for binary_label in extra_binaries:
@@ -172,6 +178,7 @@ def codex_rust_crate(
             deps = maybe_lib + deps + dev_deps + integration_deps_extra,
             proc_macro_deps = proc_macro_deps + proc_macro_dev_deps,
             rustc_env = rustc_env,
+            rustc_env_files = CODEX_WORKSPACE_RUSTC_ENV_FILES,
             env = test_env | cargo_env,
             tags = test_tags,
         )

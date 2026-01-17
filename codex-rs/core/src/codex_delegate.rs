@@ -87,7 +87,7 @@ pub(crate) async fn run_codex_thread_interactive(
         next_id: AtomicU64::new(0),
         tx_sub: tx_ops,
         rx_event: rx_sub,
-        agent_status: Arc::clone(&codex.agent_status),
+        agent_status: codex.agent_status.clone(),
     })
 }
 
@@ -108,6 +108,8 @@ pub(crate) async fn run_codex_thread_one_shot(
     // Use a child token so we can stop the delegate after completion without
     // requiring the caller to cancel the parent token.
     let child_cancel = cancel_token.child_token();
+    let parent_session_for_hooks = Arc::clone(&parent_session);
+    let parent_ctx_for_hooks = Arc::clone(&parent_ctx);
     let io = run_codex_thread_interactive(
         config,
         auth_manager,
@@ -129,23 +131,37 @@ pub(crate) async fn run_codex_thread_one_shot(
     // Bridge events so we can observe completion and shut down automatically.
     let (tx_bridge, rx_bridge) = async_channel::bounded(SUBMISSION_CHANNEL_CAPACITY);
     let ops_tx = io.tx_sub.clone();
-    let agent_status = Arc::clone(&io.agent_status);
+    let agent_status = io.agent_status.clone();
     let io_for_bridge = io;
+    let child_cancel_for_bridge = child_cancel.clone();
     tokio::spawn(async move {
         while let Ok(event) = io_for_bridge.next_event().await {
             let should_shutdown = matches!(
                 event.msg,
                 EventMsg::TurnComplete(_) | EventMsg::TurnAborted(_)
             );
+            let status = if matches!(event.msg, EventMsg::TurnComplete(_)) {
+                "completed"
+            } else if matches!(event.msg, EventMsg::TurnAborted(_)) {
+                "aborted"
+            } else {
+                "other"
+            };
             let _ = tx_bridge.send(event).await;
             if should_shutdown {
+                parent_session_for_hooks.user_hooks().subagent_stop(
+                    parent_session_for_hooks.thread_id(),
+                    parent_ctx_for_hooks.cwd.display().to_string(),
+                    "review".to_string(),
+                    status.to_string(),
+                );
                 let _ = ops_tx
                     .send(Submission {
                         id: "shutdown".to_string(),
                         op: Op::Shutdown {},
                     })
                     .await;
-                child_cancel.cancel();
+                child_cancel_for_bridge.cancel();
                 break;
             }
         }
@@ -363,20 +379,23 @@ mod tests {
     use super::*;
     use async_channel::bounded;
     use codex_protocol::models::ResponseItem;
+    use codex_protocol::protocol::AgentStatus;
     use codex_protocol::protocol::RawResponseItemEvent;
     use codex_protocol::protocol::TurnAbortReason;
     use codex_protocol::protocol::TurnAbortedEvent;
     use pretty_assertions::assert_eq;
+    use tokio::sync::watch;
 
     #[tokio::test]
     async fn forward_events_cancelled_while_send_blocked_shuts_down_delegate() {
         let (tx_events, rx_events) = bounded(1);
         let (tx_sub, rx_sub) = bounded(SUBMISSION_CHANNEL_CAPACITY);
+        let (_agent_status_tx, agent_status) = watch::channel(AgentStatus::PendingInit);
         let codex = Arc::new(Codex {
             next_id: AtomicU64::new(0),
             tx_sub,
             rx_event: rx_events,
-            agent_status: Default::default(),
+            agent_status,
         });
 
         let (session, ctx, _rx_evt) = crate::codex::make_session_and_context_with_rx().await;

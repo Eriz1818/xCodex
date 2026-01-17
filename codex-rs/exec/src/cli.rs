@@ -28,7 +28,7 @@ pub struct Cli {
     #[arg(long = "oss", default_value_t = false)]
     pub oss: bool,
 
-    /// Specify which local provider to use (lmstudio or ollama).
+    /// Specify which local provider to use (lmstudio, ollama, or ollama-chat).
     /// If not specified with --oss, will use config default or show selection.
     #[arg(long = "local-provider")]
     pub oss_provider: Option<String>,
@@ -122,6 +122,10 @@ pub struct ResumeArgs {
     /// Resume the most recent recorded session (newest) without specifying an id.
     #[arg(long = "last", default_value_t = false)]
     pub last: bool,
+
+    /// Show all sessions (disables cwd filtering).
+    #[arg(long = "all", default_value_t = false)]
+    pub all: bool,
 
     /// Read the prompt to send after resuming from a file (useful for large prompts).
     #[arg(long = "file", value_name = "FILE", value_hint = clap::ValueHint::FilePath, conflicts_with = "prompt")]

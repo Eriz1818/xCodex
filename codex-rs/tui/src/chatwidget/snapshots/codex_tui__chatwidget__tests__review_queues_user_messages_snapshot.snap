@@ -1,0 +1,22 @@
+---
+source: tui/src/chatwidget/tests.rs
+expression: term.backend().vt100().screen().contents()
+---
+
+
+
+
+
+
+
+
+
+
+
+  ↳ Queued while /review is running.
+    ⌥ + ↑ edit
+
+
+› Ask xcodex to do anything
+
+  100% context left · ? for shortcuts
