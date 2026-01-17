@@ -50,6 +50,15 @@
       "description": "When true, disables burst-paste detection for typed input entirely. All characters are inserted as they are received, and no buffering or placeholder replacement will occur for fast keypress bursts.",
       "type": "boolean"
     },
+    "exclusion": {
+      "description": "Sensitive-path exclusion configuration (ignore files + outbound gateway).",
+      "default": null,
+      "allOf": [
+        {
+          "$ref": "#/definitions/ExclusionConfig"
+        }
+      ]
+    },
     "experimental_compact_prompt_file": {
       "$ref": "#/definitions/AbsolutePathBuf"
     },
@@ -439,6 +448,14 @@
         }
       ]
     },
+    "unattested_output_policy": {
+      "description": "Policy for whether to send unattested tool output (e.g. MCP output) to the model.",
+      "allOf": [
+        {
+          "$ref": "#/definitions/UnattestedOutputPolicy"
+        }
+      ]
+    },
     "web_search": {
       "description": "Controls the web search tool mode: disabled, cached, or live.",
       "allOf": [
@@ -575,6 +592,15 @@
         "chatgpt_base_url": {
           "type": "string"
         },
+        "exclusion": {
+          "description": "Sensitive-path exclusion configuration scoped to this profile.",
+          "default": null,
+          "allOf": [
+            {
+              "$ref": "#/definitions/ExclusionConfig"
+            }
+          ]
+        },
         "experimental_compact_prompt_file": {
           "$ref": "#/definitions/AbsolutePathBuf"
         },
@@ -700,6 +726,99 @@
         }
       },
       "additionalProperties": false
+    },
+    "ExclusionConfig": {
+      "type": "object",
+      "properties": {
+        "content_hashing": {
+          "description": "Cache content gateway decisions by hashing content (fingerprint cache).",
+          "default": true,
+          "type": "boolean"
+        },
+        "enabled": {
+          "description": "When `false`, ignore files are not loaded and the content gateway is disabled.",
+          "default": true,
+          "type": "boolean"
+        },
+        "files": {
+          "description": "Repo-root ignore filenames to load (gitignore-style) for exclusion controls.",
+          "default": [
+            ".aiexclude",
+            ".xcodexignore"
+          ],
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "layer_output_sanitization": {
+          "description": "Layer 2: sanitize tool outputs (MCP/shell/custom tool outputs) before they reach the model. Defaults to `paranoid_mode` when unset.",
+          "type": "boolean"
+        },
+        "layer_request_interceptor": {
+          "description": "Layer 4: scan the full prompt payload right before the model request. Defaults to `true` when unset.",
+          "type": "boolean"
+        },
+        "layer_send_firewall": {
+          "description": "Layer 3: enforce the provenance-based send firewall (deny-send for excluded filesystem paths). Defaults to `true` when unset.",
+          "type": "boolean"
+        },
+        "log_blocked": {
+          "default": false,
+          "type": "boolean"
+        },
+        "on_match": {
+          "default": "redact",
+          "allOf": [
+            {
+              "$ref": "#/definitions/ExclusionOnMatch"
+            }
+          ]
+        },
+        "paranoid_mode": {
+          "description": "Convenience toggle: enable all 4 layers (L1-L4) when true.",
+          "default": false,
+          "type": "boolean"
+        },
+        "path_matching": {
+          "description": "Deterministic path-based matching using ignore files (e.g., for discovery and deny-send).",
+          "default": true,
+          "type": "boolean"
+        },
+        "preflight_shell_paths": {
+          "description": "When `true`, block shell tool calls that reference excluded paths before executing.",
+          "default": true,
+          "type": "boolean"
+        },
+        "secret_patterns": {
+          "description": "Secret-pattern scanning in text (defense-in-depth redaction).",
+          "default": true,
+          "type": "boolean"
+        },
+        "show_summary_banner": {
+          "description": "When `false`, clients should not render an ephemeral \"filtered\" banner/toast for this turn.",
+          "default": true,
+          "type": "boolean"
+        },
+        "show_summary_history": {
+          "description": "When `false`, clients should not add the exclusion summary to transcript/history.",
+          "default": true,
+          "type": "boolean"
+        },
+        "substring_matching": {
+          "description": "Substring/path-like matching in text (e.g., redact ignored path mentions).",
+          "default": true,
+          "type": "boolean"
+        }
+      }
+    },
+    "ExclusionOnMatch": {
+      "type": "string",
+      "enum": [
+        "warn",
+        "block",
+        "redact"
+      ]
     },
     "FeedbackConfigToml": {
       "type": "object",
@@ -1896,6 +2015,15 @@
         }
       },
       "additionalProperties": false
+    },
+    "UnattestedOutputPolicy": {
+      "type": "string",
+      "enum": [
+        "allow",
+        "warn",
+        "confirm",
+        "block"
+      ]
     },
     "UriBasedFileOpener": {
       "oneOf": [

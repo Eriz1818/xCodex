@@ -39,7 +39,7 @@ impl fmt::Display for McpServerDisabledReason {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum UnattestedOutputPolicy {
     Allow,
@@ -54,7 +54,7 @@ impl Default for UnattestedOutputPolicy {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum ExclusionOnMatch {
     Warn,
@@ -68,7 +68,7 @@ impl Default for ExclusionOnMatch {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct ExclusionConfig {
     /// When `false`, ignore files are not loaded and the content gateway is disabled.
     #[serde(default = "default_enabled")]
