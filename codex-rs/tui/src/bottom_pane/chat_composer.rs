@@ -915,23 +915,10 @@ impl ChatComposer {
                     popup.on_composer_text_change(next_first_line);
                     return (InputResult::None, true);
                 }
-                if !Self::cursor_in_slash_name_token(first_line, cursor) {
-                    return self.handle_key_event_without_popup(key_event);
-                }
 
-                // If the current line starts with a custom prompt name and includes
-                // positional args for a numeric-style template, expand and submit
-                // immediately regardless of the popup selection.
-                if let Some((name, _rest)) = parse_slash_name(first_line)
-                    && let Some(prompt_name) = name.strip_prefix(&format!("{PROMPTS_CMD_PREFIX}:"))
-                    && let Some(prompt) = self.custom_prompts.iter().find(|p| p.name == prompt_name)
-                    && let Some(expanded) =
-                        expand_if_numeric_with_positional_args(prompt, first_line)
-                {
-                    self.textarea.set_text("");
-                    return (InputResult::Submitted(expanded), true);
-                }
-
+                // When the slash popup is visible, Enter should run the highlighted
+                // suggestion (or insert it for non-runnable subcommands), even when
+                // the cursor is past the initial `/name` token (e.g. subcommands).
                 if let Some(sel) = popup.selected_item() {
                     match sel {
                         CommandItem::Builtin(cmd) => {
@@ -944,6 +931,10 @@ impl ChatComposer {
                             insert_trailing_space,
                             ..
                         } => {
+                            let completed = format!("/{name}");
+                            if !run_on_enter && first_line.trim_end().starts_with(&completed) {
+                                return self.handle_key_event_without_popup(key_event);
+                            }
                             let text = if insert_trailing_space {
                                 format!("/{name} ")
                             } else {
@@ -981,6 +972,23 @@ impl ChatComposer {
                             return (InputResult::None, true);
                         }
                     }
+                }
+
+                if !Self::cursor_in_slash_name_token(first_line, cursor) {
+                    return self.handle_key_event_without_popup(key_event);
+                }
+
+                // If the current line starts with a custom prompt name and includes
+                // positional args for a numeric-style template, expand and submit
+                // immediately regardless of the popup selection.
+                if let Some((name, _rest)) = parse_slash_name(first_line)
+                    && let Some(prompt_name) = name.strip_prefix(&format!("{PROMPTS_CMD_PREFIX}:"))
+                    && let Some(prompt) = self.custom_prompts.iter().find(|p| p.name == prompt_name)
+                    && let Some(expanded) =
+                        expand_if_numeric_with_positional_args(prompt, first_line)
+                {
+                    self.textarea.set_text("");
+                    return (InputResult::Submitted(expanded), true);
                 }
                 // Fallback to default newline handling if no command selected.
                 self.handle_key_event_without_popup(key_event)
@@ -3764,6 +3772,55 @@ mod tests {
             InputResult::None => panic!("expected Command result for '/diff'"),
         }
         assert!(composer.textarea.is_empty());
+    }
+
+    #[test]
+    fn slash_subcommand_enter_runs_highlighted_suggestion_when_cursor_in_args() {
+        use super::super::command_popup::CommandItem;
+        use crossterm::event::KeyCode;
+        use crossterm::event::KeyEvent;
+        use crossterm::event::KeyModifiers;
+
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask xcodex to do anything".to_string(),
+            false,
+        );
+
+        // Type a subcommand prefix so the cursor is past the initial `/worktree` token.
+        type_chars_humanlike(
+            &mut composer,
+            &[
+                '/', 'w', 'o', 'r', 'k', 't', 'r', 'e', 'e', ' ', 'd', 'o', 'c',
+            ],
+        );
+
+        match &composer.active_popup {
+            ActivePopup::Command(popup) => match popup.selected_item() {
+                Some(CommandItem::BuiltinText {
+                    name, run_on_enter, ..
+                }) => {
+                    assert_eq!(name, "worktree doctor");
+                    assert!(run_on_enter, "doctor should run immediately");
+                }
+                other => {
+                    panic!("expected BuiltinText selection for '/worktree doc', got {other:?}")
+                }
+            },
+            _ => panic!("expected command popup to be active"),
+        }
+
+        let (result, _needs_redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        assert_eq!(
+            result,
+            InputResult::Submitted("/worktree doctor".to_string())
+        );
+        assert!(composer.textarea.is_empty(), "composer should be cleared");
     }
 
     #[test]
