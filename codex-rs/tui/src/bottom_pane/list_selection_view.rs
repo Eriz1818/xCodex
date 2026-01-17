@@ -850,6 +850,12 @@ mod tests {
                 ..Default::default()
             },
             SelectionItem {
+                name: "Create worktree…".to_string(),
+                display_shortcut: Some(key_hint::alt(KeyCode::Char('i'))),
+                dismiss_on_select: true,
+                ..Default::default()
+            },
+            SelectionItem {
                 name: "Worktree doctor".to_string(),
                 display_shortcut: Some(key_hint::alt(KeyCode::Char('d'))),
                 dismiss_on_select: true,

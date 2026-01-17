@@ -5006,6 +5006,19 @@ impl ChatWidget {
             ..Default::default()
         });
 
+        items.push(SelectionItem {
+            name: "Create worktree…".to_string(),
+            display_shortcut: Some(crate::key_hint::alt(KeyCode::Char('i'))),
+            description: Some("Insert `/worktree init` into the composer.".to_string()),
+            actions: vec![Box::new(|tx: &AppEventSender| {
+                tx.send(AppEvent::OpenToolsCommand {
+                    command: "/worktree init ".to_string(),
+                });
+            })],
+            dismiss_on_select: true,
+            ..Default::default()
+        });
+
         {
             let cwd = self.config.cwd.clone();
             let shared_dirs = self.config.worktrees_shared_dirs.clone();
@@ -5104,6 +5117,8 @@ impl ChatWidget {
                 " refresh  ".dim(),
                 crate::key_hint::alt(KeyCode::Char('s')).into(),
                 " settings  ".dim(),
+                crate::key_hint::alt(KeyCode::Char('i')).into(),
+                " create  ".dim(),
                 crate::key_hint::alt(KeyCode::Char('d')).into(),
                 " doctor  ".dim(),
                 "type to search  ".dim(),

@@ -5276,6 +5276,66 @@ impl ChatWidget {
             let cwd = self.config.cwd.clone();
             let shared_dirs = self.config.worktrees_shared_dirs.clone();
             items.push(SelectionItem {
+                name: "Create worktree…".to_string(),
+                display_shortcut: Some(crate::key_hint::alt(KeyCode::Char('i'))),
+                description: Some("Create a new worktree and switch to it.".to_string()),
+                actions: vec![Box::new(move |tx: &AppEventSender| {
+                    let cwd = cwd.clone();
+                    let shared_dirs = shared_dirs.clone();
+                    let tx = tx.clone();
+                    tokio::spawn(async move {
+                        use codex_core::git_info::GitHeadState;
+
+                        let Some(head) = codex_core::git_info::resolve_git_worktree_head(&cwd)
+                        else {
+                            tx.send(AppEvent::InsertHistoryCell(Box::new(
+                                history_cell::new_error_event(String::from(
+                                    "`/worktree init` — not inside a git worktree (start xcodex in a repo/worktree directory, or switch via `/worktree`)",
+                                )),
+                            )));
+                            return;
+                        };
+                        let Some(workspace_root) =
+                            codex_core::git_info::resolve_root_git_project_for_trust(
+                                &head.worktree_root,
+                            )
+                        else {
+                            tx.send(AppEvent::InsertHistoryCell(Box::new(
+                                history_cell::new_error_event(String::from(
+                                    "`/worktree init` — failed to resolve workspace root (the main worktree root for this repo)",
+                                )),
+                            )));
+                            return;
+                        };
+
+                        let current_branch =
+                            codex_core::git_info::read_git_head_state(&head.head_path).and_then(
+                                |state| match state {
+                                    GitHeadState::Branch(branch) => Some(branch),
+                                    GitHeadState::Detached => None,
+                                },
+                            );
+
+                        let worktree_root = head.worktree_root;
+                        let branches = codex_core::git_info::local_git_branches(&cwd).await;
+                        tx.send(AppEvent::OpenWorktreeInitWizard {
+                            worktree_root,
+                            workspace_root,
+                            current_branch,
+                            shared_dirs,
+                            branches,
+                        });
+                    });
+                })],
+                dismiss_on_select: true,
+                ..Default::default()
+            });
+        }
+
+        {
+            let cwd = self.config.cwd.clone();
+            let shared_dirs = self.config.worktrees_shared_dirs.clone();
+            items.push(SelectionItem {
                 name: "Worktree doctor".to_string(),
                 display_shortcut: Some(crate::key_hint::alt(KeyCode::Char('d'))),
                 description: Some(
@@ -5410,6 +5470,8 @@ impl ChatWidget {
                 " refresh  ".dim(),
                 crate::key_hint::alt(KeyCode::Char('s')).into(),
                 " settings  ".dim(),
+                crate::key_hint::alt(KeyCode::Char('i')).into(),
+                " create  ".dim(),
                 crate::key_hint::alt(KeyCode::Char('d')).into(),
                 " doctor  ".dim(),
                 "type to search  ".dim(),
