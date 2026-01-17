@@ -12,6 +12,68 @@ Codex can connect to MCP servers configured in `~/.codex/config.toml`. See the c
 
 - https://developers.openai.com/codex/config-reference
 
+## Ignore files
+
+Codex supports repo-local ignore files (gitignore-style) to exclude paths from discovery/search/context building:
+
+- `.aiexclude`
+- `.xcodexignore`
+
+Matches are omitted from file search and directory listings, and structured file tools refuse to read them.
+
+See `docs/xcodex/ignore-files.md` for details and examples.
+
+MCP note: MCP servers may run outside Codex's sandbox. Use `unattested_output_policy` to control whether unattested MCP output is forwarded to the model.
+
+## Exclusion (sensitive-path controls)
+
+The `[exclusion]` config table controls both:
+
+- Which repo-root ignore files are loaded.
+- How Codex redacts/blocks ignored path mentions and common secret patterns before sending content to the model.
+
+Example:
+
+```toml
+[exclusion]
+enabled = true
+paranoid_mode = false
+path_matching = true
+content_hashing = true
+substring_matching = true
+secret_patterns = true
+on_match = "redact"  # warn|block|redact
+log_blocked = false
+show_summary_banner = true
+show_summary_history = true
+preflight_shell_paths = true
+files = [".aiexclude", ".xcodexignore"]
+```
+
+Defaults:
+
+- `enabled = true`
+- `path_matching = true`, `content_hashing = true`, `substring_matching = true`, `secret_patterns = true`
+- `paranoid_mode = false` (only Layer 1 + Layer 3 are enforced by default; see below)
+- `show_summary_banner = true`, `show_summary_history = true` (both are UI-only; no paths are ever shown)
+- `preflight_shell_paths = true` (blocks shell tool calls that reference excluded paths before executing)
+
+Layer toggles:
+
+- Layer 1 (Input guards / deny-read for structured tools): controlled by `path_matching`.
+- Layer 2 (Output sanitization): controlled by `layer_output_sanitization` (defaults to `paranoid_mode`).
+- Layer 3 (Send firewall): controlled by `layer_send_firewall` (defaults to `true`).
+- Layer 4 (Request interceptor): controlled by `layer_request_interceptor` (defaults to `paranoid_mode`).
+
+If you set `paranoid_mode = true`, Codex enables Layer 2 and Layer 4 by default. You can still override any layer individually:
+
+```toml
+[exclusion]
+paranoid_mode = true
+layer_output_sanitization = false
+layer_request_interceptor = true
+```
+
 ## Notify
 
 Codex can run a notification hook when the agent finishes a turn. See the configuration reference for the latest notification settings:
@@ -1152,6 +1214,7 @@ Valid values:
 | `model_provider`                                 | string                                                            | Provider id from `model_providers` (default: `openai`).                                                                         |
 | `model_context_window`                           | number                                                            | Context window tokens.                                                                                                          |
 | `tool_output_token_limit`                        | number                                                            | Token budget for stored function/tool outputs in history (default: 2,560 tokens).                                               |
+| `unattested_output_policy`                       | `allow` \| `warn` \| `confirm` \| `block`                          | Policy for sending unattested MCP output to the model (default: `allow`).                                                       |
 | `approval_policy`                                | `untrusted` \| `on-failure` \| `on-request` \| `never`            | When to prompt for approval.                                                                                                    |
 | `sandbox_mode`                                   | `read-only` \| `workspace-write` \| `danger-full-access`          | OS sandbox policy.                                                                                                              |
 | `sandbox_workspace_write.writable_roots`         | array<string>                                                     | Extra writable roots in workspace‑write.                                                                                        |
