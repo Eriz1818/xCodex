@@ -967,7 +967,7 @@ impl Renderable for WorktreeInitWizardView {
                     body_area,
                     buf,
                     "Worktree name",
-                    String::from("e.g. fix/worktree"),
+                    String::from("e.g. feat-singularity"),
                 );
             }
             Step::BranchPicker => {

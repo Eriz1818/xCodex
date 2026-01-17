@@ -24,7 +24,7 @@ fn worktree_hint_for_subcommand(full_name: &str, command_line: &str) -> Option<S
             let usage = "Usage: /worktree init <name> <branch> [<path>]";
             let next = worktree_init_next_arg(command_line);
             let example = match next {
-                Some("<name>") => Some("e.g. fix/worktree"),
+                Some("<name>") => Some("e.g. feat-singularity"),
                 Some("<branch>") => Some("e.g. main"),
                 Some("[<path>]") => Some("e.g. .worktrees/<slug>"),
                 _ => None,
