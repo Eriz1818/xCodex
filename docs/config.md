@@ -12,6 +12,67 @@ Codex can connect to MCP servers configured in `~/.codex/config.toml`. See the c
 
 - https://developers.openai.com/codex/config-reference
 
+## Themes
+
+Codex TUIs support theming via xcodex-native YAML theme files.
+
+### Theme selection
+
+Theme selection is configured under the `[themes]` table in `~/.codex/config.toml`:
+
+```toml
+[themes]
+# Optional directory containing `*.yml` / `*.yaml` theme files.
+# Defaults to `$CODEX_HOME/themes`.
+dir = "/path/to/themes"
+
+# auto|light|dark (default: auto)
+theme_mode = "auto"
+
+# Theme names for each variant (default: "default").
+light = "example-light"
+dark = "example-dark"
+```
+
+Codex ships with a small built-in theme catalog, so `/theme` and the config above work even when `themes.dir` is empty. Built-in theme names:
+
+- `default`
+- `dracula`
+- `gruvbox-dark`
+- `nord`
+- `solarized-dark`
+- `solarized-light`
+
+Any `*.yml` / `*.yaml` files found in `themes.dir` are merged into the catalog and can override a built-in theme by reusing its `name`.
+
+You can also select themes interactively from inside the TUI:
+
+- `/theme` opens the picker (live preview, Enter saves).
+- `/theme help` explains `roles.*` vs `palette.*`.
+- `/theme preview` shows a swatch grid and role samples for the active theme.
+- `/theme create` scaffolds a new theme YAML by copying an existing theme and selects it.
+- `/theme edit` opens a minimal editor (roles/palette), live-previews changes, then saves as a new theme YAML and selects it.
+- `/theme template` writes example YAML files into `themes.dir` (or `$CODEX_HOME/themes`).
+
+### Theme file format
+
+Theme files are YAML with:
+
+- `name`: string (used for selection)
+- `variant`: `light` or `dark`
+- `palette.*`: 16 ANSI palette slots
+- `roles.*`: semantic UI roles used by the TUI
+
+Common `roles.*` keys:
+
+- `roles.fg` / `roles.bg`: primary app text + surfaces
+- `roles.transcript_bg` / `roles.composer_bg` / `roles.status_bg`: transcript, composer, and status bar backgrounds (optional; derived from `roles.fg/bg` by default)
+- `roles.selection_fg` / `roles.selection_bg`: selection highlight in pickers
+- `roles.border`: box borders and chrome
+- `roles.dim`: derived from `roles.fg/bg` (no YAML key)
+
+See `docs/themes/example-dark.yaml` and `docs/themes/example-light.yaml` for reference.
+
 ## Notify
 
 Codex can run a notification hook when the agent finishes a turn. See the configuration reference for the latest notification settings:
@@ -1229,6 +1290,7 @@ Valid values:
 | `tui.ramps_rotate`                               | boolean                                                           | Xcodex-only: rotate between ramp status flows across turns (default: true). When false, uses the baseline Hardware ramp only.  |
 | `tui.ramps_build`                                | boolean                                                           | Xcodex-only: enable the Build ramp for rotation (default: true).                                                                |
 | `tui.ramps_devops`                               | boolean                                                           | Xcodex-only: enable the DevOps ramp for rotation (default: true).                                                               |
+| `tui.composer_minimal_borders`                   | boolean                                                           | Render the active composer with only top/bottom borders (default: false).                                                       |
 | `tui.scroll_events_per_tick`                     | number                                                            | Raw events per wheel notch (normalization input; default: terminal-specific; fallback: 3).                                      |
 | `tui.scroll_wheel_lines`                         | number                                                            | Lines per physical wheel notch in wheel-like mode (default: 3).                                                                 |
 | `tui.scroll_trackpad_lines`                      | number                                                            | Baseline trackpad sensitivity in trackpad-like mode (default: 1).                                                               |
