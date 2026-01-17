@@ -388,6 +388,7 @@ async fn make_chatwidget_manual(
         enhanced_keys_supported: false,
         placeholder_text: "Ask xcodex to do anything".to_string(),
         disable_paste_burst: false,
+        minimal_composer_borders: false,
         xtreme_ui_enabled: true,
         animations_enabled: cfg.animations,
         skills: None,

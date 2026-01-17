@@ -1101,6 +1101,7 @@ impl WorktreeInitWizardView {
             rows,
             &self.selection_state,
             MAX_POPUP_ROWS,
+            user_message_style(),
             empty,
         );
     }

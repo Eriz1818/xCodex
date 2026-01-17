@@ -78,6 +78,7 @@ mod streaming;
 mod style;
 mod terminal_palette;
 mod text_formatting;
+mod theme;
 mod tooltips;
 mod transcript_copy;
 mod transcript_copy_action;

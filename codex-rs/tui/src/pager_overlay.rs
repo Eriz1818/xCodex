@@ -2,6 +2,15 @@ use std::io::Result;
 use std::sync::Arc;
 use std::time::Duration;
 
+use crate::app_event::AppEvent;
+use crate::app_event_sender::AppEventSender;
+use crate::bottom_pane::BottomPane;
+use crate::bottom_pane::BottomPaneParams;
+use crate::bottom_pane::BottomPaneView;
+use crate::bottom_pane::FooterMode;
+use crate::bottom_pane::FooterProps;
+use crate::bottom_pane::ThemeEditorView;
+use crate::bottom_pane::render_footer;
 use crate::history_cell::HistoryCell;
 use crate::history_cell::UserHistoryCell;
 use crate::key_hint;
@@ -12,17 +21,22 @@ use crate::render::renderable::Renderable;
 use crate::style::user_message_style;
 use crate::tui;
 use crate::tui::TuiEvent;
+use codex_core::features::Features;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use ratatui::buffer::Buffer;
 use ratatui::buffer::Cell;
+use ratatui::layout::Constraint;
+use ratatui::layout::Direction;
+use ratatui::layout::Layout;
 use ratatui::layout::Rect;
+use ratatui::style::Modifier;
 use ratatui::style::Style;
+use ratatui::style::Styled;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
 use ratatui::text::Span;
 use ratatui::text::Text;
-use ratatui::widgets::Clear;
 use ratatui::widgets::Paragraph;
 use ratatui::widgets::Widget;
 use ratatui::widgets::WidgetRef;
@@ -31,6 +45,7 @@ use ratatui::widgets::Wrap;
 pub(crate) enum Overlay {
     Transcript(TranscriptOverlay),
     Static(StaticOverlay),
+    ThemeSelector(ThemeSelectorOverlay),
 }
 
 impl Overlay {
@@ -49,10 +64,19 @@ impl Overlay {
         Self::Static(StaticOverlay::with_renderables(renderables, title))
     }
 
+    pub(crate) fn new_theme_selector(
+        app_event_tx: AppEventSender,
+        config: codex_core::config::Config,
+        terminal_bg: Option<(u8, u8, u8)>,
+    ) -> Self {
+        Self::ThemeSelector(ThemeSelectorOverlay::new(app_event_tx, config, terminal_bg))
+    }
+
     pub(crate) fn handle_event(&mut self, tui: &mut tui::Tui, event: TuiEvent) -> Result<()> {
         match self {
             Overlay::Transcript(o) => o.handle_event(tui, event),
             Overlay::Static(o) => o.handle_event(tui, event),
+            Overlay::ThemeSelector(o) => o.handle_event(tui, event),
         }
     }
 
@@ -60,6 +84,7 @@ impl Overlay {
         match self {
             Overlay::Transcript(o) => o.is_done(),
             Overlay::Static(o) => o.is_done(),
+            Overlay::ThemeSelector(o) => o.is_done(),
         }
     }
 }
@@ -78,11 +103,15 @@ const KEY_CTRL_F: KeyBinding = key_hint::ctrl(KeyCode::Char('f'));
 const KEY_CTRL_D: KeyBinding = key_hint::ctrl(KeyCode::Char('d'));
 const KEY_CTRL_B: KeyBinding = key_hint::ctrl(KeyCode::Char('b'));
 const KEY_CTRL_U: KeyBinding = key_hint::ctrl(KeyCode::Char('u'));
+const KEY_TAB: KeyBinding = key_hint::plain(KeyCode::Tab);
 const KEY_Q: KeyBinding = key_hint::plain(KeyCode::Char('q'));
 const KEY_ESC: KeyBinding = key_hint::plain(KeyCode::Esc);
 const KEY_ENTER: KeyBinding = key_hint::plain(KeyCode::Enter);
 const KEY_CTRL_T: KeyBinding = key_hint::ctrl(KeyCode::Char('t'));
 const KEY_CTRL_C: KeyBinding = key_hint::ctrl(KeyCode::Char('c'));
+const KEY_SLASH: KeyBinding = key_hint::plain(KeyCode::Char('/'));
+const KEY_D: KeyBinding = key_hint::plain(KeyCode::Char('d'));
+const KEY_E: KeyBinding = key_hint::plain(KeyCode::Char('e'));
 
 // Common pager navigation hints rendered on the first line
 const PAGER_KEY_HINTS: &[(&[KeyBinding], &str)] = &[
@@ -110,6 +139,718 @@ fn render_key_hints(area: Rect, buf: &mut Buffer, pairs: &[(&[KeyBinding], &str)
         first = false;
     }
     Paragraph::new(vec![Line::from(spans).dim()]).render_ref(area, buf);
+}
+
+pub(crate) struct ThemeSelectorOverlay {
+    app_event_tx: AppEventSender,
+    config: codex_core::config::Config,
+    edit_variant: codex_core::themes::ThemeVariant,
+    theme_entries: Vec<ThemeEntry>,
+    selected_idx: usize,
+    scroll_top: usize,
+    last_previewed: Option<String>,
+    mode: ThemeSelectorMode,
+    applied: bool,
+    is_done: bool,
+    frame_requester: Option<crate::tui::FrameRequester>,
+}
+
+#[derive(Clone, Debug)]
+struct ThemeEntry {
+    name: String,
+    variant: codex_core::themes::ThemeVariant,
+}
+
+impl ThemeSelectorOverlay {
+    fn new(
+        app_event_tx: AppEventSender,
+        config: codex_core::config::Config,
+        terminal_bg: Option<(u8, u8, u8)>,
+    ) -> Self {
+        use codex_core::themes::ThemeCatalog;
+        use codex_core::themes::ThemeVariant;
+
+        let edit_variant = crate::theme::active_variant(&config, terminal_bg);
+        let current_theme = match edit_variant {
+            ThemeVariant::Light => config.themes.light.as_deref(),
+            ThemeVariant::Dark => config.themes.dark.as_deref(),
+        }
+        .unwrap_or("default")
+        .to_string();
+
+        let mut theme_entries: Vec<ThemeEntry> = match ThemeCatalog::load(&config) {
+            Ok(catalog) => catalog
+                .list_names()
+                .map(|(name, variant)| ThemeEntry {
+                    name: name.to_string(),
+                    variant,
+                })
+                .collect(),
+            Err(_) => Vec::new(),
+        };
+
+        if !theme_entries.iter().any(|entry| entry.name == "default") {
+            theme_entries.insert(
+                0,
+                ThemeEntry {
+                    name: "default".to_string(),
+                    variant: ThemeVariant::Dark,
+                },
+            );
+        }
+
+        fn variant_order(variant: ThemeVariant) -> u8 {
+            match variant {
+                ThemeVariant::Light => 0,
+                ThemeVariant::Dark => 1,
+            }
+        }
+
+        theme_entries.sort_by(|a, b| {
+            if a.name == "default" {
+                std::cmp::Ordering::Less
+            } else if b.name == "default" {
+                std::cmp::Ordering::Greater
+            } else {
+                variant_order(a.variant)
+                    .cmp(&variant_order(b.variant))
+                    .then_with(|| a.name.cmp(&b.name))
+            }
+        });
+
+        let selected_idx = theme_entries
+            .iter()
+            .position(|entry| entry.name == current_theme)
+            .unwrap_or(0);
+
+        Self {
+            app_event_tx,
+            config,
+            edit_variant,
+            theme_entries,
+            selected_idx,
+            scroll_top: 0,
+            last_previewed: None,
+            mode: ThemeSelectorMode::Picker {
+                preview_scroll: 0,
+                diff_bg: true,
+            },
+            applied: false,
+            is_done: false,
+            frame_requester: None,
+        }
+    }
+
+    fn selected_theme_variant(&self) -> codex_core::themes::ThemeVariant {
+        self.theme_entries
+            .get(self.selected_idx)
+            .or_else(|| self.theme_entries.first())
+            .map(|entry| entry.variant)
+            .unwrap_or(codex_core::themes::ThemeVariant::Dark)
+    }
+
+    fn selected_theme(&self) -> &str {
+        self.theme_entries
+            .get(self.selected_idx)
+            .or_else(|| self.theme_entries.first())
+            .map(|entry| entry.name.as_str())
+            .unwrap_or("default")
+    }
+
+    fn set_edit_variant(&mut self, variant: codex_core::themes::ThemeVariant) {
+        use codex_core::themes::ThemeVariant;
+
+        self.edit_variant = variant;
+        let desired_theme = match variant {
+            ThemeVariant::Light => self.config.themes.light.as_deref(),
+            ThemeVariant::Dark => self.config.themes.dark.as_deref(),
+        }
+        .unwrap_or("default");
+
+        if let Some(idx) = self
+            .theme_entries
+            .iter()
+            .position(|entry| entry.name == desired_theme)
+        {
+            self.selected_idx = idx;
+            self.ensure_preview_applied();
+        }
+    }
+
+    fn ensure_preview_applied(&mut self) {
+        let theme = self.selected_theme().to_string();
+        if self.last_previewed.as_deref() == Some(theme.as_str()) {
+            return;
+        }
+        self.last_previewed = Some(theme.clone());
+        self.app_event_tx.send(AppEvent::PreviewTheme { theme });
+    }
+
+    fn move_selection(&mut self, delta: isize) {
+        if self.theme_entries.is_empty() {
+            return;
+        }
+        let len = self.theme_entries.len() as isize;
+        let next = (self.selected_idx as isize + delta).rem_euclid(len) as usize;
+        self.selected_idx = next;
+        self.ensure_preview_applied();
+    }
+
+    fn open_editor(&mut self) {
+        use codex_core::themes::ThemeCatalog;
+
+        let base_theme_name = self.selected_theme().to_string();
+        let base_theme = ThemeCatalog::load(&self.config)
+            .ok()
+            .and_then(|catalog| catalog.get(base_theme_name.as_str()).cloned())
+            .unwrap_or_else(ThemeCatalog::built_in_default);
+
+        let suggested_name = if base_theme_name == "default" {
+            "my-theme".to_string()
+        } else {
+            format!("{base_theme_name}-custom")
+        };
+
+        self.mode = ThemeSelectorMode::Editor(ThemeEditorView::new(
+            self.config.clone(),
+            self.selected_theme_variant(),
+            base_theme_name,
+            base_theme,
+            suggested_name,
+            self.app_event_tx.clone(),
+        ));
+    }
+
+    fn visible_items(&self, list_height: u16) -> usize {
+        usize::from(list_height.max(1)).min(self.theme_entries.len())
+    }
+
+    fn ensure_visible(&mut self, list_height: u16) {
+        let visible = self.visible_items(list_height);
+        if visible == 0 {
+            self.scroll_top = 0;
+            return;
+        }
+        if self.selected_idx < self.scroll_top {
+            self.scroll_top = self.selected_idx;
+        } else if self.selected_idx >= self.scroll_top + visible {
+            self.scroll_top = self.selected_idx + 1 - visible;
+        }
+    }
+
+    fn apply_selection(&mut self) {
+        let theme = self.selected_theme().to_string();
+        let variant = self.edit_variant;
+        self.applied = true;
+        self.app_event_tx
+            .send(AppEvent::PersistThemeSelection { variant, theme });
+        self.is_done = true;
+    }
+
+    fn cancel(&mut self) {
+        if !self.applied {
+            self.app_event_tx.send(AppEvent::CancelThemePreview);
+        }
+        self.is_done = true;
+    }
+
+    fn render_preview(&self, area: Rect, buf: &mut Buffer, scroll: u16, diff_bg: bool) -> u16 {
+        if area.is_empty() {
+            return 0;
+        }
+
+        fn buffer_to_lines(buf: &Buffer) -> Vec<Line<'static>> {
+            let mut out = Vec::new();
+            for y in 0..buf.area.height {
+                let mut spans: Vec<Span<'static>> = Vec::new();
+                let mut run_style: Option<Style> = None;
+                let mut run = String::new();
+
+                for x in 0..buf.area.width {
+                    let cell = &buf[(x, y)];
+                    let symbol = cell.symbol();
+                    let style = cell.style();
+
+                    if run_style != Some(style) && !run.is_empty() {
+                        spans.push(Span::styled(std::mem::take(&mut run), run_style.unwrap()));
+                    }
+
+                    if run.is_empty() {
+                        run_style = Some(style);
+                    } else if run_style != Some(style) {
+                        run_style = Some(style);
+                    }
+
+                    run.push_str(symbol);
+                }
+
+                if let Some(style) = run_style {
+                    if !run.is_empty() {
+                        spans.push(Span::styled(run, style));
+                    }
+                }
+
+                out.push(Line::from(spans));
+            }
+            out
+        }
+
+        for y in area.top()..area.bottom() {
+            for x in area.left()..area.right() {
+                buf[(x, y)].set_style(crate::theme::transcript_style());
+            }
+        }
+
+        let Some(frame_requester) = self.frame_requester.as_ref() else {
+            return 0;
+        };
+
+        let user_style = crate::theme::transcript_style().patch(user_message_style());
+        let diff_add = if diff_bg {
+            crate::theme::diff_add_style()
+        } else {
+            crate::theme::diff_add_text_style()
+        };
+        let diff_del = if diff_bg {
+            crate::theme::diff_del_style()
+        } else {
+            crate::theme::diff_del_text_style()
+        };
+        let diff_hunk = if diff_bg {
+            crate::theme::diff_hunk_style()
+        } else {
+            crate::theme::diff_hunk_text_style()
+        };
+        let thought_style = crate::theme::transcript_dim_style().add_modifier(Modifier::ITALIC);
+
+        let approval = crate::bottom_pane::ApprovalOverlay::new(
+            crate::bottom_pane::ApprovalRequest::Exec {
+                id: "preview-install".to_string(),
+                command: vec![
+                    "bash".to_string(),
+                    "-lc".to_string(),
+                    "cd /Users/eriz/Dev/Pyfun/codex/codex-rs && just xcodex-install".to_string(),
+                ],
+                reason: None,
+                proposed_execpolicy_amendment: None,
+            },
+            self.app_event_tx.clone(),
+            Features::with_defaults(),
+        );
+        let approval_height = approval.desired_height(area.width);
+        let mut approval_buf = Buffer::empty(Rect::new(0, 0, area.width, approval_height));
+        for y in 0..approval_buf.area.height {
+            for x in 0..approval_buf.area.width {
+                approval_buf[(x, y)].set_symbol(" ");
+                approval_buf[(x, y)].set_style(crate::theme::transcript_style());
+            }
+        }
+        approval.render(*approval_buf.area(), &mut approval_buf);
+        let approval_lines = buffer_to_lines(&approval_buf);
+
+        let mut lines: Vec<Line<'static>> = vec![
+            Line::from(vec!["Theme preview".dim()]),
+            Line::from(""),
+            Line::from(vec![
+                "Session ".into(),
+                Span::from("xcodex").set_style(crate::theme::accent_style().bold()),
+                " · model: gpt-5.2 · power: ⚡⚡⚡".dim(),
+            ]),
+            Line::from(""),
+            Line::from(vec!["› ".bold().dim(), "Show me the diff and explain it.".into()])
+                .style(user_style),
+            Line::from(vec![
+                "  ".into(),
+                "diff preview ".dim(),
+                if diff_bg {
+                    "(bg highlight)".dim()
+                } else {
+                    "(text-only)".dim()
+                },
+            ]),
+            Line::from(vec![
+                Span::from("@@ -1,3 +1,4 @@").set_style(diff_hunk),
+                " ".into(),
+                "config".dim(),
+            ]),
+            Line::from(vec![Span::from("- old line").set_style(diff_del)]),
+            Line::from(vec![Span::from("+ new line").set_style(diff_add)]),
+            Line::from(vec![
+                "• ".into(),
+                "status: ".dim(),
+                Span::from("Working").set_style(crate::theme::accent_style()),
+                " · ".dim(),
+                Span::from("warning").set_style(crate::theme::warning_style()),
+                " · ".dim(),
+                Span::from("error").set_style(crate::theme::error_style()),
+                " · ".dim(),
+                Span::from("success").set_style(crate::theme::success_style()),
+            ]),
+            Line::from(vec![
+                "• ".into(),
+                "link: ".dim(),
+                "https://example.com".set_style(crate::theme::link_style().underlined()),
+            ]),
+            Line::from(""),
+            Line::from("Adjusting background colors").style(thought_style),
+            Line::from(""),
+            Line::from("In `styles_for`, I noticed that `composer_bg` can end up too close to the transcript background. I want the composer surface to be derived from the theme’s background while still reading as slightly lighter, without depending on terminal defaults.")
+                .style(thought_style),
+            Line::from(""),
+            Line::from("Inspecting color mapping").style(thought_style),
+            Line::from(""),
+            Line::from("I’ll check how `ThemeColorResolved` flows into the TUI styles and ensure we only blend based on the theme’s resolved RGB background (not the terminal’s fg/bg). Then the composer, status, and suggestion surfaces should stay consistent across terminals.")
+                .style(thought_style),
+            Line::from(""),
+            Line::from(vec!["Approval required:".set_style(crate::theme::warning_style().bold())]),
+        ];
+        lines.extend(approval_lines);
+        lines.extend([
+            Line::from(""),
+            Line::from(vec!["assistant: ".dim(), "Here’s the plan…".into()]),
+            Line::from(""),
+            Line::from(vec![
+                "• ".into(),
+                "Ran ".dim(),
+                Span::from("cd /Users/eriz/Dev/Pyfun/codex/codex-rs")
+                    .set_style(crate::theme::accent_style()),
+                " && ".dim(),
+                Span::from("cargo test -p codex-core").set_style(crate::theme::accent_style()),
+            ]),
+            Line::from(vec![
+                "  └ ".dim(),
+                "test result: ok(".dim(),
+                Span::from("5 passed").set_style(crate::theme::success_style()),
+                "; ".dim(),
+                "0 failed".dim(),
+                ")".dim(),
+            ]),
+        ]);
+
+        let mut bottom_pane = BottomPane::new(BottomPaneParams {
+            app_event_tx: self.app_event_tx.clone(),
+            frame_requester: frame_requester.clone(),
+            has_input_focus: true,
+            enhanced_keys_supported: false,
+            placeholder_text: "Ask xcodex to do anything".to_string(),
+            disable_paste_burst: false,
+            minimal_composer_borders: self.config.tui_composer_minimal_borders,
+            xtreme_ui_enabled: crate::xtreme::xtreme_ui_enabled(&self.config),
+            animations_enabled: self.config.animations,
+            skills: None,
+        });
+        bottom_pane.set_slash_popup_max_rows(3);
+        bottom_pane.set_composer_text("/".to_string());
+        bottom_pane.ensure_status_indicator();
+        bottom_pane.update_status("Working".to_string(), Some("Theme preview".to_string()));
+        bottom_pane.set_context_window(Some(100), Some(0));
+        bottom_pane.set_status_bar_git_options(true, true);
+        bottom_pane.set_status_bar_git_context(
+            Some("feat/themes".to_string()),
+            Some("~/Dev/Pyfun/codex".to_string()),
+        );
+
+        let footer_height = 1u16;
+        let desired_bottom_height = bottom_pane.desired_height(area.width);
+        let max_bottom_height = area.height.saturating_sub(footer_height).saturating_sub(3);
+        let bottom_height = desired_bottom_height.min(max_bottom_height);
+
+        let chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Min(0),
+                Constraint::Length(bottom_height),
+                Constraint::Length(footer_height),
+            ])
+            .split(area);
+
+        let transcript_area = chunks[0];
+        let bottom_pane_area = chunks[1];
+        let footer_area = chunks[2];
+        let visible_rows = transcript_area.height as usize;
+        let max_scroll =
+            u16::try_from(lines.len().saturating_sub(visible_rows)).unwrap_or(u16::MAX);
+        let scroll = scroll.min(max_scroll);
+
+        Paragraph::new(Text::from(lines))
+            .style(crate::theme::transcript_style())
+            .wrap(Wrap { trim: false })
+            .scroll((scroll, 0))
+            .render_ref(transcript_area, buf);
+
+        bottom_pane.render(bottom_pane_area, buf);
+
+        render_footer(
+            footer_area,
+            buf,
+            FooterProps {
+                mode: FooterMode::ShortcutSummary,
+                esc_backtrack_hint: false,
+                use_shift_enter_hint: false,
+                is_task_running: true,
+                context_window_percent: Some(100),
+                context_window_used_tokens: Some(0),
+                status_bar_git_branch: Some("feat/themes"),
+                status_bar_worktree: Some("~/Dev/Pyfun/codex"),
+                show_status_bar_git_branch: true,
+                show_status_bar_worktree: true,
+            },
+        );
+
+        max_scroll
+    }
+
+    fn render_theme_list(&mut self, area: Rect, buf: &mut Buffer) {
+        if area.is_empty() {
+            return;
+        }
+
+        for y in area.top()..area.bottom() {
+            for x in area.left()..area.right() {
+                buf[(x, y)].set_symbol(" ");
+                buf[(x, y)].set_style(crate::theme::composer_style());
+            }
+        }
+
+        let title = Line::from(vec![
+            "Theme (set for ".dim(),
+            match self.edit_variant {
+                codex_core::themes::ThemeVariant::Light => "Light".into(),
+                codex_core::themes::ThemeVariant::Dark => "Dark".into(),
+            },
+            "): ".dim(),
+            Span::from(self.selected_theme().to_string())
+                .set_style(crate::theme::accent_style().bold()),
+            " ".into(),
+            "(↑/↓ preview · Tab mode · Enter apply · Esc cancel)".dim(),
+        ]);
+        Paragraph::new(Text::from(vec![title]))
+            .style(crate::theme::composer_style())
+            .render_ref(Rect::new(area.x, area.y, area.width, 1), buf);
+
+        let list_height = area.height.saturating_sub(2);
+        let list_area = Rect::new(area.x, area.y + 1, area.width, list_height);
+        self.ensure_visible(list_area.height);
+
+        let visible = self.visible_items(list_area.height);
+        let start = self
+            .scroll_top
+            .min(self.theme_entries.len().saturating_sub(1));
+        let end = (start + visible).min(self.theme_entries.len());
+
+        for (row, idx) in (start..end).enumerate() {
+            let y = list_area.y + row as u16;
+            let entry = &self.theme_entries[idx];
+            let variant_label = match entry.variant {
+                codex_core::themes::ThemeVariant::Light => "Light",
+                codex_core::themes::ThemeVariant::Dark => "Dark",
+            };
+            let mut line = Line::from(format!("{variant_label}  {}", entry.name));
+            if idx == self.selected_idx {
+                let style = crate::theme::composer_style()
+                    .patch(crate::theme::accent_style())
+                    .add_modifier(Modifier::BOLD);
+                line = line.set_style(style);
+            } else {
+                line = line.set_style(crate::theme::composer_style());
+            }
+            line.render(
+                Rect::new(list_area.x + 2, y, list_area.width.saturating_sub(2), 1),
+                buf,
+            );
+        }
+
+        let hint_area = Rect::new(area.x, area.bottom().saturating_sub(1), area.width, 1);
+        render_key_hints(
+            hint_area,
+            buf,
+            &[
+                (&[KEY_UP, KEY_DOWN], "select"),
+                (&[KEY_TAB], "toggle mode"),
+                (
+                    &[KEY_PAGE_UP, KEY_PAGE_DOWN, KEY_CTRL_U, KEY_CTRL_D],
+                    "scroll preview",
+                ),
+                (&[KEY_D], "toggle diff highlight"),
+                (&[KEY_E], "edit theme"),
+                (&[KEY_ENTER], "apply"),
+                (&[KEY_ESC], "cancel"),
+                (
+                    &[KEY_SLASH],
+                    "more: /theme help | /theme edit | /theme create",
+                ),
+            ],
+        );
+    }
+
+    pub(crate) fn handle_event(&mut self, tui: &mut tui::Tui, event: TuiEvent) -> Result<()> {
+        if self.frame_requester.is_none() {
+            self.frame_requester = Some(tui.frame_requester().clone());
+        }
+
+        if matches!(event, TuiEvent::Draw) {
+            return self.handle_draw(tui);
+        }
+
+        match &mut self.mode {
+            ThemeSelectorMode::Editor(editor) => match event {
+                TuiEvent::Key(key_event) => {
+                    editor.handle_key_event(key_event);
+                    if editor.is_complete() {
+                        self.is_done = true;
+                    }
+                    tui.frame_requester().schedule_frame();
+                    Ok(())
+                }
+                _ => Ok(()),
+            },
+            ThemeSelectorMode::Picker {
+                preview_scroll,
+                diff_bg,
+            } => match event {
+                TuiEvent::Key(key_event) => match key_event {
+                    e if KEY_ESC.is_press(e) || KEY_Q.is_press(e) => {
+                        self.cancel();
+                        Ok(())
+                    }
+                    e if KEY_ENTER.is_press(e) => {
+                        self.apply_selection();
+                        Ok(())
+                    }
+                    e if KEY_TAB.is_press(e) => {
+                        let next = match self.edit_variant {
+                            codex_core::themes::ThemeVariant::Light => {
+                                codex_core::themes::ThemeVariant::Dark
+                            }
+                            codex_core::themes::ThemeVariant::Dark => {
+                                codex_core::themes::ThemeVariant::Light
+                            }
+                        };
+                        self.set_edit_variant(next);
+                        tui.frame_requester().schedule_frame();
+                        Ok(())
+                    }
+                    e if KEY_UP.is_press(e) || KEY_K.is_press(e) => {
+                        self.move_selection(-1);
+                        tui.frame_requester().schedule_frame();
+                        Ok(())
+                    }
+                    e if KEY_DOWN.is_press(e) || KEY_J.is_press(e) => {
+                        self.move_selection(1);
+                        tui.frame_requester().schedule_frame();
+                        Ok(())
+                    }
+                    e if KEY_PAGE_UP.is_press(e) || KEY_CTRL_U.is_press(e) => {
+                        *preview_scroll = preview_scroll.saturating_sub(3);
+                        tui.frame_requester().schedule_frame();
+                        Ok(())
+                    }
+                    e if KEY_PAGE_DOWN.is_press(e) || KEY_CTRL_D.is_press(e) => {
+                        *preview_scroll = preview_scroll.saturating_add(3);
+                        tui.frame_requester().schedule_frame();
+                        Ok(())
+                    }
+                    e if KEY_D.is_press(e) => {
+                        *diff_bg = !*diff_bg;
+                        tui.frame_requester().schedule_frame();
+                        Ok(())
+                    }
+                    e if KEY_E.is_press(e) => {
+                        self.open_editor();
+                        tui.frame_requester().schedule_frame();
+                        Ok(())
+                    }
+                    _ => Ok(()),
+                },
+                _ => Ok(()),
+            },
+        }
+    }
+
+    fn handle_draw(&mut self, tui: &mut tui::Tui) -> Result<()> {
+        match &mut self.mode {
+            ThemeSelectorMode::Editor(editor) => {
+                tui.draw(u16::MAX, |frame| {
+                    let area = frame.area();
+                    for y in area.top()..area.bottom() {
+                        for x in area.left()..area.right() {
+                            frame.buffer_mut()[(x, y)].set_symbol(" ");
+                            frame.buffer_mut()[(x, y)].set_style(crate::theme::transcript_style());
+                        }
+                    }
+                    editor.render(area, frame.buffer_mut());
+                    if let Some((x, y)) = editor.cursor_pos(area) {
+                        frame.set_cursor_position((x, y));
+                    }
+                })?;
+                Ok(())
+            }
+            ThemeSelectorMode::Picker { .. } => {
+                self.ensure_preview_applied();
+                let (requested_scroll, diff_bg) = match &self.mode {
+                    ThemeSelectorMode::Picker {
+                        preview_scroll,
+                        diff_bg,
+                    } => (*preview_scroll, *diff_bg),
+                    ThemeSelectorMode::Editor(_) => (0, true),
+                };
+
+                let mut max_scroll = 0u16;
+                tui.draw(u16::MAX, |frame| {
+                    let area = frame.area();
+                    for y in area.top()..area.bottom() {
+                        for x in area.left()..area.right() {
+                            frame.buffer_mut()[(x, y)].set_symbol(" ");
+                            frame.buffer_mut()[(x, y)].set_style(crate::theme::transcript_style());
+                        }
+                    }
+
+                    let list_height = 8u16.min(area.height.saturating_sub(7)).max(4);
+                    let parts = Layout::default()
+                        .direction(Direction::Vertical)
+                        .constraints([
+                            Constraint::Min(0),
+                            Constraint::Length(1),
+                            Constraint::Length(list_height),
+                        ])
+                        .split(area);
+
+                    let spacer_area = parts[1];
+                    for y in spacer_area.top()..spacer_area.bottom() {
+                        for x in spacer_area.left()..spacer_area.right() {
+                            frame.buffer_mut()[(x, y)].set_symbol(" ");
+                            frame.buffer_mut()[(x, y)].set_style(crate::theme::transcript_style());
+                        }
+                    }
+
+                    max_scroll = self.render_preview(
+                        parts[0],
+                        frame.buffer_mut(),
+                        requested_scroll,
+                        diff_bg,
+                    );
+                    self.render_theme_list(parts[2], frame.buffer_mut());
+                })?;
+
+                if let ThemeSelectorMode::Picker { preview_scroll, .. } = &mut self.mode
+                    && *preview_scroll > max_scroll
+                {
+                    *preview_scroll = max_scroll;
+                    tui.frame_requester().schedule_frame();
+                }
+                Ok(())
+            }
+        }
+    }
+
+    pub(crate) fn is_done(&self) -> bool {
+        self.is_done
+    }
+}
+
+enum ThemeSelectorMode {
+    Picker { preview_scroll: u16, diff_bg: bool },
+    Editor(ThemeEditorView),
 }
 
 /// Generic widget for rendering a pager view.
@@ -143,7 +884,14 @@ impl PagerView {
     }
 
     fn render(&mut self, area: Rect, buf: &mut Buffer) {
-        Clear.render(area, buf);
+        if !area.is_empty() {
+            for y in area.top()..area.bottom() {
+                for x in area.left()..area.right() {
+                    buf[(x, y)].set_symbol(" ");
+                    buf[(x, y)].set_style(crate::theme::transcript_style());
+                }
+            }
+        }
         self.render_header(area, buf);
         let content_area = self.content_area(area);
         self.update_last_content_height(content_area.height);
@@ -218,7 +966,7 @@ impl PagerView {
         let sep_rect = Rect::new(full_area.x, sep_y, full_area.width, 1);
 
         Span::from("─".repeat(sep_rect.width as usize))
-            .dim()
+            .style(crate::theme::border_style())
             .render_ref(sep_rect, buf);
         let percent = if total_len == 0 {
             100
@@ -235,7 +983,7 @@ impl PagerView {
         let pct_w = pct_text.chars().count() as u16;
         let pct_x = sep_rect.x + sep_rect.width - pct_w - 1;
         Span::from(pct_text)
-            .dim()
+            .style(crate::theme::dim_style())
             .render_ref(Rect::new(pct_x, sep_rect.y, pct_w, 1), buf);
     }
 

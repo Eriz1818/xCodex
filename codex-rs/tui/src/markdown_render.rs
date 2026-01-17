@@ -31,6 +31,29 @@ struct MarkdownStyles {
     blockquote: Style,
 }
 
+impl MarkdownStyles {
+    fn from_theme() -> Self {
+        use ratatui::style::Stylize;
+
+        Self {
+            h1: Style::new().bold().underlined(),
+            h2: Style::new().bold(),
+            h3: Style::new().bold().italic(),
+            h4: Style::new().italic(),
+            h5: Style::new().italic(),
+            h6: Style::new().italic(),
+            code: crate::theme::accent_style(),
+            emphasis: Style::new().italic(),
+            strong: Style::new().bold(),
+            strikethrough: Style::new().crossed_out(),
+            ordered_list_marker: Style::new().light_blue(),
+            unordered_list_marker: Style::new(),
+            link: crate::theme::link_style().underlined(),
+            blockquote: crate::theme::dim_style().italic(),
+        }
+    }
+}
+
 impl Default for MarkdownStyles {
     fn default() -> Self {
         use ratatui::style::Stylize;
@@ -42,14 +65,14 @@ impl Default for MarkdownStyles {
             h4: Style::new().italic(),
             h5: Style::new().italic(),
             h6: Style::new().italic(),
-            code: Style::new().cyan(),
+            code: crate::theme::accent_style(),
             emphasis: Style::new().italic(),
             strong: Style::new().bold(),
             strikethrough: Style::new().crossed_out(),
             ordered_list_marker: Style::new().light_blue(),
             unordered_list_marker: Style::new(),
-            link: Style::new().cyan().underlined(),
-            blockquote: Style::new().green(),
+            link: crate::theme::link_style().underlined(),
+            blockquote: crate::theme::dim_style().italic(),
         }
     }
 }
@@ -115,7 +138,7 @@ where
         Self {
             iter,
             text: Text::default(),
-            styles: MarkdownStyles::default(),
+            styles: MarkdownStyles::from_theme(),
             inline_styles: Vec::new(),
             indent_stack: Vec::new(),
             list_indices: Vec::new(),

@@ -452,6 +452,7 @@ impl Renderable for WorktreeLinkSharedWizardView {
                     &rows,
                     &self.state,
                     MAX_POPUP_ROWS,
+                    user_message_style(),
                     "  No shared dirs configured",
                 );
                 Paragraph::new(Line::from(vec![

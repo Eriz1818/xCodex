@@ -79,11 +79,17 @@ pub(crate) fn footer_height(props: FooterProps<'_>) -> u16 {
 }
 
 pub(crate) fn render_footer(area: Rect, buf: &mut Buffer, props: FooterProps<'_>) {
+    for y in area.top()..area.bottom() {
+        for x in area.left()..area.right() {
+            buf[(x, y)].set_style(crate::theme::status_style());
+        }
+    }
     Paragraph::new(prefix_lines(
         footer_lines(props),
         " ".repeat(FOOTER_INDENT_COLS).into(),
         " ".repeat(FOOTER_INDENT_COLS).into(),
     ))
+    .style(crate::theme::status_style())
     .render(area, buf);
 }
 
@@ -98,8 +104,15 @@ fn footer_lines(props: FooterProps<'_>) -> Vec<Line<'static>> {
 
         line.push_span(" · ".dim());
         match feedback {
-            TranscriptCopyFeedback::Copied => line.push_span("Copied".green().bold()),
-            TranscriptCopyFeedback::Failed => line.push_span("Copy failed".red().bold()),
+            TranscriptCopyFeedback::Copied => {
+                line.push_span(Span::styled("Copied", crate::theme::success_style().bold()));
+            }
+            TranscriptCopyFeedback::Failed => {
+                line.push_span(Span::styled(
+                    "Copy failed",
+                    crate::theme::error_style().bold(),
+                ));
+            }
         }
     }
 
@@ -115,17 +128,20 @@ fn footer_lines(props: FooterProps<'_>) -> Vec<Line<'static>> {
         if props.show_status_bar_git_branch
             && let Some(branch) = props.status_bar_git_branch
         {
-            line.push_span(" · ".dim());
-            line.push_span("branch: ".dim());
-            line.push_span(branch.to_owned().cyan());
+            line.push_span(Span::styled(" · ", crate::theme::dim_style()));
+            line.push_span(Span::styled("branch: ", crate::theme::dim_style()));
+            line.push_span(Span::styled(
+                branch.to_owned(),
+                crate::theme::accent_style(),
+            ));
         }
 
         if props.show_status_bar_worktree
             && let Some(worktree) = props.status_bar_worktree
         {
-            line.push_span(" · ".dim());
-            line.push_span("wt: ".dim());
-            line.push_span(worktree.to_owned().dim());
+            line.push_span(Span::styled(" · ", crate::theme::dim_style()));
+            line.push_span(Span::styled("wt: ", crate::theme::dim_style()));
+            line.push_span(Span::styled(worktree.to_owned(), crate::theme::dim_style()));
         }
     }
 

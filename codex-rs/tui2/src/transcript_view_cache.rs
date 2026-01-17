@@ -284,6 +284,9 @@ struct WrappedTranscriptCache {
 
     /// Fingerprint of currently-expanded exec call ids.
     expanded_exec_call_ids_fingerprint: u64,
+
+    /// Version of the theme that produced the cached output.
+    theme_version: u64,
 }
 
 impl WrappedTranscriptCache {
@@ -305,6 +308,7 @@ impl WrappedTranscriptCache {
             is_user_cell: Vec::new(),
             verbose_tool_output: false,
             expanded_exec_call_ids_fingerprint: 0,
+            theme_version: crate::theme::theme_version(),
         }
     }
 
@@ -325,6 +329,7 @@ impl WrappedTranscriptCache {
     ) -> WrappedTranscriptUpdate {
         let expanded_exec_call_ids_fingerprint =
             expanded_exec_call_ids_fingerprint(expanded_exec_call_ids);
+        let theme_version = crate::theme::theme_version();
         if width == 0 {
             self.width = width;
             self.cell_count = cells.len();
@@ -336,6 +341,7 @@ impl WrappedTranscriptCache {
             self.is_user_cell.clear();
             self.verbose_tool_output = verbose_tool_output;
             self.expanded_exec_call_ids_fingerprint = expanded_exec_call_ids_fingerprint;
+            self.theme_version = theme_version;
             return WrappedTranscriptUpdate::Rebuilt;
         }
 
@@ -347,6 +353,7 @@ impl WrappedTranscriptCache {
                 && self.first_cell_ptr != current_first_ptr)
             || self.verbose_tool_output != verbose_tool_output
             || self.expanded_exec_call_ids_fingerprint != expanded_exec_call_ids_fingerprint
+            || self.theme_version != theme_version
         {
             self.rebuild(cells, width, verbose_tool_output, expanded_exec_call_ids);
             return WrappedTranscriptUpdate::Rebuilt;
@@ -361,6 +368,7 @@ impl WrappedTranscriptCache {
         self.first_cell_ptr = current_first_ptr;
         self.verbose_tool_output = verbose_tool_output;
         self.expanded_exec_call_ids_fingerprint = expanded_exec_call_ids_fingerprint;
+        self.theme_version = theme_version;
         let base_opts: crate::wrapping::RtOptions<'_> =
             crate::wrapping::RtOptions::new(width.max(1) as usize);
         for (cell_index, cell) in cells.iter().enumerate().skip(old_cell_count) {
@@ -392,6 +400,7 @@ impl WrappedTranscriptCache {
         verbose_tool_output: bool,
         expanded_exec_call_ids: &HashSet<String>,
     ) {
+        self.theme_version = crate::theme::theme_version();
         self.width = width;
         self.cell_count = cells.len();
         self.first_cell_ptr = cells.first().map(Arc::as_ptr);
@@ -457,6 +466,8 @@ struct TranscriptRasterCache {
     clock: u64,
     /// Version of the terminal palette used for the cached rows.
     palette_version: u64,
+    /// Version of the active theme used for the cached rows.
+    theme_version: u64,
     /// Access log used for approximate LRU eviction.
     lru: VecDeque<(u64, u64)>,
     /// Cached rasterized rows by key.
@@ -482,6 +493,7 @@ impl TranscriptRasterCache {
             capacity: 0,
             clock: 0,
             palette_version: crate::terminal_palette::palette_version(),
+            theme_version: crate::theme::theme_version(),
             lru: VecDeque::new(),
             rows: HashMap::new(),
         }
@@ -524,6 +536,12 @@ impl TranscriptRasterCache {
         let palette_version = crate::terminal_palette::palette_version();
         if palette_version != self.palette_version {
             self.palette_version = palette_version;
+            self.clear();
+        }
+
+        let theme_version = crate::theme::theme_version();
+        if theme_version != self.theme_version {
+            self.theme_version = theme_version;
             self.clear();
         }
 
@@ -623,11 +641,14 @@ fn rasterize_line(
     let scratch_area = Rect::new(0, 0, width, 1);
     let mut scratch = Buffer::empty(scratch_area);
 
-    if is_user_row {
-        let base_style = crate::style::user_message_style();
-        for x in 0..width {
-            scratch[(x, 0)].set_style(base_style);
-        }
+    let base_style = crate::theme::transcript_style();
+    let row_style = if is_user_row {
+        base_style.patch(crate::style::user_message_style())
+    } else {
+        base_style
+    };
+    for x in 0..width {
+        scratch[(x, 0)].set_style(row_style);
     }
 
     line.render_ref(scratch_area, &mut scratch);

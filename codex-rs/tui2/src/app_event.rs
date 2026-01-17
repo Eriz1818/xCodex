@@ -5,6 +5,7 @@ use codex_core::git_info::GitWorktreeEntry;
 use codex_core::protocol::ConversationPathResponseEvent;
 use codex_core::protocol::Event;
 use codex_core::protocol::RateLimitSnapshot;
+use codex_core::themes::ThemeVariant;
 use codex_file_search::FileMatch;
 use codex_protocol::openai_models::ModelPreset;
 
@@ -189,6 +190,29 @@ pub(crate) enum AppEvent {
 
     /// Persist whether xtreme mode styling is enabled.
     PersistXtremeMode(XtremeMode),
+
+    /// Preview a theme without persisting changes.
+    PreviewTheme {
+        theme: String,
+    },
+
+    /// Cancel theme preview and revert to the config-selected theme.
+    CancelThemePreview,
+
+    /// Persist theme selection for the provided variant.
+    PersistThemeSelection {
+        variant: ThemeVariant,
+        theme: String,
+    },
+
+    /// Open the full-screen theme selector (live preview, Enter saves).
+    OpenThemeSelector,
+
+    /// Open the in-TUI theme help view.
+    OpenThemeHelp,
+
+    /// Open the in-TUI theme preview view.
+    OpenThemePreview,
 
     /// Persist xcodex ramp settings.
     PersistRampsConfig {

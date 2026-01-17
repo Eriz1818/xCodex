@@ -144,6 +144,7 @@ pub(crate) fn simulate_stream_markdown_for_tests(
 mod tests {
     use super::*;
     use ratatui::style::Color;
+    use ratatui::style::Modifier;
 
     fn logical_line_text(line: &MarkdownLogicalLine) -> String {
         line.initial_indent
@@ -174,20 +175,16 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn e2e_stream_blockquote_simple_is_green() {
+    async fn e2e_stream_blockquote_simple_is_dim_italic() {
         let out = super::simulate_stream_markdown_for_tests(&["> Hello\n"], true);
         assert_eq!(out.len(), 1);
         let l = &out[0];
-        assert_eq!(
-            l.line_style.fg,
-            Some(Color::Green),
-            "expected blockquote line fg green, got {:?}",
-            l.line_style.fg
-        );
+        assert!(l.line_style.add_modifier.contains(Modifier::DIM));
+        assert!(l.line_style.add_modifier.contains(Modifier::ITALIC));
     }
 
     #[tokio::test]
-    async fn e2e_stream_blockquote_nested_is_green() {
+    async fn e2e_stream_blockquote_nested_is_dim_italic() {
         let out = super::simulate_stream_markdown_for_tests(&["> Level 1\n>> Level 2\n"], true);
         // Filter out any blank lines that may be inserted at paragraph starts.
         let non_blank: Vec<_> = out
@@ -200,16 +197,20 @@ mod tests {
             })
             .collect();
         assert_eq!(non_blank.len(), 2);
-        assert_eq!(non_blank[0].line_style.fg, Some(Color::Green));
-        assert_eq!(non_blank[1].line_style.fg, Some(Color::Green));
+        for line in non_blank {
+            assert!(line.line_style.add_modifier.contains(Modifier::DIM));
+            assert!(line.line_style.add_modifier.contains(Modifier::ITALIC));
+        }
     }
 
     #[tokio::test]
-    async fn e2e_stream_blockquote_with_list_items_is_green() {
+    async fn e2e_stream_blockquote_with_list_items_is_dim_italic() {
         let out = super::simulate_stream_markdown_for_tests(&["> - item 1\n> - item 2\n"], true);
         assert_eq!(out.len(), 2);
-        assert_eq!(out[0].line_style.fg, Some(Color::Green));
-        assert_eq!(out[1].line_style.fg, Some(Color::Green));
+        for line in out {
+            assert!(line.line_style.add_modifier.contains(Modifier::DIM));
+            assert!(line.line_style.add_modifier.contains(Modifier::ITALIC));
+        }
     }
 
     #[tokio::test]
@@ -242,11 +243,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn e2e_stream_blockquote_wrap_preserves_green_style() {
+    async fn e2e_stream_blockquote_wrap_preserves_dim_italic_style() {
         let long = "> This is a very long quoted line that should wrap across multiple columns to verify style preservation.";
         let out = super::simulate_stream_markdown_for_tests(&[long, "\n"], true);
         assert_eq!(out.len(), 1);
-        assert_eq!(out[0].line_style.fg, Some(Color::Green));
+        assert!(out[0].line_style.add_modifier.contains(Modifier::DIM));
+        assert!(out[0].line_style.add_modifier.contains(Modifier::ITALIC));
     }
 
     #[tokio::test]

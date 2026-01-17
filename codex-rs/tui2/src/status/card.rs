@@ -752,15 +752,17 @@ impl HistoryCell for StatusHistoryCell {
         let value_width = formatter.value_width(available_inner_width);
 
         let note_first_line = Line::from(vec![
-            Span::from("Visit ").cyan(),
-            "https://chatgpt.com/codex/settings/usage"
-                .cyan()
-                .underlined(),
-            Span::from(" for up-to-date").cyan(),
+            Span::styled("Visit ", crate::theme::accent_style()),
+            Span::styled(
+                "https://chatgpt.com/codex/settings/usage",
+                crate::theme::link_style().add_modifier(Modifier::UNDERLINED),
+            ),
+            Span::styled(" for up-to-date", crate::theme::accent_style()),
         ]);
-        let note_second_line = Line::from(vec![
-            Span::from("information on rate limits and credits").cyan(),
-        ]);
+        let note_second_line = Line::from(vec![Span::styled(
+            "information on rate limits and credits",
+            crate::theme::accent_style(),
+        )]);
         let note_lines = word_wrap_lines(
             [note_first_line, note_second_line],
             RtOptions::new(available_inner_width),
@@ -794,7 +796,10 @@ impl HistoryCell for StatusHistoryCell {
         lines.push(formatter.line(
             "Auto-compact",
             vec![if self.auto_compact_enabled {
-                "enabled".green().bold()
+                Span::styled(
+                    "enabled",
+                    crate::theme::success_style().add_modifier(Modifier::BOLD),
+                )
             } else {
                 "disabled".dim()
             }],

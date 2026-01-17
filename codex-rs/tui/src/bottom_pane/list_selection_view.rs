@@ -43,6 +43,7 @@ pub(crate) struct SelectionItem {
     pub is_current: bool,
     pub is_default: bool,
     pub actions: Vec<SelectionAction>,
+    pub highlight_actions: Vec<SelectionAction>,
     pub dismiss_on_select: bool,
     pub search_value: Option<String>,
     pub disabled_reason: Option<String>,
@@ -58,6 +59,7 @@ pub(crate) struct SelectionViewParams {
     pub search_placeholder: Option<String>,
     pub header: Box<dyn Renderable>,
     pub initial_selected_idx: Option<usize>,
+    pub on_cancel: Option<SelectionAction>,
 }
 
 impl Default for SelectionViewParams {
@@ -72,6 +74,7 @@ impl Default for SelectionViewParams {
             search_placeholder: None,
             header: Box::new(()),
             initial_selected_idx: None,
+            on_cancel: None,
         }
     }
 }
@@ -90,6 +93,8 @@ pub(crate) struct ListSelectionView {
     last_selected_actual_idx: Option<usize>,
     header: Box<dyn Renderable>,
     initial_selected_idx: Option<usize>,
+    on_cancel: Option<SelectionAction>,
+    last_highlighted_actual_idx: Option<usize>,
 }
 
 impl ListSelectionView {
@@ -122,8 +127,11 @@ impl ListSelectionView {
             last_selected_actual_idx: None,
             header,
             initial_selected_idx: params.initial_selected_idx,
+            on_cancel: params.on_cancel,
+            last_highlighted_actual_idx: None,
         };
         s.apply_filter();
+        s.apply_highlight();
         s
     }
 
@@ -136,6 +144,10 @@ impl ListSelectionView {
     }
 
     fn apply_filter(&mut self) {
+        let previous_selection = self
+            .state
+            .selected_idx
+            .and_then(|visible_idx| self.filtered_indices.get(visible_idx).copied());
         let previously_selected = self
             .state
             .selected_idx
@@ -184,6 +196,14 @@ impl ListSelectionView {
         let visible = Self::max_visible_rows(len);
         self.state.clamp_selection(len);
         self.state.ensure_visible(len, visible);
+
+        let new_selection = self
+            .state
+            .selected_idx
+            .and_then(|visible_idx| self.filtered_indices.get(visible_idx).copied());
+        if previous_selection != new_selection {
+            self.apply_highlight();
+        }
     }
 
     fn build_rows(&self) -> Vec<GenericDisplayRow> {
@@ -232,35 +252,51 @@ impl ListSelectionView {
     }
 
     fn move_up(&mut self) {
+        let before = self.state.selected_idx;
         let len = self.visible_len();
         self.state.move_up_wrap(len);
         let visible = Self::max_visible_rows(len);
         self.state.ensure_visible(len, visible);
         self.skip_disabled_up();
+        if before != self.state.selected_idx {
+            self.apply_highlight();
+        }
     }
 
     fn move_down(&mut self) {
+        let before = self.state.selected_idx;
         let len = self.visible_len();
         self.state.move_down_wrap(len);
         let visible = Self::max_visible_rows(len);
         self.state.ensure_visible(len, visible);
         self.skip_disabled_down();
+        if before != self.state.selected_idx {
+            self.apply_highlight();
+        }
     }
 
     fn accept(&mut self) {
-        if let Some(idx) = self.state.selected_idx
-            && let Some(actual_idx) = self.filtered_indices.get(idx)
-            && let Some(item) = self.items.get(*actual_idx)
-            && item.disabled_reason.is_none()
-        {
-            self.last_selected_actual_idx = Some(*actual_idx);
-            for act in &item.actions {
-                act(&self.app_event_tx);
-            }
-            if item.dismiss_on_select {
-                self.complete = true;
-            }
-        } else {
+        let Some(idx) = self.state.selected_idx else {
+            self.complete = true;
+            return;
+        };
+        let Some(actual_idx) = self.filtered_indices.get(idx) else {
+            self.complete = true;
+            return;
+        };
+        let Some(item) = self.items.get(*actual_idx) else {
+            self.complete = true;
+            return;
+        };
+        if item.disabled_reason.is_some() {
+            return;
+        }
+
+        self.last_selected_actual_idx = Some(*actual_idx);
+        for act in &item.actions {
+            act(&self.app_event_tx);
+        }
+        if item.dismiss_on_select {
             self.complete = true;
         }
     }
@@ -343,11 +379,41 @@ impl ListSelectionView {
 
         true
     }
+
+    fn apply_highlight(&mut self) {
+        let Some(visible_idx) = self.state.selected_idx else {
+            return;
+        };
+        let Some(actual_idx) = self.filtered_indices.get(visible_idx).copied() else {
+            return;
+        };
+        let Some(item) = self.items.get(actual_idx) else {
+            return;
+        };
+        if item.disabled_reason.is_some() {
+            return;
+        }
+        if self.last_highlighted_actual_idx == Some(actual_idx) {
+            return;
+        }
+        self.last_highlighted_actual_idx = Some(actual_idx);
+        for act in &item.highlight_actions {
+            act(&self.app_event_tx);
+        }
+    }
+
+    fn cancel(&mut self) {
+        if let Some(action) = &self.on_cancel {
+            action(&self.app_event_tx);
+        }
+        self.complete = true;
+    }
 }
 
 impl BottomPaneView for ListSelectionView {
     fn handle_key_event(&mut self, key_event: KeyEvent) {
         if self.handle_display_shortcut(key_event) {
+            self.apply_highlight();
             return;
         }
 
@@ -402,7 +468,7 @@ impl BottomPaneView for ListSelectionView {
             KeyEvent {
                 code: KeyCode::Esc, ..
             } => {
-                self.on_ctrl_c();
+                self.cancel();
             }
             KeyEvent {
                 code: KeyCode::Char(c),
@@ -451,7 +517,7 @@ impl BottomPaneView for ListSelectionView {
     }
 
     fn on_ctrl_c(&mut self) -> CancellationEvent {
-        self.complete = true;
+        self.cancel();
         CancellationEvent::Handled
     }
 }
@@ -501,9 +567,8 @@ impl Renderable for ListSelectionView {
         let [content_area, footer_area] =
             Layout::vertical([Constraint::Fill(1), Constraint::Length(footer_rows)]).areas(area);
 
-        Block::default()
-            .style(user_message_style())
-            .render(content_area, buf);
+        let base_style = user_message_style().patch(crate::theme::composer_style());
+        Block::default().style(base_style).render(content_area, buf);
 
         let header_height = self
             .header
@@ -563,6 +628,7 @@ impl Renderable for ListSelectionView {
                 &rows,
                 &self.state,
                 render_area.height as usize,
+                base_style,
                 "no matches",
             );
         }

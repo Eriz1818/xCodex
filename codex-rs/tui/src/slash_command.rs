@@ -31,6 +31,7 @@ pub enum SlashCommand {
     Mention,
     Status,
     Settings,
+    Theme,
     StatusMenu,
     Xtreme,
     Worktree,
@@ -66,6 +67,7 @@ impl SlashCommand {
             SlashCommand::Help => "show help for a topic (e.g. /help xcodex)",
             SlashCommand::Status => "open the status/settings menu",
             SlashCommand::Settings => "open the status/settings menu",
+            SlashCommand::Theme => "choose a theme (persists)",
             SlashCommand::StatusMenu => "open the status/settings menu (alias)",
             SlashCommand::Xtreme => "open the ⚡Tools control panel",
             SlashCommand::Worktree => "switch this session to a different git worktree",
@@ -110,6 +112,7 @@ impl SlashCommand {
             | SlashCommand::Help
             | SlashCommand::Status
             | SlashCommand::Settings
+            | SlashCommand::Theme
             | SlashCommand::StatusMenu
             | SlashCommand::Xtreme
             | SlashCommand::Worktree

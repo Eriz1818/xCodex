@@ -150,6 +150,7 @@ impl App {
         if !self.deferred_history_cells.is_empty() {
             let cells = std::mem::take(&mut self.deferred_history_cells);
             let width = tui.terminal.last_known_screen_size.width;
+            let base = crate::theme::transcript_style();
             let mut lines: Vec<ratatui::text::Line<'static>> = Vec::new();
             for cell in cells {
                 let mut display = cell.display_lines(width);
@@ -168,6 +169,9 @@ impl App {
                     }
                 }
 
+                for line in &mut display {
+                    line.style = base.patch(line.style);
+                }
                 lines.extend(display);
             }
             if !lines.is_empty() {

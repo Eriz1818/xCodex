@@ -81,8 +81,10 @@ use rand::Rng;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::Color;
+use ratatui::style::Styled as _;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
+use ratatui::text::Span;
 use ratatui::widgets::Paragraph;
 use ratatui::widgets::Wrap;
 use tokio::sync::mpsc::UnboundedSender;
@@ -1932,6 +1934,7 @@ impl ChatWidget {
                 enhanced_keys_supported,
                 placeholder_text: placeholder,
                 disable_paste_burst: config.disable_paste_burst,
+                minimal_composer_borders: config.tui_composer_minimal_borders,
                 xtreme_ui_enabled,
                 animations_enabled: config.animations,
                 skills: None,
@@ -2060,6 +2063,7 @@ impl ChatWidget {
                 enhanced_keys_supported,
                 placeholder_text: placeholder,
                 disable_paste_burst: config.disable_paste_burst,
+                minimal_composer_borders: config.tui_composer_minimal_borders,
                 xtreme_ui_enabled,
                 animations_enabled: config.animations,
                 skills: None,
@@ -2488,6 +2492,10 @@ impl ChatWidget {
                 self.bottom_pane.show_view(Box::new(view));
                 self.request_redraw();
             }
+            SlashCommand::Theme => {
+                self.app_event_tx.send(AppEvent::OpenThemeSelector);
+                self.request_redraw();
+            }
             SlashCommand::StatusMenu => {
                 let status_cell = self.status_menu_status_cell();
                 let view = crate::bottom_pane::StatusMenuView::new(
@@ -2608,6 +2616,27 @@ impl ChatWidget {
                         user_facing_hint: None,
                     },
                 });
+            }
+            SlashCommand::Theme if trimmed.eq_ignore_ascii_case("help") => {
+                self.app_event_tx.send(AppEvent::OpenThemeHelp);
+            }
+            SlashCommand::Theme
+                if trimmed.eq_ignore_ascii_case("create")
+                    || trimmed.to_ascii_lowercase().starts_with("create ") =>
+            {
+                self.open_theme_create_wizard(trimmed);
+            }
+            SlashCommand::Theme
+                if trimmed.eq_ignore_ascii_case("edit")
+                    || trimmed.to_ascii_lowercase().starts_with("edit ") =>
+            {
+                self.open_theme_editor(trimmed);
+            }
+            SlashCommand::Theme if trimmed.eq_ignore_ascii_case("template") => {
+                self.write_theme_templates();
+            }
+            SlashCommand::Theme if trimmed.eq_ignore_ascii_case("preview") => {
+                self.app_event_tx.send(AppEvent::OpenThemePreview);
             }
             _ => self.dispatch_command(cmd),
         }
@@ -4331,8 +4360,16 @@ impl ChatWidget {
     pub(crate) fn add_help_topics_output(&mut self) {
         let command = PlainHistoryCell::new(vec![Line::from(vec!["/help".magenta()])]);
         let body = PlainHistoryCell::new(vec![
-            vec!["Topics: ".into(), "xcodex".cyan().bold()].into(),
-            vec!["Try: ".dim(), "/help xcodex".cyan()].into(),
+            vec![
+                "Topics: ".into(),
+                Span::from("xcodex").set_style(crate::theme::accent_style().bold()),
+            ]
+            .into(),
+            vec![
+                "Try: ".dim(),
+                Span::from("/help xcodex").set_style(crate::theme::accent_style()),
+            ]
+            .into(),
         ]);
         self.add_to_history(CompositeHistoryCell::new(vec![
             Box::new(command),
@@ -4441,7 +4478,11 @@ impl ChatWidget {
     pub(crate) fn add_help_xcodex_output(&mut self) {
         let command = PlainHistoryCell::new(vec![Line::from(vec!["/help xcodex".magenta()])]);
         let body = PlainHistoryCell::new(vec![
-            vec!["xcodex".cyan().bold(), " additions in this UI".dim()].into(),
+            vec![
+                Span::from("xcodex").set_style(crate::theme::accent_style().bold()),
+                " additions in this UI".dim(),
+            ]
+            .into(),
             vec![
                 "• ".dim(),
                 "/settings".cyan(),
@@ -5272,6 +5313,200 @@ impl ChatWidget {
             }
         };
         self.open_model_popup_with_presets(presets);
+    }
+
+    fn open_theme_create_wizard(&mut self, args: &str) {
+        use codex_core::themes::ThemeVariant;
+
+        let terminal_bg = crate::terminal_palette::default_bg();
+        let mut variant = crate::theme::active_variant(&self.config, terminal_bg);
+
+        let mut name = String::new();
+        let lower = args.to_ascii_lowercase();
+        let rest = lower
+            .strip_prefix("create")
+            .and_then(|_| args.get("create".len()..))
+            .unwrap_or_default()
+            .trim();
+
+        if !rest.is_empty() {
+            let mut parts = rest.split_whitespace();
+            if let Some(first) = parts.next() {
+                match first.to_ascii_lowercase().as_str() {
+                    "light" => {
+                        variant = ThemeVariant::Light;
+                        name = parts.collect::<Vec<_>>().join(" ");
+                    }
+                    "dark" => {
+                        variant = ThemeVariant::Dark;
+                        name = parts.collect::<Vec<_>>().join(" ");
+                    }
+                    _ => {
+                        name = rest.to_string();
+                    }
+                }
+            }
+        }
+
+        let mut view = crate::bottom_pane::ThemeCreateWizardView::new(
+            self.config.clone(),
+            variant,
+            self.app_event_tx.clone(),
+        );
+        if !name.trim().is_empty() {
+            view.set_initial_name(name.trim());
+        }
+        self.bottom_pane.show_view(Box::new(view));
+        self.request_redraw();
+    }
+
+    fn open_theme_editor(&mut self, args: &str) {
+        use codex_core::themes::ThemeCatalog;
+        use codex_core::themes::ThemeVariant;
+
+        let terminal_bg = crate::terminal_palette::default_bg();
+        let mut variant = crate::theme::active_variant(&self.config, terminal_bg);
+
+        let mut requested_theme: Option<String> = None;
+        let lower = args.to_ascii_lowercase();
+        let rest = lower
+            .strip_prefix("edit")
+            .and_then(|_| args.get("edit".len()..))
+            .unwrap_or_default()
+            .trim();
+
+        if !rest.is_empty() {
+            let mut parts = rest.split_whitespace();
+            if let Some(first) = parts.next() {
+                match first.to_ascii_lowercase().as_str() {
+                    "light" => {
+                        variant = ThemeVariant::Light;
+                        let name = parts.collect::<Vec<_>>().join(" ");
+                        if !name.trim().is_empty() {
+                            requested_theme = Some(name.trim().to_string());
+                        }
+                    }
+                    "dark" => {
+                        variant = ThemeVariant::Dark;
+                        let name = parts.collect::<Vec<_>>().join(" ");
+                        if !name.trim().is_empty() {
+                            requested_theme = Some(name.trim().to_string());
+                        }
+                    }
+                    _ => requested_theme = Some(rest.to_string()),
+                }
+            }
+        }
+
+        let catalog = match ThemeCatalog::load(&self.config) {
+            Ok(catalog) => catalog,
+            Err(err) => {
+                self.add_error_message(format!("Failed to load themes: {err}"));
+                return;
+            }
+        };
+
+        let base_name = if let Some(requested) = requested_theme {
+            requested
+        } else {
+            match variant {
+                ThemeVariant::Light => self.config.themes.light.as_deref(),
+                ThemeVariant::Dark => self.config.themes.dark.as_deref(),
+            }
+            .unwrap_or("default")
+            .to_string()
+        };
+        let base_theme = match catalog.get(&base_name) {
+            Some(theme) => theme.clone(),
+            None => {
+                self.add_error_message(format!("Unknown theme `{base_name}`."));
+                return;
+            }
+        };
+
+        let mut suggested = format!("{base_name}-custom");
+        if catalog.get(&suggested).is_some() {
+            for idx in 2.. {
+                let candidate = format!("{base_name}-custom-{idx}");
+                if catalog.get(&candidate).is_none() {
+                    suggested = candidate;
+                    break;
+                }
+            }
+        }
+
+        let view = crate::bottom_pane::ThemeEditorView::new(
+            self.config.clone(),
+            variant,
+            base_name,
+            base_theme,
+            suggested,
+            self.app_event_tx.clone(),
+        );
+        self.bottom_pane.show_view(Box::new(view));
+        self.request_redraw();
+    }
+
+    fn write_theme_templates(&mut self) {
+        use codex_core::themes::ThemeCatalog;
+        use codex_core::themes::ThemeVariant;
+
+        let dir = codex_core::themes::themes_dir(&self.config.codex_home, &self.config.themes);
+        if let Err(err) = std::fs::create_dir_all(&dir) {
+            self.add_error_message(format!(
+                "Failed to create themes directory `{}`: {err}",
+                dir.display()
+            ));
+            return;
+        }
+
+        let templates = [
+            (ThemeVariant::Light, "example-light.yaml"),
+            (ThemeVariant::Dark, "example-dark.yaml"),
+        ];
+
+        let mut created: Vec<String> = Vec::new();
+        let mut skipped: Vec<String> = Vec::new();
+
+        for (variant, filename) in templates {
+            let path = dir.join(filename);
+            if path.exists() {
+                skipped.push(path.display().to_string());
+                continue;
+            }
+            let yaml = ThemeCatalog::example_theme_yaml(variant);
+            if let Err(err) = std::fs::write(&path, yaml) {
+                self.add_error_message(format!("Failed to write `{}`: {err}", path.display()));
+                return;
+            }
+            created.push(path.display().to_string());
+        }
+
+        if created.is_empty() {
+            self.add_info_message(
+                format!("Theme templates already exist in `{}`.", dir.display()),
+                None,
+            );
+            return;
+        }
+
+        let mut message = String::from("Wrote theme template(s):\n");
+        for path in created {
+            message.push_str("- ");
+            message.push_str(&path);
+            message.push('\n');
+        }
+        if !skipped.is_empty() {
+            message.push_str("\nSkipped existing file(s):\n");
+            for path in skipped {
+                message.push_str("- ");
+                message.push_str(&path);
+                message.push('\n');
+            }
+        }
+        message.push_str("\nSelect a theme with `/theme`.");
+
+        self.add_info_message(message, None);
     }
 
     fn model_menu_header(&self, title: &str, subtitle: &str) -> Box<dyn Renderable> {
@@ -6386,6 +6621,11 @@ impl ChatWidget {
         self.request_redraw();
     }
 
+    pub(crate) fn set_themes_config(&mut self, themes: codex_core::config::types::Themes) {
+        self.config.themes = themes;
+        self.request_redraw();
+    }
+
     pub(crate) fn set_ramps_config(&mut self, rotate: bool, build: bool, devops: bool) {
         self.config.tui_ramps_rotate = rotate;
         self.config.tui_ramps_build = build;
@@ -6844,6 +7084,14 @@ impl Drop for ChatWidget {
 
 impl Renderable for ChatWidget {
     fn render(&self, area: Rect, buf: &mut Buffer) {
+        if !area.is_empty() {
+            for y in area.top()..area.bottom() {
+                for x in area.left()..area.right() {
+                    buf[(x, y)].set_symbol(" ");
+                    buf[(x, y)].set_style(crate::theme::transcript_style());
+                }
+            }
+        }
         self.as_renderable().render(area, buf);
         self.last_rendered_width.set(Some(area.width as usize));
     }

@@ -19,6 +19,7 @@ use crossterm::event::KeyEventKind;
 use ratatui::layout::Constraint;
 use ratatui::layout::Layout;
 use ratatui::layout::Rect;
+use ratatui::style::Styled as _;
 use ratatui::style::Stylize as _;
 use ratatui::text::Line;
 use ratatui::text::Span;
@@ -819,8 +820,10 @@ fn hint_line(state: &PickerState) -> Line<'static> {
     if let Some(feedback) = state.copy_feedback.as_ref() {
         hint_spans.extend(["    ".into(), "•".dim(), " ".into()]);
         match feedback {
-            CopyFeedback::Copied => hint_spans.push("Copied.".green().bold()),
-            CopyFeedback::Error(msg) => hint_spans.push(Span::from(msg.clone()).red().bold()),
+            CopyFeedback::Copied => hint_spans
+                .push(Span::from("Copied.").set_style(crate::theme::success_style().bold())),
+            CopyFeedback::Error(msg) => hint_spans
+                .push(Span::from(msg.clone()).set_style(crate::theme::error_style().bold())),
         }
     }
 
@@ -849,7 +852,7 @@ fn draw_picker(tui: &mut Tui, state: &PickerState) -> std::io::Result<()> {
         };
         frame.render_widget_ref(
             Line::from(vec![
-                "Resume session".bold().cyan(),
+                Span::from("Resume session").set_style(crate::theme::accent_style().bold()),
                 " — ".dim(),
                 scope.dim(),
             ]),

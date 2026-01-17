@@ -128,7 +128,7 @@ where
             .spans
             .iter()
             .map(|s| Span {
-                style: s.style.patch(line.style),
+                style: line.style.patch(s.style),
                 content: s.content.clone(),
             })
             .collect();

@@ -1,8 +1,6 @@
 use diffy::Hunk;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
-use ratatui::style::Color;
-use ratatui::style::Modifier;
 use ratatui::style::Style;
 use ratatui::style::Stylize;
 use ratatui::text::Line as RtLine;
@@ -59,13 +57,17 @@ impl From<DiffSummary> for Box<dyn Renderable> {
 
         for (i, row) in collect_rows(&val.changes).into_iter().enumerate() {
             if i > 0 {
-                rows.push(Box::new(RtLine::from("")));
+                rows.push(Box::new(
+                    RtLine::from("").style(crate::theme::transcript_style()),
+                ));
             }
             let mut path = RtLine::from(display_path_for(&row.path, &val.cwd));
             path.push_span(" ");
             path.extend(render_line_count_summary(row.added, row.removed));
             rows.push(Box::new(path));
-            rows.push(Box::new(RtLine::from("")));
+            rows.push(Box::new(
+                RtLine::from("").style(crate::theme::transcript_style()),
+            ));
             rows.push(Box::new(InsetRenderable::new(
                 Box::new(row.change) as Box<dyn Renderable>,
                 Insets::tlbr(0, 2, 0, 0),
@@ -125,11 +127,18 @@ fn collect_rows(changes: &HashMap<PathBuf, FileChange>) -> Vec<Row> {
 
 fn render_line_count_summary(added: usize, removed: usize) -> Vec<RtSpan<'static>> {
     let mut spans = Vec::new();
-    spans.push("(".into());
-    spans.push(format!("+{added}").green());
-    spans.push(" ".into());
-    spans.push(format!("-{removed}").red());
-    spans.push(")".into());
+    let base = crate::theme::transcript_style();
+    spans.push(RtSpan::styled("(", base));
+    spans.push(RtSpan::styled(
+        format!("+{added}"),
+        crate::theme::diff_add_style(),
+    ));
+    spans.push(RtSpan::styled(" ", base));
+    spans.push(RtSpan::styled(
+        format!("-{removed}"),
+        crate::theme::diff_del_style(),
+    ));
+    spans.push(RtSpan::styled(")", base));
     spans
 }
 
@@ -150,7 +159,8 @@ fn render_changes_block(rows: Vec<Row>, wrap_cols: usize, cwd: &Path) -> Vec<RtL
     let total_removed: usize = rows.iter().map(|r| r.removed).sum();
     let file_count = rows.len();
     let noun = if file_count == 1 { "file" } else { "files" };
-    let mut header_spans: Vec<RtSpan<'static>> = vec!["• ".dim()];
+    let mut header_spans: Vec<RtSpan<'static>> =
+        vec![RtSpan::styled("• ", crate::theme::border_style())];
     if let [row] = &rows[..] {
         let verb = match &row.change {
             FileChange::Add { .. } => "Added",
@@ -172,13 +182,13 @@ fn render_changes_block(rows: Vec<Row>, wrap_cols: usize, cwd: &Path) -> Vec<RtL
     for (idx, r) in rows.into_iter().enumerate() {
         // Insert a blank separator between file chunks (except before the first)
         if idx > 0 {
-            out.push("".into());
+            out.push(RtLine::from("").style(crate::theme::transcript_style()));
         }
         // File header line (skip when single-file header already shows the name)
         let skip_file_header = file_count == 1;
         if !skip_file_header {
             let mut header: Vec<RtSpan<'static>> = Vec::new();
-            header.push("  └ ".dim());
+            header.push(RtSpan::styled("  └ ", crate::theme::border_style()));
             header.extend(render_path(&r));
             header.push(" ".into());
             header.extend(render_line_count_summary(r.added, r.removed));
@@ -249,7 +259,10 @@ fn render_change(change: &FileChange, out: &mut Vec<RtLine<'static>>, width: usi
                     if !is_first_hunk {
                         let spacer = format!("{:width$} ", "", width = line_number_width.max(1));
                         let spacer_span = RtSpan::styled(spacer, style_gutter());
-                        out.push(RtLine::from(vec![spacer_span, "⋮".dim()]));
+                        out.push(RtLine::from(vec![
+                            spacer_span,
+                            RtSpan::styled("⋮", crate::theme::diff_hunk_style()),
+                        ]));
                     }
                     is_first_hunk = false;
 
@@ -423,19 +436,19 @@ fn line_number_width(max_line_number: usize) -> usize {
 }
 
 fn style_gutter() -> Style {
-    Style::default().add_modifier(Modifier::DIM)
+    crate::theme::transcript_dim_style()
 }
 
 fn style_context() -> Style {
-    Style::default()
+    crate::theme::transcript_style()
 }
 
 fn style_add() -> Style {
-    Style::default().fg(Color::Green)
+    crate::theme::diff_add_style()
 }
 
 fn style_del() -> Style {
-    Style::default().fg(Color::Red)
+    crate::theme::diff_del_style()
 }
 
 #[cfg(test)]

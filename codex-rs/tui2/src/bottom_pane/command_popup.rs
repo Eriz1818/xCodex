@@ -2,7 +2,6 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::widgets::WidgetRef;
 
-use super::popup_consts::MAX_POPUP_ROWS;
 use super::scroll_state::ScrollState;
 use super::selection_popup_common::GenericDisplayRow;
 use super::selection_popup_common::render_rows;
@@ -19,6 +18,8 @@ use codex_common::fuzzy_match::fuzzy_match;
 use codex_protocol::custom_prompts::CustomPrompt;
 use codex_protocol::custom_prompts::PROMPTS_CMD_PREFIX;
 use std::collections::HashSet;
+
+pub(crate) const DEFAULT_SLASH_POPUP_ROWS: usize = 8;
 
 fn windows_degraded_sandbox_active() -> bool {
     cfg!(target_os = "windows")
@@ -69,10 +70,15 @@ pub(crate) struct CommandPopup {
     slash_completion_branches: Vec<String>,
     current_git_branch: Option<String>,
     state: ScrollState,
+    max_rows: usize,
 }
 
 impl CommandPopup {
-    pub(crate) fn new(mut prompts: Vec<CustomPrompt>, skills_enabled: bool) -> Self {
+    pub(crate) fn new(
+        mut prompts: Vec<CustomPrompt>,
+        skills_enabled: bool,
+        max_rows: usize,
+    ) -> Self {
         let allow_elevate_sandbox = windows_degraded_sandbox_active();
         let builtins: Vec<(&'static str, SlashCommand)> = built_in_slash_commands()
             .into_iter()
@@ -91,6 +97,7 @@ impl CommandPopup {
             slash_completion_branches: Vec::new(),
             current_git_branch: None,
             state: ScrollState::new(),
+            max_rows: max_rows.max(1),
         }
     }
 
@@ -103,6 +110,14 @@ impl CommandPopup {
         prompts.retain(|p| !exclude.contains(&p.name));
         prompts.sort_by(|a, b| a.name.cmp(&b.name));
         self.prompts = prompts;
+    }
+
+    pub(crate) fn set_max_rows(&mut self, max_rows: usize) {
+        self.max_rows = max_rows.max(1);
+        self.state.ensure_visible(
+            self.filtered().len(),
+            self.max_rows.min(self.filtered().len()),
+        );
     }
 
     pub(crate) fn set_slash_completion_branches(&mut self, branches: Vec<String>) {
@@ -160,7 +175,7 @@ impl CommandPopup {
             self.state.selected_idx = Some(idx);
         }
         self.state
-            .ensure_visible(matches_len, MAX_POPUP_ROWS.min(matches_len));
+            .ensure_visible(matches_len, self.max_rows.min(matches_len));
     }
 
     fn should_default_select_subcommand(&self) -> bool {
@@ -173,7 +188,7 @@ impl CommandPopup {
         use super::selection_popup_common::measure_rows_height;
         let rows = self.rows_from_matches(self.filtered());
 
-        measure_rows_height(&rows, &self.state, MAX_POPUP_ROWS, width)
+        measure_rows_height(&rows, &self.state, self.max_rows, width)
     }
 
     /// Compute fuzzy-filtered matches over built-in commands and user prompts,
@@ -339,6 +354,7 @@ impl CommandPopup {
                     match_indices: indices.map(|v| v.into_iter().map(|i| i + 1).collect()),
                     display_shortcut: None,
                     description: Some(description),
+                    disabled_reason: None,
                     wrap_indent: None,
                 }
             })
@@ -464,7 +480,7 @@ impl CommandPopup {
     pub(crate) fn move_up(&mut self) {
         let len = self.filtered_items().len();
         self.state.move_up_wrap(len);
-        self.state.ensure_visible(len, MAX_POPUP_ROWS.min(len));
+        self.state.ensure_visible(len, self.max_rows.min(len));
     }
 
     /// Move the selection cursor one step down.
@@ -472,7 +488,7 @@ impl CommandPopup {
         let matches_len = self.filtered_items().len();
         self.state.move_down_wrap(matches_len);
         self.state
-            .ensure_visible(matches_len, MAX_POPUP_ROWS.min(matches_len));
+            .ensure_visible(matches_len, self.max_rows.min(matches_len));
     }
 
     /// Return currently selected command, if any.
@@ -501,13 +517,21 @@ fn sanitize_worktree_path_slug(name: &str) -> String {
 
 impl WidgetRef for CommandPopup {
     fn render_ref(&self, area: Rect, buf: &mut Buffer) {
+        let base_style = crate::theme::transcript_style();
+        for y in area.top()..area.bottom() {
+            for x in area.left()..area.right() {
+                buf[(x, y)].set_symbol(" ");
+                buf[(x, y)].set_style(base_style);
+            }
+        }
         let rows = self.rows_from_matches(self.filtered());
         render_rows(
             area.inset(Insets::tlbr(0, 2, 0, 0)),
             buf,
             &rows,
             &self.state,
-            MAX_POPUP_ROWS,
+            self.max_rows,
+            base_style,
             "no matches",
         );
     }
@@ -520,7 +544,7 @@ mod tests {
 
     #[test]
     fn filter_includes_init_when_typing_prefix() {
-        let mut popup = CommandPopup::new(Vec::new(), false);
+        let mut popup = CommandPopup::new(Vec::new(), false, DEFAULT_SLASH_POPUP_ROWS);
         // Simulate the composer line starting with '/in' so the popup filters
         // matching commands by prefix.
         popup.on_composer_text_change("/in".to_string());
@@ -542,7 +566,7 @@ mod tests {
 
     #[test]
     fn selecting_init_by_exact_match() {
-        let mut popup = CommandPopup::new(Vec::new(), false);
+        let mut popup = CommandPopup::new(Vec::new(), false, DEFAULT_SLASH_POPUP_ROWS);
         popup.on_composer_text_change("/init".to_string());
 
         // When an exact match exists, the selected command should be that
@@ -563,7 +587,7 @@ mod tests {
 
     #[test]
     fn model_is_first_suggestion_for_mo() {
-        let mut popup = CommandPopup::new(Vec::new(), false);
+        let mut popup = CommandPopup::new(Vec::new(), false, DEFAULT_SLASH_POPUP_ROWS);
         popup.on_composer_text_change("/mo".to_string());
         let matches = popup.filtered_items();
         match matches.first() {
@@ -599,7 +623,7 @@ mod tests {
                 argument_hint: None,
             },
         ];
-        let popup = CommandPopup::new(prompts, false);
+        let popup = CommandPopup::new(prompts, false, DEFAULT_SLASH_POPUP_ROWS);
         let items = popup.filtered_items();
         let mut prompt_names: Vec<String> = items
             .into_iter()
@@ -624,6 +648,7 @@ mod tests {
                 argument_hint: None,
             }],
             false,
+            DEFAULT_SLASH_POPUP_ROWS,
         );
         let items = popup.filtered_items();
         let has_collision_prompt = items.into_iter().any(|it| match it {
@@ -647,6 +672,7 @@ mod tests {
                 argument_hint: None,
             }],
             false,
+            DEFAULT_SLASH_POPUP_ROWS,
         );
         let rows = popup.rows_from_matches(vec![(CommandItem::UserPrompt(0), None, 0)]);
         let description = rows.first().and_then(|row| row.description.as_deref());
@@ -667,6 +693,7 @@ mod tests {
                 argument_hint: None,
             }],
             false,
+            DEFAULT_SLASH_POPUP_ROWS,
         );
         let rows = popup.rows_from_matches(vec![(CommandItem::UserPrompt(0), None, 0)]);
         let description = rows.first().and_then(|row| row.description.as_deref());
@@ -684,6 +711,7 @@ mod tests {
                 argument_hint: None,
             }],
             false,
+            DEFAULT_SLASH_POPUP_ROWS,
         );
         popup.on_composer_text_change("/my".to_string());
         let items = popup.filtered_items();
@@ -695,7 +723,7 @@ mod tests {
 
     #[test]
     fn fuzzy_filter_matches_subsequence_for_ac() {
-        let mut popup = CommandPopup::new(Vec::new(), false);
+        let mut popup = CommandPopup::new(Vec::new(), false, DEFAULT_SLASH_POPUP_ROWS);
         popup.on_composer_text_change("/ac".to_string());
 
         let cmds: Vec<&str> = popup
@@ -716,7 +744,7 @@ mod tests {
 
     #[test]
     fn worktree_subcommands_are_suggested_under_worktree() {
-        let mut popup = CommandPopup::new(Vec::new(), false);
+        let mut popup = CommandPopup::new(Vec::new(), false, DEFAULT_SLASH_POPUP_ROWS);
         popup.on_composer_text_change("/worktree ".to_string());
 
         let items = popup.filtered_items();
@@ -736,7 +764,7 @@ mod tests {
 
     #[test]
     fn settings_subcommands_are_suggested_under_settings() {
-        let mut popup = CommandPopup::new(Vec::new(), false);
+        let mut popup = CommandPopup::new(Vec::new(), false, DEFAULT_SLASH_POPUP_ROWS);
         popup.on_composer_text_change("/settings ".to_string());
 
         let items = popup.filtered_items();
@@ -757,7 +785,7 @@ mod tests {
 
     #[test]
     fn settings_nested_subcommands_are_suggested_under_status_bar() {
-        let mut popup = CommandPopup::new(Vec::new(), false);
+        let mut popup = CommandPopup::new(Vec::new(), false, DEFAULT_SLASH_POPUP_ROWS);
         popup.on_composer_text_change("/settings status-bar ".to_string());
 
         let items = popup.filtered_items();
@@ -778,7 +806,7 @@ mod tests {
 
     #[test]
     fn worktree_subcommands_are_hidden_until_space() {
-        let mut popup = CommandPopup::new(Vec::new(), false);
+        let mut popup = CommandPopup::new(Vec::new(), false, DEFAULT_SLASH_POPUP_ROWS);
         popup.on_composer_text_change("/worktree".to_string());
 
         let items = popup.filtered_items();
@@ -792,7 +820,7 @@ mod tests {
 
     #[test]
     fn worktree_init_stays_visible_after_trailing_space_and_args() {
-        let mut popup = CommandPopup::new(Vec::new(), false);
+        let mut popup = CommandPopup::new(Vec::new(), false, DEFAULT_SLASH_POPUP_ROWS);
         popup.on_composer_text_change("/worktree init foo ".to_string());
 
         let items = popup.filtered_items();
@@ -812,7 +840,7 @@ mod tests {
 
     #[test]
     fn worktree_init_description_includes_next_arg_hint() {
-        let mut popup = CommandPopup::new(Vec::new(), false);
+        let mut popup = CommandPopup::new(Vec::new(), false, DEFAULT_SLASH_POPUP_ROWS);
         popup.on_composer_text_change("/worktree init foo ".to_string());
 
         let rows = popup.rows_from_matches(popup.filtered());
@@ -830,7 +858,7 @@ mod tests {
 
     #[test]
     fn worktree_init_branch_arg_suggests_branches() {
-        let mut popup = CommandPopup::new(Vec::new(), false);
+        let mut popup = CommandPopup::new(Vec::new(), false, DEFAULT_SLASH_POPUP_ROWS);
         popup.set_slash_completion_branches(vec!["main".to_string(), "feature".to_string()]);
         popup.set_current_git_branch(Some("feature".to_string()));
         popup.on_composer_text_change("/worktree init foo ".to_string());
@@ -852,7 +880,7 @@ mod tests {
 
     #[test]
     fn worktree_init_path_arg_suggests_default_path() {
-        let mut popup = CommandPopup::new(Vec::new(), false);
+        let mut popup = CommandPopup::new(Vec::new(), false, DEFAULT_SLASH_POPUP_ROWS);
         popup.on_composer_text_change("/worktree init feat/x main ".to_string());
 
         let items = popup.filtered_items();

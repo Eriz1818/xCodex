@@ -426,8 +426,10 @@ impl ExecCell {
         if !continuation_lines.is_empty() {
             lines.extend(prefix_lines(
                 continuation_lines,
-                Span::from(layout.command_continuation.initial_prefix).dim(),
-                Span::from(layout.command_continuation.subsequent_prefix).dim(),
+                Span::from(layout.command_continuation.initial_prefix)
+                    .style(crate::theme::border_style()),
+                Span::from(layout.command_continuation.subsequent_prefix)
+                    .style(crate::theme::border_style()),
             ));
         }
 
@@ -455,9 +457,13 @@ impl ExecCell {
             if raw_output.lines.is_empty() {
                 if !call.is_unified_exec_interaction() {
                     lines.extend(prefix_lines(
-                        vec![Line::from("(no output)".dim())],
-                        Span::from(layout.output_block.initial_prefix).dim(),
-                        Span::from(layout.output_block.subsequent_prefix),
+                        vec![Line::from(
+                            Span::from("(no output)").style(crate::theme::dim_style()),
+                        )],
+                        Span::from(layout.output_block.initial_prefix)
+                            .style(crate::theme::border_style()),
+                        Span::from(layout.output_block.subsequent_prefix)
+                            .style(crate::theme::border_style()),
                     ));
                 }
             } else {
@@ -481,8 +487,10 @@ impl ExecCell {
                 if !trimmed_output.is_empty() {
                     lines.extend(prefix_lines(
                         trimmed_output,
-                        Span::from(layout.output_block.initial_prefix).dim(),
-                        Span::from(layout.output_block.subsequent_prefix),
+                        Span::from(layout.output_block.initial_prefix)
+                            .style(crate::theme::border_style()),
+                        Span::from(layout.output_block.subsequent_prefix)
+                            .style(crate::theme::border_style()),
                     ));
                 }
             }

@@ -101,6 +101,49 @@ const SETTINGS_SUBCOMMANDS: &[SubcommandNode] = &[
     },
 ];
 
+const THEME_SUBCOMMANDS: &[SubcommandNode] = &[
+    SubcommandNode {
+        token: "help",
+        full_name: "theme help",
+        description: "show theme role mapping and format details",
+        run_on_enter: true,
+        insert_trailing_space: false,
+        children: &[],
+    },
+    SubcommandNode {
+        token: "create",
+        full_name: "theme create",
+        description: "create a new theme YAML by copying an existing theme",
+        run_on_enter: true,
+        insert_trailing_space: false,
+        children: &[],
+    },
+    SubcommandNode {
+        token: "edit",
+        full_name: "theme edit",
+        description: "edit theme roles/palette and save as a new theme",
+        run_on_enter: true,
+        insert_trailing_space: false,
+        children: &[],
+    },
+    SubcommandNode {
+        token: "preview",
+        full_name: "theme preview",
+        description: "show theme preview for the active theme",
+        run_on_enter: true,
+        insert_trailing_space: false,
+        children: &[],
+    },
+    SubcommandNode {
+        token: "template",
+        full_name: "theme template",
+        description: "write example theme YAML files to themes.dir",
+        run_on_enter: true,
+        insert_trailing_space: false,
+        children: &[],
+    },
+];
+
 const WORKTREE_SUBCOMMANDS: &[SubcommandNode] = &[
     SubcommandNode {
         token: "detect",
@@ -154,6 +197,11 @@ const SUBCOMMAND_ROOTS: &[SubcommandRoot] = &[
         root: "settings",
         anchor: SlashCommand::Settings,
         children: SETTINGS_SUBCOMMANDS,
+    },
+    SubcommandRoot {
+        root: "theme",
+        anchor: SlashCommand::Theme,
+        children: THEME_SUBCOMMANDS,
     },
 ];
 

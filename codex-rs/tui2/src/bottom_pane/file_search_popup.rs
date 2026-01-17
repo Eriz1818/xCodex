@@ -131,6 +131,7 @@ impl WidgetRef for &FileSearchPopup {
                         .map(|v| v.iter().map(|&i| i as usize).collect()),
                     display_shortcut: None,
                     description: None,
+                    disabled_reason: None,
                     wrap_indent: None,
                 })
                 .collect()
@@ -142,12 +143,14 @@ impl WidgetRef for &FileSearchPopup {
             "no matches"
         };
 
+        let base_style = crate::theme::transcript_style();
         render_rows(
             area.inset(Insets::tlbr(0, 2, 0, 0)),
             buf,
             &rows_all,
             &self.state,
             MAX_POPUP_ROWS,
+            base_style,
             empty_message,
         );
     }
