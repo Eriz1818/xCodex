@@ -24,6 +24,7 @@ use crate::hooks::UserHooks;
 use crate::models_manager::manager::ModelsManager;
 use crate::parse_command::parse_command;
 use crate::parse_turn_item;
+use crate::sensitive_paths::SensitivePathPolicy;
 use crate::stream_events_utils::HandleOutputCtx;
 use crate::stream_events_utils::handle_non_tool_response_item;
 use crate::stream_events_utils::handle_output_item_done;
@@ -88,6 +89,7 @@ use crate::config::Constrained;
 use crate::config::ConstraintResult;
 use crate::config::GhostSnapshotConfig;
 use crate::config::types::ShellEnvironmentPolicy;
+use crate::config::types::UnattestedOutputPolicy;
 use crate::context_manager::ContextManager;
 use crate::environment_context::EnvironmentContext;
 use crate::error::CodexErr;
@@ -365,6 +367,7 @@ pub(crate) struct Session {
     features: Features,
     pub(crate) active_turn: Mutex<Option<ActiveTurn>>,
     pub(crate) services: SessionServices,
+    pub(crate) content_gateway_cache: crate::content_gateway::GatewayCache,
     next_internal_sub_id: AtomicU64,
 }
 
@@ -388,6 +391,11 @@ pub(crate) struct TurnContext {
     pub(crate) shell_environment_policy: ShellEnvironmentPolicy,
     pub(crate) tools_config: ToolsConfig,
     pub(crate) ghost_snapshot: GhostSnapshotConfig,
+    pub(crate) exclusion: crate::config::types::ExclusionConfig,
+    pub(crate) exclusion_counters:
+        std::sync::Arc<std::sync::Mutex<crate::exclusion_counters::ExclusionTurnCounters>>,
+    pub(crate) sensitive_paths: SensitivePathPolicy,
+    pub(crate) unattested_output_policy: UnattestedOutputPolicy,
     pub(crate) final_output_json_schema: Option<Value>,
     pub(crate) codex_linux_sandbox_exe: Option<PathBuf>,
     pub(crate) tool_call_gate: Arc<ReadinessFlag>,
@@ -568,6 +576,15 @@ impl Session {
             shell_environment_policy: per_turn_config.shell_environment_policy.clone(),
             tools_config,
             ghost_snapshot: per_turn_config.ghost_snapshot.clone(),
+            exclusion: per_turn_config.exclusion.clone(),
+            exclusion_counters: std::sync::Arc::new(std::sync::Mutex::new(
+                crate::exclusion_counters::ExclusionTurnCounters::default(),
+            )),
+            sensitive_paths: SensitivePathPolicy::new_with_exclusion(
+                session_configuration.cwd.clone(),
+                per_turn_config.exclusion.clone(),
+            ),
+            unattested_output_policy: per_turn_config.unattested_output_policy,
             final_output_json_schema: None,
             codex_linux_sandbox_exe: per_turn_config.codex_linux_sandbox_exe.clone(),
             tool_call_gate: Arc::new(ReadinessFlag::new()),
@@ -755,6 +772,7 @@ impl Session {
             features: config.features.clone(),
             active_turn: Mutex::new(None),
             services,
+            content_gateway_cache: crate::content_gateway::GatewayCache::new(),
             next_internal_sub_id: AtomicU64::new(0),
         });
 
@@ -2729,6 +2747,15 @@ async fn spawn_review_thread(
         client,
         tools_config,
         ghost_snapshot: parent_turn_context.ghost_snapshot.clone(),
+        exclusion: parent_turn_context.exclusion.clone(),
+        exclusion_counters: std::sync::Arc::new(std::sync::Mutex::new(
+            crate::exclusion_counters::ExclusionTurnCounters::default(),
+        )),
+        sensitive_paths: SensitivePathPolicy::new_with_exclusion(
+            parent_turn_context.cwd.clone(),
+            parent_turn_context.exclusion.clone(),
+        ),
+        unattested_output_policy: parent_turn_context.unattested_output_policy,
         developer_instructions: None,
         user_instructions: None,
         base_instructions: Some(base_instructions.clone()),
@@ -3216,10 +3243,45 @@ async fn try_run_turn(
         prompt.parallel_tool_calls,
         prompt.output_schema.is_some(),
     );
+
+    let prompt = if turn_context.exclusion.enabled
+        && turn_context.exclusion.layer_request_interceptor_enabled()
+    {
+        let mut prompt = prompt.clone();
+        let epoch = turn_context.sensitive_paths.ignore_epoch();
+        let gateway = crate::content_gateway::ContentGateway::new(
+            crate::content_gateway::GatewayConfig::from_exclusion(&turn_context.exclusion),
+        );
+        for item in prompt.input.iter_mut() {
+            let report = gateway.scan_response_item_text_fields(
+                item,
+                &turn_context.sensitive_paths,
+                &sess.content_gateway_cache,
+                epoch,
+            );
+            if report.redacted || report.blocked {
+                let mut counters = turn_context
+                    .exclusion_counters
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                counters.record(
+                    crate::exclusion_counters::ExclusionLayer::Layer4RequestInterceptor,
+                    crate::exclusion_counters::ExclusionSource::Prompt,
+                    "prompt",
+                    report.redacted,
+                    report.blocked,
+                );
+            }
+        }
+        prompt
+    } else {
+        prompt.clone()
+    };
+
     let mut stream = turn_context
         .client
         .clone()
-        .stream(prompt)
+        .stream(&prompt)
         .instrument(trace_span!("stream_request"))
         .or_cancel(&cancellation_token)
         .await??;
@@ -4150,6 +4212,7 @@ mod tests {
             features: config.features.clone(),
             active_turn: Mutex::new(None),
             services,
+            content_gateway_cache: crate::content_gateway::GatewayCache::new(),
             next_internal_sub_id: AtomicU64::new(0),
         };
 
@@ -4251,6 +4314,7 @@ mod tests {
             features: config.features.clone(),
             active_turn: Mutex::new(None),
             services,
+            content_gateway_cache: crate::content_gateway::GatewayCache::new(),
             next_internal_sub_id: AtomicU64::new(0),
         });
 

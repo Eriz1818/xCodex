@@ -8,6 +8,7 @@ use crate::shell::get_shell_by_model_provided_path;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
+use crate::tools::context::ToolProvenance;
 use crate::tools::handlers::apply_patch::intercept_apply_patch;
 use crate::tools::handlers::parse_arguments;
 use crate::tools::registry::ToolHandler;
@@ -221,6 +222,9 @@ impl ToolHandler for UnifiedExecHandler {
             content,
             content_items: None,
             success: Some(true),
+            provenance: ToolProvenance::Shell {
+                cwd: turn.cwd.clone(),
+            },
         })
     }
 }

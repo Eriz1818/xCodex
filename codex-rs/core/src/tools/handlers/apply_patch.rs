@@ -11,10 +11,12 @@ use crate::client_common::tools::ToolSpec;
 use crate::codex::Session;
 use crate::codex::TurnContext;
 use crate::function_tool::FunctionCallError;
+use crate::sensitive_paths::SensitivePathDecision;
 use crate::tools::context::SharedTurnDiffTracker;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
+use crate::tools::context::ToolProvenance;
 use crate::tools::events::ToolEmitter;
 use crate::tools::events::ToolEventCtx;
 use crate::tools::handlers::parse_arguments;
@@ -112,6 +114,30 @@ impl ToolHandler for ApplyPatchHandler {
         let command = vec!["apply_patch".to_string(), patch_input.clone()];
         match codex_apply_patch::maybe_parse_apply_patch_verified(&command, &cwd) {
             codex_apply_patch::MaybeApplyPatchVerified::Body(changes) => {
+                let file_paths = file_paths_for_action(&changes);
+                if file_paths.iter().any(|path| {
+                    turn.sensitive_paths
+                        .decision_discover_with_is_dir(path.as_path(), Some(false))
+                        == SensitivePathDecision::Deny
+                }) {
+                    {
+                        let mut counters = turn
+                            .exclusion_counters
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner);
+                        counters.record(
+                            crate::exclusion_counters::ExclusionLayer::Layer1InputGuards,
+                            crate::exclusion_counters::ExclusionSource::Filesystem,
+                            &tool_name,
+                            /* redacted */ false,
+                            /* blocked */ true,
+                        );
+                    }
+                    return Err(FunctionCallError::RespondToModel(
+                        turn.sensitive_paths.format_denied_message(),
+                    ));
+                }
+
                 match apply_patch::apply_patch(turn.as_ref(), changes).await {
                     InternalApplyPatchInvocation::Output(item) => {
                         let content = item?;
@@ -119,6 +145,9 @@ impl ToolHandler for ApplyPatchHandler {
                             content,
                             content_items: None,
                             success: Some(true),
+                            provenance: ToolProvenance::Filesystem {
+                                path: turn.cwd.clone(),
+                            },
                         })
                     }
                     InternalApplyPatchInvocation::DelegateToExec(apply) => {
@@ -165,6 +194,9 @@ impl ToolHandler for ApplyPatchHandler {
                             content,
                             content_items: None,
                             success: Some(true),
+                            provenance: ToolProvenance::Filesystem {
+                                path: turn.cwd.clone(),
+                            },
                         })
                     }
                 }
@@ -202,6 +234,30 @@ pub(crate) async fn intercept_apply_patch(
 ) -> Result<Option<ToolOutput>, FunctionCallError> {
     match codex_apply_patch::maybe_parse_apply_patch_verified(command, cwd) {
         codex_apply_patch::MaybeApplyPatchVerified::Body(changes) => {
+            let file_paths = file_paths_for_action(&changes);
+            if file_paths.iter().any(|path| {
+                turn.sensitive_paths
+                    .decision_discover_with_is_dir(path.as_path(), Some(false))
+                    == SensitivePathDecision::Deny
+            }) {
+                {
+                    let mut counters = turn
+                        .exclusion_counters
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner);
+                    counters.record(
+                        crate::exclusion_counters::ExclusionLayer::Layer1InputGuards,
+                        crate::exclusion_counters::ExclusionSource::Filesystem,
+                        tool_name,
+                        /* redacted */ false,
+                        /* blocked */ true,
+                    );
+                }
+                return Err(FunctionCallError::RespondToModel(
+                    turn.sensitive_paths.format_denied_message(),
+                ));
+            }
+
             session
                 .record_model_warning(
                     format!("apply_patch was requested via {tool_name}. Use the apply_patch tool instead of exec_command."),
@@ -215,6 +271,9 @@ pub(crate) async fn intercept_apply_patch(
                         content,
                         content_items: None,
                         success: Some(true),
+                        provenance: ToolProvenance::Filesystem {
+                            path: turn.cwd.clone(),
+                        },
                     }))
                 }
                 InternalApplyPatchInvocation::DelegateToExec(apply) => {
@@ -252,6 +311,9 @@ pub(crate) async fn intercept_apply_patch(
                         content,
                         content_items: None,
                         success: Some(true),
+                        provenance: ToolProvenance::Filesystem {
+                            path: turn.cwd.clone(),
+                        },
                     }))
                 }
             }

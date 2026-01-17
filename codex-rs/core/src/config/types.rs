@@ -18,6 +18,139 @@ use serde::de::Error as SerdeError;
 
 pub const DEFAULT_OTEL_ENVIRONMENT: &str = "dev";
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum UnattestedOutputPolicy {
+    Allow,
+    Warn,
+    Confirm,
+    Block,
+}
+
+impl Default for UnattestedOutputPolicy {
+    fn default() -> Self {
+        Self::Allow
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ExclusionOnMatch {
+    Warn,
+    Block,
+    Redact,
+}
+
+impl Default for ExclusionOnMatch {
+    fn default() -> Self {
+        Self::Redact
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ExclusionConfig {
+    /// When `false`, ignore files are not loaded and the content gateway is disabled.
+    #[serde(default = "default_enabled")]
+    pub enabled: bool,
+
+    /// Convenience toggle: enable all 4 layers (L1-L4) when true.
+    #[serde(default)]
+    pub paranoid_mode: bool,
+
+    /// Deterministic path-based matching using ignore files (e.g., for discovery and deny-send).
+    #[serde(default = "default_enabled")]
+    pub path_matching: bool,
+
+    /// Cache content gateway decisions by hashing content (fingerprint cache).
+    #[serde(default = "default_enabled")]
+    pub content_hashing: bool,
+
+    /// Substring/path-like matching in text (e.g., redact ignored path mentions).
+    #[serde(default = "default_enabled")]
+    pub substring_matching: bool,
+
+    /// Secret-pattern scanning in text (defense-in-depth redaction).
+    #[serde(default = "default_enabled")]
+    pub secret_patterns: bool,
+
+    /// Layer 2: sanitize tool outputs (MCP/shell/custom tool outputs) before they reach the model.
+    /// Defaults to `paranoid_mode` when unset.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub layer_output_sanitization: Option<bool>,
+
+    /// Layer 3: enforce the provenance-based send firewall (deny-send for excluded filesystem paths).
+    /// Defaults to `true` when unset.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub layer_send_firewall: Option<bool>,
+
+    /// Layer 4: scan the full prompt payload right before the model request.
+    /// Defaults to `paranoid_mode` when unset.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub layer_request_interceptor: Option<bool>,
+
+    #[serde(default)]
+    pub on_match: ExclusionOnMatch,
+
+    #[serde(default)]
+    pub log_blocked: bool,
+
+    /// When `false`, clients should not render an ephemeral "filtered" banner/toast for this turn.
+    #[serde(default = "default_enabled")]
+    pub show_summary_banner: bool,
+
+    /// When `false`, clients should not add the exclusion summary to transcript/history.
+    #[serde(default = "default_enabled")]
+    pub show_summary_history: bool,
+
+    /// When `true`, block shell tool calls that reference excluded paths before executing.
+    #[serde(default = "default_enabled")]
+    pub preflight_shell_paths: bool,
+
+    /// Repo-root ignore filenames to load (gitignore-style) for exclusion controls.
+    #[serde(default = "default_exclusion_files")]
+    pub files: Vec<String>,
+}
+
+fn default_exclusion_files() -> Vec<String> {
+    vec![".aiexclude".to_string(), ".xcodexignore".to_string()]
+}
+
+impl Default for ExclusionConfig {
+    fn default() -> Self {
+        Self {
+            enabled: default_enabled(),
+            paranoid_mode: false,
+            path_matching: default_enabled(),
+            content_hashing: default_enabled(),
+            substring_matching: default_enabled(),
+            secret_patterns: default_enabled(),
+            layer_output_sanitization: None,
+            layer_send_firewall: None,
+            layer_request_interceptor: None,
+            on_match: ExclusionOnMatch::default(),
+            log_blocked: false,
+            show_summary_banner: default_enabled(),
+            show_summary_history: default_enabled(),
+            preflight_shell_paths: default_enabled(),
+            files: default_exclusion_files(),
+        }
+    }
+}
+
+impl ExclusionConfig {
+    pub fn layer_output_sanitization_enabled(&self) -> bool {
+        self.layer_output_sanitization.unwrap_or(self.paranoid_mode)
+    }
+
+    pub fn layer_send_firewall_enabled(&self) -> bool {
+        self.layer_send_firewall.unwrap_or(true)
+    }
+
+    pub fn layer_request_interceptor_enabled(&self) -> bool {
+        self.layer_request_interceptor.unwrap_or(self.paranoid_mode)
+    }
+}
+
 #[derive(Serialize, Debug, Clone, PartialEq)]
 pub struct McpServerConfig {
     #[serde(flatten)]

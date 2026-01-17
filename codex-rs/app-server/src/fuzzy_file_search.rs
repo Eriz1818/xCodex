@@ -46,6 +46,7 @@ pub(crate) async fn run_fuzzy_file_search(
                 limit_per_root,
                 &search_dir,
                 Vec::new(),
+                Vec::new(),
                 threads,
                 cancel_flag,
                 COMPUTE_INDICES,

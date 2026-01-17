@@ -8,6 +8,7 @@ use crate::function_tool::FunctionCallError;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
+use crate::tools::context::ToolProvenance;
 use crate::tools::handlers::parse_arguments;
 use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
@@ -96,7 +97,12 @@ impl ToolHandler for ReadFileHandler {
     }
 
     async fn handle(&self, invocation: ToolInvocation) -> Result<ToolOutput, FunctionCallError> {
-        let ToolInvocation { payload, turn, .. } = invocation;
+        let ToolInvocation {
+            payload,
+            turn,
+            tool_name,
+            ..
+        } = invocation;
 
         let arguments = match payload {
             ToolPayload::Function { arguments } => arguments,
@@ -137,6 +143,29 @@ impl ToolHandler for ReadFileHandler {
 
         let path = turn.resolve_structured_file_tool_path(Some(file_path));
 
+        if turn
+            .sensitive_paths
+            .decision_discover_with_is_dir(&path, Some(false))
+            == crate::sensitive_paths::SensitivePathDecision::Deny
+        {
+            {
+                let mut counters = turn
+                    .exclusion_counters
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                counters.record(
+                    crate::exclusion_counters::ExclusionLayer::Layer1InputGuards,
+                    crate::exclusion_counters::ExclusionSource::Filesystem,
+                    &tool_name,
+                    /* redacted */ false,
+                    /* blocked */ true,
+                );
+            }
+            return Err(FunctionCallError::RespondToModel(
+                turn.sensitive_paths.format_denied_message(),
+            ));
+        }
+
         let collected = match mode {
             ReadMode::Slice => slice::read(&path, offset, limit).await?,
             ReadMode::Indentation => {
@@ -148,6 +177,7 @@ impl ToolHandler for ReadFileHandler {
             content: collected.join("\n"),
             content_items: None,
             success: Some(true),
+            provenance: ToolProvenance::Filesystem { path },
         })
     }
 }

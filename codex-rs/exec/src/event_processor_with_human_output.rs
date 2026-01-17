@@ -169,6 +169,15 @@ impl EventProcessor for EventProcessorWithHumanOutput {
                     "warning:".style(self.yellow).style(self.bold)
                 );
             }
+            EventMsg::ExclusionSummary(ev) => {
+                ts_msg!(
+                    self,
+                    "{} {} redacted, {} blocked",
+                    "exclusion:".style(self.cyan),
+                    ev.total_redacted,
+                    ev.total_blocked
+                );
+            }
             EventMsg::DeprecationNotice(DeprecationNoticeEvent { summary, details }) => {
                 ts_msg!(
                     self,

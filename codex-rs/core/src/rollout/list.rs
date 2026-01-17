@@ -493,6 +493,7 @@ pub async fn find_thread_path_by_id_str(
         id_str,
         limit,
         &root,
+        Vec::new(),
         exclude,
         threads,
         cancel,

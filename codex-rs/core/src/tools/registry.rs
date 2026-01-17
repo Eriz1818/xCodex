@@ -4,10 +4,15 @@ use std::time::Duration;
 
 use crate::client_common::tools::ToolSpec;
 use crate::function_tool::FunctionCallError;
+use crate::protocol::EventMsg;
+use crate::protocol::ReviewDecision;
+use crate::protocol::WarningEvent;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
+use crate::tools::context::ToolProvenance;
 use async_trait::async_trait;
+use codex_protocol::models::FunctionCallOutputContentItem;
 use codex_protocol::models::ResponseInputItem;
 use codex_utils_readiness::Readiness;
 use tracing::warn;
@@ -64,6 +69,8 @@ impl ToolRegistry {
     ) -> Result<ResponseInputItem, FunctionCallError> {
         let tool_name = invocation.tool_name.clone();
         let call_id_owned = invocation.call_id.clone();
+        let session = invocation.session.clone();
+        let turn = invocation.turn.clone();
         let otel = invocation.turn.client.get_otel_manager();
         let payload_for_response = invocation.payload.clone();
         let log_payload = payload_for_response.log_payload();
@@ -136,10 +143,334 @@ impl ToolRegistry {
                 let output = guard.take().ok_or_else(|| {
                     FunctionCallError::Fatal("tool produced no output".to_string())
                 })?;
+                let output = enforce_sensitive_send_policy(
+                    output,
+                    session.as_ref(),
+                    &turn,
+                    &tool_name,
+                    &call_id_owned,
+                )
+                .await;
                 Ok(output.into_response(&call_id_owned, &payload_for_response))
             }
             Err(err) => Err(err),
         }
+    }
+}
+
+async fn enforce_sensitive_send_policy(
+    output: ToolOutput,
+    session: &crate::codex::Session,
+    turn: &crate::codex::TurnContext,
+    tool_name: &str,
+    call_id: &str,
+) -> ToolOutput {
+    let output = match output {
+        ToolOutput::Function {
+            content: _,
+            content_items: _,
+            success: _,
+            provenance: ToolProvenance::Filesystem { path },
+        } if turn.exclusion.layer_send_firewall_enabled()
+            && turn.sensitive_paths.decision_send(&path)
+                == crate::sensitive_paths::SensitivePathDecision::Deny =>
+        {
+            {
+                let mut counters = turn
+                    .exclusion_counters
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                counters.record(
+                    crate::exclusion_counters::ExclusionLayer::Layer3SendFirewall,
+                    crate::exclusion_counters::ExclusionSource::Filesystem,
+                    tool_name,
+                    /* redacted */ false,
+                    /* blocked */ true,
+                );
+            }
+            ToolOutput::Function {
+                content: turn.sensitive_paths.format_denied_message(),
+                content_items: None,
+                success: Some(false),
+                provenance: ToolProvenance::Filesystem { path },
+            }
+        }
+        other => other,
+    };
+
+    let output = if turn.exclusion.layer_output_sanitization_enabled() {
+        enforce_sensitive_content_gateway(output, session, turn, tool_name)
+    } else {
+        output
+    };
+
+    if !is_unattested_output(&output) {
+        return output;
+    }
+
+    match turn.unattested_output_policy {
+        crate::config::types::UnattestedOutputPolicy::Allow => output,
+        crate::config::types::UnattestedOutputPolicy::Warn => {
+            emit_unattested_output_warning(session, turn, tool_name, call_id, &output).await;
+            output
+        }
+        crate::config::types::UnattestedOutputPolicy::Confirm => {
+            emit_unattested_output_warning(session, turn, tool_name, call_id, &output).await;
+            let provenance = match &output {
+                ToolOutput::Function { provenance, .. } => provenance,
+                ToolOutput::Mcp { provenance, .. } => provenance,
+            };
+            let mut command = vec!["send_unattested_output".to_string(), tool_name.to_string()];
+            command.push(provenance.origin_type().to_string());
+            if let Some(path) = provenance.origin_path() {
+                command.push(path);
+            }
+
+            let decision = session
+                .request_command_approval(
+                    turn,
+                    call_id.to_string(),
+                    command,
+                    turn.cwd.clone(),
+                    Some("unattested MCP output would be sent to the model".to_string()),
+                    None,
+                )
+                .await;
+
+            match decision {
+                ReviewDecision::Approved
+                | ReviewDecision::ApprovedForSession
+                | ReviewDecision::ApprovedExecpolicyAmendment { .. } => output,
+                ReviewDecision::Denied | ReviewDecision::Abort => block_unattested_output(output),
+            }
+        }
+        crate::config::types::UnattestedOutputPolicy::Block => block_unattested_output(output),
+    }
+}
+
+fn enforce_sensitive_content_gateway(
+    output: ToolOutput,
+    session: &crate::codex::Session,
+    turn: &crate::codex::TurnContext,
+    tool_name: &str,
+) -> ToolOutput {
+    let epoch = turn.sensitive_paths.ignore_epoch();
+    let gateway = crate::content_gateway::ContentGateway::new(
+        crate::content_gateway::GatewayConfig::from_exclusion(&turn.exclusion),
+    );
+
+    match output {
+        ToolOutput::Function {
+            content,
+            mut content_items,
+            mut success,
+            provenance,
+        } => {
+            let (content, report) = gateway.scan_text(
+                &content,
+                &turn.sensitive_paths,
+                &session.content_gateway_cache,
+                epoch,
+            );
+            if report.redacted || report.blocked {
+                let mut counters = turn
+                    .exclusion_counters
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                counters.record(
+                    crate::exclusion_counters::ExclusionLayer::Layer2OutputSanitization,
+                    match &provenance {
+                        ToolProvenance::Filesystem { .. } => {
+                            crate::exclusion_counters::ExclusionSource::Filesystem
+                        }
+                        ToolProvenance::Mcp { .. } => {
+                            crate::exclusion_counters::ExclusionSource::Mcp
+                        }
+                        ToolProvenance::Shell { .. } => {
+                            crate::exclusion_counters::ExclusionSource::Shell
+                        }
+                        ToolProvenance::Unattested { .. } => {
+                            crate::exclusion_counters::ExclusionSource::Other
+                        }
+                    },
+                    tool_name,
+                    report.redacted,
+                    report.blocked,
+                );
+            }
+
+            if let Some(items) = &mut content_items {
+                for item in items.iter_mut() {
+                    if let FunctionCallOutputContentItem::InputText { text } = item {
+                        let (next, r) = gateway.scan_text(
+                            text,
+                            &turn.sensitive_paths,
+                            &session.content_gateway_cache,
+                            epoch,
+                        );
+                        *text = next;
+                        if r.redacted || r.blocked {
+                            let mut counters = turn
+                                .exclusion_counters
+                                .lock()
+                                .unwrap_or_else(std::sync::PoisonError::into_inner);
+                            counters.record(
+                                crate::exclusion_counters::ExclusionLayer::Layer2OutputSanitization,
+                                match &provenance {
+                                    ToolProvenance::Filesystem { .. } => {
+                                        crate::exclusion_counters::ExclusionSource::Filesystem
+                                    }
+                                    ToolProvenance::Mcp { .. } => {
+                                        crate::exclusion_counters::ExclusionSource::Mcp
+                                    }
+                                    ToolProvenance::Shell { .. } => {
+                                        crate::exclusion_counters::ExclusionSource::Shell
+                                    }
+                                    ToolProvenance::Unattested { .. } => {
+                                        crate::exclusion_counters::ExclusionSource::Other
+                                    }
+                                },
+                                tool_name,
+                                r.redacted,
+                                r.blocked,
+                            );
+                        }
+                        if r.redacted {
+                            success = Some(false);
+                        }
+                    }
+                }
+            }
+
+            if report.redacted {
+                success = Some(false);
+            }
+
+            ToolOutput::Function {
+                content,
+                content_items,
+                success,
+                provenance,
+            }
+        }
+        ToolOutput::Mcp { result, provenance } => {
+            let mut report = crate::content_gateway::ScanReport::safe();
+            let result = result.map(|mut ok| {
+                let mut scan_string = |s: &mut String| {
+                    let (next, r) = gateway.scan_text(
+                        s,
+                        &turn.sensitive_paths,
+                        &session.content_gateway_cache,
+                        epoch,
+                    );
+                    *s = next;
+                    report.layers.extend(r.layers);
+                    report.redacted |= r.redacted;
+                    report.blocked |= r.blocked;
+                };
+
+                for block in ok.content.iter_mut() {
+                    match block {
+                        mcp_types::ContentBlock::TextContent(text) => scan_string(&mut text.text),
+                        mcp_types::ContentBlock::ResourceLink(link) => {
+                            if let Some(desc) = &mut link.description {
+                                scan_string(desc);
+                            }
+                            if let Some(title) = &mut link.title {
+                                scan_string(title);
+                            }
+                            scan_string(&mut link.name);
+                            scan_string(&mut link.uri);
+                        }
+                        mcp_types::ContentBlock::EmbeddedResource(resource) => {
+                            match &mut resource.resource {
+                                mcp_types::EmbeddedResourceResource::TextResourceContents(text) => {
+                                    if let Some(mime) = &mut text.mime_type {
+                                        scan_string(mime);
+                                    }
+                                    scan_string(&mut text.text);
+                                    scan_string(&mut text.uri);
+                                }
+                                mcp_types::EmbeddedResourceResource::BlobResourceContents(blob) => {
+                                    if let Some(mime) = &mut blob.mime_type {
+                                        scan_string(mime);
+                                    }
+                                    scan_string(&mut blob.uri);
+                                }
+                            }
+                        }
+                        mcp_types::ContentBlock::ImageContent(_)
+                        | mcp_types::ContentBlock::AudioContent(_) => {}
+                    }
+                }
+                ok
+            });
+            if report.redacted || report.blocked {
+                let mut counters = turn
+                    .exclusion_counters
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                counters.record(
+                    crate::exclusion_counters::ExclusionLayer::Layer2OutputSanitization,
+                    crate::exclusion_counters::ExclusionSource::Mcp,
+                    tool_name,
+                    report.redacted,
+                    report.blocked,
+                );
+            }
+            ToolOutput::Mcp { result, provenance }
+        }
+    }
+}
+
+fn is_unattested_output(output: &ToolOutput) -> bool {
+    match output {
+        ToolOutput::Mcp { provenance, .. } => matches!(provenance, ToolProvenance::Mcp { .. }),
+        ToolOutput::Function { provenance, .. } => matches!(
+            provenance,
+            ToolProvenance::Shell { .. }
+                | ToolProvenance::Mcp { .. }
+                | ToolProvenance::Unattested { .. }
+        ),
+    }
+}
+
+async fn emit_unattested_output_warning(
+    session: &crate::codex::Session,
+    turn: &crate::codex::TurnContext,
+    tool_name: &str,
+    call_id: &str,
+    output: &ToolOutput,
+) {
+    let provenance = match output {
+        ToolOutput::Function { provenance, .. } => provenance,
+        ToolOutput::Mcp { provenance, .. } => provenance,
+    };
+    let origin = provenance
+        .origin_path()
+        .unwrap_or_else(|| String::from("<unknown>"));
+    let message = format!(
+        "unattested tool output ({tool_name}, call_id={call_id}, origin={origin}) may contain sensitive data; policy={policy:?}",
+        policy = turn.unattested_output_policy
+    );
+    session
+        .send_event(turn, EventMsg::Warning(WarningEvent { message }))
+        .await;
+}
+
+fn block_unattested_output(output: ToolOutput) -> ToolOutput {
+    let message = "unattested tool output blocked by policy".to_string();
+    match output {
+        ToolOutput::Function { provenance, .. } => ToolOutput::Function {
+            content: message,
+            content_items: None,
+            success: Some(false),
+            provenance,
+        },
+        ToolOutput::Mcp { provenance, .. } => ToolOutput::Mcp {
+            result: Err(message),
+            provenance,
+        },
     }
 }
 

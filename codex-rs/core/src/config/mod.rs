@@ -1,5 +1,6 @@
 use crate::auth::AuthCredentialsStoreMode;
 use crate::config::types::DEFAULT_OTEL_ENVIRONMENT;
+use crate::config::types::ExclusionConfig;
 use crate::config::types::History;
 use crate::config::types::McpServerConfig;
 use crate::config::types::Notice;
@@ -12,6 +13,7 @@ use crate::config::types::ScrollInputMode;
 use crate::config::types::ShellEnvironmentPolicy;
 use crate::config::types::ShellEnvironmentPolicyToml;
 use crate::config::types::Tui;
+use crate::config::types::UnattestedOutputPolicy;
 use crate::config::types::UriBasedFileOpener;
 use crate::config::types::Worktrees;
 use crate::config::types::XtremeMode;
@@ -345,6 +347,9 @@ pub struct Config {
     /// Token budget applied when storing tool/function outputs in the context manager.
     pub tool_output_token_limit: Option<usize>,
 
+    /// How Codex should treat tool output that cannot be attributed to a specific path/source.
+    pub unattested_output_policy: UnattestedOutputPolicy,
+
     /// Directory containing all Codex state (defaults to `~/.codex` but can be
     /// overridden by the `CODEX_HOME` environment variable).
     pub codex_home: PathBuf,
@@ -402,6 +407,9 @@ pub struct Config {
 
     /// Centralized feature flags; source of truth for feature gating.
     pub features: Features,
+
+    /// Sensitive-path exclusion configuration (ignore files + outbound gateway).
+    pub exclusion: ExclusionConfig,
 
     /// The active profile name used to derive this `Config` (if any).
     pub active_profile: Option<String>,
@@ -833,6 +841,9 @@ pub struct ConfigToml {
     /// Token budget applied when storing tool/function outputs in the context manager.
     pub tool_output_token_limit: Option<usize>,
 
+    /// Policy for whether to send unattested tool output (e.g. MCP output) to the model.
+    pub unattested_output_policy: Option<UnattestedOutputPolicy>,
+
     /// Profile to use from the `profiles` map.
     pub profile: Option<String>,
 
@@ -881,6 +892,10 @@ pub struct ConfigToml {
     /// Centralized feature flags (new). Prefer this over individual toggles.
     #[serde(default)]
     pub features: Option<FeaturesToml>,
+
+    /// Sensitive-path exclusion configuration (ignore files + outbound gateway).
+    #[serde(default)]
+    pub exclusion: Option<ExclusionConfig>,
 
     /// Settings for ghost snapshots (used for undo).
     #[serde(default)]
@@ -1529,6 +1544,10 @@ impl Config {
         };
 
         let features = Features::from_config(&cfg, &config_profile, feature_overrides);
+        let exclusion = derive_exclusion_config(
+            config_profile.exclusion.clone().or(cfg.exclusion.clone()),
+            &features,
+        );
         #[cfg(target_os = "windows")]
         {
             // Base flag controls sandbox on/off; elevated only applies when base is enabled.
@@ -1776,6 +1795,7 @@ impl Config {
                 })
                 .collect(),
             tool_output_token_limit: cfg.tool_output_token_limit,
+            unattested_output_policy: cfg.unattested_output_policy.unwrap_or_default(),
             codex_home,
             config_layer_stack,
             history,
@@ -1807,6 +1827,7 @@ impl Config {
             use_experimental_unified_exec_tool,
             ghost_snapshot,
             features,
+            exclusion,
             active_profile: active_profile_name,
             active_project,
             windows_wsl_setup_acknowledged: cfg.windows_wsl_setup_acknowledged.unwrap_or(false),
@@ -2070,6 +2091,32 @@ pub fn log_dir(cfg: &Config) -> std::io::Result<PathBuf> {
     let mut p = cfg.codex_home.clone();
     p.push("log");
     Ok(p)
+}
+
+fn derive_exclusion_config(user: Option<ExclusionConfig>, _features: &Features) -> ExclusionConfig {
+    let mut cfg = user.unwrap_or_default();
+    cfg.files = normalize_exclusion_files(cfg.files);
+    cfg
+}
+
+fn normalize_exclusion_files(files: Vec<String>) -> Vec<String> {
+    let mut out = vec![".aiexclude".to_string(), ".xcodexignore".to_string()];
+
+    for raw in files {
+        let name = raw.trim();
+        if name.is_empty() || name == "." || name == ".." {
+            continue;
+        }
+        if name.contains('/') || name.contains('\\') {
+            continue;
+        }
+        if out.iter().any(|existing| existing == name) {
+            continue;
+        }
+        out.push(name.to_string());
+    }
+
+    out
 }
 
 #[cfg(test)]
@@ -3801,6 +3848,7 @@ model_verbosity = "high"
                 project_doc_max_bytes: PROJECT_DOC_MAX_BYTES,
                 project_doc_fallback_filenames: Vec::new(),
                 tool_output_token_limit: None,
+                unattested_output_policy: UnattestedOutputPolicy::Allow,
                 codex_home: fixture.codex_home(),
                 config_layer_stack: Default::default(),
                 history: History::default(),
@@ -3823,6 +3871,7 @@ model_verbosity = "high"
                 use_experimental_unified_exec_tool: false,
                 ghost_snapshot: GhostSnapshotConfig::default(),
                 features: Features::with_defaults(),
+                exclusion: ExclusionConfig::default(),
                 active_profile: Some("o3".to_string()),
                 active_project: ProjectConfig { trust_level: None },
                 windows_wsl_setup_acknowledged: false,
@@ -3900,6 +3949,7 @@ model_verbosity = "high"
             project_doc_max_bytes: PROJECT_DOC_MAX_BYTES,
             project_doc_fallback_filenames: Vec::new(),
             tool_output_token_limit: None,
+            unattested_output_policy: UnattestedOutputPolicy::Allow,
             codex_home: fixture.codex_home(),
             config_layer_stack: Default::default(),
             history: History::default(),
@@ -3922,6 +3972,7 @@ model_verbosity = "high"
             use_experimental_unified_exec_tool: false,
             ghost_snapshot: GhostSnapshotConfig::default(),
             features: Features::with_defaults(),
+            exclusion: ExclusionConfig::default(),
             active_profile: Some("gpt3".to_string()),
             active_project: ProjectConfig { trust_level: None },
             windows_wsl_setup_acknowledged: false,
@@ -4014,6 +4065,7 @@ model_verbosity = "high"
             project_doc_max_bytes: PROJECT_DOC_MAX_BYTES,
             project_doc_fallback_filenames: Vec::new(),
             tool_output_token_limit: None,
+            unattested_output_policy: UnattestedOutputPolicy::Allow,
             codex_home: fixture.codex_home(),
             config_layer_stack: Default::default(),
             history: History::default(),
@@ -4036,6 +4088,7 @@ model_verbosity = "high"
             use_experimental_unified_exec_tool: false,
             ghost_snapshot: GhostSnapshotConfig::default(),
             features: Features::with_defaults(),
+            exclusion: ExclusionConfig::default(),
             active_profile: Some("zdr".to_string()),
             active_project: ProjectConfig { trust_level: None },
             windows_wsl_setup_acknowledged: false,
@@ -4114,6 +4167,7 @@ model_verbosity = "high"
             project_doc_max_bytes: PROJECT_DOC_MAX_BYTES,
             project_doc_fallback_filenames: Vec::new(),
             tool_output_token_limit: None,
+            unattested_output_policy: UnattestedOutputPolicy::Allow,
             codex_home: fixture.codex_home(),
             config_layer_stack: Default::default(),
             history: History::default(),
@@ -4136,6 +4190,7 @@ model_verbosity = "high"
             use_experimental_unified_exec_tool: false,
             ghost_snapshot: GhostSnapshotConfig::default(),
             features: Features::with_defaults(),
+            exclusion: ExclusionConfig::default(),
             active_profile: Some("gpt5".to_string()),
             active_project: ProjectConfig { trust_level: None },
             windows_wsl_setup_acknowledged: false,

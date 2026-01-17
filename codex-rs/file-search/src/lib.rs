@@ -1,4 +1,6 @@
 use ignore::WalkBuilder;
+use ignore::gitignore::Gitignore;
+use ignore::gitignore::GitignoreBuilder;
 use ignore::overrides::OverrideBuilder;
 use nucleo_matcher::Matcher;
 use nucleo_matcher::Utf32Str;
@@ -110,6 +112,7 @@ pub async fn run_main<T: Reporter>(
         &pattern_text,
         limit,
         &search_directory,
+        default_ignore_filenames(),
         exclude,
         threads,
         cancel_flag,
@@ -136,6 +139,7 @@ pub fn run(
     pattern_text: &str,
     limit: NonZero<usize>,
     search_directory: &Path,
+    ignore_filenames: Vec<String>,
     exclude: Vec<String>,
     threads: NonZero<usize>,
     cancel_flag: Arc<AtomicBool>,
@@ -192,6 +196,8 @@ pub fn run(
     }
     let walker = walk_builder.build_parallel();
 
+    let root_ignore = RootIgnore::new(search_directory, ignore_filenames);
+
     // Each worker created by `WalkParallel::run()` will have its own
     // `BestMatchesList` to update.
     let index_counter = AtomicUsize::new(0);
@@ -206,8 +212,21 @@ pub fn run(
         let mut processed = 0;
 
         let cancel = cancel_flag.clone();
+        let root_ignore = root_ignore.clone();
 
         Box::new(move |entry| {
+            if root_ignore.is_ignored(&entry) {
+                if entry
+                    .as_ref()
+                    .ok()
+                    .and_then(|entry| entry.file_type())
+                    .is_some_and(|ft| ft.is_dir())
+                {
+                    return ignore::WalkState::Skip;
+                }
+                return ignore::WalkState::Continue;
+            }
+
             if let Some(path) = get_file_path(&entry, search_directory) {
                 best_list.insert(path);
             }
@@ -305,6 +324,99 @@ pub fn run(
         matches,
         total_match_count,
     })
+}
+
+fn default_ignore_filenames() -> Vec<String> {
+    vec![".aiexclude".to_string(), ".xcodexignore".to_string()]
+}
+
+#[derive(Clone, Debug)]
+struct RootIgnore {
+    repo_root: Option<std::path::PathBuf>,
+    ignore_filenames: Vec<String>,
+    matcher: Option<Arc<Gitignore>>,
+}
+
+impl RootIgnore {
+    fn new(search_directory: &Path, mut ignore_filenames: Vec<String>) -> Self {
+        if ignore_filenames.is_empty() {
+            ignore_filenames = default_ignore_filenames();
+        }
+
+        let repo_root = find_git_repo_root(search_directory);
+        let matcher = repo_root.as_ref().and_then(|root| {
+            let mut builder = GitignoreBuilder::new(root);
+            let mut saw_any = false;
+            for name in &ignore_filenames {
+                if name.trim().is_empty() || name.contains('/') || name.contains('\\') {
+                    continue;
+                }
+                let path = root.join(name);
+                if !path.is_file() {
+                    continue;
+                }
+                builder.add(path);
+                saw_any = true;
+            }
+            if !saw_any {
+                return None;
+            }
+            builder.build().ok().map(Arc::new)
+        });
+
+        Self {
+            repo_root,
+            ignore_filenames,
+            matcher,
+        }
+    }
+
+    fn is_ignored(&self, entry_result: &Result<ignore::DirEntry, ignore::Error>) -> bool {
+        let entry = match entry_result {
+            Ok(entry) => entry,
+            Err(_) => return false,
+        };
+        let Some(repo_root) = self.repo_root.as_ref() else {
+            return false;
+        };
+        let Some(matcher) = self.matcher.as_ref() else {
+            return self.is_ignore_file(entry.path());
+        };
+
+        if self.is_ignore_file(entry.path()) {
+            return true;
+        }
+
+        let Ok(relative) = entry.path().strip_prefix(repo_root) else {
+            return false;
+        };
+        let is_dir = entry.file_type().is_some_and(|ft| ft.is_dir());
+        matcher
+            .matched_path_or_any_parents(relative, is_dir)
+            .is_ignore()
+    }
+
+    fn is_ignore_file(&self, path: &Path) -> bool {
+        let Some(name) = path.file_name().and_then(|p| p.to_str()) else {
+            return false;
+        };
+        self.ignore_filenames
+            .iter()
+            .any(|candidate| candidate == name)
+    }
+}
+
+fn find_git_repo_root(start: &Path) -> Option<std::path::PathBuf> {
+    let mut current = start.to_path_buf();
+    loop {
+        let candidate = current.join(".git");
+        if candidate.exists() {
+            return Some(current);
+        }
+        if !current.pop() {
+            return None;
+        }
+    }
 }
 
 /// Sort matches in-place by descending score, then ascending path.

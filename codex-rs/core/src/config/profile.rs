@@ -33,6 +33,9 @@ pub struct ConfigProfile {
     /// Optional feature toggles scoped to this profile.
     #[serde(default)]
     pub features: Option<crate::features::FeaturesToml>,
+    /// Sensitive-path exclusion configuration scoped to this profile.
+    #[serde(default)]
+    pub exclusion: Option<crate::config::types::ExclusionConfig>,
     pub oss_provider: Option<String>,
 }
 

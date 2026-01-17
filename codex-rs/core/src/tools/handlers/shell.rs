@@ -13,6 +13,7 @@ use crate::shell::Shell;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
+use crate::tools::context::ToolProvenance;
 use crate::tools::events::ToolEmitter;
 use crate::tools::events::ToolEventCtx;
 use crate::tools::handlers::apply_patch::intercept_apply_patch;
@@ -234,6 +235,39 @@ impl ShellHandler {
             return Ok(output);
         }
 
+        if turn.exclusion.enabled
+            && turn.exclusion.preflight_shell_paths
+            && turn.exclusion.path_matching
+            && crate::exclusion_preflight::shell_command_references_excluded_paths(
+                &exec_params.command,
+                &exec_params.cwd,
+                &turn.sensitive_paths,
+            )
+        {
+            {
+                let mut counters = turn
+                    .exclusion_counters
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                counters.record(
+                    crate::exclusion_counters::ExclusionLayer::Layer1InputGuards,
+                    crate::exclusion_counters::ExclusionSource::Shell,
+                    tool_name,
+                    /* redacted */ false,
+                    /* blocked */ true,
+                );
+            }
+
+            return Ok(ToolOutput::Function {
+                content: turn.sensitive_paths.format_denied_message(),
+                content_items: None,
+                success: Some(false),
+                provenance: ToolProvenance::Shell {
+                    cwd: exec_params.cwd.clone(),
+                },
+            });
+        }
+
         let source = ExecCommandSource::Agent;
         let emitter = ToolEmitter::shell(
             exec_params.command.clone(),
@@ -283,6 +317,9 @@ impl ShellHandler {
             content,
             content_items: None,
             success: Some(true),
+            provenance: ToolProvenance::Shell {
+                cwd: exec_params.cwd.clone(),
+            },
         })
     }
 }
