@@ -7,6 +7,7 @@ expression: "render_lines_with_width(&view, 56)"
                                                         
 › 1. Refresh worktrees (⌥ + r)                          
   2. Worktrees settings… (⌥ + s)                        
-  3. Worktree doctor (⌥ + d)                            
+  3. Create worktree… (⌥ + i)                           
+  4. Worktree doctor (⌥ + d)                            
                                                         
   Press enter to confirm or esc to go back
