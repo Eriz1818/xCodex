@@ -494,6 +494,12 @@ pub struct Tui {
     #[serde(default)]
     pub status_bar_show_worktree: bool,
 
+    /// When true, render the active composer with only top/bottom borders.
+    ///
+    /// Defaults to `false`.
+    #[serde(default)]
+    pub composer_minimal_borders: bool,
+
     /// When true, the TUI asks for confirmation before exiting if external hooks are still running.
     /// Defaults to `true`.
     #[serde(default = "default_true")]
@@ -612,6 +618,43 @@ pub struct Tui {
     /// scrollback in terminal multiplexers like Zellij that follow the xterm spec.
     #[serde(default)]
     pub alternate_screen: AltScreenMode,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ThemeMode {
+    Auto,
+    Light,
+    Dark,
+}
+
+impl Default for ThemeMode {
+    fn default() -> Self {
+        Self::Auto
+    }
+}
+
+/// Global theme configuration for xcodex.
+///
+/// Themes are stored as YAML files under `dir` (defaults to `$CODEX_HOME/themes`).
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default)]
+pub struct Themes {
+    /// Directory containing user theme YAML files (`*.yml` / `*.yaml`).
+    ///
+    /// Defaults to `$CODEX_HOME/themes`.
+    pub dir: Option<AbsolutePathBuf>,
+
+    /// Select whether to use the light or dark theme explicitly, or auto-select.
+    ///
+    /// `auto` is resolved by the frontend (TUI) based on the current terminal background.
+    #[serde(default)]
+    pub theme_mode: ThemeMode,
+
+    /// Theme name used when in light mode (or when `theme_mode = "light"`).
+    pub light: Option<String>,
+
+    /// Theme name used when in dark mode (or when `theme_mode = "dark"`).
+    pub dark: Option<String>,
 }
 
 /// Collection of settings that affect git worktree behavior.

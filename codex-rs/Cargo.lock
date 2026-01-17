@@ -1887,6 +1887,7 @@ dependencies = [
  "url",
  "uuid",
  "vt100",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]

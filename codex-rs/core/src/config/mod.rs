@@ -213,6 +213,9 @@ pub struct Config {
     /// When true, the TUI asks for confirmation before exiting if external hooks are still running.
     pub tui_confirm_exit_with_running_hooks: bool,
 
+    /// Theme configuration for xcodex (theme selection + theme directory).
+    pub themes: crate::config::types::Themes,
+
     /// Override the events-per-wheel-tick factor for TUI2 scroll normalization.
     ///
     /// This is the same `tui.scroll_events_per_tick` value from `config.toml`, plumbed through the
@@ -282,6 +285,11 @@ pub struct Config {
     ///
     /// This is the same `tui.status_bar_show_worktree` value from `config.toml` (see [`Tui`]).
     pub tui_status_bar_show_worktree: bool,
+
+    /// When true, render the active composer with only top/bottom borders.
+    ///
+    /// This is the same `tui.composer_minimal_borders` value from `config.toml` (see [`Tui`]).
+    pub tui_composer_minimal_borders: bool,
 
     /// When true, show verbose tool output in the transcript (including large file reads).
     ///
@@ -850,6 +858,9 @@ pub struct ConfigToml {
 
     /// Collection of settings that are specific to the TUI.
     pub tui: Option<Tui>,
+
+    /// Global theme configuration for xcodex.
+    pub themes: Option<crate::config::types::Themes>,
 
     /// Settings that affect worktree behavior.
     pub worktrees: Option<Worktrees>,
@@ -1839,6 +1850,7 @@ impl Config {
                 .as_ref()
                 .map(|t| t.confirm_exit_with_running_hooks)
                 .unwrap_or(true),
+            themes: cfg.themes.unwrap_or_default(),
             tui_scroll_events_per_tick: cfg.tui.as_ref().and_then(|t| t.scroll_events_per_tick),
             tui_scroll_wheel_lines: cfg.tui.as_ref().and_then(|t| t.scroll_wheel_lines),
             tui_scroll_trackpad_lines: cfg.tui.as_ref().and_then(|t| t.scroll_trackpad_lines),
@@ -1874,6 +1886,11 @@ impl Config {
                 .tui
                 .as_ref()
                 .map(|t| t.status_bar_show_worktree)
+                .unwrap_or(false),
+            tui_composer_minimal_borders: cfg
+                .tui
+                .as_ref()
+                .map(|t| t.composer_minimal_borders)
                 .unwrap_or(false),
             tui_verbose_tool_output: cfg
                 .tui
@@ -2193,6 +2210,7 @@ persistence = "none"
                 verbose_tool_output: false,
                 status_bar_show_git_branch: false,
                 status_bar_show_worktree: false,
+                composer_minimal_borders: false,
                 confirm_exit_with_running_hooks: true,
                 scroll_events_per_tick: None,
                 scroll_wheel_lines: None,
@@ -3837,6 +3855,7 @@ model_verbosity = "high"
                 tui_ramps_build: true,
                 tui_ramps_devops: true,
                 tui_confirm_exit_with_running_hooks: true,
+                themes: crate::config::types::Themes::default(),
                 analytics_enabled: Some(true),
                 feedback_enabled: true,
                 tui_scroll_events_per_tick: None,
@@ -3851,6 +3870,7 @@ model_verbosity = "high"
                 tui_alternate_screen: AltScreenMode::Auto,
                 tui_status_bar_show_git_branch: false,
                 tui_status_bar_show_worktree: false,
+                tui_composer_minimal_borders: false,
                 tui_verbose_tool_output: false,
                 tui_mouse_capture: true,
                 otel: OtelConfig::default(),
@@ -3936,6 +3956,7 @@ model_verbosity = "high"
             tui_ramps_build: true,
             tui_ramps_devops: true,
             tui_confirm_exit_with_running_hooks: true,
+            themes: crate::config::types::Themes::default(),
             analytics_enabled: Some(true),
             feedback_enabled: true,
             tui_scroll_events_per_tick: None,
@@ -3950,6 +3971,7 @@ model_verbosity = "high"
             tui_alternate_screen: AltScreenMode::Auto,
             tui_status_bar_show_git_branch: false,
             tui_status_bar_show_worktree: false,
+            tui_composer_minimal_borders: false,
             tui_verbose_tool_output: false,
             tui_mouse_capture: true,
             otel: OtelConfig::default(),
@@ -4050,6 +4072,7 @@ model_verbosity = "high"
             tui_ramps_build: true,
             tui_ramps_devops: true,
             tui_confirm_exit_with_running_hooks: true,
+            themes: crate::config::types::Themes::default(),
             analytics_enabled: Some(false),
             feedback_enabled: true,
             tui_scroll_events_per_tick: None,
@@ -4064,6 +4087,7 @@ model_verbosity = "high"
             tui_alternate_screen: AltScreenMode::Auto,
             tui_status_bar_show_git_branch: false,
             tui_status_bar_show_worktree: false,
+            tui_composer_minimal_borders: false,
             tui_verbose_tool_output: false,
             tui_mouse_capture: true,
             otel: OtelConfig::default(),
@@ -4150,6 +4174,7 @@ model_verbosity = "high"
             tui_ramps_build: true,
             tui_ramps_devops: true,
             tui_confirm_exit_with_running_hooks: true,
+            themes: crate::config::types::Themes::default(),
             analytics_enabled: Some(true),
             feedback_enabled: true,
             tui_scroll_events_per_tick: None,
@@ -4164,6 +4189,7 @@ model_verbosity = "high"
             tui_alternate_screen: AltScreenMode::Auto,
             tui_status_bar_show_git_branch: false,
             tui_status_bar_show_worktree: false,
+            tui_composer_minimal_borders: false,
             tui_verbose_tool_output: false,
             tui_mouse_capture: true,
             otel: OtelConfig::default(),
