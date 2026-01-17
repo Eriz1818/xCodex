@@ -429,7 +429,7 @@ impl ThemeSelectorOverlay {
             return 0;
         };
 
-        let user_style = crate::theme::transcript_style().patch(user_message_style());
+        let _user_style = crate::theme::transcript_style().patch(user_message_style());
         let diff_add = if diff_bg {
             crate::theme::diff_add_style()
         } else {
@@ -473,10 +473,6 @@ impl ThemeSelectorOverlay {
         let approval_lines = buffer_to_lines(&approval_buf);
 
         let mut lines: Vec<Line<'static>> = vec![
-            Line::from("").style(user_style),
-            Line::from(vec!["› ".bold().dim(), "Show me the diff and explain it.".into()])
-                .style(user_style),
-            Line::from("").style(user_style),
             Line::from(vec![
                 Span::from("config.yaml").set_style(diff_hunk),
                 " ".into(),
@@ -500,16 +496,23 @@ impl ThemeSelectorOverlay {
                 "link: ".dim(),
                 "https://example.com".set_style(crate::theme::link_style().underlined()),
             ]),
+        ];
+
+        let user_cell = UserHistoryCell {
+            message: "group these conflicts into batches for me so I can help better and we will then be able to resolve multiple conflicts at once.".to_string(),
+        };
+        lines.extend(user_cell.display_lines(area.width));
+
+        lines.extend([
             Line::from(""),
-            Line::from("Adjusting background colors".bold()),
+            Line::from("Implementing user requests")
+                .style(thought_style.add_modifier(Modifier::BOLD)),
             Line::from(""),
-            Line::from("Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua.")
-                .style(thought_style),
-            Line::from("Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat.")
+            Line::from("I need to remove the diff preview line and replace the hunk header with something more intuitive. I’ll also update the directory in the info box and ensure scroll behavior matches the real transcript experience.")
                 .style(thought_style),
             Line::from(""),
             Line::from(vec!["Approval required:".set_style(crate::theme::warning_style().bold())]),
-        ];
+        ]);
         lines.extend(approval_lines);
         lines.extend([
             Line::from(""),
