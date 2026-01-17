@@ -111,6 +111,7 @@ const KEY_TAB: KeyBinding = key_hint::plain(KeyCode::Tab);
 const KEY_Q: KeyBinding = key_hint::plain(KeyCode::Char('q'));
 const KEY_ESC: KeyBinding = key_hint::plain(KeyCode::Esc);
 const KEY_ENTER: KeyBinding = key_hint::plain(KeyCode::Enter);
+const KEY_H: KeyBinding = key_hint::plain(KeyCode::Char('h'));
 const KEY_CTRL_T: KeyBinding = key_hint::ctrl(KeyCode::Char('t'));
 const KEY_CTRL_C: KeyBinding = key_hint::ctrl(KeyCode::Char('c'));
 const KEY_D: KeyBinding = key_hint::plain(KeyCode::Char('d'));
@@ -452,11 +453,10 @@ impl ThemeSelectorOverlay {
         let approval_lines = buffer_to_lines(&approval_buf);
 
         let mut lines: Vec<Line<'static>> = vec![
-            Line::from(""),
-            Line::from(vec![
-                "› ".bold().dim(),
-                Span::from("Show me the diff and explain it.").set_style(user_style),
-            ]),
+            Line::from("").style(user_style),
+            Line::from(vec!["› ".bold().dim(), "Show me the diff and explain it.".into()])
+                .style(user_style),
+            Line::from("").style(user_style),
             Line::from(vec![
                 Span::from("config.yaml").set_style(diff_hunk),
                 " ".into(),
@@ -481,14 +481,11 @@ impl ThemeSelectorOverlay {
                 "https://example.com".set_style(crate::theme::link_style().underlined()),
             ]),
             Line::from(""),
-            Line::from("Adjusting background colors").style(thought_style),
+            Line::from("Adjusting background colors".bold()),
             Line::from(""),
-            Line::from("In `styles_for`, I noticed that `composer_bg` can end up too close to the transcript background. I want the composer surface to be derived from the theme’s background while still reading as slightly lighter, without depending on terminal defaults.")
+            Line::from("Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua.")
                 .style(thought_style),
-            Line::from(""),
-            Line::from("Inspecting color mapping").style(thought_style),
-            Line::from(""),
-            Line::from("I’ll check how `ThemeColorResolved` flows into the TUI styles and ensure we only blend based on the theme’s resolved RGB background (not the terminal’s fg/bg). Then the composer, status, and suggestion surfaces should stay consistent across terminals.")
+            Line::from("Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat.")
                 .style(thought_style),
             Line::from(""),
             Line::from(vec!["Approval required:".set_style(crate::theme::warning_style().bold())]),
@@ -584,7 +581,7 @@ impl ThemeSelectorOverlay {
                 Line::from(vec![
                     "directory:".dim(),
                     " ".into(),
-                    "~/Dev/Pyfun/codex".into(),
+                    "~/Dev/pyFun/skynet/xcodex".into(),
                 ]),
             ];
             Paragraph::new(Text::from(info))
@@ -1300,6 +1297,7 @@ pub(crate) struct TranscriptOverlay {
     view: PagerView,
     cells: Vec<Arc<dyn HistoryCell>>,
     highlight_cell: Option<usize>,
+    highlight_user_messages: bool,
     is_done: bool,
 }
 
@@ -1307,12 +1305,13 @@ impl TranscriptOverlay {
     pub(crate) fn new(transcript_cells: Vec<Arc<dyn HistoryCell>>) -> Self {
         Self {
             view: PagerView::new(
-                Self::render_cells(&transcript_cells, None),
+                Self::render_cells(&transcript_cells, None, false),
                 "T R A N S C R I P T".to_string(),
                 usize::MAX,
             ),
             cells: transcript_cells,
             highlight_cell: None,
+            highlight_user_messages: false,
             is_done: false,
         }
     }
@@ -1320,6 +1319,7 @@ impl TranscriptOverlay {
     fn render_cells(
         cells: &[Arc<dyn HistoryCell>],
         highlight_cell: Option<usize>,
+        highlight_user_messages: bool,
     ) -> Vec<Box<dyn Renderable>> {
         cells
             .iter()
@@ -1327,12 +1327,17 @@ impl TranscriptOverlay {
             .flat_map(|(i, c)| {
                 let mut v: Vec<Box<dyn Renderable>> = Vec::new();
                 let mut cell_renderable = if c.as_any().is::<UserHistoryCell>() {
+                    let base_style = if highlight_user_messages {
+                        crate::theme::user_message_highlight_style()
+                    } else {
+                        user_message_style()
+                    };
                     Box::new(CachedRenderable::new(CellRenderable {
                         cell: c.clone(),
                         style: if highlight_cell == Some(i) {
-                            user_message_style().reversed()
+                            base_style.reversed()
                         } else {
-                            user_message_style()
+                            base_style
                         },
                     })) as Box<dyn Renderable>
                 } else {
@@ -1356,7 +1361,11 @@ impl TranscriptOverlay {
     pub(crate) fn insert_cell(&mut self, cell: Arc<dyn HistoryCell>) {
         let follow_bottom = self.view.is_scrolled_to_bottom();
         self.cells.push(cell);
-        self.view.renderables = Self::render_cells(&self.cells, self.highlight_cell);
+        self.view.renderables = Self::render_cells(
+            &self.cells,
+            self.highlight_cell,
+            self.highlight_user_messages,
+        );
         if follow_bottom {
             self.view.scroll_offset = usize::MAX;
         }
@@ -1364,7 +1373,11 @@ impl TranscriptOverlay {
 
     pub(crate) fn set_highlight_cell(&mut self, cell: Option<usize>) {
         self.highlight_cell = cell;
-        self.view.renderables = Self::render_cells(&self.cells, self.highlight_cell);
+        self.view.renderables = Self::render_cells(
+            &self.cells,
+            self.highlight_cell,
+            self.highlight_user_messages,
+        );
         if let Some(idx) = self.highlight_cell {
             self.view.scroll_chunk_into_view(idx);
         }
@@ -1377,6 +1390,7 @@ impl TranscriptOverlay {
 
         let mut pairs: Vec<(&[KeyBinding], &str)> =
             vec![(&[KEY_Q], "to quit"), (&[KEY_ESC], "to edit prev")];
+        pairs.push((&[KEY_H], "highlight users"));
         if self.highlight_cell.is_some() {
             pairs.push((&[KEY_ENTER], "to edit message"));
         }
@@ -1398,6 +1412,16 @@ impl TranscriptOverlay {
             TuiEvent::Key(key_event) => match key_event {
                 e if KEY_Q.is_press(e) || KEY_CTRL_C.is_press(e) || KEY_CTRL_T.is_press(e) => {
                     self.is_done = true;
+                    Ok(())
+                }
+                e if KEY_H.is_press(e) => {
+                    self.highlight_user_messages = !self.highlight_user_messages;
+                    self.view.renderables = Self::render_cells(
+                        &self.cells,
+                        self.highlight_cell,
+                        self.highlight_user_messages,
+                    );
+                    tui.frame_requester().schedule_frame();
                     Ok(())
                 }
                 other => self.view.handle_key_event(tui, other),
