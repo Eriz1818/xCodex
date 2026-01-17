@@ -968,6 +968,10 @@ impl ChatWidget {
         self.bottom_pane.set_mcp_startup_banner(message);
     }
 
+    fn set_exclusion_summary_banner(&mut self, message: Option<String>) {
+        self.bottom_pane.set_exclusion_summary_banner(message);
+    }
+
     fn parse_timeout_seconds(error: &str) -> Option<u64> {
         let lower = error.to_ascii_lowercase();
         if !lower.contains("timed out") {
@@ -2681,6 +2685,7 @@ impl ChatWidget {
         // MCP startup warnings should not remain pinned once the user proceeds with any prompt.
         if !(user_message.text.trim().is_empty() && user_message.image_paths.is_empty()) {
             self.set_mcp_startup_banner(None);
+            self.set_exclusion_summary_banner(None);
         }
         if self.bottom_pane.is_task_running() {
             self.queued_user_messages.push_back(user_message);
@@ -4091,6 +4096,7 @@ impl ChatWidget {
                 self.on_rate_limit_snapshot(ev.rate_limits);
             }
             EventMsg::Warning(WarningEvent { message }) => self.on_warning(message),
+            EventMsg::ExclusionSummary(ev) => self.on_exclusion_summary(ev),
             EventMsg::Error(ErrorEvent { message, .. }) => self.on_error(message),
             EventMsg::McpStartupUpdate(ev) => self.on_mcp_startup_update(ev),
             EventMsg::McpStartupComplete(ev) => self.on_mcp_startup_complete(ev),
@@ -4169,6 +4175,23 @@ impl ChatWidget {
             | EventMsg::AgentMessageContentDelta(_)
             | EventMsg::ReasoningContentDelta(_)
             | EventMsg::ReasoningRawContentDelta(_) => {}
+        }
+    }
+
+    fn on_exclusion_summary(&mut self, event: codex_protocol::protocol::ExclusionSummaryEvent) {
+        if self.config.exclusion.show_summary_banner {
+            if event.total_redacted > 0 || event.total_blocked > 0 {
+                self.set_exclusion_summary_banner(Some(format!(
+                    "Filtered: {} redacted, {} blocked",
+                    event.total_redacted, event.total_blocked
+                )));
+            } else {
+                self.set_exclusion_summary_banner(None);
+            }
+        }
+
+        if self.config.exclusion.show_summary_history {
+            self.add_to_history(history_cell::new_exclusion_summary(event));
         }
     }
 
