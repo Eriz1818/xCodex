@@ -455,18 +455,9 @@ impl ThemeSelectorOverlay {
                 Span::from("Show me the diff and explain it.").set_style(user_style),
             ]),
             Line::from(vec![
-                "  ".into(),
-                "diff preview ".dim(),
-                if diff_bg {
-                    "(bg highlight)".dim()
-                } else {
-                    "(text-only)".dim()
-                },
-            ]),
-            Line::from(vec![
-                Span::from("@@ -1,3 +1,4 @@").set_style(diff_hunk),
+                Span::from("config.yaml").set_style(diff_hunk),
                 " ".into(),
-                "config".dim(),
+                "(example change)".dim(),
             ]),
             Line::from(vec![Span::from("- old line").set_style(diff_del)]),
             Line::from(vec![Span::from("+ new line").set_style(diff_add)]),
