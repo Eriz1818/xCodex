@@ -16,6 +16,7 @@ pub(crate) struct ThemeStyles {
     composer: Style,
     status: Style,
     selection: Style,
+    user_message_highlight: Style,
     dim: Style,
     border: Style,
     accent: Style,
@@ -131,6 +132,10 @@ pub(crate) fn composer_style() -> Style {
 
 pub(crate) fn status_style() -> Style {
     get_styles().status
+}
+
+pub(crate) fn user_message_highlight_style() -> Style {
+    get_styles().user_message_highlight
 }
 
 pub(crate) fn accent_style() -> Style {
@@ -602,6 +607,29 @@ fn styles_for(
     let selection_bg = resolve_color(theme, "roles.selection_bg", &theme.roles.selection_bg);
     let selection = style_from_roles(selection_fg, selection_bg, Style::default().cyan());
 
+    fn user_message_highlight_bg(rgb: (u8, u8, u8)) -> ratatui::style::Color {
+        best_color(blend(
+            (255, 255, 255),
+            rgb,
+            if is_light(rgb) { 0.06 } else { 0.14 },
+        ))
+    }
+
+    let user_message_highlight = match theme.resolve_composer_bg() {
+        ThemeColorResolved::Rgb(rgb) => {
+            Style::default().bg(user_message_highlight_bg((rgb.0, rgb.1, rgb.2)))
+        }
+        ThemeColorResolved::Inherit => {
+            let rgb = match theme.resolve_transcript_bg() {
+                ThemeColorResolved::Rgb(rgb) => Some((rgb.0, rgb.1, rgb.2)),
+                ThemeColorResolved::Inherit => terminal_bg,
+            };
+            rgb.map(user_message_highlight_bg)
+                .map(|bg| Style::default().bg(bg))
+                .unwrap_or_default()
+        }
+    };
+
     let dim = match theme.resolve_dim() {
         ThemeColorResolved::Rgb(rgb) => Style::default().fg(best_color((rgb.0, rgb.1, rgb.2))),
         ThemeColorResolved::Inherit => Style::default().dim(),
@@ -654,6 +682,7 @@ fn styles_for(
         composer,
         status,
         selection,
+        user_message_highlight,
         dim,
         border,
         accent,
@@ -677,6 +706,7 @@ fn fallback_styles() -> ThemeStyles {
         composer: Style::default(),
         status: Style::default(),
         selection: Style::default().cyan(),
+        user_message_highlight: Style::default(),
         dim: Style::default().dim(),
         border: Style::default().dim(),
         accent: Style::default().cyan(),

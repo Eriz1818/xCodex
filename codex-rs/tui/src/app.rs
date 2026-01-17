@@ -542,6 +542,7 @@ impl App {
                     let pasted = pasted.replace("\r", "\n");
                     self.chat_widget.handle_paste(pasted);
                 }
+                TuiEvent::Mouse(_) => {}
                 TuiEvent::Draw => {
                     self.chat_widget.maybe_post_pending_notification(tui);
                     if self
