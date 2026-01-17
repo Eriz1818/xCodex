@@ -37,6 +37,7 @@ use ratatui::style::Stylize;
 use ratatui::text::Line;
 use ratatui::text::Span;
 use ratatui::text::Text;
+use ratatui::widgets::Block;
 use ratatui::widgets::Paragraph;
 use ratatui::widgets::Widget;
 use ratatui::widgets::WidgetRef;
@@ -109,7 +110,6 @@ const KEY_ESC: KeyBinding = key_hint::plain(KeyCode::Esc);
 const KEY_ENTER: KeyBinding = key_hint::plain(KeyCode::Enter);
 const KEY_CTRL_T: KeyBinding = key_hint::ctrl(KeyCode::Char('t'));
 const KEY_CTRL_C: KeyBinding = key_hint::ctrl(KeyCode::Char('c'));
-const KEY_SLASH: KeyBinding = key_hint::plain(KeyCode::Char('/'));
 const KEY_D: KeyBinding = key_hint::plain(KeyCode::Char('d'));
 const KEY_E: KeyBinding = key_hint::plain(KeyCode::Char('e'));
 
@@ -384,10 +384,10 @@ impl ThemeSelectorOverlay {
                     run.push_str(symbol);
                 }
 
-                if let Some(style) = run_style {
-                    if !run.is_empty() {
-                        spans.push(Span::styled(run, style));
-                    }
+                if let Some(style) = run_style
+                    && !run.is_empty()
+                {
+                    spans.push(Span::styled(run, style));
                 }
 
                 out.push(Line::from(spans));
@@ -449,16 +449,11 @@ impl ThemeSelectorOverlay {
         let approval_lines = buffer_to_lines(&approval_buf);
 
         let mut lines: Vec<Line<'static>> = vec![
-            Line::from(vec!["Theme preview".dim()]),
             Line::from(""),
             Line::from(vec![
-                "Session ".into(),
-                Span::from("xcodex").set_style(crate::theme::accent_style().bold()),
-                " · model: gpt-5.2 · power: ⚡⚡⚡".dim(),
+                "› ".bold().dim(),
+                Span::from("Show me the diff and explain it.").set_style(user_style),
             ]),
-            Line::from(""),
-            Line::from(vec!["› ".bold().dim(), "Show me the diff and explain it.".into()])
-                .style(user_style),
             Line::from(vec![
                 "  ".into(),
                 "diff preview ".dim(),
@@ -567,6 +562,44 @@ impl ThemeSelectorOverlay {
         let transcript_area = chunks[0];
         let bottom_pane_area = chunks[1];
         let footer_area = chunks[2];
+        let (info_area, transcript_area) = if transcript_area.height >= 6 {
+            let parts = Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([Constraint::Length(5), Constraint::Min(0)])
+                .split(transcript_area);
+            (parts[0], parts[1])
+        } else {
+            (Rect::new(0, 0, 0, 0), transcript_area)
+        };
+
+        if !info_area.is_empty() {
+            let title = Line::from(vec![
+                "⚡ ".into(),
+                "xtreme-Codex".bold(),
+                format!(" (v{})", env!("CARGO_PKG_VERSION")).dim(),
+            ]);
+            let info = vec![
+                Line::from(vec!["power:".dim(), " ".into(), "⚡⚡⚡".into()]),
+                Line::from(vec![
+                    "model:".dim(),
+                    " ".into(),
+                    "gpt-5.2 medium".into(),
+                    "  ".into(),
+                    "/mode".dim(),
+                    " to change".dim(),
+                ]),
+                Line::from(vec![
+                    "directory:".dim(),
+                    " ".into(),
+                    "~/Dev/Pyfun/codex".into(),
+                ]),
+            ];
+            Paragraph::new(Text::from(info))
+                .style(crate::theme::transcript_style())
+                .block(Block::bordered().title(title))
+                .render_ref(info_area, buf);
+        }
+
         let visible_rows = transcript_area.height as usize;
         let max_scroll =
             u16::try_from(lines.len().saturating_sub(visible_rows)).unwrap_or(u16::MAX);
@@ -612,24 +645,7 @@ impl ThemeSelectorOverlay {
             }
         }
 
-        let title = Line::from(vec![
-            "Theme (set for ".dim(),
-            match self.edit_variant {
-                codex_core::themes::ThemeVariant::Light => "Light".into(),
-                codex_core::themes::ThemeVariant::Dark => "Dark".into(),
-            },
-            "): ".dim(),
-            Span::from(self.selected_theme().to_string())
-                .set_style(crate::theme::accent_style().bold()),
-            " ".into(),
-            "(↑/↓ preview · Tab mode · Enter apply · Esc cancel)".dim(),
-        ]);
-        Paragraph::new(Text::from(vec![title]))
-            .style(crate::theme::composer_style())
-            .render_ref(Rect::new(area.x, area.y, area.width, 1), buf);
-
-        let list_height = area.height.saturating_sub(2);
-        let list_area = Rect::new(area.x, area.y + 1, area.width, list_height);
+        let list_area = area;
         self.ensure_visible(list_area.height);
 
         let visible = self.visible_items(list_area.height);
@@ -660,32 +676,12 @@ impl ThemeSelectorOverlay {
             );
         }
 
-        let hint_area = Rect::new(area.x, area.bottom().saturating_sub(1), area.width, 1);
-        render_key_hints(
-            hint_area,
-            buf,
-            &[
-                (&[KEY_UP, KEY_DOWN], "select"),
-                (&[KEY_TAB], "toggle mode"),
-                (
-                    &[KEY_PAGE_UP, KEY_PAGE_DOWN, KEY_CTRL_U, KEY_CTRL_D],
-                    "scroll preview",
-                ),
-                (&[KEY_D], "toggle diff highlight"),
-                (&[KEY_E], "edit theme"),
-                (&[KEY_ENTER], "apply"),
-                (&[KEY_ESC], "cancel"),
-                (
-                    &[KEY_SLASH],
-                    "more: /theme help | /theme edit | /theme create",
-                ),
-            ],
-        );
+        // Footer key hints are rendered by the overlay layout, not in the list widget.
     }
 
     pub(crate) fn handle_event(&mut self, tui: &mut tui::Tui, event: TuiEvent) -> Result<()> {
         if self.frame_requester.is_none() {
-            self.frame_requester = Some(tui.frame_requester().clone());
+            self.frame_requester = Some(tui.frame_requester());
         }
 
         if matches!(event, TuiEvent::Draw) {
@@ -730,22 +726,22 @@ impl ThemeSelectorOverlay {
                         tui.frame_requester().schedule_frame();
                         Ok(())
                     }
-                    e if KEY_UP.is_press(e) || KEY_K.is_press(e) => {
+                    e if KEY_UP.is_press(e) => {
                         self.move_selection(-1);
                         tui.frame_requester().schedule_frame();
                         Ok(())
                     }
-                    e if KEY_DOWN.is_press(e) || KEY_J.is_press(e) => {
+                    e if KEY_DOWN.is_press(e) => {
                         self.move_selection(1);
                         tui.frame_requester().schedule_frame();
                         Ok(())
                     }
-                    e if KEY_PAGE_UP.is_press(e) || KEY_CTRL_U.is_press(e) => {
+                    e if KEY_CTRL_U.is_press(e) => {
                         *preview_scroll = preview_scroll.saturating_sub(3);
                         tui.frame_requester().schedule_frame();
                         Ok(())
                     }
-                    e if KEY_PAGE_DOWN.is_press(e) || KEY_CTRL_D.is_press(e) => {
+                    e if KEY_CTRL_D.is_press(e) => {
                         *preview_scroll = preview_scroll.saturating_add(3);
                         tui.frame_requester().schedule_frame();
                         Ok(())
@@ -805,31 +801,105 @@ impl ThemeSelectorOverlay {
                         }
                     }
 
-                    let list_height = 8u16.min(area.height.saturating_sub(7)).max(4);
                     let parts = Layout::default()
                         .direction(Direction::Vertical)
-                        .constraints([
-                            Constraint::Min(0),
-                            Constraint::Length(1),
-                            Constraint::Length(list_height),
-                        ])
+                        .constraints([Constraint::Min(0), Constraint::Length(1)])
                         .split(area);
 
-                    let spacer_area = parts[1];
-                    for y in spacer_area.top()..spacer_area.bottom() {
-                        for x in spacer_area.left()..spacer_area.right() {
+                    let body_area = parts[0];
+                    let footer_area = parts[1];
+
+                    let body_parts = Layout::default()
+                        .direction(Direction::Horizontal)
+                        .constraints([Constraint::Percentage(20), Constraint::Percentage(80)])
+                        .split(body_area);
+
+                    let left = body_parts[0];
+                    let right = body_parts[1];
+
+                    let title_height = 2u16.min(left.height);
+
+                    let left_parts = Layout::default()
+                        .direction(Direction::Vertical)
+                        .constraints([Constraint::Length(title_height), Constraint::Min(0)])
+                        .split(left);
+                    let left_title_area = left_parts[0];
+                    let left_content_area = left_parts[1];
+
+                    for y in left_title_area.top()..left_title_area.bottom() {
+                        for x in left_title_area.left()..left_title_area.right() {
                             frame.buffer_mut()[(x, y)].set_symbol(" ");
-                            frame.buffer_mut()[(x, y)].set_style(crate::theme::transcript_style());
+                            frame.buffer_mut()[(x, y)].set_style(crate::theme::composer_style());
                         }
                     }
 
+                    let selected_title = Line::from(vec![
+                        "Themes (selecting for ".dim(),
+                        match self.edit_variant {
+                            codex_core::themes::ThemeVariant::Light => "Light mode".into(),
+                            codex_core::themes::ThemeVariant::Dark => "Dark mode".into(),
+                        },
+                        ")".dim(),
+                    ]);
+                    let wrapped_title =
+                        crate::wrapping::word_wrap_line(&selected_title, usize::from(left.width));
+                    let wrapped_title: Vec<Line<'_>> = wrapped_title
+                        .into_iter()
+                        .take(usize::from(title_height))
+                        .collect();
+                    Paragraph::new(Text::from(wrapped_title))
+                        .style(crate::theme::composer_style())
+                        .render_ref(left_title_area, frame.buffer_mut());
+
+                    let right_parts = Layout::default()
+                        .direction(Direction::Vertical)
+                        .constraints([Constraint::Length(title_height), Constraint::Min(0)])
+                        .split(right);
+                    let right_title_area = right_parts[0];
+                    let right_content_area = right_parts[1];
+
+                    let right_title_area = Rect::new(
+                        right_title_area.x.saturating_add(1),
+                        right_title_area.y,
+                        right_title_area.width.saturating_sub(1),
+                        right_title_area.height,
+                    );
+                    Paragraph::new(Line::from("Theme Preview"))
+                        .style(crate::theme::transcript_style())
+                        .render_ref(right_title_area, frame.buffer_mut());
+
+                    let right_content_area = Rect::new(
+                        right_content_area.x.saturating_add(1),
+                        right_content_area.y,
+                        right_content_area.width.saturating_sub(1),
+                        right_content_area.height,
+                    );
                     max_scroll = self.render_preview(
-                        parts[0],
+                        right_content_area,
                         frame.buffer_mut(),
                         requested_scroll,
                         diff_bg,
                     );
-                    self.render_theme_list(parts[2], frame.buffer_mut());
+                    self.render_theme_list(left_content_area, frame.buffer_mut());
+
+                    let footer_parts = Layout::default()
+                        .direction(Direction::Horizontal)
+                        .constraints([Constraint::Percentage(20), Constraint::Percentage(80)])
+                        .split(footer_area);
+
+                    render_key_hints(
+                        footer_parts[0],
+                        frame.buffer_mut(),
+                        &[(&[KEY_UP, KEY_DOWN], "select"), (&[KEY_TAB], "toggle mode")],
+                    );
+                    render_key_hints(
+                        footer_parts[1],
+                        frame.buffer_mut(),
+                        &[
+                            (&[KEY_CTRL_U, KEY_CTRL_D], "scroll preview"),
+                            (&[KEY_D], "toggle diff highlight"),
+                        ],
+                    );
                 })?;
 
                 if let ThemeSelectorMode::Picker { preview_scroll, .. } = &mut self.mode
