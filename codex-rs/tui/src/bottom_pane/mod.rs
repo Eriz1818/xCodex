@@ -167,6 +167,58 @@ impl Renderable for McpStartupBannerWidget {
     }
 }
 
+#[derive(Debug)]
+pub(crate) struct ExclusionSummaryBannerWidget {
+    message: String,
+}
+
+impl ExclusionSummaryBannerWidget {
+    pub(crate) fn new(message: String) -> Self {
+        Self { message }
+    }
+
+    fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
+        let message = self.message.trim();
+        if message.is_empty() || width == 0 {
+            return Vec::new();
+        }
+
+        let prefix = "🛡 ";
+        let prefix_width = u16::try_from(prefix.chars().count()).unwrap_or(2);
+        let content_width = width.saturating_sub(prefix_width).max(1);
+
+        let wrapped = wrap(message, usize::from(content_width));
+        let mut lines = Vec::with_capacity(wrapped.len());
+
+        for (idx, part) in wrapped.into_iter().enumerate() {
+            if idx == 0 {
+                lines.push(Line::from(vec![prefix.cyan(), part.to_string().cyan()]));
+            } else {
+                lines.push(Line::from(vec![
+                    Span::from(" ".repeat(usize::from(prefix_width))).cyan(),
+                    part.to_string().cyan(),
+                ]));
+            }
+        }
+
+        lines
+    }
+}
+
+impl Renderable for ExclusionSummaryBannerWidget {
+    fn render(&self, area: Rect, buf: &mut Buffer) {
+        if area.is_empty() {
+            return;
+        }
+
+        Paragraph::new(self.display_lines(area.width)).render_ref(area, buf);
+    }
+
+    fn desired_height(&self, width: u16) -> u16 {
+        u16::try_from(self.display_lines(width).len()).unwrap_or(0)
+    }
+}
+
 /// Pane displayed in the lower half of the chat UI.
 ///
 /// This is the owning container for the prompt input (`ChatComposer`) and the view stack
@@ -193,6 +245,8 @@ pub(crate) struct BottomPane {
     status: Option<StatusIndicatorWidget>,
     /// Ephemeral MCP startup failure banner (not part of the transcript).
     mcp_startup_banner: Option<McpStartupBannerWidget>,
+    /// Ephemeral sensitive-path exclusion summary (not part of the transcript).
+    exclusion_summary_banner: Option<ExclusionSummaryBannerWidget>,
     /// Unified exec session summary shown above the composer.
     unified_exec_footer: UnifiedExecFooter,
     /// Queued user messages to show above the composer while a turn is running.
@@ -245,6 +299,7 @@ impl BottomPane {
             is_task_running: false,
             status: None,
             mcp_startup_banner: None,
+            exclusion_summary_banner: None,
             unified_exec_footer: UnifiedExecFooter::new(),
             queued_user_messages: QueuedUserMessages::new(),
             esc_backtrack_hint: false,
@@ -444,9 +499,32 @@ impl BottomPane {
         self.request_redraw();
     }
 
+    pub(crate) fn set_exclusion_summary_banner(&mut self, message: Option<String>) {
+        let next = message.map(ExclusionSummaryBannerWidget::new);
+        if self.exclusion_summary_banner.is_some() == next.is_some()
+            && self
+                .exclusion_summary_banner
+                .as_ref()
+                .zip(next.as_ref())
+                .is_some_and(|(a, b)| a.message == b.message)
+        {
+            return;
+        }
+
+        self.exclusion_summary_banner = next;
+        self.request_redraw();
+    }
+
     #[cfg(test)]
     pub(crate) fn mcp_startup_banner_message(&self) -> Option<&str> {
         self.mcp_startup_banner.as_ref().map(|b| b.message.as_str())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn exclusion_summary_banner_message(&self) -> Option<&str> {
+        self.exclusion_summary_banner
+            .as_ref()
+            .map(|b| b.message.as_str())
     }
 
     /// Show the transient "press again to quit" hint for `key`.
@@ -798,12 +876,16 @@ impl BottomPane {
             if let Some(banner) = &self.mcp_startup_banner {
                 flex.push(0, RenderableItem::Borrowed(banner));
             }
+            if let Some(banner) = &self.exclusion_summary_banner {
+                flex.push(0, RenderableItem::Borrowed(banner));
+            }
             if !self.unified_exec_footer.is_empty() {
                 flex.push(0, RenderableItem::Borrowed(&self.unified_exec_footer));
             }
             flex.push(1, RenderableItem::Borrowed(&self.queued_user_messages));
             if self.status.is_some()
                 || self.mcp_startup_banner.is_some()
+                || self.exclusion_summary_banner.is_some()
                 || !self.unified_exec_footer.is_empty()
                 || !self.queued_user_messages.messages.is_empty()
             {

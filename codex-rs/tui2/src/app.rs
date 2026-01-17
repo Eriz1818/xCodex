@@ -549,7 +549,11 @@ impl App {
 
         chat_widget.maybe_prompt_windows_sandbox_enable();
 
-        let file_search = FileSearchManager::new(config.cwd.clone(), app_event_tx.clone());
+        let file_search = FileSearchManager::new(
+            config.cwd.clone(),
+            config.exclusion.files.clone(),
+            app_event_tx.clone(),
+        );
         #[cfg(not(debug_assertions))]
         let upgrade_version = crate::updates::get_upgrade_version(&config);
         #[cfg(not(debug_assertions))]
@@ -3179,7 +3183,11 @@ mod tests {
         ));
         let auth_manager =
             AuthManager::from_auth_for_testing(CodexAuth::from_api_key("Test API Key"));
-        let file_search = FileSearchManager::new(config.cwd.clone(), app_event_tx.clone());
+        let file_search = FileSearchManager::new(
+            config.cwd.clone(),
+            config.exclusion.files.clone(),
+            app_event_tx.clone(),
+        );
 
         App {
             server,
@@ -3234,7 +3242,11 @@ mod tests {
         ));
         let auth_manager =
             AuthManager::from_auth_for_testing(CodexAuth::from_api_key("Test API Key"));
-        let file_search = FileSearchManager::new(config.cwd.clone(), app_event_tx.clone());
+        let file_search = FileSearchManager::new(
+            config.cwd.clone(),
+            config.exclusion.files.clone(),
+            app_event_tx.clone(),
+        );
 
         (
             App {

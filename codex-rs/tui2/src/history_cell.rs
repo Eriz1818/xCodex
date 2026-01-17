@@ -1770,6 +1770,76 @@ pub(crate) fn new_deprecation_notice(
     DeprecationNoticeCell { summary, details }
 }
 
+#[derive(Debug)]
+pub(crate) struct ExclusionSummaryCell {
+    summary: String,
+    details: Vec<String>,
+}
+
+pub(crate) fn new_exclusion_summary(
+    event: codex_protocol::protocol::ExclusionSummaryEvent,
+) -> ExclusionSummaryCell {
+    let summary = format!(
+        "Exclusion filtered content: {} redacted, {} blocked",
+        event.total_redacted, event.total_blocked
+    );
+
+    let mut details: Vec<String> = Vec::new();
+    details.push(format!(
+        "Layers: L1 blocked={}, L2 redacted={}, blocked={}, L3 blocked={}, L4 redacted={}, blocked={}",
+        event.layers.layer1_input_guards.blocked,
+        event.layers.layer2_output_sanitization.redacted,
+        event.layers.layer2_output_sanitization.blocked,
+        event.layers.layer3_send_firewall.blocked,
+        event.layers.layer4_request_interceptor.redacted,
+        event.layers.layer4_request_interceptor.blocked,
+    ));
+    details.push(format!(
+        "Sources: filesystem r={} b={}, mcp r={} b={}, shell r={} b={}, prompt r={} b={}",
+        event.sources.filesystem.redacted,
+        event.sources.filesystem.blocked,
+        event.sources.mcp.redacted,
+        event.sources.mcp.blocked,
+        event.sources.shell.redacted,
+        event.sources.shell.blocked,
+        event.sources.prompt.redacted,
+        event.sources.prompt.blocked,
+    ));
+
+    if !event.per_tool.is_empty() {
+        details.push("Tools:".to_string());
+        for tool in event.per_tool {
+            if tool.counts.redacted == 0 && tool.counts.blocked == 0 {
+                continue;
+            }
+            details.push(format!(
+                "  - {}: redacted={}, blocked={}",
+                tool.tool_name, tool.counts.redacted, tool.counts.blocked
+            ));
+        }
+    }
+
+    ExclusionSummaryCell { summary, details }
+}
+
+impl HistoryCell for ExclusionSummaryCell {
+    fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
+        let mut lines: Vec<Line<'static>> = Vec::new();
+        lines.push(vec!["🛡  ".cyan().bold(), self.summary.clone().cyan()].into());
+
+        let wrap_width = width.saturating_sub(4).max(1) as usize;
+        for detail in &self.details {
+            let wrapped = textwrap::wrap(detail, wrap_width)
+                .into_iter()
+                .map(|s| s.to_string().dim().into())
+                .collect::<Vec<_>>();
+            lines.extend(wrapped);
+        }
+
+        lines
+    }
+}
+
 impl HistoryCell for DeprecationNoticeCell {
     fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
         let mut lines: Vec<Line<'static>> = Vec::new();

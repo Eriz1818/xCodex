@@ -10,9 +10,11 @@ use serde::Deserialize;
 use tokio::fs;
 
 use crate::function_tool::FunctionCallError;
+use crate::sensitive_paths::SensitivePathDecision;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
+use crate::tools::context::ToolProvenance;
 use crate::tools::handlers::parse_arguments;
 use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
@@ -52,7 +54,12 @@ impl ToolHandler for ListDirHandler {
     }
 
     async fn handle(&self, invocation: ToolInvocation) -> Result<ToolOutput, FunctionCallError> {
-        let ToolInvocation { payload, turn, .. } = invocation;
+        let ToolInvocation {
+            payload,
+            turn,
+            tool_name,
+            ..
+        } = invocation;
 
         let arguments = match payload {
             ToolPayload::Function { arguments } => arguments,
@@ -92,7 +99,26 @@ impl ToolHandler for ListDirHandler {
 
         let path = turn.resolve_structured_file_tool_path(Some(dir_path));
 
-        let entries = list_dir_slice(&path, offset, limit, depth).await?;
+        if turn.sensitive_paths.decision_discover(&path) == SensitivePathDecision::Deny {
+            {
+                let mut counters = turn
+                    .exclusion_counters
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                counters.record(
+                    crate::exclusion_counters::ExclusionLayer::Layer1InputGuards,
+                    crate::exclusion_counters::ExclusionSource::Filesystem,
+                    &tool_name,
+                    /* redacted */ false,
+                    /* blocked */ true,
+                );
+            }
+            return Err(FunctionCallError::RespondToModel(
+                turn.sensitive_paths.format_denied_message(),
+            ));
+        }
+
+        let entries = list_dir_slice(&path, offset, limit, depth, &turn.sensitive_paths).await?;
         let mut output = Vec::with_capacity(entries.len() + 1);
         output.push(format!("Absolute path: {}", path.display()));
         output.extend(entries);
@@ -100,6 +126,7 @@ impl ToolHandler for ListDirHandler {
             content: output.join("\n"),
             content_items: None,
             success: Some(true),
+            provenance: ToolProvenance::Filesystem { path },
         })
     }
 }
@@ -109,9 +136,10 @@ async fn list_dir_slice(
     offset: usize,
     limit: usize,
     depth: usize,
+    sensitive_paths: &crate::sensitive_paths::SensitivePathPolicy,
 ) -> Result<Vec<String>, FunctionCallError> {
     let mut entries = Vec::new();
-    collect_entries(path, Path::new(""), depth, &mut entries).await?;
+    collect_entries(path, Path::new(""), depth, sensitive_paths, &mut entries).await?;
 
     if entries.is_empty() {
         return Ok(Vec::new());
@@ -147,12 +175,19 @@ async fn collect_entries(
     dir_path: &Path,
     relative_prefix: &Path,
     depth: usize,
+    sensitive_paths: &crate::sensitive_paths::SensitivePathPolicy,
     entries: &mut Vec<DirEntry>,
 ) -> Result<(), FunctionCallError> {
     let mut queue = VecDeque::new();
     queue.push_back((dir_path.to_path_buf(), relative_prefix.to_path_buf(), depth));
 
     while let Some((current_dir, prefix, remaining_depth)) = queue.pop_front() {
+        if sensitive_paths.decision_discover_with_is_dir(&current_dir, Some(true))
+            == SensitivePathDecision::Deny
+        {
+            continue;
+        }
+
         let mut read_dir = fs::read_dir(&current_dir).await.map_err(|err| {
             FunctionCallError::RespondToModel(format!("failed to read directory: {err}"))
         })?;
@@ -162,11 +197,12 @@ async fn collect_entries(
         while let Some(entry) = read_dir.next_entry().await.map_err(|err| {
             FunctionCallError::RespondToModel(format!("failed to read directory: {err}"))
         })? {
+            let file_name = entry.file_name();
+            let entry_path = entry.path();
             let file_type = entry.file_type().await.map_err(|err| {
                 FunctionCallError::RespondToModel(format!("failed to inspect entry: {err}"))
             })?;
 
-            let file_name = entry.file_name();
             let relative_path = if prefix.as_os_str().is_empty() {
                 PathBuf::from(&file_name)
             } else {
@@ -177,8 +213,15 @@ async fn collect_entries(
             let display_depth = prefix.components().count();
             let sort_key = format_entry_name(&relative_path);
             let kind = DirEntryKind::from(&file_type);
+            if sensitive_paths.decision_discover_with_is_dir(
+                &entry_path,
+                Some(matches!(kind, DirEntryKind::Directory)),
+            ) == SensitivePathDecision::Deny
+            {
+                continue;
+            }
             dir_entries.push((
-                entry.path(),
+                entry_path,
                 relative_path,
                 kind,
                 DirEntry {
@@ -301,7 +344,9 @@ mod tests {
             symlink(dir_path.join("entry.txt"), &link_path).expect("create symlink");
         }
 
-        let entries = list_dir_slice(dir_path, 1, 20, 3)
+        let sensitive_paths =
+            crate::sensitive_paths::SensitivePathPolicy::new(dir_path.to_path_buf());
+        let entries = list_dir_slice(dir_path, 1, 20, 3, &sensitive_paths)
             .await
             .expect("list directory");
 
@@ -335,7 +380,9 @@ mod tests {
             .await
             .expect("create sub dir");
 
-        let err = list_dir_slice(dir_path, 10, 1, 2)
+        let sensitive_paths =
+            crate::sensitive_paths::SensitivePathPolicy::new(dir_path.to_path_buf());
+        let err = list_dir_slice(dir_path, 10, 1, 2, &sensitive_paths)
             .await
             .expect_err("offset exceeds entries");
         assert_eq!(
@@ -362,7 +409,9 @@ mod tests {
             .await
             .expect("write deeper");
 
-        let entries_depth_one = list_dir_slice(dir_path, 1, 10, 1)
+        let sensitive_paths =
+            crate::sensitive_paths::SensitivePathPolicy::new(dir_path.to_path_buf());
+        let entries_depth_one = list_dir_slice(dir_path, 1, 10, 1, &sensitive_paths)
             .await
             .expect("list depth 1");
         assert_eq!(
@@ -370,7 +419,7 @@ mod tests {
             vec!["nested/".to_string(), "root.txt".to_string(),]
         );
 
-        let entries_depth_two = list_dir_slice(dir_path, 1, 20, 2)
+        let entries_depth_two = list_dir_slice(dir_path, 1, 20, 2, &sensitive_paths)
             .await
             .expect("list depth 2");
         assert_eq!(
@@ -383,7 +432,7 @@ mod tests {
             ]
         );
 
-        let entries_depth_three = list_dir_slice(dir_path, 1, 30, 3)
+        let entries_depth_three = list_dir_slice(dir_path, 1, 30, 3, &sensitive_paths)
             .await
             .expect("list depth 3");
         assert_eq!(
@@ -415,7 +464,9 @@ mod tests {
             .await
             .expect("write b child");
 
-        let first_page = list_dir_slice(dir_path, 1, 2, 2)
+        let sensitive_paths =
+            crate::sensitive_paths::SensitivePathPolicy::new(dir_path.to_path_buf());
+        let first_page = list_dir_slice(dir_path, 1, 2, 2, &sensitive_paths)
             .await
             .expect("list page one");
         assert_eq!(
@@ -427,7 +478,7 @@ mod tests {
             ]
         );
 
-        let second_page = list_dir_slice(dir_path, 3, 2, 2)
+        let second_page = list_dir_slice(dir_path, 3, 2, 2, &sensitive_paths)
             .await
             .expect("list page two");
         assert_eq!(
@@ -450,7 +501,9 @@ mod tests {
             .await
             .expect("write gamma");
 
-        let entries = list_dir_slice(dir_path, 2, usize::MAX, 1)
+        let sensitive_paths =
+            crate::sensitive_paths::SensitivePathPolicy::new(dir_path.to_path_buf());
+        let entries = list_dir_slice(dir_path, 2, usize::MAX, 1, &sensitive_paths)
             .await
             .expect("list without overflow");
         assert_eq!(
@@ -471,7 +524,9 @@ mod tests {
                 .expect("write file");
         }
 
-        let entries = list_dir_slice(dir_path, 1, 25, 1)
+        let sensitive_paths =
+            crate::sensitive_paths::SensitivePathPolicy::new(dir_path.to_path_buf());
+        let entries = list_dir_slice(dir_path, 1, 25, 1, &sensitive_paths)
             .await
             .expect("list directory");
         assert_eq!(entries.len(), 26);
@@ -493,7 +548,9 @@ mod tests {
         tokio::fs::write(nested.join("child.txt"), b"child").await?;
         tokio::fs::write(deeper.join("grandchild.txt"), b"deep").await?;
 
-        let entries_depth_three = list_dir_slice(dir_path, 1, 3, 3).await?;
+        let sensitive_paths =
+            crate::sensitive_paths::SensitivePathPolicy::new(dir_path.to_path_buf());
+        let entries_depth_three = list_dir_slice(dir_path, 1, 3, 3, &sensitive_paths).await?;
         assert_eq!(
             entries_depth_three,
             vec![

@@ -5,6 +5,7 @@ use crate::mcp_tool_call::handle_mcp_tool_call;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
+use crate::tools::context::ToolProvenance;
 use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
 
@@ -39,6 +40,10 @@ impl ToolHandler for McpHandler {
         };
 
         let (server, tool, raw_arguments) = payload;
+        let provenance = ToolProvenance::Mcp {
+            server: server.clone(),
+            tool: tool.clone(),
+        };
         let arguments_str = raw_arguments;
 
         let response = handle_mcp_tool_call(
@@ -53,7 +58,7 @@ impl ToolHandler for McpHandler {
 
         match response {
             codex_protocol::models::ResponseInputItem::McpToolCallOutput { result, .. } => {
-                Ok(ToolOutput::Mcp { result })
+                Ok(ToolOutput::Mcp { result, provenance })
             }
             codex_protocol::models::ResponseInputItem::FunctionCallOutput { output, .. } => {
                 let codex_protocol::models::FunctionCallOutputPayload {
@@ -65,6 +70,7 @@ impl ToolHandler for McpHandler {
                     content,
                     content_items,
                     success,
+                    provenance,
                 })
             }
             _ => Err(FunctionCallError::RespondToModel(

@@ -39,6 +39,9 @@ pub struct ConfigProfile {
     // Injects known feature keys into the schema and forbids unknown keys.
     #[schemars(schema_with = "crate::config::schema::features_schema")]
     pub features: Option<crate::features::FeaturesToml>,
+    /// Sensitive-path exclusion configuration scoped to this profile.
+    #[serde(default)]
+    pub exclusion: Option<crate::config::types::ExclusionConfig>,
     pub oss_provider: Option<String>,
 }
 

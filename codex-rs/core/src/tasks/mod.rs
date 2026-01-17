@@ -180,6 +180,15 @@ impl Session {
         if should_close_processes {
             self.close_unified_exec_processes().await;
         }
+        let exclusion_summary = turn_context
+            .exclusion_counters
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .snapshot();
+        if let Some(summary) = exclusion_summary {
+            self.send_event(turn_context.as_ref(), EventMsg::ExclusionSummary(summary))
+                .await;
+        }
         let event = EventMsg::TurnComplete(TurnCompleteEvent { last_agent_message });
         self.send_event(turn_context.as_ref(), event).await;
     }

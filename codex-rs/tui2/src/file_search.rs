@@ -46,6 +46,7 @@ pub(crate) struct FileSearchManager {
     state: Arc<Mutex<SearchState>>,
 
     search_dir: PathBuf,
+    ignore_filenames: Vec<String>,
     app_tx: AppEventSender,
 }
 
@@ -66,7 +67,7 @@ struct ActiveSearch {
 }
 
 impl FileSearchManager {
-    pub fn new(search_dir: PathBuf, tx: AppEventSender) -> Self {
+    pub fn new(search_dir: PathBuf, ignore_filenames: Vec<String>, tx: AppEventSender) -> Self {
         Self {
             state: Arc::new(Mutex::new(SearchState {
                 latest_query: String::new(),
@@ -74,6 +75,7 @@ impl FileSearchManager {
                 active_search: None,
             })),
             search_dir,
+            ignore_filenames,
             app_tx: tx,
         }
     }
@@ -116,6 +118,7 @@ impl FileSearchManager {
         // debounce timer.
         let state = self.state.clone();
         let search_dir = self.search_dir.clone();
+        let ignore_filenames = self.ignore_filenames.clone();
         let tx_clone = self.app_tx.clone();
         thread::spawn(move || {
             // Always do a minimum debounce, but then poll until the
@@ -148,6 +151,7 @@ impl FileSearchManager {
             FileSearchManager::spawn_file_search(
                 query,
                 search_dir,
+                ignore_filenames,
                 tx_clone,
                 cancellation_token,
                 state,
@@ -158,6 +162,7 @@ impl FileSearchManager {
     fn spawn_file_search(
         query: String,
         search_dir: PathBuf,
+        ignore_filenames: Vec<String>,
         tx: AppEventSender,
         cancellation_token: Arc<AtomicBool>,
         search_state: Arc<Mutex<SearchState>>,
@@ -168,6 +173,7 @@ impl FileSearchManager {
                 &query,
                 MAX_FILE_SEARCH_RESULTS,
                 &search_dir,
+                ignore_filenames,
                 Vec::new(),
                 NUM_FILE_SEARCH_THREADS,
                 cancellation_token.clone(),

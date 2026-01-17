@@ -7,6 +7,7 @@ use crate::function_tool::FunctionCallError;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
+use crate::tools::context::ToolProvenance;
 use crate::tools::handlers::parse_arguments;
 use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
@@ -158,6 +159,10 @@ mod spawn {
             content,
             success: Some(true),
             content_items: None,
+            provenance: ToolProvenance::Unattested {
+                origin_type: "collab",
+                origin_path: None,
+            },
         })
     }
 }
@@ -247,6 +252,10 @@ mod send_input {
             content,
             success: Some(true),
             content_items: None,
+            provenance: ToolProvenance::Unattested {
+                origin_type: "collab",
+                origin_path: None,
+            },
         })
     }
 }
@@ -413,6 +422,10 @@ mod wait {
             content,
             success: None,
             content_items: None,
+            provenance: ToolProvenance::Unattested {
+                origin_type: "collab",
+                origin_path: None,
+            },
         })
     }
 
@@ -524,6 +537,10 @@ pub mod close_agent {
             content,
             success: Some(true),
             content_items: None,
+            provenance: ToolProvenance::Unattested {
+                origin_type: "collab",
+                origin_path: None,
+            },
         })
     }
 }

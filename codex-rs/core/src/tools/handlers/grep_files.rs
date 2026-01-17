@@ -7,9 +7,11 @@ use tokio::process::Command;
 use tokio::time::timeout;
 
 use crate::function_tool::FunctionCallError;
+use crate::sensitive_paths::SensitivePathDecision;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
+use crate::tools::context::ToolProvenance;
 use crate::tools::handlers::parse_arguments;
 use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
@@ -42,7 +44,12 @@ impl ToolHandler for GrepFilesHandler {
     }
 
     async fn handle(&self, invocation: ToolInvocation) -> Result<ToolOutput, FunctionCallError> {
-        let ToolInvocation { payload, turn, .. } = invocation;
+        let ToolInvocation {
+            payload,
+            turn,
+            tool_name,
+            ..
+        } = invocation;
 
         let arguments = match payload {
             ToolPayload::Function { arguments } => arguments,
@@ -71,6 +78,25 @@ impl ToolHandler for GrepFilesHandler {
         let limit = args.limit.min(MAX_LIMIT);
         let search_path = turn.resolve_structured_file_tool_path(args.path.clone());
 
+        if turn.sensitive_paths.decision_discover(&search_path) == SensitivePathDecision::Deny {
+            {
+                let mut counters = turn
+                    .exclusion_counters
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                counters.record(
+                    crate::exclusion_counters::ExclusionLayer::Layer1InputGuards,
+                    crate::exclusion_counters::ExclusionSource::Filesystem,
+                    &tool_name,
+                    /* redacted */ false,
+                    /* blocked */ true,
+                );
+            }
+            return Err(FunctionCallError::RespondToModel(
+                turn.sensitive_paths.format_denied_message(),
+            ));
+        }
+
         verify_path_exists(&search_path).await?;
 
         let include = args.include.as_deref().map(str::trim).and_then(|val| {
@@ -81,20 +107,36 @@ impl ToolHandler for GrepFilesHandler {
             }
         });
 
+        let search_results = run_rg_search(
+            pattern,
+            include.as_deref(),
+            &search_path,
+            limit,
+            &turn.cwd,
+            &turn.sensitive_paths,
+        )
+        .await?;
+
         let search_results =
-            run_rg_search(pattern, include.as_deref(), &search_path, limit, &turn.cwd).await?;
+            filter_sensitive_results(search_results, &turn.sensitive_paths, &turn.cwd);
 
         if search_results.is_empty() {
             Ok(ToolOutput::Function {
                 content: "No matches found.".to_string(),
                 content_items: None,
                 success: Some(false),
+                provenance: ToolProvenance::Filesystem {
+                    path: search_path.to_path_buf(),
+                },
             })
         } else {
             Ok(ToolOutput::Function {
                 content: search_results.join("\n"),
                 content_items: None,
                 success: Some(true),
+                provenance: ToolProvenance::Filesystem {
+                    path: search_path.to_path_buf(),
+                },
             })
         }
     }
@@ -113,6 +155,7 @@ async fn run_rg_search(
     search_path: &Path,
     limit: usize,
     cwd: &Path,
+    sensitive_paths: &crate::sensitive_paths::SensitivePathPolicy,
 ) -> Result<Vec<String>, FunctionCallError> {
     let mut command = Command::new("rg");
     command
@@ -126,6 +169,8 @@ async fn run_rg_search(
     if let Some(glob) = include {
         command.arg("--glob").arg(glob);
     }
+
+    apply_sensitive_excludes(&mut command, sensitive_paths);
 
     command.arg("--").arg(search_path);
 
@@ -152,6 +197,15 @@ async fn run_rg_search(
     }
 }
 
+fn apply_sensitive_excludes(
+    command: &mut Command,
+    sensitive_paths: &crate::sensitive_paths::SensitivePathPolicy,
+) {
+    for ignore_file in sensitive_paths.ignore_file_paths() {
+        command.arg("--ignore-file").arg(ignore_file);
+    }
+}
+
 fn parse_results(stdout: &[u8], limit: usize) -> Vec<String> {
     let mut results = Vec::new();
     for line in stdout.split(|byte| *byte == b'\n') {
@@ -169,6 +223,25 @@ fn parse_results(stdout: &[u8], limit: usize) -> Vec<String> {
         }
     }
     results
+}
+
+fn filter_sensitive_results(
+    results: Vec<String>,
+    sensitive_paths: &crate::sensitive_paths::SensitivePathPolicy,
+    cwd: &Path,
+) -> Vec<String> {
+    results
+        .into_iter()
+        .filter(|result| {
+            let path = Path::new(result);
+            let abs = if path.is_absolute() {
+                path.to_path_buf()
+            } else {
+                cwd.join(path)
+            };
+            sensitive_paths.decision_discover(&abs) == SensitivePathDecision::Allow
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -208,7 +281,8 @@ mod tests {
         std::fs::write(dir.join("match_two.txt"), "alpha delta").unwrap();
         std::fs::write(dir.join("other.txt"), "omega").unwrap();
 
-        let results = run_rg_search("alpha", None, dir, 10, dir).await?;
+        let sensitive_paths = crate::sensitive_paths::SensitivePathPolicy::new(dir.to_path_buf());
+        let results = run_rg_search("alpha", None, dir, 10, dir, &sensitive_paths).await?;
         assert_eq!(results.len(), 2);
         assert!(results.iter().any(|path| path.ends_with("match_one.txt")));
         assert!(results.iter().any(|path| path.ends_with("match_two.txt")));
@@ -225,7 +299,8 @@ mod tests {
         std::fs::write(dir.join("match_one.rs"), "alpha beta gamma").unwrap();
         std::fs::write(dir.join("match_two.txt"), "alpha delta").unwrap();
 
-        let results = run_rg_search("alpha", Some("*.rs"), dir, 10, dir).await?;
+        let sensitive_paths = crate::sensitive_paths::SensitivePathPolicy::new(dir.to_path_buf());
+        let results = run_rg_search("alpha", Some("*.rs"), dir, 10, dir, &sensitive_paths).await?;
         assert_eq!(results.len(), 1);
         assert!(results.iter().all(|path| path.ends_with("match_one.rs")));
         Ok(())
@@ -242,7 +317,8 @@ mod tests {
         std::fs::write(dir.join("two.txt"), "alpha two").unwrap();
         std::fs::write(dir.join("three.txt"), "alpha three").unwrap();
 
-        let results = run_rg_search("alpha", None, dir, 2, dir).await?;
+        let sensitive_paths = crate::sensitive_paths::SensitivePathPolicy::new(dir.to_path_buf());
+        let results = run_rg_search("alpha", None, dir, 2, dir, &sensitive_paths).await?;
         assert_eq!(results.len(), 2);
         Ok(())
     }
@@ -256,7 +332,8 @@ mod tests {
         let dir = temp.path();
         std::fs::write(dir.join("one.txt"), "omega").unwrap();
 
-        let results = run_rg_search("alpha", None, dir, 5, dir).await?;
+        let sensitive_paths = crate::sensitive_paths::SensitivePathPolicy::new(dir.to_path_buf());
+        let results = run_rg_search("alpha", None, dir, 5, dir, &sensitive_paths).await?;
         assert!(results.is_empty());
         Ok(())
     }

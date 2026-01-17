@@ -6,6 +6,7 @@ use crate::function_tool::FunctionCallError;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
+use crate::tools::context::ToolProvenance;
 use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
 use crate::tools::spec::JsonSchema;
@@ -90,6 +91,10 @@ impl ToolHandler for PlanHandler {
             content,
             content_items: None,
             success: Some(true),
+            provenance: ToolProvenance::Unattested {
+                origin_type: "internal",
+                origin_path: Some("update_plan".to_string()),
+            },
         })
     }
 }

@@ -622,6 +622,42 @@ async fn mcp_startup_banner_clears_after_user_submits_prompt() {
     );
 }
 
+#[tokio::test]
+async fn exclusion_summary_banner_is_ephemeral() {
+    use codex_protocol::protocol::ExclusionLayerCounts;
+    use codex_protocol::protocol::ExclusionSourceCounts;
+    use codex_protocol::protocol::ExclusionSummaryEvent;
+
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    chat.handle_codex_event(Event {
+        id: "exclusion-1".into(),
+        msg: EventMsg::ExclusionSummary(ExclusionSummaryEvent {
+            total_redacted: 3,
+            total_blocked: 1,
+            layers: ExclusionLayerCounts::default(),
+            sources: ExclusionSourceCounts::default(),
+            per_tool: Vec::new(),
+        }),
+    });
+
+    assert!(!drain_insert_history(&mut rx).is_empty());
+    assert_eq!(
+        chat.bottom_pane.exclusion_summary_banner_message(),
+        Some("Filtered: 3 redacted, 1 blocked")
+    );
+
+    chat.bottom_pane.set_composer_text("hello".to_string());
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+    assert!(
+        chat.bottom_pane
+            .exclusion_summary_banner_message()
+            .is_none(),
+        "expected banner to clear after the user submits a prompt"
+    );
+}
+
 fn set_chatgpt_auth(chat: &mut ChatWidget) {
     chat.auth_manager =
         AuthManager::from_auth_for_testing(CodexAuth::create_dummy_chatgpt_auth_for_testing());

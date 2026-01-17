@@ -5,9 +5,11 @@ use tokio::fs;
 use crate::function_tool::FunctionCallError;
 use crate::protocol::EventMsg;
 use crate::protocol::ViewImageToolCallEvent;
+use crate::sensitive_paths::SensitivePathDecision;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
+use crate::tools::context::ToolProvenance;
 use crate::tools::handlers::parse_arguments;
 use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
@@ -32,6 +34,7 @@ impl ToolHandler for ViewImageHandler {
         let ToolInvocation {
             session,
             turn,
+            tool_name,
             payload,
             call_id,
             ..
@@ -49,6 +52,29 @@ impl ToolHandler for ViewImageHandler {
         let args: ViewImageArgs = parse_arguments(&arguments)?;
 
         let abs_path = turn.resolve_structured_file_tool_path(Some(args.path));
+
+        if turn
+            .sensitive_paths
+            .decision_discover_with_is_dir(&abs_path, Some(false))
+            == SensitivePathDecision::Deny
+        {
+            {
+                let mut counters = turn
+                    .exclusion_counters
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                counters.record(
+                    crate::exclusion_counters::ExclusionLayer::Layer1InputGuards,
+                    crate::exclusion_counters::ExclusionSource::Filesystem,
+                    &tool_name,
+                    /* redacted */ false,
+                    /* blocked */ true,
+                );
+            }
+            return Err(FunctionCallError::RespondToModel(
+                turn.sensitive_paths.format_denied_message(),
+            ));
+        }
 
         let metadata = fs::metadata(&abs_path).await.map_err(|error| {
             FunctionCallError::RespondToModel(format!(
@@ -95,6 +121,7 @@ impl ToolHandler for ViewImageHandler {
             content: "attached local image path".to_string(),
             content_items: None,
             success: Some(true),
+            provenance: ToolProvenance::Filesystem { path: abs_path },
         })
     }
 }

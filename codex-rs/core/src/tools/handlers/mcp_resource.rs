@@ -30,6 +30,7 @@ use crate::protocol::McpToolCallEndEvent;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
+use crate::tools::context::ToolProvenance;
 use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
 
@@ -633,6 +634,10 @@ where
         content,
         content_items: None,
         success: Some(true),
+        provenance: ToolProvenance::Unattested {
+            origin_type: "mcp_resource",
+            origin_path: None,
+        },
     })
 }
 

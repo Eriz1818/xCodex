@@ -667,6 +667,9 @@ pub enum EventMsg {
     /// indicates the turn continued but the user should still be notified.
     Warning(WarningEvent),
 
+    /// Summary of exclusion filtering applied during the turn (no paths).
+    ExclusionSummary(ExclusionSummaryEvent),
+
     /// Conversation history was compacted (either automatically or manually).
     ContextCompacted(ContextCompactedEvent),
 
@@ -877,6 +880,51 @@ impl From<CollabCloseEndEvent> for EventMsg {
     fn from(event: CollabCloseEndEvent) -> Self {
         EventMsg::CollabCloseEnd(event)
     }
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
+pub struct ExclusionSummaryEvent {
+    #[ts(type = "number")]
+    pub total_redacted: i64,
+    #[ts(type = "number")]
+    pub total_blocked: i64,
+
+    pub layers: ExclusionLayerCounts,
+    pub sources: ExclusionSourceCounts,
+
+    #[serde(default)]
+    pub per_tool: Vec<ExclusionToolCount>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize, Serialize, JsonSchema, TS)]
+pub struct ExclusionLayerCounts {
+    pub layer1_input_guards: ExclusionCounts,
+    pub layer2_output_sanitization: ExclusionCounts,
+    pub layer3_send_firewall: ExclusionCounts,
+    pub layer4_request_interceptor: ExclusionCounts,
+}
+
+#[derive(Debug, Clone, Default, Deserialize, Serialize, JsonSchema, TS)]
+pub struct ExclusionSourceCounts {
+    pub filesystem: ExclusionCounts,
+    pub mcp: ExclusionCounts,
+    pub shell: ExclusionCounts,
+    pub prompt: ExclusionCounts,
+    pub other: ExclusionCounts,
+}
+
+#[derive(Debug, Clone, Default, Deserialize, Serialize, JsonSchema, TS)]
+pub struct ExclusionCounts {
+    #[ts(type = "number")]
+    pub redacted: i64,
+    #[ts(type = "number")]
+    pub blocked: i64,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
+pub struct ExclusionToolCount {
+    pub tool_name: String,
+    pub counts: ExclusionCounts,
 }
 
 /// Agent lifecycle status, derived from emitted events.

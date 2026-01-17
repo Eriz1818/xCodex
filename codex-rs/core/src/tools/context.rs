@@ -11,6 +11,7 @@ use codex_protocol::models::ShellToolCallParams;
 use codex_utils_string::take_bytes_at_char_boundary;
 use mcp_types::CallToolResult;
 use std::borrow::Cow;
+use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
@@ -63,24 +64,64 @@ pub enum ToolOutput {
         // Some tool calls such as MCP calls may return structured content that can get parsed into an array of polymorphic content items.
         content_items: Option<Vec<FunctionCallOutputContentItem>>,
         success: Option<bool>,
+        provenance: ToolProvenance,
     },
     Mcp {
         result: Result<CallToolResult, String>,
+        provenance: ToolProvenance,
     },
+}
+
+#[derive(Clone, Debug)]
+pub enum ToolProvenance {
+    Filesystem {
+        path: PathBuf,
+    },
+    Mcp {
+        server: String,
+        tool: String,
+    },
+    Shell {
+        cwd: PathBuf,
+    },
+    Unattested {
+        origin_type: &'static str,
+        origin_path: Option<String>,
+    },
+}
+
+impl ToolProvenance {
+    pub fn origin_type(&self) -> &'static str {
+        match self {
+            Self::Filesystem { .. } => "filesystem",
+            Self::Mcp { .. } => "mcp",
+            Self::Shell { .. } => "shell",
+            Self::Unattested { origin_type, .. } => origin_type,
+        }
+    }
+
+    pub fn origin_path(&self) -> Option<String> {
+        match self {
+            Self::Filesystem { path } => Some(path.display().to_string()),
+            Self::Shell { cwd } => Some(cwd.display().to_string()),
+            Self::Mcp { server, tool } => Some(format!("{server}/{tool}")),
+            Self::Unattested { origin_path, .. } => origin_path.clone(),
+        }
+    }
 }
 
 impl ToolOutput {
     pub fn log_preview(&self) -> String {
         match self {
             ToolOutput::Function { content, .. } => telemetry_preview(content),
-            ToolOutput::Mcp { result } => format!("{result:?}"),
+            ToolOutput::Mcp { result, .. } => format!("{result:?}"),
         }
     }
 
     pub fn success_for_logging(&self) -> bool {
         match self {
             ToolOutput::Function { success, .. } => success.unwrap_or(true),
-            ToolOutput::Mcp { result } => result.is_ok(),
+            ToolOutput::Mcp { result, .. } => result.is_ok(),
         }
     }
 
@@ -90,6 +131,7 @@ impl ToolOutput {
                 content,
                 content_items,
                 success,
+                provenance: _,
             } => {
                 if matches!(payload, ToolPayload::Custom { .. }) {
                     ResponseInputItem::CustomToolCallOutput {
@@ -107,7 +149,10 @@ impl ToolOutput {
                     }
                 }
             }
-            ToolOutput::Mcp { result } => ResponseInputItem::McpToolCallOutput {
+            ToolOutput::Mcp {
+                result,
+                provenance: _,
+            } => ResponseInputItem::McpToolCallOutput {
                 call_id: call_id.to_string(),
                 result,
             },
@@ -169,6 +214,10 @@ mod tests {
             content: "patched".to_string(),
             content_items: None,
             success: Some(true),
+            provenance: ToolProvenance::Unattested {
+                origin_type: "test",
+                origin_path: None,
+            },
         }
         .into_response("call-42", &payload);
 
@@ -190,6 +239,10 @@ mod tests {
             content: "ok".to_string(),
             content_items: None,
             success: Some(true),
+            provenance: ToolProvenance::Unattested {
+                origin_type: "test",
+                origin_path: None,
+            },
         }
         .into_response("fn-1", &payload);
 
