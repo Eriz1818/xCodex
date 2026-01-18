@@ -190,14 +190,56 @@ impl ReasoningSummaryCell {
     }
 
     fn lines(&self, width: u16) -> Vec<Line<'static>> {
-        let mut lines: Vec<Line<'static>> = Vec::new();
-        append_markdown(
-            &self.content,
-            Some((width as usize).saturating_sub(2)),
-            &mut lines,
-        );
+        let wrap_width = width as usize;
+        let md_width = Some(wrap_width.saturating_sub(2));
+
+        let header = self._header.trim();
+        let content = self.content.trim();
+
+        if header.is_empty() {
+            let mut lines: Vec<Line<'static>> = Vec::new();
+            append_markdown(content, md_width, &mut lines);
+
+            let summary_style = Style::default().dim().italic();
+            let summary_lines = lines
+                .into_iter()
+                .map(|mut line| {
+                    line.spans = line
+                        .spans
+                        .into_iter()
+                        .map(|span| span.patch_style(summary_style))
+                        .collect();
+                    line
+                })
+                .collect::<Vec<_>>();
+
+            return word_wrap_lines(
+                &summary_lines,
+                RtOptions::new(wrap_width)
+                    .initial_indent("• ".dim().into())
+                    .subsequent_indent("  ".into()),
+            );
+        }
+
+        let mut header_lines: Vec<Line<'static>> = Vec::new();
+        append_markdown(header, md_width, &mut header_lines);
+        let header_style = Style::default().dim();
+        let header_lines = header_lines
+            .into_iter()
+            .map(|mut line| {
+                line.spans = line
+                    .spans
+                    .into_iter()
+                    .map(|span| span.patch_style(header_style))
+                    .collect();
+                line
+            })
+            .collect::<Vec<_>>();
+
+        let mut content_lines: Vec<Line<'static>> = Vec::new();
+        append_markdown(content, md_width, &mut content_lines);
         let summary_style = Style::default().dim().italic();
-        let summary_lines = lines
+        let content_lines = content_lines
             .into_iter()
             .map(|mut line| {
                 line.spans = line
@@ -209,12 +251,19 @@ impl ReasoningSummaryCell {
             })
             .collect::<Vec<_>>();
 
-        word_wrap_lines(
-            &summary_lines,
-            RtOptions::new(width as usize)
+        let mut out = word_wrap_lines(
+            &header_lines,
+            RtOptions::new(wrap_width)
                 .initial_indent("• ".dim().into())
                 .subsequent_indent("  ".into()),
-        )
+        );
+        out.extend(word_wrap_lines(
+            &content_lines,
+            RtOptions::new(wrap_width)
+                .initial_indent("  ".into())
+                .subsequent_indent("  ".into()),
+        ));
+        out
     }
 }
 
@@ -3276,10 +3325,16 @@ mod tests {
         );
 
         let rendered_display = render_lines(&cell.display_lines(80));
-        assert_eq!(rendered_display, vec!["• Detailed reasoning goes here."]);
+        assert_eq!(
+            rendered_display,
+            vec!["• High level reasoning", "  Detailed reasoning goes here."]
+        );
 
         let rendered_transcript = render_transcript(cell.as_ref());
-        assert_eq!(rendered_transcript, vec!["• Detailed reasoning goes here."]);
+        assert_eq!(
+            rendered_transcript,
+            vec!["• High level reasoning", "  Detailed reasoning goes here."]
+        );
     }
 
     #[test]
@@ -3301,7 +3356,10 @@ mod tests {
         );
 
         let rendered_display = render_lines(&cell.display_lines(80));
-        assert_eq!(rendered_display, vec!["• Detailed reasoning goes here."]);
+        assert_eq!(
+            rendered_display,
+            vec!["• High level reasoning", "  Detailed reasoning goes here."]
+        );
     }
 
     #[test]
@@ -3342,10 +3400,16 @@ mod tests {
         );
 
         let rendered_display = render_lines(&cell.display_lines(80));
-        assert_eq!(rendered_display, vec!["• We should fix the bug next."]);
+        assert_eq!(
+            rendered_display,
+            vec!["• High level plan", "  We should fix the bug next."]
+        );
 
         let rendered_transcript = render_transcript(cell.as_ref());
-        assert_eq!(rendered_transcript, vec!["• We should fix the bug next."]);
+        assert_eq!(
+            rendered_transcript,
+            vec!["• High level plan", "  We should fix the bug next."]
+        );
     }
 
     #[test]
