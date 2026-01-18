@@ -1,4 +1,6 @@
+use std::collections::HashMap;
 use std::io::Result;
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use crate::app_event::AppEvent;
@@ -6,10 +8,9 @@ use crate::app_event_sender::AppEventSender;
 use crate::bottom_pane::BottomPane;
 use crate::bottom_pane::BottomPaneParams;
 use crate::bottom_pane::BottomPaneView;
-use crate::bottom_pane::FooterMode;
-use crate::bottom_pane::FooterProps;
 use crate::bottom_pane::ThemeEditorView;
-use crate::bottom_pane::render_footer;
+use crate::history_cell::AgentMessageCell;
+use crate::history_cell::FinalMessageSeparator;
 use crate::history_cell::HistoryCell;
 use crate::history_cell::UserHistoryCell;
 use crate::key_hint;
@@ -20,7 +21,11 @@ use crate::render::renderable::Renderable;
 use crate::style::user_message_style;
 use crate::tui;
 use crate::tui::TuiEvent;
-use codex_core::features::Features;
+use codex_core::protocol::FileChange;
+use codex_protocol::ThreadId;
+use codex_protocol::plan_tool::PlanItemArg;
+use codex_protocol::plan_tool::StepStatus;
+use codex_protocol::plan_tool::UpdatePlanArgs;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyEventKind;
@@ -40,11 +45,11 @@ use ratatui::style::Stylize;
 use ratatui::text::Line;
 use ratatui::text::Span;
 use ratatui::text::Text;
-use ratatui::widgets::Block;
 use ratatui::widgets::Paragraph;
 use ratatui::widgets::Widget;
 use ratatui::widgets::WidgetRef;
 use ratatui::widgets::Wrap;
+use serde_json::json;
 
 pub(crate) enum Overlay {
     Transcript(TranscriptOverlay),
@@ -111,7 +116,6 @@ const KEY_TAB: KeyBinding = key_hint::plain(KeyCode::Tab);
 const KEY_Q: KeyBinding = key_hint::plain(KeyCode::Char('q'));
 const KEY_ESC: KeyBinding = key_hint::plain(KeyCode::Esc);
 const KEY_ENTER: KeyBinding = key_hint::plain(KeyCode::Enter);
-const KEY_H: KeyBinding = key_hint::plain(KeyCode::Char('h'));
 const KEY_CTRL_T: KeyBinding = key_hint::ctrl(KeyCode::Char('t'));
 const KEY_CTRL_C: KeyBinding = key_hint::ctrl(KeyCode::Char('c'));
 const KEY_D: KeyBinding = key_hint::plain(KeyCode::Char('d'));
@@ -362,8 +366,35 @@ impl ThemeSelectorOverlay {
             return 0;
         }
 
+        for y in area.top()..area.bottom() {
+            for x in area.left()..area.right() {
+                buf[(x, y)].set_symbol(" ");
+                buf[(x, y)].set_style(crate::theme::transcript_style());
+            }
+        }
+
+        let Some(frame_requester) = self.frame_requester.as_ref() else {
+            return 0;
+        };
+
+        let diff_add = if diff_bg {
+            crate::theme::diff_add_style()
+        } else {
+            crate::theme::diff_add_text_style()
+        };
+        let diff_del = if diff_bg {
+            crate::theme::diff_del_style()
+        } else {
+            crate::theme::diff_del_text_style()
+        };
+        let diff_hunk = if diff_bg {
+            crate::theme::diff_hunk_style()
+        } else {
+            crate::theme::diff_hunk_text_style()
+        };
+
         fn buffer_to_lines(buf: &Buffer) -> Vec<Line<'static>> {
-            let mut out = Vec::new();
+            let mut out: Vec<Line<'static>> = Vec::with_capacity(buf.area.height as usize);
             for y in 0..buf.area.height {
                 let mut spans: Vec<Span<'static>> = Vec::new();
                 let mut run_style: Option<Style> = None;
@@ -373,14 +404,17 @@ impl ThemeSelectorOverlay {
                     let cell = &buf[(x, y)];
                     let symbol = cell.symbol();
                     let style = cell.style();
+                    let symbol = if symbol.is_empty() { " " } else { symbol };
 
                     if run_style != Some(style) && !run.is_empty() {
-                        spans.push(Span::styled(std::mem::take(&mut run), run_style.unwrap()));
+                        if let Some(prev_style) = run_style {
+                            spans.push(Span::styled(std::mem::take(&mut run), prev_style));
+                        } else {
+                            spans.push(Span::from(std::mem::take(&mut run)));
+                        }
                     }
 
-                    if run.is_empty() {
-                        run_style = Some(style);
-                    } else if run_style != Some(style) {
+                    if run.is_empty() || run_style != Some(style) {
                         run_style = Some(style);
                     }
 
@@ -398,237 +432,503 @@ impl ThemeSelectorOverlay {
             out
         }
 
-        for y in area.top()..area.bottom() {
-            for x in area.left()..area.right() {
-                buf[(x, y)].set_symbol(" ");
-                buf[(x, y)].set_style(crate::theme::transcript_style());
+        let session_event = codex_core::protocol::SessionConfiguredEvent {
+            session_id: ThreadId::new(),
+            model: "gpt-5.2 medium".to_string(),
+            model_provider_id: "openai".to_string(),
+            approval_policy: self.config.approval_policy.value(),
+            sandbox_policy: self.config.sandbox_policy.get().clone(),
+            cwd: PathBuf::from("~/Dev/Pyfun/skynet/xcodex"),
+            reasoning_effort: None,
+            history_log_id: 0,
+            history_entry_count: 0,
+            initial_messages: None,
+            rollout_path: PathBuf::from("/tmp/theme-preview.jsonl"),
+        };
+
+        let mut preview_config = self.config.clone();
+        preview_config.cwd = PathBuf::from("~/Dev/Pyfun/skynet/xcodex");
+
+        let session_info = crate::history_cell::new_session_info(
+            &preview_config,
+            "gpt-5.2 medium",
+            session_event,
+            true,
+        );
+
+        let mut lines: Vec<Line<'static>> = Vec::new();
+
+        // (1) Session info (scrollable transcript content).
+        lines.extend(session_info.display_lines(area.width));
+        lines.push(Line::from(""));
+
+        // (2) Quick examples block: diff + status + link + warning + error.
+        lines.push(vec!["• ".dim(), "Quick examples".bold()].into());
+        lines.extend([
+            Line::from(vec![
+                "  └ ".dim(),
+                Span::from("config.yaml").set_style(diff_hunk),
+                " ".into(),
+                "(example change)".dim(),
+            ]),
+            Line::from(vec![
+                "    ".into(),
+                Span::from("- old line").set_style(diff_del),
+            ]),
+            Line::from(vec![
+                "    ".into(),
+                Span::from("+ new line").set_style(diff_add),
+            ]),
+            Line::from(vec![
+                "  └ ".dim(),
+                "status: ".dim(),
+                Span::from("Working").set_style(crate::theme::accent_style()),
+                " · ".dim(),
+                Span::from("warning").set_style(crate::theme::warning_style()),
+                " · ".dim(),
+                Span::from("error").set_style(crate::theme::error_style()),
+                " · ".dim(),
+                Span::from("success").set_style(crate::theme::success_style()),
+            ]),
+            Line::from(vec![
+                "  └ ".dim(),
+                "link: ".dim(),
+                Span::from("https://example.com")
+                    .set_style(crate::theme::link_style().underlined()),
+            ]),
+        ]);
+        lines.extend(
+            crate::history_cell::new_warning_event(
+                "This is an example warning event shown in the transcript.".to_string(),
+            )
+            .display_lines(area.width),
+        );
+        lines.extend(
+            crate::history_cell::new_error_event(
+                "This is an example error event shown in the transcript.".to_string(),
+            )
+            .display_lines(area.width),
+        );
+        lines.push(Line::from(""));
+        lines.push(vec!["  └ ".dim(), "One-of-each transcript items".bold()].into());
+        lines.push(Line::from(""));
+
+        {
+            let update = crate::history_cell::UpdateAvailableHistoryCell::new(
+                "v2026.01.17".to_string(),
+                None,
+            );
+            lines.extend(update.display_lines(area.width));
+            lines.push(Line::from(""));
+
+            let whats_new = crate::history_cell::WhatsNewHistoryCell::new(
+                "2026.01.17".to_string(),
+                vec![
+                    "Theme preview now renders a full turn-flow transcript.".to_string(),
+                    "Approval modals render without background bleed.".to_string(),
+                    "All preview styling is sourced from real widgets/cells.".to_string(),
+                ],
+            );
+            lines.extend(whats_new.display_lines(area.width));
+            lines.push(Line::from(""));
+
+            let deprecation = crate::history_cell::new_deprecation_notice(
+                "Heads up: `/dance` is deprecated.".to_string(),
+                Some(
+                    "Use `/boogie` instead (or just type “boogie” loudly into the composer)."
+                        .to_string(),
+                ),
+            );
+            lines.extend(deprecation.display_lines(area.width));
+            lines.push(Line::from(""));
+
+            let info = crate::history_cell::new_info_event(
+                "Tip: Use `/mcp` to inspect available tools.".to_string(),
+                Some("This preview includes a sample `/mcp` output block.".to_string()),
+            );
+            lines.extend(info.display_lines(area.width));
+            lines.push(Line::from(""));
+
+            let web_search =
+                crate::history_cell::new_web_search_call("ratatui Stylize helpers".to_string());
+            lines.extend(web_search.display_lines(area.width));
+            lines.push(Line::from(""));
+
+            let mut changes = HashMap::new();
+            changes.insert(
+                PathBuf::from("codex-rs/tui2/src/pager_overlay.rs"),
+                FileChange::Update {
+                    unified_diff: "@@ -1,1 +1,2 @@\n-old\n+new\n+extra\n".to_string(),
+                    move_path: None,
+                },
+            );
+            changes.insert(
+                PathBuf::from("docs/impl-plans/one-of-each.md"),
+                FileChange::Add {
+                    content: "# One-of-each\n\nThis file is a preview example.\n".to_string(),
+                },
+            );
+            changes.insert(
+                PathBuf::from("notes/tmp.txt"),
+                FileChange::Delete {
+                    content: "obsolete\n".to_string(),
+                },
+            );
+
+            let patch = crate::history_cell::new_patch_event(changes, self.config.cwd.as_path());
+            lines.extend(patch.display_lines(area.width));
+            lines.push(Line::from(""));
+
+            let patch_failed = crate::history_cell::new_patch_apply_failure(
+                "error: patch failed: src/main.rs:42\nerror: src/main.rs: patch does not apply\n"
+                    .to_string(),
+            );
+            lines.extend(patch_failed.display_lines(area.width));
+            lines.push(Line::from(""));
+
+            let view_image = crate::history_cell::new_view_image_tool_call(
+                self.config.cwd.join("screenshots/preview-cat.png"),
+                self.config.cwd.as_path(),
+            );
+            lines.extend(view_image.display_lines(area.width));
+            lines.push(Line::from(""));
+
+            let mut tool_call = crate::history_cell::new_active_mcp_tool_call(
+                "preview-mcp-1".to_string(),
+                codex_core::protocol::McpInvocation {
+                    server: "filesystem".to_string(),
+                    tool: "read_file".to_string(),
+                    arguments: Some(json!({"path": "README.md"})),
+                },
+                self.config.animations,
+            );
+            let image_cell = tool_call.complete(
+                std::time::Duration::from_millis(312),
+                Ok(mcp_types::CallToolResult {
+                    content: vec![mcp_types::ContentBlock::TextContent(
+                        mcp_types::TextContent {
+                            annotations: None,
+                            text: "Found 1 file: README.md".to_string(),
+                            r#type: "text".to_string(),
+                        },
+                    )],
+                    is_error: Some(false),
+                    structured_content: None,
+                }),
+            );
+            lines.extend(tool_call.display_lines(area.width));
+            if let Some(image_cell) = image_cell {
+                lines.extend(image_cell.display_lines(area.width));
             }
+            lines.push(Line::from(""));
+
+            let mut image_tool_call = crate::history_cell::new_active_mcp_tool_call(
+                "preview-mcp-2".to_string(),
+                codex_core::protocol::McpInvocation {
+                    server: "screenshots".to_string(),
+                    tool: "take_screenshot".to_string(),
+                    arguments: Some(json!({"fullPage": true})),
+                },
+                self.config.animations,
+            );
+            let image_cell = image_tool_call.complete(
+                std::time::Duration::from_millis(198),
+                Ok(mcp_types::CallToolResult {
+                    content: vec![mcp_types::ContentBlock::ImageContent(mcp_types::ImageContent {
+                        annotations: None,
+                        data: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+W6p0AAAAASUVORK5CYII=".to_string(),
+                        mime_type: "image/png".to_string(),
+                        r#type: "image".to_string(),
+                    })],
+                    is_error: Some(false),
+                    structured_content: None,
+                }),
+            );
+            lines.extend(image_tool_call.display_lines(area.width));
+            if let Some(image_cell) = image_cell {
+                lines.extend(image_cell.display_lines(area.width));
+            }
+            lines.push(Line::from(""));
+
+            let mcp = crate::history_cell::empty_mcp_output();
+            lines.extend(mcp.display_lines(area.width));
+            lines.push(Line::from(""));
+
+            let approval_decision = crate::history_cell::new_approval_decision_cell(
+                vec![
+                    "bash".to_string(),
+                    "-lc".to_string(),
+                    "cargo test -p codex-tui2".to_string(),
+                ],
+                codex_core::protocol::ReviewDecision::Approved,
+            );
+            lines.extend(approval_decision.display_lines(area.width));
+            lines.push(Line::from(""));
+
+            let sessions = crate::history_cell::new_unified_exec_sessions_output(
+                vec![
+                    crate::history_cell::BackgroundActivityEntry::new(
+                        "term-17".to_string(),
+                        "python3 -i\n>>>".to_string(),
+                    ),
+                    crate::history_cell::BackgroundActivityEntry::new(
+                        "term-23".to_string(),
+                        "rg -n \"HistoryCell\" -S codex-rs/tui2/src/history_cell.rs".to_string(),
+                    ),
+                ],
+                vec![crate::history_cell::BackgroundActivityEntry::new(
+                    "hook-1".to_string(),
+                    "pre-commit: cargo fmt && cargo test -p codex-tui2".to_string(),
+                )],
+            );
+            lines.extend(sessions.display_lines(area.width));
         }
 
-        let Some(frame_requester) = self.frame_requester.as_ref() else {
-            return 0;
-        };
+        lines.push(Line::from(""));
 
-        let _user_style = crate::theme::transcript_style().patch(user_message_style());
-        let diff_add = if diff_bg {
-            crate::theme::diff_add_style()
-        } else {
-            crate::theme::diff_add_text_style()
-        };
-        let diff_del = if diff_bg {
-            crate::theme::diff_del_style()
-        } else {
-            crate::theme::diff_del_text_style()
-        };
-        let diff_hunk = if diff_bg {
-            crate::theme::diff_hunk_style()
-        } else {
-            crate::theme::diff_hunk_text_style()
-        };
-        let thought_style = crate::theme::transcript_dim_style().add_modifier(Modifier::ITALIC);
+        let user_prompt = "Summarize the theme preview changes and show an approval modal example.";
+        {
+            let mut composer_pane = BottomPane::new(BottomPaneParams {
+                app_event_tx: self.app_event_tx.clone(),
+                frame_requester: frame_requester.clone(),
+                has_input_focus: true,
+                enhanced_keys_supported: false,
+                placeholder_text: "Ask xcodex to do anything".to_string(),
+                disable_paste_burst: false,
+                minimal_composer_borders: self.config.tui_composer_minimal_borders,
+                xtreme_ui_enabled: crate::xtreme::xtreme_ui_enabled(&self.config),
+                animations_enabled: self.config.animations,
+                skills: None,
+            });
+            composer_pane.set_composer_text(user_prompt.to_string());
 
+            let width = area.width.max(1);
+            let height = composer_pane.desired_height(width);
+            let mut composer_buf = Buffer::empty(Rect::new(0, 0, width, height));
+            composer_pane.render(*composer_buf.area(), &mut composer_buf);
+
+            lines.push(vec!["• ".dim(), "Composer history".bold()].into());
+            lines.extend(buffer_to_lines(&composer_buf));
+            lines.push(Line::from(""));
+        }
+
+        let user_cell = UserHistoryCell {
+            message: user_prompt.to_string(),
+        };
+        lines.extend(user_cell.display_lines(area.width));
+
+        // (3) Plan update sample.
+        let plan_update = crate::history_cell::new_plan_update(UpdatePlanArgs {
+            explanation: Some(
+                "Make the theme preview show the whole turn flow, without hardcoded colors."
+                    .to_string(),
+            ),
+            plan: vec![
+                PlanItemArg {
+                    step: "Add quick examples block".to_string(),
+                    status: StepStatus::Completed,
+                },
+                PlanItemArg {
+                    step: "Render approval modal inside transcript".to_string(),
+                    status: StepStatus::InProgress,
+                },
+                PlanItemArg {
+                    step: "Add final summary section".to_string(),
+                    status: StepStatus::Pending,
+                },
+            ],
+        });
+        lines.extend(plan_update.display_lines(area.width));
+
+        let mut tool_call = crate::exec_cell::new_active_exec_command(
+            "preview-shell-1".to_string(),
+            vec![
+                "bash".to_string(),
+                "-lc".to_string(),
+                "rg -n \"Theme Preview\" codex-rs/tui2/src/pager_overlay.rs".to_string(),
+            ],
+            Vec::new(),
+            codex_core::protocol::ExecCommandSource::Agent,
+            None,
+            false,
+        );
+        tool_call.complete_call(
+            "preview-shell-1",
+            crate::exec_cell::CommandOutput {
+                exit_code: 0,
+                aggregated_output:
+                    "935:                    Paragraph::new(Line::from(\"Theme Preview\"))\n"
+                        .to_string(),
+                formatted_output: "935: Paragraph::new(Line::from(\"Theme Preview\"))".to_string(),
+            },
+            std::time::Duration::from_millis(742),
+        );
+        lines.extend(tool_call.display_lines(area.width));
+
+        let thought = crate::history_cell::new_reasoning_summary_block_with_visibility(
+            "**Thought**\n\nI’ll render the preview using the same `HistoryCell` renderers as the real transcript so styles are theme-derived and consistent.".to_string(),
+            false,
+        );
+        lines.extend(thought.display_lines(area.width));
+
+        // (4) Approval required (render the real approval overlay into transcript).
         let approval = crate::bottom_pane::ApprovalOverlay::new(
             crate::bottom_pane::ApprovalRequest::Exec {
                 id: "preview-install".to_string(),
                 command: vec![
                     "bash".to_string(),
                     "-lc".to_string(),
-                    "cd /Users/eriz/Dev/Pyfun/codex/codex-rs && just xcodex-install".to_string(),
+                    "cd /Users/MD-Dyson/Dev/Pyfun/skynet/xcodex/codex-rs && just xcodex-install"
+                        .to_string(),
                 ],
                 reason: None,
                 proposed_execpolicy_amendment: None,
             },
             self.app_event_tx.clone(),
-            Features::with_defaults(),
+            codex_core::features::Features::with_defaults(),
         );
-        let approval_height = approval.desired_height(area.width);
-        let mut approval_buf = Buffer::empty(Rect::new(0, 0, area.width, approval_height));
+        let width = area.width.max(1);
+        let height = approval.desired_height(width);
+        let mut approval_buf = Buffer::empty(Rect::new(0, 0, width, height));
+        let base_style = user_message_style().patch(crate::theme::composer_style());
         for y in 0..approval_buf.area.height {
             for x in 0..approval_buf.area.width {
                 approval_buf[(x, y)].set_symbol(" ");
-                approval_buf[(x, y)].set_style(crate::theme::transcript_style());
+                approval_buf[(x, y)].set_style(base_style);
             }
         }
         approval.render(*approval_buf.area(), &mut approval_buf);
-        let approval_lines = buffer_to_lines(&approval_buf);
+        lines.push(Line::from(vec![
+            Span::from("Approval required:")
+                .set_style(crate::theme::warning_style().add_modifier(Modifier::BOLD)),
+        ]));
+        lines.extend(buffer_to_lines(&approval_buf));
+        lines.push(Line::from(""));
 
-        let mut lines: Vec<Line<'static>> = vec![
-            Line::from(vec![
-                Span::from("config.yaml").set_style(diff_hunk),
-                " ".into(),
-                "(example change)".dim(),
-            ]),
-            Line::from(vec![Span::from("- old line").set_style(diff_del)]),
-            Line::from(vec![Span::from("+ new line").set_style(diff_add)]),
-            Line::from(vec![
-                "• ".into(),
-                "status: ".dim(),
-                "Working".set_style(crate::theme::accent_style()),
-                " · ".dim(),
-                "warning".set_style(crate::theme::warning_style()),
-                " · ".dim(),
-                "error".set_style(crate::theme::error_style()),
-                " · ".dim(),
-                "success".set_style(crate::theme::success_style()),
-            ]),
-            Line::from(vec![
-                "• ".into(),
-                "link: ".dim(),
-                "https://example.com".set_style(crate::theme::link_style().underlined()),
-            ]),
-        ];
-
-        let user_cell = UserHistoryCell {
-            message: "group these conflicts into batches for me so I can help better and we will then be able to resolve multiple conflicts at once.".to_string(),
-        };
-        lines.extend(user_cell.display_lines(area.width));
-
-        lines.extend([
-            Line::from(""),
-            Line::from("Implementing user requests")
-                .style(thought_style.add_modifier(Modifier::BOLD)),
-            Line::from(""),
-            Line::from("I need to remove the diff preview line and replace the hunk header with something more intuitive. I’ll also update the directory in the info box and ensure scroll behavior matches the real transcript experience.")
-                .style(thought_style),
-            Line::from(""),
-            Line::from(vec!["Approval required:".set_style(crate::theme::warning_style().bold())]),
-        ]);
-        lines.extend(approval_lines);
-        lines.extend([
-            Line::from(""),
-            Line::from(vec!["assistant: ".dim(), "Here’s the plan…".into()]),
-            Line::from(""),
-            Line::from(vec![
-                "• ".into(),
-                "Ran ".dim(),
-                "cd /Users/eriz/Dev/Pyfun/codex/codex-rs".set_style(crate::theme::accent_style()),
-                " && ".dim(),
-                "cargo test -p codex-core".set_style(crate::theme::accent_style()),
-            ]),
-            Line::from(vec![
-                "  └ ".dim(),
-                "test result: ok(".dim(),
-                "5 passed".set_style(crate::theme::success_style()),
-                "; ".dim(),
-                "0 failed".dim(),
-                ")".dim(),
-            ]),
-        ]);
-
-        let mut bottom_pane = BottomPane::new(BottomPaneParams {
-            app_event_tx: self.app_event_tx.clone(),
-            frame_requester: frame_requester.clone(),
-            has_input_focus: true,
-            enhanced_keys_supported: false,
-            placeholder_text: "Ask xcodex to do anything".to_string(),
-            disable_paste_burst: false,
-            minimal_composer_borders: self.config.tui_composer_minimal_borders,
-            xtreme_ui_enabled: crate::xtreme::xtreme_ui_enabled(&self.config),
-            animations_enabled: self.config.animations,
-            skills: None,
-        });
-        bottom_pane.set_slash_popup_max_rows(3);
-        bottom_pane.set_composer_text("/".to_string());
-        bottom_pane.ensure_status_indicator();
-        bottom_pane.update_status("Working".to_string(), Some("Theme preview".to_string()));
-        bottom_pane.set_context_window(Some(100), Some(0));
-        bottom_pane.set_status_bar_git_options(true, true);
-        bottom_pane.set_status_bar_git_context(
-            Some("feat/themes".to_string()),
-            Some("~/Dev/Pyfun/codex".to_string()),
+        // (5) Final separator + summary header.
+        lines.extend(
+            FinalMessageSeparator::new(
+                Some(12),
+                true,
+                crate::xtreme::xtreme_ui_enabled(&self.config),
+                None,
+                None,
+            )
+            .display_lines(area.width),
+        );
+        lines.extend(
+            crate::history_cell::new_review_status_line("Summary".to_string())
+                .display_lines(area.width),
         );
 
-        let footer_height = 1u16;
-        let desired_bottom_height = bottom_pane.desired_height(area.width);
-        let max_bottom_height = area.height.saturating_sub(footer_height).saturating_sub(3);
-        let bottom_height = desired_bottom_height.min(max_bottom_height);
+        let assistant = AgentMessageCell::new(
+            vec![Line::from(vec![
+                "assistant: ".dim(),
+                "Theme preview now includes session info, quick examples, a plan update, a tool run, and an embedded approval modal.".into(),
+            ])],
+            true,
+        );
+        lines.extend(assistant.display_lines(area.width));
 
-        let chunks = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([
-                Constraint::Min(0),
-                Constraint::Length(bottom_height),
-                Constraint::Length(footer_height),
-            ])
-            .split(area);
+        // (6) Bottom pane snapshot (scrollable transcript content).
+        {
+            let mut bottom_pane = BottomPane::new(BottomPaneParams {
+                app_event_tx: self.app_event_tx.clone(),
+                frame_requester: frame_requester.clone(),
+                has_input_focus: true,
+                enhanced_keys_supported: false,
+                placeholder_text: "Ask xcodex to do anything".to_string(),
+                disable_paste_burst: false,
+                minimal_composer_borders: self.config.tui_composer_minimal_borders,
+                xtreme_ui_enabled: crate::xtreme::xtreme_ui_enabled(&self.config),
+                animations_enabled: self.config.animations,
+                skills: None,
+            });
+            bottom_pane.set_slash_popup_max_rows(3);
+            bottom_pane.insert_str("/mo");
+            bottom_pane.ensure_status_indicator();
+            bottom_pane.update_status("Working".to_string(), Some("Theme preview".to_string()));
+            bottom_pane.set_context_window(Some(100), Some(0));
+            bottom_pane.set_status_bar_git_options(true, true);
+            bottom_pane.set_status_bar_git_context(
+                Some("feat/themes".to_string()),
+                Some("~/Dev/Pyfun/skynet/xcodex".to_string()),
+            );
 
-        let transcript_area = chunks[0];
-        let bottom_pane_area = chunks[1];
-        let footer_area = chunks[2];
-        let (info_area, transcript_area) = if transcript_area.height >= 6 {
-            let parts = Layout::default()
-                .direction(Direction::Vertical)
-                .constraints([Constraint::Length(5), Constraint::Min(0)])
-                .split(transcript_area);
-            (parts[0], parts[1])
-        } else {
-            (Rect::new(0, 0, 0, 0), transcript_area)
-        };
+            let width = area.width.max(1);
+            let height = bottom_pane.desired_height(width).max(1);
+            let mut bottom_buf = Buffer::empty(Rect::new(0, 0, width, height));
+            bottom_pane.render(*bottom_buf.area(), &mut bottom_buf);
 
-        if !info_area.is_empty() {
-            let title = Line::from(vec![
-                "⚡ ".into(),
-                "xtreme-Codex".bold(),
-                format!(" (v{})", env!("CARGO_PKG_VERSION")).dim(),
-            ]);
-            let info = vec![
-                Line::from(vec!["power:".dim(), " ".into(), "⚡⚡⚡".into()]),
-                Line::from(vec![
-                    "model:".dim(),
-                    " ".into(),
-                    "gpt-5.2 medium".into(),
-                    "  ".into(),
-                    "/mode".dim(),
-                    " to change".dim(),
-                ]),
-                Line::from(vec![
-                    "directory:".dim(),
-                    " ".into(),
-                    "~/Dev/pyFun/skynet/xcodex".into(),
-                ]),
-            ];
-            Paragraph::new(Text::from(info))
-                .style(crate::theme::transcript_style())
-                .block(Block::bordered().title(title))
-                .render_ref(info_area, buf);
+            // Render the footer in a separate pane so the snapshot can show:
+            // composer + slash popup + status bar.
+            let mut footer_pane = BottomPane::new(BottomPaneParams {
+                app_event_tx: self.app_event_tx.clone(),
+                frame_requester: frame_requester.clone(),
+                has_input_focus: true,
+                enhanced_keys_supported: false,
+                placeholder_text: "Ask xcodex to do anything".to_string(),
+                disable_paste_burst: false,
+                minimal_composer_borders: self.config.tui_composer_minimal_borders,
+                xtreme_ui_enabled: crate::xtreme::xtreme_ui_enabled(&self.config),
+                animations_enabled: self.config.animations,
+                skills: None,
+            });
+            footer_pane.set_slash_popup_max_rows(3);
+            footer_pane.ensure_status_indicator();
+            footer_pane.update_status("Working".to_string(), Some("Theme preview".to_string()));
+            footer_pane.set_context_window(Some(100), Some(0));
+            footer_pane.set_status_bar_git_options(true, true);
+            footer_pane.set_status_bar_git_context(
+                Some("feat/themes".to_string()),
+                Some("~/Dev/Pyfun/skynet/xcodex".to_string()),
+            );
+
+            let footer_height = footer_pane.desired_height(width).max(1);
+            let mut footer_buf = Buffer::empty(Rect::new(0, 0, width, footer_height));
+            footer_pane.render(*footer_buf.area(), &mut footer_buf);
+
+            let rows_to_copy = 1u16;
+            let mut combined_buf = Buffer::empty(Rect::new(
+                0,
+                0,
+                width,
+                bottom_buf.area.height.saturating_add(rows_to_copy),
+            ));
+            for y in 0..combined_buf.area.height {
+                for x in 0..combined_buf.area.width {
+                    combined_buf[(x, y)].set_symbol(" ");
+                    combined_buf[(x, y)].set_style(crate::theme::transcript_style());
+                }
+            }
+
+            for y in 0..bottom_buf.area.height {
+                for x in 0..width {
+                    combined_buf[(x, y)] = bottom_buf[(x, y)].clone();
+                }
+            }
+
+            if footer_buf.area.height >= rows_to_copy {
+                let src_y = footer_buf.area.height - rows_to_copy;
+                let dst_y = combined_buf.area.height - rows_to_copy;
+                for x in 0..width {
+                    combined_buf[(x, dst_y)] = footer_buf[(x, src_y)].clone();
+                }
+            }
+
+            lines.push(Line::from(""));
+            lines.push(vec!["• ".dim(), "Bottom pane snapshot".bold()].into());
+            lines.extend(buffer_to_lines(&combined_buf));
         }
 
-        let visible_rows = transcript_area.height as usize;
-        let max_scroll =
-            u16::try_from(lines.len().saturating_sub(visible_rows)).unwrap_or(u16::MAX);
-        let scroll = scroll.min(max_scroll);
-
-        Paragraph::new(Text::from(lines))
+        let paragraph = Paragraph::new(Text::from(lines))
             .style(crate::theme::transcript_style())
-            .wrap(Wrap { trim: false })
-            .scroll((scroll, 0))
-            .render_ref(transcript_area, buf);
-
-        bottom_pane.render(bottom_pane_area, buf);
-
-        render_footer(
-            footer_area,
-            buf,
-            FooterProps {
-                mode: FooterMode::ShortcutSummary,
-                esc_backtrack_hint: false,
-                use_shift_enter_hint: false,
-                is_task_running: true,
-                context_window_percent: Some(100),
-                context_window_used_tokens: Some(0),
-                transcript_scrolled: true,
-                transcript_selection_active: false,
-                transcript_scroll_position: Some((3, 12)),
-                transcript_copy_selection_key: key_hint::ctrl_shift(KeyCode::Char('c')),
-                composer_has_text: true,
-                composer_copy_key: key_hint::ctrl(KeyCode::Char('y')),
-                transcript_copy_feedback: None,
-                status_bar_git_branch: Some("feat/themes"),
-                status_bar_worktree: Some("~/Dev/Pyfun/codex"),
-                show_status_bar_git_branch: true,
-                show_status_bar_worktree: true,
-            },
-        );
+            .wrap(Wrap { trim: false });
+        let total_rows = paragraph.line_count(area.width) as usize;
+        let max_scroll =
+            u16::try_from(total_rows.saturating_sub(area.height as usize)).unwrap_or(u16::MAX);
+        let scroll = scroll.min(max_scroll);
+        paragraph.scroll((scroll, 0)).render_ref(area, buf);
 
         max_scroll
     }
@@ -1300,7 +1600,6 @@ pub(crate) struct TranscriptOverlay {
     view: PagerView,
     cells: Vec<Arc<dyn HistoryCell>>,
     highlight_cell: Option<usize>,
-    highlight_user_messages: bool,
     is_done: bool,
 }
 
@@ -1308,13 +1607,12 @@ impl TranscriptOverlay {
     pub(crate) fn new(transcript_cells: Vec<Arc<dyn HistoryCell>>) -> Self {
         Self {
             view: PagerView::new(
-                Self::render_cells(&transcript_cells, None, false),
+                Self::render_cells(&transcript_cells, None),
                 "T R A N S C R I P T".to_string(),
                 usize::MAX,
             ),
             cells: transcript_cells,
             highlight_cell: None,
-            highlight_user_messages: false,
             is_done: false,
         }
     }
@@ -1322,7 +1620,6 @@ impl TranscriptOverlay {
     fn render_cells(
         cells: &[Arc<dyn HistoryCell>],
         highlight_cell: Option<usize>,
-        highlight_user_messages: bool,
     ) -> Vec<Box<dyn Renderable>> {
         cells
             .iter()
@@ -1330,17 +1627,12 @@ impl TranscriptOverlay {
             .flat_map(|(i, c)| {
                 let mut v: Vec<Box<dyn Renderable>> = Vec::new();
                 let mut cell_renderable = if c.as_any().is::<UserHistoryCell>() {
-                    let base_style = if highlight_user_messages {
-                        crate::theme::user_message_highlight_style()
-                    } else {
-                        user_message_style()
-                    };
                     Box::new(CachedRenderable::new(CellRenderable {
                         cell: c.clone(),
                         style: if highlight_cell == Some(i) {
-                            base_style.reversed()
+                            user_message_style().reversed()
                         } else {
-                            base_style
+                            user_message_style()
                         },
                     })) as Box<dyn Renderable>
                 } else {
@@ -1364,11 +1656,7 @@ impl TranscriptOverlay {
     pub(crate) fn insert_cell(&mut self, cell: Arc<dyn HistoryCell>) {
         let follow_bottom = self.view.is_scrolled_to_bottom();
         self.cells.push(cell);
-        self.view.renderables = Self::render_cells(
-            &self.cells,
-            self.highlight_cell,
-            self.highlight_user_messages,
-        );
+        self.view.renderables = Self::render_cells(&self.cells, self.highlight_cell);
         if follow_bottom {
             self.view.scroll_offset = usize::MAX;
         }
@@ -1376,11 +1664,7 @@ impl TranscriptOverlay {
 
     pub(crate) fn set_highlight_cell(&mut self, cell: Option<usize>) {
         self.highlight_cell = cell;
-        self.view.renderables = Self::render_cells(
-            &self.cells,
-            self.highlight_cell,
-            self.highlight_user_messages,
-        );
+        self.view.renderables = Self::render_cells(&self.cells, self.highlight_cell);
         if let Some(idx) = self.highlight_cell {
             self.view.scroll_chunk_into_view(idx);
         }
@@ -1393,7 +1677,6 @@ impl TranscriptOverlay {
 
         let mut pairs: Vec<(&[KeyBinding], &str)> =
             vec![(&[KEY_Q], "to quit"), (&[KEY_ESC], "to edit prev")];
-        pairs.push((&[KEY_H], "highlight users"));
         if self.highlight_cell.is_some() {
             pairs.push((&[KEY_ENTER], "to edit message"));
         }
@@ -1415,16 +1698,6 @@ impl TranscriptOverlay {
             TuiEvent::Key(key_event) => match key_event {
                 e if KEY_Q.is_press(e) || KEY_CTRL_C.is_press(e) || KEY_CTRL_T.is_press(e) => {
                     self.is_done = true;
-                    Ok(())
-                }
-                e if KEY_H.is_press(e) => {
-                    self.highlight_user_messages = !self.highlight_user_messages;
-                    self.view.renderables = Self::render_cells(
-                        &self.cells,
-                        self.highlight_cell,
-                        self.highlight_user_messages,
-                    );
-                    tui.frame_requester().schedule_frame();
                     Ok(())
                 }
                 other => self.view.handle_key_event(tui, other),
