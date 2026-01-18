@@ -565,6 +565,7 @@ impl Renderable for ListSelectionView {
 
         let base_style = user_message_style().patch(crate::theme::composer_style());
         Block::default().style(base_style).render(content_area, buf);
+        Block::default().style(base_style).render(footer_area, buf);
 
         let header_height = self
             .header
