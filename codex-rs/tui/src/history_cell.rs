@@ -1143,50 +1143,9 @@ pub(crate) fn new_session_info(
     let mut parts: Vec<Box<dyn HistoryCell>> = vec![Box::new(header)];
 
     if is_first_event {
-        // Help lines below the header (new copy and list)
-        let help_lines: Vec<Line<'static>> = vec![
-            "  To get started, describe a task or try one of these commands:"
-                .dim()
-                .into(),
-            Line::from(""),
-            Line::from(vec![
-                "  ".into(),
-                "/init".into(),
-                " - create an AGENTS.md file with instructions for xcodex".dim(),
-            ]),
-            Line::from(vec![
-                "  ".into(),
-                "/status".into(),
-                " - show current session configuration".dim(),
-            ]),
-            Line::from(vec![
-                "  ".into(),
-                "/approvals".into(),
-                " - choose what xcodex can do without approval".dim(),
-            ]),
-            Line::from(vec![
-                "  ".into(),
-                "/model".into(),
-                " - choose what model and reasoning effort to use".dim(),
-            ]),
-            Line::from(vec![
-                "  ".into(),
-                "/review".into(),
-                " - review any changes and find issues".dim(),
-            ]),
-            Line::from(vec![
-                "  ".into(),
-                "/hooks".into(),
-                " - automate xcodex with hooks".dim(),
-            ]),
-            Line::from(vec![
-                "  ".into(),
-                "/resume".into(),
-                " - resume a saved chat".dim(),
-            ]),
-        ];
-
-        parts.push(Box::new(PlainHistoryCell { lines: help_lines }));
+        parts.push(Box::new(PlainHistoryCell {
+            lines: session_first_event_help_lines(),
+        }));
     } else {
         if config.show_tooltips
             && codex_core::config::is_xcodex_invocation()
@@ -1212,6 +1171,94 @@ pub(crate) fn new_session_info(
     }
 
     SessionInfoCell(CompositeHistoryCell { parts })
+}
+
+pub(crate) fn new_session_info_with_help_lines(
+    config: &Config,
+    requested_model: &str,
+    event: SessionConfiguredEvent,
+    help_lines: Vec<Line<'static>>,
+) -> SessionInfoCell {
+    let SessionConfiguredEvent {
+        model,
+        reasoning_effort,
+        ..
+    } = event;
+
+    let header = SessionHeaderHistoryCell::new(
+        model.clone(),
+        reasoning_effort,
+        config.cwd.clone(),
+        CODEX_CLI_VERSION,
+        config.approval_policy.value(),
+        config.sandbox_policy.get().clone(),
+        xtreme::xtreme_ui_enabled(config),
+    );
+
+    let mut parts: Vec<Box<dyn HistoryCell>> = vec![Box::new(header)];
+    parts.push(Box::new(PlainHistoryCell { lines: help_lines }));
+
+    if requested_model != model {
+        let lines = vec![
+            "model changed:".magenta().bold().into(),
+            format!("requested: {requested_model}").into(),
+            format!("used: {model}").into(),
+        ];
+        parts.push(Box::new(PlainHistoryCell { lines }));
+    }
+
+    SessionInfoCell(CompositeHistoryCell { parts })
+}
+
+pub(crate) fn session_first_event_command_lines() -> Vec<Line<'static>> {
+    vec![
+        Line::from(vec![
+            "  ".into(),
+            "/init".into(),
+            " - create an AGENTS.md file with instructions for xcodex".dim(),
+        ]),
+        Line::from(vec![
+            "  ".into(),
+            "/status".into(),
+            " - show current session configuration".dim(),
+        ]),
+        Line::from(vec![
+            "  ".into(),
+            "/approvals".into(),
+            " - choose what xcodex can do without approval".dim(),
+        ]),
+        Line::from(vec![
+            "  ".into(),
+            "/model".into(),
+            " - choose what model and reasoning effort to use".dim(),
+        ]),
+        Line::from(vec![
+            "  ".into(),
+            "/review".into(),
+            " - review any changes and find issues".dim(),
+        ]),
+        Line::from(vec![
+            "  ".into(),
+            "/hooks".into(),
+            " - automate xcodex with hooks".dim(),
+        ]),
+        Line::from(vec![
+            "  ".into(),
+            "/resume".into(),
+            " - resume a saved chat".dim(),
+        ]),
+    ]
+}
+
+fn session_first_event_help_lines() -> Vec<Line<'static>> {
+    let mut lines: Vec<Line<'static>> = vec![
+        "  To get started, describe a task or try one of these commands:"
+            .dim()
+            .into(),
+        Line::from(""),
+    ];
+    lines.extend(session_first_event_command_lines());
+    lines
 }
 
 pub(crate) fn new_user_prompt(message: String) -> UserHistoryCell {
