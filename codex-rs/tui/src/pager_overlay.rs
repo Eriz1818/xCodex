@@ -621,7 +621,7 @@ impl ThemeSelectorOverlay {
 
             let interaction = crate::history_cell::new_unified_exec_interaction(
                 Some("python3 -i".to_string()),
-                "print('hello from background terminal')\n".to_string(),
+                "print('hello from the other (side) background terminal')\n".to_string(),
             );
             lines.extend(interaction.display_lines(area.width));
             lines.push(Line::from(""));
@@ -647,7 +647,7 @@ impl ThemeSelectorOverlay {
 
         lines.push(Line::from(""));
 
-        let user_prompt = "Summarize the theme preview changes and show an approval modal example.";
+        let user_prompt = "Give me the highlight reel of whatever we just did, and toss in an approval modal for extra drama.";
 
         let user_cell = UserHistoryCell {
             message: user_prompt.to_string(),
@@ -658,28 +658,33 @@ impl ThemeSelectorOverlay {
             crate::theme::transcript_style().patch(user_message_style()),
         ));
 
+        lines.push(Line::from(""));
+
         // (3) Plan update sample.
         let plan_update = crate::history_cell::new_plan_update(UpdatePlanArgs {
             explanation: Some(
-                "Make the theme preview show the whole turn flow, without hardcoded colors."
+                "Make this whole little playthrough feel seamless, and don’t let any “mystery styling goblins” sneak in."
                     .to_string(),
             ),
             plan: vec![
                 PlanItemArg {
-                    step: "Add quick examples block".to_string(),
+                    step: "Add a “look ma, it works” snack-sized examples block".to_string(),
                     status: StepStatus::Completed,
                 },
                 PlanItemArg {
-                    step: "Render approval modal inside transcript".to_string(),
+                    step: "Summon the approval modal inside the transcript (dramatic lighting optional)."
+                        .to_string(),
                     status: StepStatus::InProgress,
                 },
                 PlanItemArg {
-                    step: "Add final summary section".to_string(),
+                    step: "Finish with a tidy “we survived” summary section".to_string(),
                     status: StepStatus::Pending,
                 },
             ],
         });
         lines.extend(plan_update.display_lines(area.width));
+
+        lines.push(Line::from(""));
 
         let mut tool_call = crate::exec_cell::new_active_exec_command(
             "preview-shell-1".to_string(),
@@ -706,11 +711,15 @@ impl ThemeSelectorOverlay {
         );
         lines.extend(tool_call.display_lines(area.width));
 
+        lines.push(Line::from(""));
+
         let thought = crate::history_cell::new_reasoning_summary_block(
-            "**Thought**\n\nI’ll render the preview using the same `HistoryCell` renderers as the real transcript so styles are theme-derived and consistent.".to_string(),
+            "**Popcorn-powered planning**\n\nI’ll render this `preview` with real cells so the theme does the styling.\nIf it looks odd, I blame the popcorn, not the `palette`.".to_string(),
             false,
         );
         lines.extend(thought.display_lines(area.width));
+
+        lines.push(Line::from(""));
 
         // (4) Approval required (render the real approval overlay into transcript).
         let approval = crate::bottom_pane::ApprovalOverlay::new(
@@ -740,8 +749,7 @@ impl ThemeSelectorOverlay {
         }
         approval.render(*approval_buf.area(), &mut approval_buf);
         lines.push(Line::from(vec![
-            Span::from("Approval required:")
-                .set_style(crate::theme::warning_style().add_modifier(Modifier::BOLD)),
+            Span::from("Approval required:").set_style(crate::theme::accent_style()),
         ]));
         lines.extend(buffer_to_lines(&approval_buf));
         lines.push(Line::from(""));
@@ -757,16 +765,26 @@ impl ThemeSelectorOverlay {
             )
             .display_lines(area.width),
         );
-        lines.extend(
-            crate::history_cell::new_review_status_line("Summary".to_string())
-                .display_lines(area.width),
-        );
+
+        lines.push(Line::from(""));
 
         let assistant = AgentMessageCell::new(
-            vec![Line::from(vec![
-                "assistant: ".dim(),
-                "Theme preview now includes session info, quick examples, a plan update, a tool run, and an embedded approval modal.".into(),
-            ])],
+            {
+                let mut rendered: Vec<Line<'static>> = Vec::new();
+                crate::markdown::append_markdown(
+                    "I crammed a whole chaotic mini-adventure into three lines:\n\
+                    \n\
+                    - `plan`\n\
+                    - command\n\
+                    - a dramatic “approved” moment\n\
+                    \n\
+                    There’s exactly one “typing area” cameo at the bottom—no duplicate keyboard gremlins rehearsing `mid-transcript`.\n\
+                    Everything above it is just the story: one prompt, one `brainwave`, one button-press, and one smug little summary.",
+                    None,
+                    &mut rendered,
+                );
+                rendered
+            },
             true,
         );
         lines.extend(assistant.display_lines(area.width));
@@ -792,7 +810,7 @@ impl ThemeSelectorOverlay {
             bottom_pane.set_context_window(Some(100), Some(0));
             bottom_pane.set_status_bar_git_options(true, true);
             bottom_pane.set_status_bar_git_context(
-                Some("feat/themes".to_string()),
+                Some("feat/skynet-themes".to_string()),
                 Some("~/Dev/Pyfun/skynet/xcodex".to_string()),
             );
 
@@ -858,7 +876,6 @@ impl ThemeSelectorOverlay {
             }
 
             lines.push(Line::from(""));
-            lines.push(vec!["• ".dim(), "Bottom pane snapshot".bold()].into());
             lines.extend(buffer_to_lines(&combined_buf));
         }
 
