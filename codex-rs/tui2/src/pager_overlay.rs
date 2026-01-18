@@ -432,6 +432,26 @@ impl ThemeSelectorOverlay {
             out
         }
 
+        fn render_cell_to_lines(
+            cell: &dyn HistoryCell,
+            width: u16,
+            base_style: Style,
+        ) -> Vec<Line<'static>> {
+            let width = width.max(1);
+            let height = cell.desired_height(width).max(1);
+            let mut cell_buf = Buffer::empty(Rect::new(0, 0, width, height));
+            for y in 0..cell_buf.area.height {
+                for x in 0..cell_buf.area.width {
+                    cell_buf[(x, y)].set_symbol(" ");
+                    cell_buf[(x, y)].set_style(base_style);
+                }
+            }
+            Paragraph::new(Text::from(cell.transcript_lines(width)))
+                .style(base_style)
+                .render(*cell_buf.area(), &mut cell_buf);
+            buffer_to_lines(&cell_buf)
+        }
+
         let session_event = codex_core::protocol::SessionConfiguredEvent {
             session_id: ThreadId::new(),
             model: "gpt-5.2 medium".to_string(),
@@ -605,7 +625,11 @@ impl ThemeSelectorOverlay {
         let user_cell = UserHistoryCell {
             message: user_prompt.to_string(),
         };
-        lines.extend(user_cell.display_lines(area.width));
+        lines.extend(render_cell_to_lines(
+            &user_cell,
+            area.width,
+            crate::theme::transcript_style().patch(user_message_style()),
+        ));
 
         // (3) Plan update sample.
         let plan_update = crate::history_cell::new_plan_update(UpdatePlanArgs {
