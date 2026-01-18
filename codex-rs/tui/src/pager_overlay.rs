@@ -397,12 +397,12 @@ impl ThemeSelectorOverlay {
             return 0;
         };
 
-        let diff_add = if diff_bg {
+        let _diff_add = if diff_bg {
             crate::theme::diff_add_style()
         } else {
             crate::theme::diff_add_text_style()
         };
-        let diff_del = if diff_bg {
+        let _diff_del = if diff_bg {
             crate::theme::diff_del_style()
         } else {
             crate::theme::diff_del_text_style()
@@ -469,11 +469,21 @@ impl ThemeSelectorOverlay {
         let mut preview_config = self.config.clone();
         preview_config.cwd = PathBuf::from("~/Dev/Pyfun/skynet/xcodex");
 
-        let session_info = crate::history_cell::new_session_info(
+        let mut session_help_lines: Vec<Line<'static>> = vec![
+            "  To get started, describe a task or try one of these commands:"
+                .dim()
+                .into(),
+            Line::from(""),
+        ];
+        let mut command_lines = crate::history_cell::session_first_event_command_lines();
+        command_lines.truncate(2);
+        session_help_lines.extend(command_lines);
+
+        let session_info = crate::history_cell::new_session_info_with_help_lines(
             &preview_config,
             "gpt-5.2 medium",
             session_event,
-            true,
+            session_help_lines,
         );
 
         let mut lines: Vec<Line<'static>> = Vec::new();
@@ -490,14 +500,6 @@ impl ThemeSelectorOverlay {
                 Span::from("config.yaml").set_style(diff_hunk),
                 " ".into(),
                 "(example change)".dim(),
-            ]),
-            Line::from(vec![
-                "    ".into(),
-                Span::from("- old line").set_style(diff_del),
-            ]),
-            Line::from(vec![
-                "    ".into(),
-                Span::from("+ new line").set_style(diff_add),
             ]),
             Line::from(vec![
                 "  └ ".dim(),
@@ -517,41 +519,9 @@ impl ThemeSelectorOverlay {
                     .set_style(crate::theme::link_style().underlined()),
             ]),
         ]);
-        lines.extend(
-            crate::history_cell::new_warning_event(
-                "This is an example warning event shown in the transcript.".to_string(),
-            )
-            .display_lines(area.width),
-        );
-        lines.extend(
-            crate::history_cell::new_error_event(
-                "This is an example error event shown in the transcript.".to_string(),
-            )
-            .display_lines(area.width),
-        );
-        lines.push(Line::from(""));
-        lines.push(vec!["  └ ".dim(), "One-of-each transcript items".bold()].into());
         lines.push(Line::from(""));
 
         {
-            let update = crate::history_cell::UpdateAvailableHistoryCell::new(
-                "v2026.01.17".to_string(),
-                None,
-            );
-            lines.extend(update.display_lines(area.width));
-            lines.push(Line::from(""));
-
-            let whats_new = crate::history_cell::WhatsNewHistoryCell::new(
-                "2026.01.17".to_string(),
-                vec![
-                    "Theme preview now renders a full turn-flow transcript.".to_string(),
-                    "Approval modals render without background bleed.".to_string(),
-                    "All preview styling is sourced from real widgets/cells.".to_string(),
-                ],
-            );
-            lines.extend(whats_new.display_lines(area.width));
-            lines.push(Line::from(""));
-
             let deprecation = crate::history_cell::new_deprecation_notice(
                 "Heads up: `/dance` is deprecated.".to_string(),
                 Some(
@@ -562,36 +532,20 @@ impl ThemeSelectorOverlay {
             lines.extend(deprecation.display_lines(area.width));
             lines.push(Line::from(""));
 
-            let info = crate::history_cell::new_info_event(
-                "Tip: Use `/mcp` to inspect available tools.".to_string(),
-                Some("This preview includes a sample `/mcp` output block.".to_string()),
+            lines.extend(
+                crate::history_cell::new_warning_event(
+                    "Warning: `/boogie` may cause spontaneous finger snaps.".to_string(),
+                )
+                .display_lines(area.width),
             );
-            lines.extend(info.display_lines(area.width));
-            lines.push(Line::from(""));
-
-            let web_search =
-                crate::history_cell::new_web_search_call("ratatui Stylize helpers".to_string());
-            lines.extend(web_search.display_lines(area.width));
             lines.push(Line::from(""));
 
             let mut changes = HashMap::new();
             changes.insert(
                 PathBuf::from("codex-rs/tui/src/pager_overlay.rs"),
                 FileChange::Update {
-                    unified_diff: "@@ -1,1 +1,2 @@\n-old\n+new\n+extra\n".to_string(),
+                    unified_diff: "@@ -1,2 +1,2 @@\n-old\n-stale\n+new\n+extra\n".to_string(),
                     move_path: None,
-                },
-            );
-            changes.insert(
-                PathBuf::from("docs/impl-plans/one-of-each.md"),
-                FileChange::Add {
-                    content: "# One-of-each\n\nThis file is a preview example.\n".to_string(),
-                },
-            );
-            changes.insert(
-                PathBuf::from("notes/tmp.txt"),
-                FileChange::Delete {
-                    content: "obsolete\n".to_string(),
                 },
             );
 
@@ -600,17 +554,9 @@ impl ThemeSelectorOverlay {
             lines.push(Line::from(""));
 
             let patch_failed = crate::history_cell::new_patch_apply_failure(
-                "error: patch failed: src/main.rs:42\nerror: src/main.rs: patch does not apply\n"
-                    .to_string(),
+                "error: patch failed: src/main.rs:42\n".to_string(),
             );
             lines.extend(patch_failed.display_lines(area.width));
-            lines.push(Line::from(""));
-
-            let view_image = crate::history_cell::new_view_image_tool_call(
-                self.config.cwd.join("screenshots/preview-cat.png"),
-                self.config.cwd.as_path(),
-            );
-            lines.extend(view_image.display_lines(area.width));
             lines.push(Line::from(""));
 
             let mut tool_call = crate::history_cell::new_active_mcp_tool_call(
@@ -642,38 +588,6 @@ impl ThemeSelectorOverlay {
             }
             lines.push(Line::from(""));
 
-            let mut image_tool_call = crate::history_cell::new_active_mcp_tool_call(
-                "preview-mcp-2".to_string(),
-                codex_core::protocol::McpInvocation {
-                    server: "screenshots".to_string(),
-                    tool: "take_screenshot".to_string(),
-                    arguments: Some(json!({"fullPage": true})),
-                },
-                self.config.animations,
-            );
-            let image_cell = image_tool_call.complete(
-                Duration::from_millis(198),
-                Ok(mcp_types::CallToolResult {
-                    content: vec![mcp_types::ContentBlock::ImageContent(mcp_types::ImageContent {
-                        annotations: None,
-                        data: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+W6p0AAAAASUVORK5CYII=".to_string(),
-                        mime_type: "image/png".to_string(),
-                        r#type: "image".to_string(),
-                    })],
-                    is_error: Some(false),
-                    structured_content: None,
-                }),
-            );
-            lines.extend(image_tool_call.display_lines(area.width));
-            if let Some(image_cell) = image_cell {
-                lines.extend(image_cell.display_lines(area.width));
-            }
-            lines.push(Line::from(""));
-
-            let mcp = crate::history_cell::empty_mcp_output();
-            lines.extend(mcp.display_lines(area.width));
-            lines.push(Line::from(""));
-
             let approval_decision = crate::history_cell::new_approval_decision_cell(
                 vec![
                     "bash".to_string(),
@@ -683,13 +597,6 @@ impl ThemeSelectorOverlay {
                 codex_core::protocol::ReviewDecision::Approved,
             );
             lines.extend(approval_decision.display_lines(area.width));
-            lines.push(Line::from(""));
-
-            let waiting = crate::history_cell::new_unified_exec_wait_live(
-                Some("python3 -i".to_string()),
-                false,
-            );
-            lines.extend(waiting.display_lines(area.width));
             lines.push(Line::from(""));
 
             let interaction = crate::history_cell::new_unified_exec_interaction(
@@ -721,30 +628,6 @@ impl ThemeSelectorOverlay {
         lines.push(Line::from(""));
 
         let user_prompt = "Summarize the theme preview changes and show an approval modal example.";
-        {
-            let mut composer_pane = BottomPane::new(BottomPaneParams {
-                app_event_tx: self.app_event_tx.clone(),
-                frame_requester: frame_requester.clone(),
-                has_input_focus: true,
-                enhanced_keys_supported: false,
-                placeholder_text: "Ask xcodex to do anything".to_string(),
-                disable_paste_burst: false,
-                minimal_composer_borders: self.config.tui_composer_minimal_borders,
-                xtreme_ui_enabled: crate::xtreme::xtreme_ui_enabled(&self.config),
-                animations_enabled: self.config.animations,
-                skills: None,
-            });
-            composer_pane.set_composer_text(user_prompt.to_string());
-
-            let width = area.width.max(1);
-            let height = composer_pane.desired_height(width);
-            let mut composer_buf = Buffer::empty(Rect::new(0, 0, width, height));
-            composer_pane.render(*composer_buf.area(), &mut composer_buf);
-
-            lines.push(vec!["• ".dim(), "Composer history".bold()].into());
-            lines.extend(buffer_to_lines(&composer_buf));
-            lines.push(Line::from(""));
-        }
 
         let user_cell = UserHistoryCell {
             message: user_prompt.to_string(),
@@ -955,14 +838,15 @@ impl ThemeSelectorOverlay {
             lines.extend(buffer_to_lines(&combined_buf));
         }
 
-        let paragraph = Paragraph::new(Text::from(lines))
-            .style(crate::theme::transcript_style())
-            .wrap(Wrap { trim: false });
-        let total_rows = paragraph.line_count(area.width) as usize;
+        let visible_rows = area.height as usize;
         let max_scroll =
-            u16::try_from(total_rows.saturating_sub(area.height as usize)).unwrap_or(u16::MAX);
+            u16::try_from(lines.len().saturating_sub(visible_rows)).unwrap_or(u16::MAX);
         let scroll = scroll.min(max_scroll);
-        paragraph.scroll((scroll, 0)).render_ref(area, buf);
+
+        Paragraph::new(Text::from(lines))
+            .style(crate::theme::transcript_style())
+            .scroll((scroll, 0))
+            .render_ref(area, buf);
 
         max_scroll
     }
