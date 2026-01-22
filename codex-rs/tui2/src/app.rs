@@ -1710,8 +1710,7 @@ impl App {
                 });
                 if let Some(summary) = summary {
                     let base_style = crate::theme::transcript_style();
-                    let mut usage_line = summary.usage_line.clone();
-                    usage_line.style = base_style.patch(usage_line.style);
+                    let usage_line = Line::from(summary.usage_line.clone()).style(base_style);
                     let mut lines: Vec<Line<'static>> = vec![usage_line];
                     if let Some(command) = summary.resume_command {
                         let spans = vec!["To continue this session, run ".into(), command.cyan()];
@@ -1770,8 +1769,8 @@ impl App {
                                 self.current_model = resumed_model;
                                 if let Some(summary) = summary {
                                     let base_style = crate::theme::transcript_style();
-                                    let mut usage_line = summary.usage_line.clone();
-                                    usage_line.style = base_style.patch(usage_line.style);
+                                    let usage_line =
+                                        Line::from(summary.usage_line.clone()).style(base_style);
                                     let mut lines: Vec<Line<'static>> = vec![usage_line];
                                     if let Some(command) = summary.resume_command {
                                         let spans = vec![
