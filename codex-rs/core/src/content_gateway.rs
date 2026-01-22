@@ -27,8 +27,11 @@ pub struct GatewayConfig {
     pub content_hashing: bool,
     pub substring_matching: bool,
     pub secret_patterns: bool,
+    pub secret_patterns_builtin: bool,
+    pub secret_patterns_allowlist: Vec<String>,
+    pub secret_patterns_blocklist: Vec<String>,
     pub on_match: ExclusionOnMatch,
-    pub log_blocked: bool,
+    pub log_redactions: bool,
 }
 
 impl Default for GatewayConfig {
@@ -38,8 +41,11 @@ impl Default for GatewayConfig {
             content_hashing: true,
             substring_matching: true,
             secret_patterns: true,
+            secret_patterns_builtin: true,
+            secret_patterns_allowlist: Vec::new(),
+            secret_patterns_blocklist: Vec::new(),
             on_match: ExclusionOnMatch::Redact,
-            log_blocked: false,
+            log_redactions: false,
         }
     }
 }
@@ -51,8 +57,12 @@ impl GatewayConfig {
             content_hashing: exclusion.content_hashing,
             substring_matching: exclusion.substring_matching,
             secret_patterns: exclusion.secret_patterns,
+            secret_patterns_builtin: exclusion.secret_patterns_builtin,
+            secret_patterns_allowlist: exclusion.secret_patterns_allowlist.clone(),
+            secret_patterns_blocklist: exclusion.secret_patterns_blocklist.clone(),
             on_match: exclusion.on_match,
-            log_blocked: exclusion.log_blocked,
+            log_redactions: exclusion.log_redactions_mode()
+                != crate::config::types::LogRedactionsMode::Off,
         }
     }
 }
@@ -98,7 +108,17 @@ pub struct ScanReport {
     pub layers: Vec<ScanLayer>,
     pub redacted: bool,
     pub blocked: bool,
+    pub reasons: Vec<RedactionReason>,
 }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RedactionReason {
+    FingerprintCache,
+    IgnoredPath,
+    SecretPattern,
+}
+
+type RedactionCallback<'a> = Option<&'a mut dyn FnMut(&str, &str, &ScanReport)>;
 
 impl ScanReport {
     pub(crate) fn safe() -> Self {
@@ -106,6 +126,7 @@ impl ScanReport {
             layers: Vec::new(),
             redacted: false,
             blocked: false,
+            reasons: Vec::new(),
         }
     }
 }
@@ -133,7 +154,7 @@ static RE_PATHLIKE: Lazy<Regex> = Lazy::new(|| {
     .unwrap_or_else(|err| panic!("invalid path regex: {err}"))
 });
 
-static RE_SECRET_PATTERNS: Lazy<Vec<Regex>> = Lazy::new(|| {
+static RE_SECRET_PATTERNS_BUILTIN: Lazy<Vec<Regex>> = Lazy::new(|| {
     vec![
         // AWS access key id.
         Regex::new(r"\bAKIA[0-9A-Z]{16}\b").unwrap_or_else(|err| panic!("aws key regex: {err}")),
@@ -151,11 +172,26 @@ static RE_SECRET_PATTERNS: Lazy<Vec<Regex>> = Lazy::new(|| {
 
 pub struct ContentGateway {
     cfg: GatewayConfig,
+    secret_patterns: Vec<Regex>,
+    secret_patterns_blocklist: Vec<Regex>,
 }
 
 impl ContentGateway {
     pub fn new(cfg: GatewayConfig) -> Self {
-        Self { cfg }
+        let secret_patterns = if cfg.secret_patterns_builtin {
+            RE_SECRET_PATTERNS_BUILTIN.clone()
+        } else {
+            Vec::new()
+        };
+        let secret_patterns =
+            extend_secret_patterns(secret_patterns, &cfg.secret_patterns_allowlist, "allowlist");
+        let secret_patterns_blocklist =
+            compile_secret_patterns(&cfg.secret_patterns_blocklist, "blocklist");
+        Self {
+            cfg,
+            secret_patterns,
+            secret_patterns_blocklist,
+        }
     }
 
     pub fn scan_text(
@@ -186,6 +222,7 @@ impl ContentGateway {
                                 layers: vec![ScanLayer::L3FingerprintCache],
                                 redacted: true,
                                 blocked: false,
+                                reasons: vec![RedactionReason::FingerprintCache],
                             },
                         );
                     }
@@ -196,6 +233,7 @@ impl ContentGateway {
                                 layers: vec![ScanLayer::L3FingerprintCache],
                                 redacted: false,
                                 blocked: true,
+                                reasons: vec![RedactionReason::FingerprintCache],
                             },
                         );
                     }
@@ -212,6 +250,7 @@ impl ContentGateway {
             report.layers.extend(r.layers);
             report.redacted |= r.redacted;
             report.blocked |= r.blocked;
+            report.reasons.extend(r.reasons);
         }
 
         if self.cfg.content_hashing {
@@ -227,7 +266,7 @@ impl ContentGateway {
             guard.decisions.insert(key, decision);
         }
 
-        if (report.redacted || report.blocked) && self.cfg.log_blocked {
+        if (report.redacted || report.blocked) && self.cfg.log_redactions {
             tracing::warn!(
                 redacted = report.redacted,
                 blocked = report.blocked,
@@ -248,12 +287,15 @@ impl ContentGateway {
         let mut out = text.to_string();
 
         let mut matched_any = false;
+        let mut matched_path = false;
+        let mut matched_secret = false;
 
         if self.cfg.substring_matching {
             let matches = pathlike_candidates_in_text(text);
             for candidate in matches {
                 if is_candidate_ignored(&candidate, sensitive_paths) {
                     matched_any = true;
+                    matched_path = true;
                     if self.cfg.on_match == ExclusionOnMatch::Redact {
                         out = out.replace(&candidate, "[IGNORED-PATH: redacted]");
                     }
@@ -262,11 +304,22 @@ impl ContentGateway {
         }
 
         if self.cfg.secret_patterns {
-            for re in RE_SECRET_PATTERNS.iter() {
-                if re.is_match(&out) {
+            for re in self.secret_patterns.iter() {
+                let has_unblocked_match =
+                    re.find_iter(&out).any(|m| !self.is_blocklisted(m.as_str()));
+                if has_unblocked_match {
                     matched_any = true;
+                    matched_secret = true;
                     if self.cfg.on_match == ExclusionOnMatch::Redact {
-                        out = re.replace_all(&out, "[REDACTED]").to_string();
+                        let replacement = |caps: &regex::Captures<'_>| {
+                            let matched = caps.get(0).map(|m| m.as_str()).unwrap_or_default();
+                            if self.is_blocklisted(matched) {
+                                matched.to_string()
+                            } else {
+                                "[REDACTED]".to_string()
+                            }
+                        };
+                        out = re.replace_all(&out, replacement).to_string();
                     }
                 }
             }
@@ -274,6 +327,12 @@ impl ContentGateway {
 
         if matched_any {
             report.layers.push(ScanLayer::L2ContentScan);
+            if matched_path {
+                report.reasons.push(RedactionReason::IgnoredPath);
+            }
+            if matched_secret {
+                report.reasons.push(RedactionReason::SecretPattern);
+            }
             match self.cfg.on_match {
                 ExclusionOnMatch::Warn => {}
                 ExclusionOnMatch::Redact => report.redacted = true,
@@ -293,15 +352,23 @@ impl ContentGateway {
         sensitive_paths: &SensitivePathPolicy,
         cache: &GatewayCache,
         epoch: u64,
+        mut on_redaction: RedactionCallback<'_>,
     ) -> ScanReport {
         let mut combined = ScanReport::safe();
 
         let mut scan_string = |s: &mut String| {
-            let (new, report) = self.scan_text(s, sensitive_paths, cache, epoch);
+            let original = s.as_str();
+            let (new, report) = self.scan_text(original, sensitive_paths, cache, epoch);
+            if (report.redacted || report.blocked)
+                && let Some(callback) = on_redaction.as_deref_mut()
+            {
+                callback(original, &new, &report);
+            }
             *s = new;
             combined.layers.extend(report.layers);
             combined.redacted |= report.redacted;
             combined.blocked |= report.blocked;
+            combined.reasons.extend(report.reasons);
         };
 
         match item {
@@ -330,6 +397,35 @@ impl ContentGateway {
 
         combined
     }
+
+    fn is_blocklisted(&self, candidate: &str) -> bool {
+        self.secret_patterns_blocklist
+            .iter()
+            .any(|re| re.is_match(candidate))
+    }
+}
+
+fn extend_secret_patterns(mut base: Vec<Regex>, patterns: &[String], label: &str) -> Vec<Regex> {
+    let extra = compile_secret_patterns(patterns, label);
+    base.extend(extra);
+    base
+}
+
+fn compile_secret_patterns(patterns: &[String], label: &str) -> Vec<Regex> {
+    patterns
+        .iter()
+        .filter_map(|pattern| {
+            Regex::new(pattern)
+                .map_err(|err| {
+                    tracing::warn!(
+                        pattern = pattern.as_str(),
+                        error = %err,
+                        "{label} secret pattern ignored (invalid regex)",
+                    );
+                })
+                .ok()
+        })
+        .collect()
 }
 
 fn content_fingerprint(text: &str) -> [u8; 16] {
@@ -536,6 +632,41 @@ mod tests {
         );
         assert_eq!(out, "[REDACTED]");
         assert!(report.redacted);
+    }
+
+    #[test]
+    fn allowlist_secret_patterns_redacts_when_builtins_disabled() {
+        let tmp = tempdir().expect("tempdir");
+        init_repo(tmp.path());
+        let policy = SensitivePathPolicy::new(tmp.path().to_path_buf());
+        let mut cfg = GatewayConfig::default();
+        cfg.secret_patterns_builtin = false;
+        cfg.secret_patterns_allowlist = vec![String::from(r"foo\d+")];
+        let gateway = ContentGateway::new(cfg);
+        let cache = GatewayCache::new();
+        let epoch = policy.ignore_epoch();
+
+        let (out, report) = gateway.scan_text("token=foo123", &policy, &cache, epoch);
+        assert_eq!(out, "token=[REDACTED]");
+        assert!(report.redacted);
+    }
+
+    #[test]
+    fn blocklist_secret_patterns_suppresses_match() {
+        let tmp = tempdir().expect("tempdir");
+        init_repo(tmp.path());
+        let policy = SensitivePathPolicy::new(tmp.path().to_path_buf());
+        let mut cfg = GatewayConfig::default();
+        cfg.secret_patterns_builtin = false;
+        cfg.secret_patterns_allowlist = vec![String::from(r"foo\d+")];
+        cfg.secret_patterns_blocklist = vec![String::from(r"foo123")];
+        let gateway = ContentGateway::new(cfg);
+        let cache = GatewayCache::new();
+        let epoch = policy.ignore_epoch();
+
+        let (out, report) = gateway.scan_text("token=foo123", &policy, &cache, epoch);
+        assert_eq!(out, "token=foo123");
+        assert!(!report.redacted);
     }
 
     #[test]

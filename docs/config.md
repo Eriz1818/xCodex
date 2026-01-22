@@ -42,8 +42,13 @@ path_matching = true
 content_hashing = true
 substring_matching = true
 secret_patterns = true
+secret_patterns_builtin = true
+secret_patterns_allowlist = []
+secret_patterns_blocklist = []
 on_match = "redact"  # warn|block|redact
-log_blocked = false
+log_redactions = "off" # off|summary|raw
+log_redactions_max_bytes = 52428800
+log_redactions_max_files = 2
 show_summary_banner = true
 show_summary_history = true
 preflight_shell_paths = true
@@ -57,6 +62,14 @@ Defaults:
 - `paranoid_mode = false` (only Layer 1 + Layer 3 are enforced by default; see below)
 - `show_summary_banner = true`, `show_summary_history = true` (both are UI-only; no paths are ever shown)
 - `preflight_shell_paths = true` (blocks shell tool calls that reference excluded paths before executing)
+
+When `log_redactions` is enabled, Codex appends redaction details to `CODEX_HOME/log/exclusion-redactions.jsonl` (including a `reasons` array like `ignored_path`, `secret_pattern`, `fingerprint_cache`). `summary` writes redacted context only; `raw` includes original + sanitized context.
+
+Secret-pattern customization:
+
+- `secret_patterns_builtin = true|false` toggles the built-in regex set.
+- `secret_patterns_allowlist = ["..."]` adds regexes to the built-ins.
+- `secret_patterns_blocklist = ["..."]` suppresses matches from built-ins and the allowlist.
 
 Layer toggles:
 

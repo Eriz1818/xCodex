@@ -393,6 +393,7 @@ pub(crate) struct TurnContext {
     /// the model as well as sandbox policies are resolved against this path
     /// instead of `std::env::current_dir()`.
     pub(crate) cwd: PathBuf,
+    pub(crate) codex_home: PathBuf,
     pub(crate) worktree_workspace_root: Option<PathBuf>,
     pub(crate) worktrees_pinned_paths: Vec<String>,
     pub(crate) developer_instructions: Option<String>,
@@ -577,6 +578,7 @@ impl Session {
             sub_id,
             client,
             cwd: session_configuration.cwd.clone(),
+            codex_home: per_turn_config.codex_home.clone(),
             worktree_workspace_root: crate::git_info::resolve_root_git_project_for_trust(
                 &session_configuration.cwd,
             ),
@@ -2973,6 +2975,7 @@ async fn spawn_review_thread(
         sandbox_policy: parent_turn_context.sandbox_policy.clone(),
         shell_environment_policy: parent_turn_context.shell_environment_policy.clone(),
         cwd: parent_turn_context.cwd.clone(),
+        codex_home: parent_turn_context.codex_home.clone(),
         worktree_workspace_root: parent_turn_context.worktree_workspace_root.clone(),
         worktrees_pinned_paths: parent_turn_context.worktrees_pinned_paths.clone(),
         final_output_json_schema: None,
@@ -3504,12 +3507,35 @@ async fn try_run_sampling_request(
         let gateway = crate::content_gateway::ContentGateway::new(
             crate::content_gateway::GatewayConfig::from_exclusion(&turn_context.exclusion),
         );
+        let should_log = turn_context.exclusion.log_redactions_mode()
+            != crate::config::types::LogRedactionsMode::Off;
+        let mut log_redaction =
+            |original: &str, sanitized: &str, report: &crate::content_gateway::ScanReport| {
+                let log_context = crate::exclusion_log::RedactionLogContext {
+                    codex_home: &turn_context.codex_home,
+                    layer: crate::exclusion_counters::ExclusionLayer::Layer4RequestInterceptor,
+                    source: crate::exclusion_counters::ExclusionSource::Prompt,
+                    tool_name: "prompt",
+                    origin_type: "prompt",
+                    origin_path: None,
+                    log_mode: turn_context.exclusion.log_redactions_mode(),
+                    max_bytes: turn_context.exclusion.log_redactions_max_bytes,
+                    max_files: turn_context.exclusion.log_redactions_max_files,
+                };
+                crate::exclusion_log::log_redaction_event(
+                    &log_context,
+                    report,
+                    original,
+                    sanitized,
+                );
+            };
         for item in prompt_to_send.input.iter_mut() {
             let report = gateway.scan_response_item_text_fields(
                 item,
                 &turn_context.sensitive_paths,
                 &sess.content_gateway_cache,
                 epoch,
+                should_log.then_some(&mut log_redaction),
             );
             if report.redacted || report.blocked {
                 let mut counters = turn_context

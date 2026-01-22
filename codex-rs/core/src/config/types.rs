@@ -41,31 +41,33 @@ impl fmt::Display for McpServerDisabledReason {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
+#[derive(Default)]
 pub enum UnattestedOutputPolicy {
+    #[default]
     Allow,
     Warn,
     Confirm,
     Block,
 }
 
-impl Default for UnattestedOutputPolicy {
-    fn default() -> Self {
-        Self::Allow
-    }
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+#[derive(Default)]
+pub enum ExclusionOnMatch {
+    Warn,
+    Block,
+    #[default]
+    Redact,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
-pub enum ExclusionOnMatch {
-    Warn,
-    Block,
-    Redact,
-}
-
-impl Default for ExclusionOnMatch {
-    fn default() -> Self {
-        Self::Redact
-    }
+#[derive(Default)]
+pub enum LogRedactionsMode {
+    #[default]
+    Off,
+    Summary,
+    Raw,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -94,6 +96,18 @@ pub struct ExclusionConfig {
     #[serde(default = "default_enabled")]
     pub secret_patterns: bool,
 
+    /// When true, include built-in secret regexes alongside any allowlist patterns.
+    #[serde(default = "default_enabled")]
+    pub secret_patterns_builtin: bool,
+
+    /// Optional secret patterns to add on top of built-ins.
+    #[serde(default)]
+    pub secret_patterns_allowlist: Vec<String>,
+
+    /// Patterns that suppress matches from built-ins and allowlist.
+    #[serde(default)]
+    pub secret_patterns_blocklist: Vec<String>,
+
     /// Layer 2: sanitize tool outputs (MCP/shell/custom tool outputs) before they reach the model.
     /// Defaults to `paranoid_mode` when unset.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -112,8 +126,17 @@ pub struct ExclusionConfig {
     #[serde(default)]
     pub on_match: ExclusionOnMatch,
 
+    /// Redaction log output policy.
     #[serde(default)]
-    pub log_blocked: bool,
+    pub log_redactions: LogRedactionsMode,
+
+    /// Maximum size (in bytes) for a single redaction log file before rotation.
+    #[serde(default = "default_log_redactions_max_bytes")]
+    pub log_redactions_max_bytes: u64,
+
+    /// Maximum number of redaction log files to keep (including the active file).
+    #[serde(default = "default_log_redactions_max_files")]
+    pub log_redactions_max_files: usize,
 
     /// When `false`, clients should not render an ephemeral "filtered" banner/toast for this turn.
     #[serde(default = "default_enabled")]
@@ -136,6 +159,14 @@ fn default_exclusion_files() -> Vec<String> {
     vec![".aiexclude".to_string(), ".xcodexignore".to_string()]
 }
 
+fn default_log_redactions_max_bytes() -> u64 {
+    50 * 1024 * 1024
+}
+
+fn default_log_redactions_max_files() -> usize {
+    2
+}
+
 impl Default for ExclusionConfig {
     fn default() -> Self {
         Self {
@@ -145,11 +176,16 @@ impl Default for ExclusionConfig {
             content_hashing: default_enabled(),
             substring_matching: default_enabled(),
             secret_patterns: default_enabled(),
+            secret_patterns_builtin: default_enabled(),
+            secret_patterns_allowlist: Vec::new(),
+            secret_patterns_blocklist: Vec::new(),
             layer_output_sanitization: None,
             layer_send_firewall: None,
             layer_request_interceptor: None,
             on_match: ExclusionOnMatch::default(),
-            log_blocked: false,
+            log_redactions: LogRedactionsMode::default(),
+            log_redactions_max_bytes: default_log_redactions_max_bytes(),
+            log_redactions_max_files: default_log_redactions_max_files(),
             show_summary_banner: default_enabled(),
             show_summary_history: default_enabled(),
             preflight_shell_paths: default_enabled(),
@@ -169,6 +205,10 @@ impl ExclusionConfig {
 
     pub fn layer_request_interceptor_enabled(&self) -> bool {
         self.layer_request_interceptor.unwrap_or(true)
+    }
+
+    pub fn log_redactions_mode(&self) -> LogRedactionsMode {
+        self.log_redactions
     }
 }
 

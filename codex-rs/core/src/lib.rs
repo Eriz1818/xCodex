@@ -28,6 +28,7 @@ pub mod env;
 mod environment_context;
 pub mod error;
 mod exclusion_counters;
+mod exclusion_log;
 mod exclusion_preflight;
 pub mod exec;
 pub mod exec_env;

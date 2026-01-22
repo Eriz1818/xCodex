@@ -272,12 +272,46 @@ fn enforce_sensitive_content_gateway(
             mut success,
             provenance,
         } => {
+            let source = match &provenance {
+                ToolProvenance::Filesystem { .. } => {
+                    crate::exclusion_counters::ExclusionSource::Filesystem
+                }
+                ToolProvenance::Mcp { .. } => crate::exclusion_counters::ExclusionSource::Mcp,
+                ToolProvenance::Shell { .. } => crate::exclusion_counters::ExclusionSource::Shell,
+                ToolProvenance::Unattested { .. } => {
+                    crate::exclusion_counters::ExclusionSource::Other
+                }
+            };
+            let origin_type = provenance.origin_type();
+            let origin_path = provenance.origin_path();
+            let should_log = turn.exclusion.log_redactions_mode()
+                != crate::config::types::LogRedactionsMode::Off;
+            let log_context = crate::exclusion_log::RedactionLogContext {
+                codex_home: &turn.codex_home,
+                layer: crate::exclusion_counters::ExclusionLayer::Layer2OutputSanitization,
+                source,
+                tool_name,
+                origin_type,
+                origin_path: origin_path.as_deref(),
+                log_mode: turn.exclusion.log_redactions_mode(),
+                max_bytes: turn.exclusion.log_redactions_max_bytes,
+                max_files: turn.exclusion.log_redactions_max_files,
+            };
+            let original_content = content;
             let (content, report) = gateway.scan_text(
-                &content,
+                &original_content,
                 &turn.sensitive_paths,
                 &session.content_gateway_cache,
                 epoch,
             );
+            if should_log && (report.redacted || report.blocked) {
+                crate::exclusion_log::log_redaction_event(
+                    &log_context,
+                    &report,
+                    &original_content,
+                    &content,
+                );
+            }
             if report.redacted || report.blocked {
                 let mut counters = turn
                     .exclusion_counters
@@ -285,20 +319,7 @@ fn enforce_sensitive_content_gateway(
                     .unwrap_or_else(std::sync::PoisonError::into_inner);
                 counters.record(
                     crate::exclusion_counters::ExclusionLayer::Layer2OutputSanitization,
-                    match &provenance {
-                        ToolProvenance::Filesystem { .. } => {
-                            crate::exclusion_counters::ExclusionSource::Filesystem
-                        }
-                        ToolProvenance::Mcp { .. } => {
-                            crate::exclusion_counters::ExclusionSource::Mcp
-                        }
-                        ToolProvenance::Shell { .. } => {
-                            crate::exclusion_counters::ExclusionSource::Shell
-                        }
-                        ToolProvenance::Unattested { .. } => {
-                            crate::exclusion_counters::ExclusionSource::Other
-                        }
-                    },
+                    source,
                     tool_name,
                     report.redacted,
                     report.blocked,
@@ -308,13 +329,22 @@ fn enforce_sensitive_content_gateway(
             if let Some(items) = &mut content_items {
                 for item in items.iter_mut() {
                     if let FunctionCallOutputContentItem::InputText { text } = item {
+                        let original_text = text.clone();
                         let (next, r) = gateway.scan_text(
-                            text,
+                            &original_text,
                             &turn.sensitive_paths,
                             &session.content_gateway_cache,
                             epoch,
                         );
                         *text = next;
+                        if should_log && (r.redacted || r.blocked) {
+                            crate::exclusion_log::log_redaction_event(
+                                &log_context,
+                                &r,
+                                &original_text,
+                                text.as_str(),
+                            );
+                        }
                         if r.redacted || r.blocked {
                             let mut counters = turn
                                 .exclusion_counters
@@ -322,20 +352,7 @@ fn enforce_sensitive_content_gateway(
                                 .unwrap_or_else(std::sync::PoisonError::into_inner);
                             counters.record(
                                 crate::exclusion_counters::ExclusionLayer::Layer2OutputSanitization,
-                                match &provenance {
-                                    ToolProvenance::Filesystem { .. } => {
-                                        crate::exclusion_counters::ExclusionSource::Filesystem
-                                    }
-                                    ToolProvenance::Mcp { .. } => {
-                                        crate::exclusion_counters::ExclusionSource::Mcp
-                                    }
-                                    ToolProvenance::Shell { .. } => {
-                                        crate::exclusion_counters::ExclusionSource::Shell
-                                    }
-                                    ToolProvenance::Unattested { .. } => {
-                                        crate::exclusion_counters::ExclusionSource::Other
-                                    }
-                                },
+                                source,
                                 tool_name,
                                 r.redacted,
                                 r.blocked,
@@ -361,18 +378,43 @@ fn enforce_sensitive_content_gateway(
         }
         ToolOutput::Mcp { result, provenance } => {
             let mut report = crate::content_gateway::ScanReport::safe();
+            let origin_type = provenance.origin_type();
+            let origin_path = provenance.origin_path();
+            let should_log = turn.exclusion.log_redactions_mode()
+                != crate::config::types::LogRedactionsMode::Off;
+            let log_context = crate::exclusion_log::RedactionLogContext {
+                codex_home: &turn.codex_home,
+                layer: crate::exclusion_counters::ExclusionLayer::Layer2OutputSanitization,
+                source: crate::exclusion_counters::ExclusionSource::Mcp,
+                tool_name,
+                origin_type,
+                origin_path: origin_path.as_deref(),
+                log_mode: turn.exclusion.log_redactions_mode(),
+                max_bytes: turn.exclusion.log_redactions_max_bytes,
+                max_files: turn.exclusion.log_redactions_max_files,
+            };
             let result = result.map(|mut ok| {
                 let mut scan_string = |s: &mut String| {
+                    let original = s.clone();
                     let (next, r) = gateway.scan_text(
-                        s,
+                        &original,
                         &turn.sensitive_paths,
                         &session.content_gateway_cache,
                         epoch,
                     );
                     *s = next;
-                    report.layers.extend(r.layers);
+                    report.layers.extend(r.layers.iter().copied());
                     report.redacted |= r.redacted;
                     report.blocked |= r.blocked;
+                    report.reasons.extend(r.reasons.iter().copied());
+                    if should_log && (r.redacted || r.blocked) {
+                        crate::exclusion_log::log_redaction_event(
+                            &log_context,
+                            &r,
+                            &original,
+                            s.as_str(),
+                        );
+                    }
                 };
 
                 for block in ok.content.iter_mut() {

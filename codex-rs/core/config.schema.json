@@ -763,9 +763,28 @@
           "description": "Layer 3: enforce the provenance-based send firewall (deny-send for excluded filesystem paths). Defaults to `true` when unset.",
           "type": "boolean"
         },
-        "log_blocked": {
-          "default": false,
-          "type": "boolean"
+        "log_redactions": {
+          "description": "Redaction log output policy.",
+          "default": "off",
+          "allOf": [
+            {
+              "$ref": "#/definitions/LogRedactionsMode"
+            }
+          ]
+        },
+        "log_redactions_max_bytes": {
+          "description": "Maximum size (in bytes) for a single redaction log file before rotation.",
+          "default": 52428800,
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "log_redactions_max_files": {
+          "description": "Maximum number of redaction log files to keep (including the active file).",
+          "default": 2,
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0.0
         },
         "on_match": {
           "default": "redact",
@@ -792,6 +811,27 @@
         },
         "secret_patterns": {
           "description": "Secret-pattern scanning in text (defense-in-depth redaction).",
+          "default": true,
+          "type": "boolean"
+        },
+        "secret_patterns_allowlist": {
+          "description": "Optional secret patterns to add on top of built-ins.",
+          "default": [],
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "secret_patterns_blocklist": {
+          "description": "Patterns that suppress matches from built-ins and allowlist.",
+          "default": [],
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "secret_patterns_builtin": {
+          "description": "When true, include built-in secret regexes alongside any allowlist patterns.",
           "default": true,
           "type": "boolean"
         },
@@ -1292,6 +1332,14 @@
         }
       },
       "additionalProperties": false
+    },
+    "LogRedactionsMode": {
+      "type": "string",
+      "enum": [
+        "off",
+        "summary",
+        "raw"
+      ]
     },
     "ModelProviderInfo": {
       "description": "Serializable representation of a provider definition.",
