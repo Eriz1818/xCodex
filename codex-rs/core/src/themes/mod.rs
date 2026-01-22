@@ -4,6 +4,7 @@ use crate::config::types::Themes;
 use serde::Deserialize;
 use serde::Serialize;
 use std::collections::BTreeMap;
+use std::collections::BTreeSet;
 use std::fmt;
 use std::fs;
 use std::path::Path;
@@ -213,7 +214,13 @@ pub struct ThemeRoles {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub composer_bg: Option<ThemeColor>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub user_prompt_highlight_bg: Option<ThemeColor>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub status_bg: Option<ThemeColor>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub status_ramp_fg: Option<ThemeColor>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub status_ramp_highlight: Option<ThemeColor>,
 
     pub selection_fg: ThemeColor,
     pub selection_bg: ThemeColor,
@@ -223,6 +230,8 @@ pub struct ThemeRoles {
 
     pub accent: ThemeColor,
     pub brand: ThemeColor,
+    #[serde(default = "default_command_role")]
+    pub command: ThemeColor,
     pub success: ThemeColor,
     pub warning: ThemeColor,
     pub error: ThemeColor,
@@ -238,6 +247,10 @@ pub struct ThemeRoles {
     pub badge: Option<ThemeColor>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub link: Option<ThemeColor>,
+}
+
+fn default_command_role() -> ThemeColor {
+    ThemeColor("palette.magenta".to_string())
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -310,6 +323,19 @@ impl ThemeDefinition {
         }
     }
 
+    fn darken_bg(bg: ThemeColorResolved, percent: u16) -> ThemeColorResolved {
+        let percent = percent.min(100);
+        match bg {
+            ThemeColorResolved::Rgb(ThemeRgb(br, bg, bb)) => {
+                let r = br.saturating_sub(((u16::from(br) * percent) / 100) as u8);
+                let g = bg.saturating_sub(((u16::from(bg) * percent) / 100) as u8);
+                let b = bb.saturating_sub(((u16::from(bb) * percent) / 100) as u8);
+                ThemeColorResolved::Rgb(ThemeRgb(r, g, b))
+            }
+            ThemeColorResolved::Inherit => ThemeColorResolved::Inherit,
+        }
+    }
+
     pub fn resolve_transcript_bg(&self) -> ThemeColorResolved {
         match self.roles.transcript_bg.as_ref() {
             Some(color) => self.resolve_role_or_inherit("roles.transcript_bg", color),
@@ -322,10 +348,28 @@ impl ThemeDefinition {
             Some(color) => self.resolve_role_or_inherit("roles.composer_bg", color),
             None => {
                 let bg = self.resolve_transcript_bg();
-                // Default composer background: derive from the transcript background and make it
-                // slightly lighter so the composer reads as a distinct surface.
-                Self::lighten_bg(bg, 15)
+                // Default composer background: derive from transcript background so the composer
+                // reads as a distinct surface. On dark themes, lift; on light themes, sink.
+                //
+                // We derive the behavior from the *resolved* background when available so theme
+                // edits that change bg colors automatically adjust the derived composer surface,
+                // even if the theme's stored `variant` wasn't updated.
+                let variant = match bg {
+                    ThemeColorResolved::Rgb(_) => ThemeVariant::from_background(bg),
+                    ThemeColorResolved::Inherit => self.variant,
+                };
+                match variant {
+                    ThemeVariant::Light => Self::darken_bg(bg, 15),
+                    ThemeVariant::Dark => Self::lighten_bg(bg, 15),
+                }
             }
+        }
+    }
+
+    pub fn resolve_user_prompt_highlight_bg(&self) -> ThemeColorResolved {
+        match self.roles.user_prompt_highlight_bg.as_ref() {
+            Some(color) => self.resolve_role_or_inherit("roles.user_prompt_highlight_bg", color),
+            None => self.resolve_composer_bg(),
         }
     }
 
@@ -339,7 +383,7 @@ impl ThemeDefinition {
     pub fn validate(&self) -> Result<(), ThemeError> {
         // Roles are “required” but can be set to inherit or palette refs. We validate they resolve.
         let roles = &self.roles;
-        let required: [(&'static str, &ThemeColor); 18] = [
+        let required: [(&'static str, &ThemeColor); 19] = [
             ("roles.fg", &roles.fg),
             ("roles.bg", &roles.bg),
             ("roles.selection_fg", &roles.selection_fg),
@@ -349,6 +393,7 @@ impl ThemeDefinition {
             ("roles.border", &roles.border),
             ("roles.accent", &roles.accent),
             ("roles.brand", &roles.brand),
+            ("roles.command", &roles.command),
             ("roles.success", &roles.success),
             ("roles.warning", &roles.warning),
             ("roles.error", &roles.error),
@@ -367,7 +412,16 @@ impl ThemeDefinition {
         let optional = [
             ("roles.transcript_bg", roles.transcript_bg.as_ref()),
             ("roles.composer_bg", roles.composer_bg.as_ref()),
+            (
+                "roles.user_prompt_highlight_bg",
+                roles.user_prompt_highlight_bg.as_ref(),
+            ),
             ("roles.status_bg", roles.status_bg.as_ref()),
+            ("roles.status_ramp_fg", roles.status_ramp_fg.as_ref()),
+            (
+                "roles.status_ramp_highlight",
+                roles.status_ramp_highlight.as_ref(),
+            ),
             ("roles.badge", roles.badge.as_ref()),
             ("roles.link", roles.link.as_ref()),
         ];
@@ -394,10 +448,25 @@ pub struct ThemeLoadWarning {
 pub struct ThemeCatalog {
     default: ThemeDefinition,
     by_name: BTreeMap<String, ThemeDefinition>,
+    built_in_names: BTreeSet<String>,
+    user_theme_paths: BTreeMap<String, PathBuf>,
     load_warnings: Vec<ThemeLoadWarning>,
 }
 
 impl ThemeCatalog {
+    fn built_in_bundle() -> Vec<ThemeDefinition> {
+        let bytes = include_bytes!("mbadolato_builtins.json");
+        let themes: Vec<ThemeDefinition> = match serde_json::from_slice(bytes) {
+            Ok(themes) => themes,
+            Err(_) => return Vec::new(),
+        };
+
+        themes
+            .into_iter()
+            .filter(|theme| theme.validate().is_ok())
+            .collect()
+    }
+
     pub fn built_in_default() -> ThemeDefinition {
         // Preserve the current “use terminal defaults” behavior until a user selects a theme.
         let inherit = ThemeColor::inherit();
@@ -410,7 +479,10 @@ impl ThemeCatalog {
                 bg: inherit.clone(),
                 transcript_bg: None,
                 composer_bg: None,
+                user_prompt_highlight_bg: None,
                 status_bg: None,
+                status_ramp_fg: None,
+                status_ramp_highlight: None,
                 selection_fg: inherit.clone(),
                 selection_bg: inherit.clone(),
                 cursor_fg: inherit.clone(),
@@ -418,6 +490,7 @@ impl ThemeCatalog {
                 border: inherit.clone(),
                 accent: ThemeColor("palette.blue".to_string()),
                 brand: ThemeColor("palette.magenta".to_string()),
+                command: ThemeColor("palette.magenta".to_string()),
                 success: ThemeColor("palette.green".to_string()),
                 warning: ThemeColor("palette.yellow".to_string()),
                 error: ThemeColor("palette.red".to_string()),
@@ -434,6 +507,11 @@ impl ThemeCatalog {
     }
 
     pub fn built_in_themes() -> Vec<ThemeDefinition> {
+        let bundle = Self::built_in_bundle();
+        if !bundle.is_empty() {
+            return bundle;
+        }
+
         let rgb = |value: &'static str| ThemeColor(value.to_string());
         let slot = |name: &'static str| ThemeColor(format!("palette.{name}"));
 
@@ -464,7 +542,10 @@ impl ThemeCatalog {
                     bg: rgb("#282a36"),
                     transcript_bg: None,
                     composer_bg: None,
+                    user_prompt_highlight_bg: None,
                     status_bg: None,
+                    status_ramp_fg: None,
+                    status_ramp_highlight: None,
                     selection_fg: rgb("#f8f8f2"),
                     selection_bg: rgb("#44475a"),
                     cursor_fg: rgb("#282a36"),
@@ -472,6 +553,7 @@ impl ThemeCatalog {
                     border: slot("bright_black"),
                     accent: slot("blue"),
                     brand: slot("magenta"),
+                    command: slot("magenta"),
                     success: slot("green"),
                     warning: slot("yellow"),
                     error: slot("red"),
@@ -511,7 +593,10 @@ impl ThemeCatalog {
                     bg: rgb("#282828"),
                     transcript_bg: None,
                     composer_bg: None,
+                    user_prompt_highlight_bg: None,
                     status_bg: None,
+                    status_ramp_fg: None,
+                    status_ramp_highlight: None,
                     selection_fg: rgb("#ebdbb2"),
                     selection_bg: rgb("#3c3836"),
                     cursor_fg: rgb("#282828"),
@@ -519,6 +604,7 @@ impl ThemeCatalog {
                     border: slot("bright_black"),
                     accent: slot("bright_blue"),
                     brand: slot("bright_magenta"),
+                    command: slot("magenta"),
                     success: slot("bright_green"),
                     warning: slot("bright_yellow"),
                     error: slot("bright_red"),
@@ -558,7 +644,10 @@ impl ThemeCatalog {
                     bg: rgb("#2e3440"),
                     transcript_bg: None,
                     composer_bg: None,
+                    user_prompt_highlight_bg: None,
                     status_bg: None,
+                    status_ramp_fg: None,
+                    status_ramp_highlight: None,
                     selection_fg: rgb("#d8dee9"),
                     selection_bg: rgb("#434c5e"),
                     cursor_fg: rgb("#2e3440"),
@@ -566,6 +655,7 @@ impl ThemeCatalog {
                     border: slot("bright_black"),
                     accent: slot("bright_cyan"),
                     brand: slot("bright_blue"),
+                    command: slot("magenta"),
                     success: slot("green"),
                     warning: slot("yellow"),
                     error: slot("red"),
@@ -605,7 +695,10 @@ impl ThemeCatalog {
                     bg: rgb("#002b36"),
                     transcript_bg: None,
                     composer_bg: None,
+                    user_prompt_highlight_bg: None,
                     status_bg: None,
+                    status_ramp_fg: None,
+                    status_ramp_highlight: None,
                     selection_fg: rgb("#93a1a1"),
                     selection_bg: rgb("#073642"),
                     cursor_fg: rgb("#002b36"),
@@ -613,6 +706,7 @@ impl ThemeCatalog {
                     border: slot("bright_green"),
                     accent: slot("blue"),
                     brand: slot("magenta"),
+                    command: slot("magenta"),
                     success: slot("green"),
                     warning: slot("yellow"),
                     error: slot("red"),
@@ -652,7 +746,10 @@ impl ThemeCatalog {
                     bg: rgb("#fdf6e3"),
                     transcript_bg: None,
                     composer_bg: None,
+                    user_prompt_highlight_bg: None,
                     status_bg: None,
+                    status_ramp_fg: None,
+                    status_ramp_highlight: None,
                     selection_fg: rgb("#586e75"),
                     selection_bg: rgb("#eee8d5"),
                     cursor_fg: rgb("#fdf6e3"),
@@ -660,6 +757,7 @@ impl ThemeCatalog {
                     border: slot("bright_green"),
                     accent: slot("blue"),
                     brand: slot("magenta"),
+                    command: slot("magenta"),
                     success: slot("green"),
                     warning: slot("yellow"),
                     error: slot("red"),
@@ -718,7 +816,10 @@ impl ThemeCatalog {
                 bg: ThemeColor(bg.to_string()),
                 transcript_bg: None,
                 composer_bg: None,
+                user_prompt_highlight_bg: None,
                 status_bg: None,
+                status_ramp_fg: None,
+                status_ramp_highlight: None,
                 selection_fg: ThemeColor(selection_fg.to_string()),
                 selection_bg: ThemeColor(selection_bg.to_string()),
                 cursor_fg: ThemeColor(bg.to_string()),
@@ -726,6 +827,7 @@ impl ThemeCatalog {
                 border: ThemeColor("palette.bright_black".to_string()),
                 accent: ThemeColor("palette.blue".to_string()),
                 brand: ThemeColor("palette.magenta".to_string()),
+                command: ThemeColor("palette.magenta".to_string()),
                 success: ThemeColor("palette.green".to_string()),
                 warning: ThemeColor("palette.yellow".to_string()),
                 error: ThemeColor("palette.red".to_string()),
@@ -749,10 +851,14 @@ impl ThemeCatalog {
 
     pub fn load(config: &Config) -> Result<Self, ThemeError> {
         let mut by_name = BTreeMap::new();
+        let mut built_in_names = BTreeSet::new();
+        let mut user_theme_paths = BTreeMap::new();
         let mut load_warnings = Vec::new();
         let default = Self::built_in_default();
+        built_in_names.insert(default.name.clone());
         by_name.insert(default.name.clone(), default.clone());
         for theme in Self::built_in_themes() {
+            built_in_names.insert(theme.name.clone());
             by_name.insert(theme.name.clone(), theme);
         }
 
@@ -769,6 +875,8 @@ impl ThemeCatalog {
                     return Ok(Self {
                         default,
                         by_name,
+                        built_in_names,
+                        user_theme_paths,
                         load_warnings,
                     });
                 }
@@ -819,13 +927,17 @@ impl ThemeCatalog {
                     });
                     continue;
                 }
-                by_name.insert(theme.name.clone(), theme);
+                let name = theme.name.clone();
+                by_name.insert(name.clone(), theme);
+                user_theme_paths.insert(name, path);
             }
         }
 
         Ok(Self {
             default,
             by_name,
+            built_in_names,
+            user_theme_paths,
             load_warnings,
         })
     }
@@ -838,6 +950,14 @@ impl ThemeCatalog {
 
     pub fn load_warnings(&self) -> &[ThemeLoadWarning] {
         &self.load_warnings
+    }
+
+    pub fn is_built_in_name(&self, name: &str) -> bool {
+        self.built_in_names.contains(name)
+    }
+
+    pub fn user_theme_path(&self, name: &str) -> Option<&Path> {
+        self.user_theme_paths.get(name).map(PathBuf::as_path)
     }
 
     pub fn get(&self, name: &str) -> Option<&ThemeDefinition> {
@@ -940,7 +1060,10 @@ pub fn convert_upstream_yaml(src: &str) -> Result<ThemeDefinition, ThemeError> {
         bg: ThemeColor(upstream.background),
         transcript_bg: None,
         composer_bg: None,
+        user_prompt_highlight_bg: None,
         status_bg: None,
+        status_ramp_fg: None,
+        status_ramp_highlight: None,
         selection_fg: ThemeColor(upstream.selection_text),
         selection_bg: ThemeColor(upstream.selection),
         cursor_fg: ThemeColor(upstream.cursor_text),
@@ -952,6 +1075,7 @@ pub fn convert_upstream_yaml(src: &str) -> Result<ThemeDefinition, ThemeError> {
             .map(|s| ThemeColor(s.clone()))
             .unwrap_or_else(|| ThemeColor("palette.blue".to_string())),
         brand: ThemeColor("palette.magenta".to_string()),
+        command: ThemeColor("palette.magenta".to_string()),
         success: ThemeColor("palette.green".to_string()),
         warning: ThemeColor("palette.yellow".to_string()),
         error: ThemeColor("palette.red".to_string()),
@@ -991,6 +1115,68 @@ pub fn convert_upstream_yaml(src: &str) -> Result<ThemeDefinition, ThemeError> {
 mod tests {
     use super::*;
     use pretty_assertions::assert_eq;
+
+    #[test]
+    fn resolve_composer_bg_derives_from_transcript_by_variant() {
+        let mut theme = convert_upstream_yaml(
+            r##"
+name: Test Theme
+color_01: "#000001"
+color_02: "#000002"
+color_03: "#000003"
+color_04: "#000004"
+color_05: "#000005"
+color_06: "#000006"
+color_07: "#000007"
+color_08: "#000008"
+color_09: "#000009"
+color_10: "#00000a"
+color_11: "#00000b"
+color_12: "#00000c"
+color_13: "#00000d"
+color_14: "#00000e"
+color_15: "#00000f"
+color_16: "#000010"
+foreground: "#111111"
+background: "#f0f0f0"
+cursor: "#222222"
+cursor_text: "#333333"
+selection: "#444444"
+selection_text: "#555555"
+"##,
+        )
+        .expect("conversion should succeed");
+
+        assert_eq!(theme.variant, ThemeVariant::Light);
+        assert_eq!(
+            theme.resolve_transcript_bg(),
+            ThemeColorResolved::Rgb(ThemeRgb(0xf0, 0xf0, 0xf0))
+        );
+        assert_eq!(
+            theme.resolve_composer_bg(),
+            ThemeColorResolved::Rgb(ThemeRgb(0xcc, 0xcc, 0xcc))
+        );
+
+        theme.variant = ThemeVariant::Dark;
+        assert_eq!(
+            theme.resolve_composer_bg(),
+            ThemeColorResolved::Rgb(ThemeRgb(0xcc, 0xcc, 0xcc))
+        );
+
+        theme.roles.bg.set("#1e1e1e");
+        assert_eq!(
+            theme.resolve_composer_bg(),
+            ThemeColorResolved::Rgb(ThemeRgb(0x3f, 0x3f, 0x3f))
+        );
+    }
+
+    #[test]
+    fn built_in_theme_bundle_loads_and_validates() {
+        let themes = ThemeCatalog::built_in_bundle();
+        assert_eq!(themes.len(), 453);
+        assert!(themes.iter().any(|theme| theme.name == "dracula"));
+        assert!(themes.iter().all(|theme| theme.validate().is_ok()));
+    }
 
     #[test]
     fn convert_upstream_yaml_maps_core_fields_and_palette() {
