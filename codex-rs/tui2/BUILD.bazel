@@ -11,7 +11,7 @@ codex_rust_crate(
             "Cargo.toml",
         ],
         allow_empty = True,
-    ),
+    ) + ["//codex-rs/theme-ui:theme_selector_overlay_rs"],
     test_data_extra = glob(["src/**/snapshots/**"]),
     integration_compile_data_extra = ["src/test_backend.rs"],
 )

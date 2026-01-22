@@ -1709,10 +1709,15 @@ impl App {
                     tx.send(AppEvent::UpdateSlashCompletionBranches { branches });
                 });
                 if let Some(summary) = summary {
-                    let mut lines: Vec<Line<'static>> = vec![summary.usage_line.clone().into()];
+                    let base_style = crate::theme::transcript_style();
+                    let mut usage_line = summary.usage_line.clone();
+                    usage_line.style = base_style.patch(usage_line.style);
+                    let mut lines: Vec<Line<'static>> = vec![usage_line];
                     if let Some(command) = summary.resume_command {
                         let spans = vec!["To continue this session, run ".into(), command.cyan()];
-                        lines.push(spans.into());
+                        let mut line: Line<'static> = spans.into();
+                        line.style = base_style;
+                        lines.push(line);
                     }
                     self.chat_widget.add_plain_history_lines(lines);
                 }
@@ -1764,14 +1769,18 @@ impl App {
                                 );
                                 self.current_model = resumed_model;
                                 if let Some(summary) = summary {
-                                    let mut lines: Vec<Line<'static>> =
-                                        vec![summary.usage_line.clone().into()];
+                                    let base_style = crate::theme::transcript_style();
+                                    let mut usage_line = summary.usage_line.clone();
+                                    usage_line.style = base_style.patch(usage_line.style);
+                                    let mut lines: Vec<Line<'static>> = vec![usage_line];
                                     if let Some(command) = summary.resume_command {
                                         let spans = vec![
                                             "To continue this session, run ".into(),
                                             command.cyan(),
                                         ];
-                                        lines.push(spans.into());
+                                        let mut line: Line<'static> = spans.into();
+                                        line.style = base_style;
+                                        lines.push(line);
                                     }
                                     self.chat_widget.add_plain_history_lines(lines);
                                 }
@@ -2023,23 +2032,11 @@ impl App {
                     "Palette keys".bold().into(),
                     "palette.* defines ANSI slots (0–15). They matter for legacy ANSI-colored UI and external tool output; xcodex themes do not swap the terminal palette.".into(),
                     "".into(),
-                    "Tip: run `/theme` to preview + save. `/theme preview` shows a swatch grid. `/theme create` scaffolds a new theme YAML. `/theme edit` opens the editor. `/theme template` writes example YAML files.".into(),
+                    "Tip: run `/theme` to preview + save; press Ctrl+T to edit colors (palette/roles). `/theme template` writes example YAML files.".into(),
                 ];
                 self.overlay = Some(Overlay::new_static_with_lines(
                     lines,
                     "T H E M E".to_string(),
-                ));
-                tui.frame_requester().schedule_frame();
-            }
-            AppEvent::OpenThemePreview => {
-                let _ = tui.enter_alt_screen();
-                let lines = crate::theme::preview_lines(
-                    &self.config,
-                    crate::terminal_palette::default_bg(),
-                );
-                self.overlay = Some(Overlay::new_static_with_lines(
-                    lines,
-                    "T H E M E  P R E V I E W".to_string(),
                 ));
                 tui.frame_requester().schedule_frame();
             }

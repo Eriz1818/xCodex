@@ -938,23 +938,11 @@ impl App {
                     "Palette keys".bold().into(),
                     "palette.* defines ANSI slots (0–15). They matter for legacy ANSI-colored UI and external tool output; xcodex themes do not swap the terminal palette.".into(),
                     "".into(),
-                    "Tip: run `/theme` to preview + save. `/theme preview` shows a swatch grid. `/theme create` scaffolds a new theme YAML. `/theme edit` opens the editor. `/theme template` writes example YAML files.".into(),
+                    "Tip: run `/theme` to preview + save. `/theme template` writes example YAML files.".into(),
                 ];
                 self.overlay = Some(Overlay::new_static_with_lines(
                     lines,
                     "T H E M E".to_string(),
-                ));
-                tui.frame_requester().schedule_frame();
-            }
-            AppEvent::OpenThemePreview => {
-                let _ = tui.enter_alt_screen();
-                let lines = crate::theme::preview_lines(
-                    &self.config,
-                    crate::terminal_palette::default_bg(),
-                );
-                self.overlay = Some(Overlay::new_static_with_lines(
-                    lines,
-                    "T H E M E  P R E V I E W".to_string(),
                 ));
                 tui.frame_requester().schedule_frame();
             }

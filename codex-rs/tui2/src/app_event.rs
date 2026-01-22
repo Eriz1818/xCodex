@@ -223,9 +223,6 @@ pub(crate) enum AppEvent {
     /// Open the in-TUI theme help view.
     OpenThemeHelp,
 
-    /// Open the in-TUI theme preview view.
-    OpenThemePreview,
-
     /// Persist xcodex ramp settings.
     PersistRampsConfig {
         rotate: bool,

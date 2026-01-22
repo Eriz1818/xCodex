@@ -34,7 +34,7 @@ light = "example-light"
 dark = "example-dark"
 ```
 
-Codex ships with a small built-in theme catalog, so `/theme` and the config above work even when `themes.dir` is empty. Built-in theme names:
+Codex ships with a built-in theme catalog, so `/theme` and the config above work even when `themes.dir` is empty. Some built-in theme names:
 
 - `default`
 - `dracula`
@@ -43,15 +43,15 @@ Codex ships with a small built-in theme catalog, so `/theme` and the config abov
 - `solarized-dark`
 - `solarized-light`
 
+The full built-in catalog is intentionally not listed here; use `/theme` to browse.
+
 Any `*.yml` / `*.yaml` files found in `themes.dir` are merged into the catalog and can override a built-in theme by reusing its `name`.
 
 You can also select themes interactively from inside the TUI:
 
-- `/theme` opens the picker (live preview, Enter saves).
+- `/theme` opens the picker with a live preview.
+- `Ctrl+T` toggles edit mode inside `/theme` (palette/roles + live preview + save-as flow).
 - `/theme help` explains `roles.*` vs `palette.*`.
-- `/theme preview` shows a swatch grid and role samples for the active theme.
-- `/theme create` scaffolds a new theme YAML by copying an existing theme and selects it.
-- `/theme edit` opens a minimal editor (roles/palette), live-previews changes, then saves as a new theme YAML and selects it.
 - `/theme template` writes example YAML files into `themes.dir` (or `$CODEX_HOME/themes`).
 
 ### Theme file format
@@ -67,8 +67,11 @@ Common `roles.*` keys:
 
 - `roles.fg` / `roles.bg`: primary app text + surfaces
 - `roles.transcript_bg` / `roles.composer_bg` / `roles.status_bg`: transcript, composer, and status bar backgrounds (optional; derived from `roles.fg/bg` by default)
+- `roles.status_ramp_fg` / `roles.status_ramp_highlight`: ramp text base + shimmer highlight for status headers (optional)
+- `roles.user_prompt_highlight_bg`: background for highlighting past user prompts in the transcript (optional; derived from composer by default)
 - `roles.selection_fg` / `roles.selection_bg`: selection highlight in pickers
 - `roles.border`: box borders and chrome
+- `roles.command`: command-ish labels and command identifiers (defaults to `palette.magenta`)
 - `roles.dim`: derived from `roles.fg/bg` (no YAML key)
 
 See `docs/themes/example-dark.yaml` and `docs/themes/example-light.yaml` for reference.

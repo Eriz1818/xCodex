@@ -1,8 +1,8 @@
 load("//:defs.bzl", "codex_rust_crate")
 
 codex_rust_crate(
-    name = "tui",
-    crate_name = "codex_tui",
+    name = "theme-ui",
+    crate_name = "codex_theme_ui",
     compile_data = glob(
         include = ["**"],
         exclude = [
@@ -11,7 +11,11 @@ codex_rust_crate(
             "Cargo.toml",
         ],
         allow_empty = True,
-    ) + ["//codex-rs/theme-ui:theme_selector_overlay_rs"],
-    test_data_extra = glob(["src/**/snapshots/**"]),
-    integration_compile_data_extra = ["src/test_backend.rs"],
+    ),
+)
+
+filegroup(
+    name = "theme_selector_overlay_rs",
+    srcs = ["src/theme_selector_overlay.rs"],
+    visibility = ["//visibility:public"],
 )

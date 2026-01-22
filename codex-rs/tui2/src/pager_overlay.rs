@@ -2,13 +2,12 @@ use std::collections::HashMap;
 use std::io::Result;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Duration;
 
 use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
 use crate::bottom_pane::BottomPane;
 use crate::bottom_pane::BottomPaneParams;
-use crate::bottom_pane::BottomPaneView;
-use crate::bottom_pane::ThemeEditorView;
 use crate::history_cell::AgentMessageCell;
 use crate::history_cell::FinalMessageSeparator;
 use crate::history_cell::HistoryCell;
@@ -16,6 +15,7 @@ use crate::history_cell::UserHistoryCell;
 use crate::key_hint;
 use crate::key_hint::KeyBinding;
 use crate::render::Insets;
+use crate::render::RectExt;
 use crate::render::renderable::InsetRenderable;
 use crate::render::renderable::Renderable;
 use crate::style::user_message_style;
@@ -30,6 +30,7 @@ use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyEventKind;
 use crossterm::event::KeyModifiers;
+use crossterm::event::MouseButton;
 use crossterm::event::MouseEvent;
 use crossterm::event::MouseEventKind;
 use ratatui::buffer::Buffer;
@@ -45,6 +46,10 @@ use ratatui::style::Stylize;
 use ratatui::text::Line;
 use ratatui::text::Span;
 use ratatui::text::Text;
+use ratatui::widgets::Block;
+use ratatui::widgets::BorderType;
+use ratatui::widgets::Borders;
+use ratatui::widgets::Clear;
 use ratatui::widgets::Paragraph;
 use ratatui::widgets::Widget;
 use ratatui::widgets::WidgetRef;
@@ -54,6 +59,7 @@ use serde_json::json;
 pub(crate) enum Overlay {
     Transcript(TranscriptOverlay),
     Static(StaticOverlay),
+    ThemePreview(ThemePreviewOverlay),
     ThemeSelector(ThemeSelectorOverlay),
 }
 
@@ -81,10 +87,19 @@ impl Overlay {
         Self::ThemeSelector(ThemeSelectorOverlay::new(app_event_tx, config, terminal_bg))
     }
 
+    pub(crate) fn new_theme_preview(
+        app_event_tx: AppEventSender,
+        config: codex_core::config::Config,
+        terminal_bg: Option<(u8, u8, u8)>,
+    ) -> Self {
+        Self::ThemePreview(ThemePreviewOverlay::new(app_event_tx, config, terminal_bg))
+    }
+
     pub(crate) fn handle_event(&mut self, tui: &mut tui::Tui, event: TuiEvent) -> Result<()> {
         match self {
             Overlay::Transcript(o) => o.handle_event(tui, event),
             Overlay::Static(o) => o.handle_event(tui, event),
+            Overlay::ThemePreview(o) => o.handle_event(tui, event),
             Overlay::ThemeSelector(o) => o.handle_event(tui, event),
         }
     }
@@ -93,6 +108,7 @@ impl Overlay {
         match self {
             Overlay::Transcript(o) => o.is_done(),
             Overlay::Static(o) => o.is_done(),
+            Overlay::ThemePreview(o) => o.is_done(),
             Overlay::ThemeSelector(o) => o.is_done(),
         }
     }
@@ -117,8 +133,11 @@ const KEY_Q: KeyBinding = key_hint::plain(KeyCode::Char('q'));
 const KEY_ESC: KeyBinding = key_hint::plain(KeyCode::Esc);
 const KEY_ENTER: KeyBinding = key_hint::plain(KeyCode::Enter);
 const KEY_CTRL_T: KeyBinding = key_hint::ctrl(KeyCode::Char('t'));
+const KEY_CTRL_S: KeyBinding = key_hint::ctrl(KeyCode::Char('s'));
 const KEY_CTRL_C: KeyBinding = key_hint::ctrl(KeyCode::Char('c'));
-const KEY_D: KeyBinding = key_hint::plain(KeyCode::Char('d'));
+const KEY_CTRL_G: KeyBinding = key_hint::ctrl(KeyCode::Char('g'));
+const KEY_CTRL_P: KeyBinding = key_hint::ctrl(KeyCode::Char('p'));
+const KEY_QUESTION: KeyBinding = key_hint::plain(KeyCode::Char('?'));
 
 // Common pager navigation hints rendered on the first line
 const PAGER_KEY_HINTS: &[(&[KeyBinding], &str)] = &[
@@ -148,718 +167,622 @@ fn render_key_hints(area: Rect, buf: &mut Buffer, pairs: &[(&[KeyBinding], &str)
     Paragraph::new(vec![Line::from(spans).dim()]).render_ref(area, buf);
 }
 
-pub(crate) struct ThemeSelectorOverlay {
-    app_event_tx: AppEventSender,
-    config: codex_core::config::Config,
-    edit_variant: codex_core::themes::ThemeVariant,
-    theme_entries: Vec<ThemeEntry>,
-    selected_idx: usize,
-    scroll_top: usize,
-    last_previewed: Option<String>,
-    mode: ThemeSelectorMode,
-    applied: bool,
+include!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../theme-ui/src/theme_selector_overlay.rs"
+));
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ThemePreviewMode {
+    Preview,
+    Edit,
+}
+
+pub(crate) struct ThemePreviewOverlay {
+    preview: ThemeSelectorOverlay,
+    terminal_bg: Option<(u8, u8, u8)>,
+    mode: ThemePreviewMode,
+
+    // Preview scroll state.
+    preview_scroll: u16,
+    max_preview_scroll: u16,
+
+    // Edit mode state.
+    edit_tab: ThemeEditTab,
+    edit_selected_idx: usize,
+    edit_scroll_top: usize,
+    last_editor_area: Option<Rect>,
+
+    working_theme: Option<codex_core::themes::ThemeDefinition>,
+    base_theme_name: Option<String>,
+    variant: Option<codex_core::themes::ThemeVariant>,
+
+    color_picker: Option<ColorPickerState>,
+    save_modal: Option<SaveThemeState>,
+
     is_done: bool,
-    frame_requester: Option<crate::tui::FrameRequester>,
 }
 
-#[derive(Clone, Debug)]
-struct ThemeEntry {
-    name: String,
-    variant: codex_core::themes::ThemeVariant,
-}
-
-impl ThemeSelectorOverlay {
+impl ThemePreviewOverlay {
     fn new(
         app_event_tx: AppEventSender,
         config: codex_core::config::Config,
         terminal_bg: Option<(u8, u8, u8)>,
     ) -> Self {
-        use codex_core::themes::ThemeCatalog;
-        use codex_core::themes::ThemeVariant;
-
-        let edit_variant = crate::theme::active_variant(&config, terminal_bg);
-        let current_theme = match edit_variant {
-            ThemeVariant::Light => config.themes.light.as_deref(),
-            ThemeVariant::Dark => config.themes.dark.as_deref(),
-        }
-        .unwrap_or("default")
-        .to_string();
-
-        let mut theme_entries: Vec<ThemeEntry> = match ThemeCatalog::load(&config) {
-            Ok(catalog) => catalog
-                .list_names()
-                .map(|(name, variant)| ThemeEntry {
-                    name: name.to_string(),
-                    variant,
-                })
-                .collect(),
-            Err(_) => Vec::new(),
-        };
-
-        if !theme_entries.iter().any(|entry| entry.name == "default") {
-            theme_entries.insert(
-                0,
-                ThemeEntry {
-                    name: "default".to_string(),
-                    variant: ThemeVariant::Dark,
-                },
-            );
-        }
-
-        fn variant_order(variant: ThemeVariant) -> u8 {
-            match variant {
-                ThemeVariant::Light => 0,
-                ThemeVariant::Dark => 1,
-            }
-        }
-
-        theme_entries.sort_by(|a, b| {
-            if a.name == "default" {
-                std::cmp::Ordering::Less
-            } else if b.name == "default" {
-                std::cmp::Ordering::Greater
-            } else {
-                variant_order(a.variant)
-                    .cmp(&variant_order(b.variant))
-                    .then_with(|| a.name.cmp(&b.name))
-            }
-        });
-
-        let selected_idx = theme_entries
-            .iter()
-            .position(|entry| entry.name == current_theme)
-            .unwrap_or(0);
-
         Self {
-            app_event_tx,
-            config,
-            edit_variant,
-            theme_entries,
-            selected_idx,
-            scroll_top: 0,
-            last_previewed: None,
-            mode: ThemeSelectorMode::Picker {
-                preview_scroll: 0,
-                diff_bg: true,
-            },
-            applied: false,
+            preview: ThemeSelectorOverlay::new(app_event_tx, config, terminal_bg),
+            terminal_bg,
+            mode: ThemePreviewMode::Preview,
+            preview_scroll: 0,
+            max_preview_scroll: 0,
+            edit_tab: ThemeEditTab::Palette,
+            edit_selected_idx: 0,
+            edit_scroll_top: 0,
+            last_editor_area: None,
+            working_theme: None,
+            base_theme_name: None,
+            variant: None,
+            color_picker: None,
+            save_modal: None,
             is_done: false,
-            frame_requester: None,
         }
     }
 
-    fn selected_theme(&self) -> &str {
-        self.theme_entries
-            .get(self.selected_idx)
-            .or_else(|| self.theme_entries.first())
-            .map(|entry| entry.name.as_str())
-            .unwrap_or("default")
-    }
-
-    fn selected_theme_variant(&self) -> codex_core::themes::ThemeVariant {
-        self.theme_entries
-            .get(self.selected_idx)
-            .or_else(|| self.theme_entries.first())
-            .map(|entry| entry.variant)
-            .unwrap_or(codex_core::themes::ThemeVariant::Dark)
-    }
-
-    fn ensure_preview_applied(&mut self) {
-        let theme = self.selected_theme().to_string();
-        if self.last_previewed.as_deref() == Some(theme.as_str()) {
-            return;
+    pub(crate) fn handle_event(&mut self, tui: &mut tui::Tui, event: TuiEvent) -> Result<()> {
+        if self.preview.frame_requester.is_none() {
+            self.preview.frame_requester = Some(tui.frame_requester());
         }
-        self.last_previewed = Some(theme.clone());
-        self.app_event_tx.send(AppEvent::PreviewTheme { theme });
-    }
 
-    fn move_selection(&mut self, delta: isize) {
-        if self.theme_entries.is_empty() {
-            return;
+        if matches!(event, TuiEvent::Draw) {
+            return self.handle_draw(tui);
         }
-        let len = self.theme_entries.len() as isize;
-        let next = (self.selected_idx as isize + delta).rem_euclid(len) as usize;
-        self.selected_idx = next;
-        self.ensure_preview_applied();
-    }
 
-    fn set_edit_variant(&mut self, variant: codex_core::themes::ThemeVariant) {
-        use codex_core::themes::ThemeVariant;
-
-        self.edit_variant = variant;
-        let desired_theme = match variant {
-            ThemeVariant::Light => self.config.themes.light.as_deref(),
-            ThemeVariant::Dark => self.config.themes.dark.as_deref(),
+        if self.handle_modal_event(tui, &event)? {
+            return Ok(());
         }
-        .unwrap_or("default");
 
-        if let Some(idx) = self
-            .theme_entries
-            .iter()
-            .position(|entry| entry.name == desired_theme)
-        {
-            self.selected_idx = idx;
-            self.ensure_preview_applied();
+        match self.mode {
+            ThemePreviewMode::Preview => self.handle_preview_event(tui, event),
+            ThemePreviewMode::Edit => self.handle_edit_event(tui, event),
         }
     }
 
-    fn open_editor(&mut self) {
-        use codex_core::themes::ThemeCatalog;
-
-        let base_theme_name = self.selected_theme().to_string();
-        let base_theme = ThemeCatalog::load(&self.config)
-            .ok()
-            .and_then(|catalog| catalog.get(base_theme_name.as_str()).cloned())
-            .unwrap_or_else(ThemeCatalog::built_in_default);
-
-        let suggested_name = if base_theme_name == "default" {
-            "my-theme".to_string()
-        } else {
-            format!("{base_theme_name}-custom")
-        };
-
-        self.mode = ThemeSelectorMode::Editor(ThemeEditorView::new(
-            self.config.clone(),
-            self.selected_theme_variant(),
-            base_theme_name,
-            base_theme,
-            suggested_name,
-            self.app_event_tx.clone(),
-        ));
-    }
-
-    fn visible_items(&self, list_height: u16) -> usize {
-        usize::from(list_height.max(1)).min(self.theme_entries.len())
-    }
-
-    fn ensure_visible(&mut self, list_height: u16) {
-        let visible = self.visible_items(list_height);
-        if visible == 0 {
-            self.scroll_top = 0;
-            return;
-        }
-        if self.selected_idx < self.scroll_top {
-            self.scroll_top = self.selected_idx;
-        } else if self.selected_idx >= self.scroll_top + visible {
-            self.scroll_top = self.selected_idx + 1 - visible;
-        }
-    }
-
-    fn apply_selection(&mut self) {
-        let theme = self.selected_theme().to_string();
-        let variant = self.edit_variant;
-        self.applied = true;
-        self.app_event_tx
-            .send(AppEvent::PersistThemeSelection { variant, theme });
-        self.is_done = true;
-    }
-
-    fn cancel(&mut self) {
-        if !self.applied {
-            self.app_event_tx.send(AppEvent::CancelThemePreview);
-        }
-        self.is_done = true;
-    }
-
-    fn render_preview(&self, area: Rect, buf: &mut Buffer, scroll: u16, diff_bg: bool) -> u16 {
-        if area.is_empty() {
-            return 0;
-        }
-
-        for y in area.top()..area.bottom() {
-            for x in area.left()..area.right() {
-                buf[(x, y)].set_symbol(" ");
-                buf[(x, y)].set_style(crate::theme::transcript_style());
+    fn handle_preview_event(&mut self, tui: &mut tui::Tui, event: TuiEvent) -> Result<()> {
+        match event {
+            TuiEvent::Key(KeyEvent {
+                code: KeyCode::Char('u' | 'U'),
+                modifiers: KeyModifiers::CONTROL,
+                kind: KeyEventKind::Press | KeyEventKind::Repeat,
+                ..
+            }) => {
+                self.preview_scroll = self.preview_scroll.saturating_sub(3);
+                tui.frame_requester().schedule_frame();
             }
+            TuiEvent::Key(KeyEvent {
+                code: KeyCode::Char('d' | 'D'),
+                modifiers: KeyModifiers::CONTROL,
+                kind: KeyEventKind::Press | KeyEventKind::Repeat,
+                ..
+            }) => {
+                self.preview_scroll = self.preview_scroll.saturating_add(3);
+                tui.frame_requester().schedule_frame();
+            }
+            TuiEvent::Key(KeyEvent {
+                code: KeyCode::Char('g' | 'G'),
+                modifiers: KeyModifiers::CONTROL,
+                kind: KeyEventKind::Press | KeyEventKind::Repeat,
+                ..
+            }) => {
+                let next = !self.preview.config.tui_transcript_diff_highlight;
+                self.preview.config.tui_transcript_diff_highlight = next;
+                self.preview
+                    .app_event_tx
+                    .send(AppEvent::UpdateTranscriptDiffHighlight(next));
+                self.preview
+                    .app_event_tx
+                    .send(AppEvent::PersistTranscriptDiffHighlight(next));
+                tui.frame_requester().schedule_frame();
+            }
+            TuiEvent::Key(KeyEvent {
+                code: KeyCode::Char('p' | 'P'),
+                modifiers: KeyModifiers::CONTROL,
+                kind: KeyEventKind::Press | KeyEventKind::Repeat,
+                ..
+            }) => {
+                let next = !self.preview.config.tui_transcript_user_prompt_highlight;
+                self.preview.config.tui_transcript_user_prompt_highlight = next;
+                self.preview
+                    .app_event_tx
+                    .send(AppEvent::UpdateTranscriptUserPromptHighlight(next));
+                self.preview
+                    .app_event_tx
+                    .send(AppEvent::PersistTranscriptUserPromptHighlight(next));
+                tui.frame_requester().schedule_frame();
+            }
+            TuiEvent::Key(KeyEvent {
+                code: KeyCode::Char('t' | 'T'),
+                modifiers: KeyModifiers::CONTROL,
+                kind: KeyEventKind::Press | KeyEventKind::Repeat,
+                ..
+            }) => {
+                self.enter_edit_mode();
+                tui.frame_requester().schedule_frame();
+            }
+            TuiEvent::Key(KeyEvent {
+                code: KeyCode::Char('q'),
+                kind: KeyEventKind::Press,
+                ..
+            })
+            | TuiEvent::Key(KeyEvent {
+                code: KeyCode::Esc,
+                kind: KeyEventKind::Press | KeyEventKind::Repeat,
+                ..
+            })
+            | TuiEvent::Key(KeyEvent {
+                code: KeyCode::Char('c' | 'C'),
+                modifiers: KeyModifiers::CONTROL,
+                kind: KeyEventKind::Press | KeyEventKind::Repeat,
+                ..
+            }) => {
+                self.is_done = true;
+            }
+            TuiEvent::Mouse(MouseEvent {
+                kind: MouseEventKind::ScrollUp,
+                ..
+            }) => {
+                self.preview_scroll = self.preview_scroll.saturating_sub(1);
+                tui.frame_requester().schedule_frame();
+            }
+            TuiEvent::Mouse(MouseEvent {
+                kind: MouseEventKind::ScrollDown,
+                ..
+            }) => {
+                self.preview_scroll = self.preview_scroll.saturating_add(1);
+                tui.frame_requester().schedule_frame();
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
+    fn handle_edit_event(&mut self, tui: &mut tui::Tui, event: TuiEvent) -> Result<()> {
+        match event {
+            TuiEvent::Key(KeyEvent {
+                code: KeyCode::Esc,
+                kind: KeyEventKind::Press | KeyEventKind::Repeat,
+                ..
+            }) => {
+                self.exit_edit_mode_revert();
+                tui.frame_requester().schedule_frame();
+            }
+            TuiEvent::Key(KeyEvent {
+                code: KeyCode::Char('q'),
+                kind: KeyEventKind::Press,
+                ..
+            }) => {
+                self.exit_edit_mode_revert();
+                self.is_done = true;
+            }
+            TuiEvent::Key(KeyEvent {
+                code: KeyCode::Tab,
+                kind: KeyEventKind::Press | KeyEventKind::Repeat,
+                ..
+            }) => {
+                self.edit_tab = self.edit_tab.toggle();
+                self.edit_selected_idx = 0;
+                self.edit_scroll_top = 0;
+                tui.frame_requester().schedule_frame();
+            }
+            TuiEvent::Key(KeyEvent {
+                code: KeyCode::Up,
+                kind: KeyEventKind::Press | KeyEventKind::Repeat,
+                ..
+            }) => {
+                self.move_selection(-1);
+                tui.frame_requester().schedule_frame();
+            }
+            TuiEvent::Key(KeyEvent {
+                code: KeyCode::Down,
+                kind: KeyEventKind::Press | KeyEventKind::Repeat,
+                ..
+            }) => {
+                self.move_selection(1);
+                tui.frame_requester().schedule_frame();
+            }
+            TuiEvent::Key(KeyEvent {
+                code: KeyCode::Enter,
+                kind: KeyEventKind::Press,
+                ..
+            }) => {
+                if let Some(key) = self.selected_key() {
+                    self.open_color_picker(key);
+                    tui.frame_requester().schedule_frame();
+                }
+            }
+            TuiEvent::Key(KeyEvent {
+                code: KeyCode::Char('s' | 'S'),
+                modifiers: KeyModifiers::CONTROL,
+                kind: KeyEventKind::Press | KeyEventKind::Repeat,
+                ..
+            }) => {
+                self.open_save_modal();
+                tui.frame_requester().schedule_frame();
+            }
+            TuiEvent::Mouse(MouseEvent {
+                kind: MouseEventKind::Down(MouseButton::Left),
+                column,
+                row,
+                ..
+            }) => {
+                if let Some(editor_area) = self.last_editor_area
+                    && column >= editor_area.left()
+                    && column < editor_area.right()
+                    && row >= editor_area.top()
+                    && row < editor_area.bottom()
+                    && let Some(key) = self.editor_hit_test(editor_area, column, row)
+                {
+                    self.open_color_picker(key);
+                    tui.frame_requester().schedule_frame();
+                }
+            }
+            TuiEvent::Mouse(MouseEvent {
+                kind: MouseEventKind::ScrollUp,
+                ..
+            }) => {
+                self.preview_scroll = self.preview_scroll.saturating_sub(1);
+                tui.frame_requester().schedule_frame();
+            }
+            TuiEvent::Mouse(MouseEvent {
+                kind: MouseEventKind::ScrollDown,
+                ..
+            }) => {
+                self.preview_scroll = self.preview_scroll.saturating_add(1);
+                tui.frame_requester().schedule_frame();
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
+    fn handle_modal_event(&mut self, tui: &mut tui::Tui, event: &TuiEvent) -> Result<bool> {
+        if let Some(save) = self.save_modal.as_mut() {
+            match event {
+                TuiEvent::Key(KeyEvent {
+                    code: KeyCode::Esc,
+                    kind: KeyEventKind::Press,
+                    ..
+                }) => {
+                    self.save_modal = None;
+                    tui.frame_requester().schedule_frame();
+                }
+                TuiEvent::Key(KeyEvent {
+                    code: KeyCode::Enter,
+                    kind: KeyEventKind::Press,
+                    ..
+                }) => {
+                    if save.stage == SaveStage::Editing {
+                        self.commit_save();
+                    }
+                    tui.frame_requester().schedule_frame();
+                }
+                TuiEvent::Key(KeyEvent {
+                    code: KeyCode::Char('y' | 'Y'),
+                    kind: KeyEventKind::Press,
+                    ..
+                }) => {
+                    if save.stage == SaveStage::ConfirmOverwrite {
+                        self.commit_overwrite(true);
+                    }
+                    tui.frame_requester().schedule_frame();
+                }
+                TuiEvent::Key(KeyEvent {
+                    code: KeyCode::Char('n' | 'N'),
+                    kind: KeyEventKind::Press,
+                    ..
+                }) => {
+                    if save.stage == SaveStage::ConfirmOverwrite {
+                        self.commit_overwrite(false);
+                    }
+                    tui.frame_requester().schedule_frame();
+                }
+                TuiEvent::Key(key) => {
+                    if save.stage == SaveStage::Editing {
+                        apply_text_edit(&mut save.name, &mut save.cursor, key);
+                        tui.frame_requester().schedule_frame();
+                    }
+                }
+                _ => {}
+            }
+            return Ok(true);
         }
 
-        let Some(frame_requester) = self.frame_requester.as_ref() else {
-            return 0;
-        };
-
-        let _diff_add = if diff_bg {
-            crate::theme::diff_add_style()
-        } else {
-            crate::theme::diff_add_text_style()
-        };
-        let _diff_del = if diff_bg {
-            crate::theme::diff_del_style()
-        } else {
-            crate::theme::diff_del_text_style()
-        };
-        let diff_hunk = if diff_bg {
-            crate::theme::diff_hunk_style()
-        } else {
-            crate::theme::diff_hunk_text_style()
-        };
-
-        fn buffer_to_lines(buf: &Buffer) -> Vec<Line<'static>> {
-            let mut out: Vec<Line<'static>> = Vec::with_capacity(buf.area.height as usize);
-            for y in 0..buf.area.height {
-                let mut spans: Vec<Span<'static>> = Vec::new();
-                let mut run_style: Option<Style> = None;
-                let mut run = String::new();
-
-                for x in 0..buf.area.width {
-                    let cell = &buf[(x, y)];
-                    let symbol = cell.symbol();
-                    let style = cell.style();
-                    let symbol = if symbol.is_empty() { " " } else { symbol };
-
-                    if run_style != Some(style) && !run.is_empty() {
-                        if let Some(prev_style) = run_style {
-                            spans.push(Span::styled(std::mem::take(&mut run), prev_style));
-                        } else {
-                            spans.push(Span::from(std::mem::take(&mut run)));
+        if let Some(picker) = self.color_picker.as_mut() {
+            let mut apply_live = false;
+            match event {
+                TuiEvent::Key(KeyEvent {
+                    code: KeyCode::Esc,
+                    kind: KeyEventKind::Press,
+                    ..
+                }) => {
+                    self.cancel_color_picker();
+                    tui.frame_requester().schedule_frame();
+                }
+                TuiEvent::Key(KeyEvent {
+                    code: KeyCode::Enter,
+                    kind: KeyEventKind::Press,
+                    ..
+                }) => {
+                    self.color_picker = None;
+                    tui.frame_requester().schedule_frame();
+                }
+                TuiEvent::Key(KeyEvent {
+                    code: KeyCode::Char('i' | 'I'),
+                    kind: KeyEventKind::Press,
+                    ..
+                }) => {
+                    picker.inherit = !picker.inherit;
+                    if picker.inherit {
+                        picker.derived = false;
+                    }
+                    apply_live = true;
+                    tui.frame_requester().schedule_frame();
+                }
+                TuiEvent::Key(KeyEvent {
+                    code: KeyCode::Char('d' | 'D'),
+                    kind: KeyEventKind::Press,
+                    ..
+                }) => {
+                    if is_optional_role_key(picker.key) {
+                        picker.derived = !picker.derived;
+                        if picker.derived {
+                            picker.inherit = false;
+                        }
+                        apply_live = true;
+                        tui.frame_requester().schedule_frame();
+                    }
+                }
+                TuiEvent::Key(KeyEvent {
+                    code: KeyCode::Up,
+                    kind: KeyEventKind::Press | KeyEventKind::Repeat,
+                    ..
+                }) => {
+                    picker.focus = match picker.focus {
+                        ColorPickerFocus::Hex => ColorPickerFocus::R,
+                        ColorPickerFocus::R => ColorPickerFocus::R,
+                        ColorPickerFocus::G => ColorPickerFocus::R,
+                        ColorPickerFocus::B => ColorPickerFocus::G,
+                    };
+                    tui.frame_requester().schedule_frame();
+                }
+                TuiEvent::Key(KeyEvent {
+                    code: KeyCode::Down,
+                    kind: KeyEventKind::Press | KeyEventKind::Repeat,
+                    ..
+                }) => {
+                    picker.focus = match picker.focus {
+                        ColorPickerFocus::Hex => ColorPickerFocus::R,
+                        ColorPickerFocus::R => ColorPickerFocus::G,
+                        ColorPickerFocus::G => ColorPickerFocus::B,
+                        ColorPickerFocus::B => ColorPickerFocus::B,
+                    };
+                    tui.frame_requester().schedule_frame();
+                }
+                TuiEvent::Key(KeyEvent {
+                    code: KeyCode::Left,
+                    kind: KeyEventKind::Press | KeyEventKind::Repeat,
+                    ..
+                }) => {
+                    if !picker.inherit && !picker.derived {
+                        match picker.focus {
+                            ColorPickerFocus::R => picker.r = picker.r.saturating_sub(1),
+                            ColorPickerFocus::G => picker.g = picker.g.saturating_sub(1),
+                            ColorPickerFocus::B => picker.b = picker.b.saturating_sub(1),
+                            ColorPickerFocus::Hex => {}
+                        }
+                        Self::sync_picker_rgb_text_from_rgb(picker);
+                        Self::sync_picker_hex_from_rgb(picker);
+                        apply_live = true;
+                        tui.frame_requester().schedule_frame();
+                    }
+                }
+                TuiEvent::Key(KeyEvent {
+                    code: KeyCode::Right,
+                    kind: KeyEventKind::Press | KeyEventKind::Repeat,
+                    ..
+                }) => {
+                    if !picker.inherit && !picker.derived {
+                        match picker.focus {
+                            ColorPickerFocus::R => picker.r = picker.r.saturating_add(1),
+                            ColorPickerFocus::G => picker.g = picker.g.saturating_add(1),
+                            ColorPickerFocus::B => picker.b = picker.b.saturating_add(1),
+                            ColorPickerFocus::Hex => {}
+                        }
+                        Self::sync_picker_rgb_text_from_rgb(picker);
+                        Self::sync_picker_hex_from_rgb(picker);
+                        apply_live = true;
+                        tui.frame_requester().schedule_frame();
+                    }
+                }
+                TuiEvent::Key(key) => {
+                    if picker.focus == ColorPickerFocus::Hex
+                        && !picker.inherit
+                        && !picker.derived
+                        && apply_hex_edit(&mut picker.hex, &mut picker.cursor, key)
+                    {
+                        if picker.hex.len() == 6
+                            && let Ok((r, g, b)) = parse_hex_rgb(picker.hex.as_str())
+                        {
+                            picker.r = r;
+                            picker.g = g;
+                            picker.b = b;
+                            Self::sync_picker_rgb_text_from_rgb(picker);
+                            apply_live = true;
+                        }
+                        tui.frame_requester().schedule_frame();
+                    }
+                    if !picker.inherit && !picker.derived {
+                        match picker.focus {
+                            ColorPickerFocus::R => {
+                                if apply_rgb_edit(&mut picker.r_text, &mut picker.r_cursor, key) {
+                                    if picker.r_text.is_empty() {
+                                        picker.r = 0;
+                                        picker.r_text = "0".to_string();
+                                        picker.r_cursor = picker.r_text.len();
+                                        Self::sync_picker_hex_from_rgb(picker);
+                                        apply_live = true;
+                                    } else if let Some(value) =
+                                        parse_rgb_text(picker.r_text.as_str())
+                                    {
+                                        let clamped = value.min(255) as u8;
+                                        picker.r = clamped;
+                                        picker.r_text = clamped.to_string();
+                                        picker.r_cursor = picker.r_text.len();
+                                        Self::sync_picker_hex_from_rgb(picker);
+                                        apply_live = true;
+                                    }
+                                    tui.frame_requester().schedule_frame();
+                                }
+                            }
+                            ColorPickerFocus::G => {
+                                if apply_rgb_edit(&mut picker.g_text, &mut picker.g_cursor, key) {
+                                    if picker.g_text.is_empty() {
+                                        picker.g = 0;
+                                        picker.g_text = "0".to_string();
+                                        picker.g_cursor = picker.g_text.len();
+                                        Self::sync_picker_hex_from_rgb(picker);
+                                        apply_live = true;
+                                    } else if let Some(value) =
+                                        parse_rgb_text(picker.g_text.as_str())
+                                    {
+                                        let clamped = value.min(255) as u8;
+                                        picker.g = clamped;
+                                        picker.g_text = clamped.to_string();
+                                        picker.g_cursor = picker.g_text.len();
+                                        Self::sync_picker_hex_from_rgb(picker);
+                                        apply_live = true;
+                                    }
+                                    tui.frame_requester().schedule_frame();
+                                }
+                            }
+                            ColorPickerFocus::B => {
+                                if apply_rgb_edit(&mut picker.b_text, &mut picker.b_cursor, key) {
+                                    if picker.b_text.is_empty() {
+                                        picker.b = 0;
+                                        picker.b_text = "0".to_string();
+                                        picker.b_cursor = picker.b_text.len();
+                                        Self::sync_picker_hex_from_rgb(picker);
+                                        apply_live = true;
+                                    } else if let Some(value) =
+                                        parse_rgb_text(picker.b_text.as_str())
+                                    {
+                                        let clamped = value.min(255) as u8;
+                                        picker.b = clamped;
+                                        picker.b_text = clamped.to_string();
+                                        picker.b_cursor = picker.b_text.len();
+                                        Self::sync_picker_hex_from_rgb(picker);
+                                        apply_live = true;
+                                    }
+                                    tui.frame_requester().schedule_frame();
+                                }
+                            }
+                            ColorPickerFocus::Hex => {}
                         }
                     }
-
-                    if run.is_empty() || run_style != Some(style) {
-                        run_style = Some(style);
-                    }
-
-                    run.push_str(symbol);
                 }
-
-                if let Some(style) = run_style
-                    && !run.is_empty()
-                {
-                    spans.push(Span::styled(run, style));
-                }
-
-                out.push(Line::from(spans));
+                _ => {}
             }
-            out
+            if apply_live {
+                self.apply_color_picker_live();
+            }
+            return Ok(true);
         }
 
-        fn render_cell_to_lines(
-            cell: &dyn HistoryCell,
-            width: u16,
-            base_style: Style,
-        ) -> Vec<Line<'static>> {
-            let width = width.max(1);
-            let height = cell.desired_height(width).max(1);
-            let mut cell_buf = Buffer::empty(Rect::new(0, 0, width, height));
-            for y in 0..cell_buf.area.height {
-                for x in 0..cell_buf.area.width {
-                    cell_buf[(x, y)].set_symbol(" ");
-                    cell_buf[(x, y)].set_style(base_style);
-                }
-            }
-            Paragraph::new(Text::from(cell.transcript_lines(width)))
-                .style(base_style)
-                .render(*cell_buf.area(), &mut cell_buf);
-            buffer_to_lines(&cell_buf)
-        }
-
-        let session_event = codex_core::protocol::SessionConfiguredEvent {
-            session_id: ThreadId::new(),
-            model: "gpt-5.2 medium".to_string(),
-            model_provider_id: "openai".to_string(),
-            approval_policy: self.config.approval_policy.value(),
-            sandbox_policy: self.config.sandbox_policy.get().clone(),
-            cwd: PathBuf::from("~/Dev/Pyfun/skynet/xcodex"),
-            reasoning_effort: None,
-            history_log_id: 0,
-            history_entry_count: 0,
-            initial_messages: None,
-            rollout_path: PathBuf::from("/tmp/theme-preview.jsonl"),
-        };
-
-        let mut preview_config = self.config.clone();
-        preview_config.cwd = PathBuf::from("~/Dev/Pyfun/skynet/xcodex");
-
-        let mut session_help_lines: Vec<Line<'static>> = vec![
-            "  To get started, describe a task or try one of these commands:"
-                .dim()
-                .into(),
-            Line::from(""),
-        ];
-        let mut command_lines = crate::history_cell::session_first_event_command_lines();
-        command_lines.truncate(2);
-        session_help_lines.extend(command_lines);
-
-        let session_info = crate::history_cell::new_session_info_with_help_lines(
-            &preview_config,
-            "gpt-5.2 medium",
-            session_event,
-            session_help_lines,
-        );
-
-        let mut lines: Vec<Line<'static>> = Vec::new();
-
-        // (1) Session info (scrollable transcript content).
-        lines.extend(session_info.display_lines(area.width));
-        lines.push(Line::from(""));
-
-        // (2) Quick examples block: diff + status + link + warning + error.
-        lines.push(vec!["• ".dim(), "Quick examples".bold()].into());
-        lines.extend([
-            Line::from(vec![
-                "  └ ".dim(),
-                Span::from("config.yaml").set_style(diff_hunk),
-                " ".into(),
-                "(example change)".dim(),
-            ]),
-            Line::from(vec![
-                "  └ ".dim(),
-                "status: ".dim(),
-                Span::from("Working").set_style(crate::theme::accent_style()),
-                " · ".dim(),
-                Span::from("warning").set_style(crate::theme::warning_style()),
-                " · ".dim(),
-                Span::from("error").set_style(crate::theme::error_style()),
-                " · ".dim(),
-                Span::from("success").set_style(crate::theme::success_style()),
-            ]),
-            Line::from(vec![
-                "  └ ".dim(),
-                "link: ".dim(),
-                Span::from("https://example.com")
-                    .set_style(crate::theme::link_style().underlined()),
-            ]),
-        ]);
-        lines.push(Line::from(""));
-
-        {
-            let deprecation = crate::history_cell::new_deprecation_notice(
-                "Heads up: `/dance` is deprecated.".to_string(),
-                Some(
-                    "Use `/boogie` instead (or just type “boogie” loudly into the composer)."
-                        .to_string(),
-                ),
-            );
-            lines.extend(deprecation.display_lines(area.width));
-            lines.push(Line::from(""));
-
-            lines.extend(
-                crate::history_cell::new_warning_event(
-                    "Warning: `/boogie` may cause spontaneous finger snaps.".to_string(),
-                )
-                .display_lines(area.width),
-            );
-            lines.push(Line::from(""));
-
-            let mut changes = HashMap::new();
-            changes.insert(
-                PathBuf::from("codex-rs/tui2/src/pager_overlay.rs"),
-                FileChange::Update {
-                    unified_diff: "@@ -1,2 +1,2 @@\n-old\n-stale\n+new\n+extra\n".to_string(),
-                    move_path: None,
-                },
-            );
-
-            let patch = crate::history_cell::new_patch_event(changes, self.config.cwd.as_path());
-            lines.extend(patch.display_lines(area.width));
-            lines.push(Line::from(""));
-
-            let patch_failed = crate::history_cell::new_patch_apply_failure(
-                "error: patch failed: src/main.rs:42\n".to_string(),
-            );
-            lines.extend(patch_failed.display_lines(area.width));
-            lines.push(Line::from(""));
-
-            let mut tool_call = crate::history_cell::new_active_mcp_tool_call(
-                "preview-mcp-1".to_string(),
-                codex_core::protocol::McpInvocation {
-                    server: "filesystem".to_string(),
-                    tool: "read_file".to_string(),
-                    arguments: Some(json!({"path": "README.md"})),
-                },
-                self.config.animations,
-            );
-            let image_cell = tool_call.complete(
-                std::time::Duration::from_millis(312),
-                Ok(mcp_types::CallToolResult {
-                    content: vec![mcp_types::ContentBlock::TextContent(
-                        mcp_types::TextContent {
-                            annotations: None,
-                            text: "Found 1 file: README.md".to_string(),
-                            r#type: "text".to_string(),
-                        },
-                    )],
-                    is_error: Some(false),
-                    structured_content: None,
-                }),
-            );
-            lines.extend(tool_call.display_lines(area.width));
-            if let Some(image_cell) = image_cell {
-                lines.extend(image_cell.display_lines(area.width));
-            }
-            lines.push(Line::from(""));
-
-            let approval_decision = crate::history_cell::new_approval_decision_cell(
-                vec![
-                    "bash".to_string(),
-                    "-lc".to_string(),
-                    "cargo test -p codex-tui2".to_string(),
-                ],
-                codex_core::protocol::ReviewDecision::Approved,
-            );
-            lines.extend(approval_decision.display_lines(area.width));
-            lines.push(Line::from(""));
-
-            let sessions = crate::history_cell::new_unified_exec_sessions_output(
-                vec![
-                    crate::history_cell::BackgroundActivityEntry::new(
-                        "term-17".to_string(),
-                        "python3 -i\n>>>".to_string(),
-                    ),
-                    crate::history_cell::BackgroundActivityEntry::new(
-                        "term-23".to_string(),
-                        "rg -n \"HistoryCell\" -S codex-rs/tui2/src/history_cell.rs".to_string(),
-                    ),
-                ],
-                vec![crate::history_cell::BackgroundActivityEntry::new(
-                    "hook-1".to_string(),
-                    "pre-commit: cargo fmt && cargo test -p codex-tui2".to_string(),
-                )],
-            );
-            lines.extend(sessions.display_lines(area.width));
-        }
-
-        lines.push(Line::from(""));
-
-        let user_prompt = "Give me the highlight reel of whatever we just did, and toss in an approval modal for extra drama.";
-
-        let user_cell = UserHistoryCell {
-            message: user_prompt.to_string(),
-        };
-        lines.extend(render_cell_to_lines(
-            &user_cell,
-            area.width,
-            crate::theme::transcript_style().patch(user_message_style()),
-        ));
-
-        lines.push(Line::from(""));
-
-        // (3) Plan update sample.
-        let plan_update = crate::history_cell::new_plan_update(UpdatePlanArgs {
-            explanation: Some(
-                "Make this whole little playthrough feel seamless, and don’t let any “mystery styling goblins” sneak in."
-                    .to_string(),
-            ),
-            plan: vec![
-                PlanItemArg {
-                    step: "Add a “look ma, it works” snack-sized examples block".to_string(),
-                    status: StepStatus::Completed,
-                },
-                PlanItemArg {
-                    step: "Summon the approval modal inside the transcript (dramatic lighting optional)."
-                        .to_string(),
-                    status: StepStatus::InProgress,
-                },
-                PlanItemArg {
-                    step: "Finish with a tidy “we survived” summary section".to_string(),
-                    status: StepStatus::Pending,
-                },
-            ],
-        });
-        lines.extend(plan_update.display_lines(area.width));
-
-        lines.push(Line::from(""));
-
-        let mut tool_call = crate::exec_cell::new_active_exec_command(
-            "preview-shell-1".to_string(),
-            vec![
-                "bash".to_string(),
-                "-lc".to_string(),
-                "rg -n \"Theme Preview\" codex-rs/tui2/src/pager_overlay.rs".to_string(),
-            ],
-            Vec::new(),
-            codex_core::protocol::ExecCommandSource::Agent,
-            None,
-            false,
-        );
-        tool_call.complete_call(
-            "preview-shell-1",
-            crate::exec_cell::CommandOutput {
-                exit_code: 0,
-                aggregated_output:
-                    "935:                    Paragraph::new(Line::from(\"Theme Preview\"))\n"
-                        .to_string(),
-                formatted_output: "935: Paragraph::new(Line::from(\"Theme Preview\"))".to_string(),
-            },
-            std::time::Duration::from_millis(742),
-        );
-        lines.extend(tool_call.display_lines(area.width));
-
-        lines.push(Line::from(""));
-
-        let thought = crate::history_cell::new_reasoning_summary_block_with_visibility(
-            "**Popcorn-powered planning**\n\nI’ll render this `preview` with real cells so the theme does the styling.\nIf it looks odd, I blame the popcorn, not the `palette`.".to_string(),
-            false,
-        );
-        lines.extend(thought.display_lines(area.width));
-
-        lines.push(Line::from(""));
-
-        // (4) Approval required (render the real approval overlay into transcript).
-        let approval = crate::bottom_pane::ApprovalOverlay::new(
-            crate::bottom_pane::ApprovalRequest::Exec {
-                id: "preview-install".to_string(),
-                command: vec![
-                    "bash".to_string(),
-                    "-lc".to_string(),
-                    "cd /Users/MD-Dyson/Dev/Pyfun/skynet/xcodex/codex-rs && just xcodex-install"
-                        .to_string(),
-                ],
-                reason: None,
-                proposed_execpolicy_amendment: None,
-            },
-            self.app_event_tx.clone(),
-            codex_core::features::Features::with_defaults(),
-        );
-        let width = area.width.max(1);
-        let height = approval.desired_height(width);
-        let mut approval_buf = Buffer::empty(Rect::new(0, 0, width, height));
-        let base_style = user_message_style().patch(crate::theme::composer_style());
-        for y in 0..approval_buf.area.height {
-            for x in 0..approval_buf.area.width {
-                approval_buf[(x, y)].set_symbol(" ");
-                approval_buf[(x, y)].set_style(base_style);
-            }
-        }
-        approval.render(*approval_buf.area(), &mut approval_buf);
-        lines.push(Line::from(vec![
-            Span::from("Approval required:").set_style(crate::theme::accent_style()),
-        ]));
-        lines.extend(buffer_to_lines(&approval_buf));
-        lines.push(Line::from(""));
-
-        // (5) Final separator + summary header.
-        lines.extend(
-            FinalMessageSeparator::new(
-                Some(12),
-                true,
-                crate::xtreme::xtreme_ui_enabled(&self.config),
-                None,
-                None,
-            )
-            .display_lines(area.width),
-        );
-
-        lines.push(Line::from(""));
-
-        let assistant = AgentMessageCell::new_logical(
-            crate::markdown_render::render_markdown_logical_lines(
-                "I crammed a whole chaotic mini-adventure into three lines:\n\
-\n\
-- `plan`\n\
-- command\n\
-- a dramatic “approved” moment\n\
-\n\
-There’s exactly one “typing area” cameo at the bottom—no duplicate keyboard gremlins rehearsing `mid-transcript`.\n\
-Everything above it is just the story: one prompt, one `brainwave`, one button-press, and one smug little summary.",
-            ),
-            true,
-        );
-        lines.extend(assistant.display_lines(area.width));
-
-        // (6) Bottom pane snapshot (scrollable transcript content).
-        {
-            let mut bottom_pane = BottomPane::new(BottomPaneParams {
-                app_event_tx: self.app_event_tx.clone(),
-                frame_requester: frame_requester.clone(),
-                has_input_focus: true,
-                enhanced_keys_supported: false,
-                placeholder_text: "Ask xcodex to do anything".to_string(),
-                disable_paste_burst: false,
-                minimal_composer_borders: self.config.tui_composer_minimal_borders,
-                xtreme_ui_enabled: crate::xtreme::xtreme_ui_enabled(&self.config),
-                animations_enabled: self.config.animations,
-                skills: None,
-            });
-            bottom_pane.set_slash_popup_max_rows(3);
-            bottom_pane.insert_str("/mo");
-            bottom_pane.ensure_status_indicator();
-            bottom_pane.update_status("Working".to_string(), Some("Theme preview".to_string()));
-            bottom_pane.set_context_window(Some(100), Some(0));
-            bottom_pane.set_status_bar_git_options(true, true);
-            bottom_pane.set_status_bar_git_context(
-                Some("feat/themes".to_string()),
-                Some("~/Dev/Pyfun/skynet/xcodex".to_string()),
-            );
-
-            let width = area.width.max(1);
-            let height = bottom_pane.desired_height(width).max(1);
-            let mut bottom_buf = Buffer::empty(Rect::new(0, 0, width, height));
-            bottom_pane.render(*bottom_buf.area(), &mut bottom_buf);
-
-            // Render the footer in a separate pane so the snapshot can show:
-            // composer + slash popup + status bar.
-            let mut footer_pane = BottomPane::new(BottomPaneParams {
-                app_event_tx: self.app_event_tx.clone(),
-                frame_requester: frame_requester.clone(),
-                has_input_focus: true,
-                enhanced_keys_supported: false,
-                placeholder_text: "Ask xcodex to do anything".to_string(),
-                disable_paste_burst: false,
-                minimal_composer_borders: self.config.tui_composer_minimal_borders,
-                xtreme_ui_enabled: crate::xtreme::xtreme_ui_enabled(&self.config),
-                animations_enabled: self.config.animations,
-                skills: None,
-            });
-            footer_pane.set_slash_popup_max_rows(3);
-            footer_pane.ensure_status_indicator();
-            footer_pane.update_status("Working".to_string(), Some("Theme preview".to_string()));
-            footer_pane.set_context_window(Some(100), Some(0));
-            footer_pane.set_status_bar_git_options(true, true);
-            footer_pane.set_status_bar_git_context(
-                Some("feat/skynet-themes".to_string()),
-                Some("~/Dev/Pyfun/skynet/xcodex".to_string()),
-            );
-
-            let footer_height = footer_pane.desired_height(width).max(1);
-            let mut footer_buf = Buffer::empty(Rect::new(0, 0, width, footer_height));
-            footer_pane.render(*footer_buf.area(), &mut footer_buf);
-
-            let rows_to_copy = 1u16;
-            let mut combined_buf = Buffer::empty(Rect::new(
-                0,
-                0,
-                width,
-                bottom_buf.area.height.saturating_add(rows_to_copy),
-            ));
-            for y in 0..combined_buf.area.height {
-                for x in 0..combined_buf.area.width {
-                    combined_buf[(x, y)].set_symbol(" ");
-                    combined_buf[(x, y)].set_style(crate::theme::transcript_style());
-                }
-            }
-
-            for y in 0..bottom_buf.area.height {
-                for x in 0..width {
-                    combined_buf[(x, y)] = bottom_buf[(x, y)].clone();
-                }
-            }
-
-            if footer_buf.area.height >= rows_to_copy {
-                let src_y = footer_buf.area.height - rows_to_copy;
-                let dst_y = combined_buf.area.height - rows_to_copy;
-                for x in 0..width {
-                    combined_buf[(x, dst_y)] = footer_buf[(x, src_y)].clone();
-                }
-            }
-
-            lines.push(Line::from(""));
-            lines.extend(buffer_to_lines(&combined_buf));
-        }
-
-        let visible_rows = area.height as usize;
-        let max_scroll =
-            u16::try_from(lines.len().saturating_sub(visible_rows)).unwrap_or(u16::MAX);
-        let scroll = scroll.min(max_scroll);
-
-        Paragraph::new(Text::from(lines))
-            .style(crate::theme::transcript_style())
-            .scroll((scroll, 0))
-            .render_ref(area, buf);
-
-        max_scroll
+        Ok(false)
     }
 
-    fn render_theme_list(&mut self, area: Rect, buf: &mut Buffer) {
+    fn handle_draw(&mut self, tui: &mut tui::Tui) -> Result<()> {
+        if self.preview.frame_requester.is_none() {
+            return Ok(());
+        };
+
+        let requested_scroll = self.preview_scroll;
+        tui.draw(u16::MAX, |frame| {
+            let area = frame.area();
+            for y in area.top()..area.bottom() {
+                for x in area.left()..area.right() {
+                    frame.buffer_mut()[(x, y)].set_symbol(" ");
+                    frame.buffer_mut()[(x, y)].set_style(crate::theme::transcript_style());
+                }
+            }
+
+            let parts = Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([Constraint::Min(0), Constraint::Length(1)])
+                .split(area);
+            let body = parts[0];
+            let footer = parts[1];
+
+            let (editor_area, preview_area) = match self.mode {
+                ThemePreviewMode::Preview => (Rect::new(body.x, body.y, body.width, 0), body),
+                ThemePreviewMode::Edit => {
+                    let editor_h = body.height.min(5);
+                    let parts = Layout::default()
+                        .direction(Direction::Vertical)
+                        .constraints([Constraint::Length(editor_h), Constraint::Min(0)])
+                        .split(body);
+                    (parts[0], parts[1])
+                }
+            };
+
+            self.last_editor_area = if self.mode == ThemePreviewMode::Edit {
+                Some(editor_area)
+            } else {
+                None
+            };
+
+            self.max_preview_scroll =
+                self.preview
+                    .render_preview(preview_area, frame.buffer_mut(), requested_scroll);
+
+            if self.mode == ThemePreviewMode::Edit {
+                self.render_editor(editor_area, frame.buffer_mut());
+            }
+
+            self.render_footer(footer, frame.buffer_mut());
+            if let Some((x, y)) = self.render_modals(area, frame.buffer_mut()) {
+                frame.set_cursor_position((x, y));
+            }
+        })?;
+
+        if self.preview_scroll > self.max_preview_scroll {
+            self.preview_scroll = self.max_preview_scroll;
+            tui.frame_requester().schedule_frame();
+        }
+
+        Ok(())
+    }
+
+    fn render_footer(&self, area: Rect, buf: &mut Buffer) {
+        let pairs: Vec<(&[KeyBinding], &str)> = match self.mode {
+            ThemePreviewMode::Preview => vec![
+                (&[KEY_CTRL_U, KEY_CTRL_D], "scroll"),
+                (&[KEY_CTRL_G], "diff highlight"),
+                (&[KEY_CTRL_P], "prompt highlight"),
+                (&[KEY_CTRL_T], "edit"),
+                (&[KEY_Q], "quit"),
+            ],
+            ThemePreviewMode::Edit => vec![
+                (&[KEY_TAB], "palette/roles"),
+                (&[KEY_ENTER], "pick"),
+                (&[KEY_CTRL_S], "save as"),
+                (&[KEY_ESC], "exit edit"),
+                (&[KEY_Q], "quit"),
+            ],
+        };
+        render_key_hints(area, buf, &pairs);
+    }
+
+    fn render_editor(&mut self, area: Rect, buf: &mut Buffer) {
         if area.is_empty() {
             return;
         }
@@ -871,342 +794,701 @@ Everything above it is just the story: one prompt, one `brainwave`, one button-p
             }
         }
 
-        let list_area = area;
-        self.ensure_visible(list_area.height);
+        let tabs = Line::from(vec![
+            match self.edit_tab {
+                ThemeEditTab::Palette => "Palette".bold(),
+                ThemeEditTab::Roles => "Palette".into(),
+            },
+            " ".into(),
+            match self.edit_tab {
+                ThemeEditTab::Roles => "Roles".bold(),
+                ThemeEditTab::Palette => "Roles".into(),
+            },
+            "   ".into(),
+            match self.edit_tab {
+                ThemeEditTab::Palette => {
+                    "(Tab toggle to Roles, Enter pick, Ctrl+S save theme)".dim()
+                }
+                ThemeEditTab::Roles => {
+                    "(Tab toggle to Palette, Enter pick, Ctrl+S save theme)".dim()
+                }
+            },
+        ]);
+        tabs.render_ref(Rect::new(area.x, area.y, area.width, 1), buf);
 
-        let visible = self.visible_items(list_area.height);
-        let start = self
-            .scroll_top
-            .min(self.theme_entries.len().saturating_sub(1));
-        let end = (start + visible).min(self.theme_entries.len());
+        let Some(theme) = self.working_theme.as_ref() else {
+            return;
+        };
 
-        for (row, idx) in (start..end).enumerate() {
-            let y = list_area.y + row as u16;
-            let entry = &self.theme_entries[idx];
-            let variant_label = match entry.variant {
-                codex_core::themes::ThemeVariant::Light => "Light",
-                codex_core::themes::ThemeVariant::Dark => "Dark",
+        let content = Rect::new(
+            area.x,
+            area.y + 1,
+            area.width,
+            area.height.saturating_sub(1),
+        );
+        match self.edit_tab {
+            ThemeEditTab::Palette => self.render_palette_swatches(theme, content, buf),
+            ThemeEditTab::Roles => self.render_role_list(theme, content, buf),
+        }
+    }
+
+    fn render_palette_swatches(
+        &self,
+        theme: &codex_core::themes::ThemeDefinition,
+        area: Rect,
+        buf: &mut Buffer,
+    ) {
+        if area.is_empty() {
+            return;
+        }
+
+        let swatch_w = 6u16;
+        let cols = (area.width / swatch_w).max(1) as usize;
+        let keys = palette_keys();
+        let max = (area.height as usize * cols).min(keys.len());
+
+        for idx in 0..max {
+            let row = idx / cols;
+            let col = idx % cols;
+            let x = area.x + col as u16 * swatch_w;
+            let y = area.y + row as u16;
+            let rect = Rect::new(x, y, swatch_w.min(area.width.saturating_sub(x - area.x)), 1);
+            if rect.width == 0 {
+                continue;
+            }
+
+            let key = keys[idx];
+            let label = format!("{idx:02X}");
+            let value = palette_value(theme, key);
+            let (inherit, rgb) =
+                parse_theme_color_as_rgb(theme, value.as_str()).unwrap_or((false, None));
+            let style = if inherit {
+                crate::theme::composer_style().patch(crate::theme::dim_style())
+            } else if let Some((r, g, b)) = rgb {
+                let c = crate::terminal_palette::best_color((r, g, b));
+                Style::default().fg(c).bg(c)
+            } else {
+                crate::theme::warning_style().patch(crate::theme::composer_style())
             };
-            let mut line = Line::from(format!("{variant_label}  {}", entry.name));
-            if idx == self.selected_idx {
-                let style = crate::theme::composer_style()
+
+            let mut line: Line<'static> = vec![label.into(), " ".into(), "██".into()].into();
+            line = line.set_style(style);
+            if idx == self.edit_selected_idx {
+                line = line.set_style(
+                    crate::theme::composer_style()
+                        .patch(crate::theme::accent_style())
+                        .add_modifier(Modifier::BOLD),
+                );
+            }
+            line.render_ref(rect, buf);
+        }
+    }
+
+    fn render_role_list(
+        &self,
+        theme: &codex_core::themes::ThemeDefinition,
+        area: Rect,
+        buf: &mut Buffer,
+    ) {
+        if area.is_empty() {
+            return;
+        }
+
+        let keys = role_keys();
+        if keys.is_empty() {
+            return;
+        }
+
+        let visible = usize::from(area.height.max(1)).min(keys.len());
+        let start = self.edit_scroll_top;
+        let end = (start + visible).min(keys.len());
+        for (row, idx) in (start..end).enumerate() {
+            let y = area.y + row as u16;
+            let key = keys[idx];
+            let value = role_value(theme, key).unwrap_or_default();
+            let mut line: Line<'static> = vec![key.dim(), " ".into(), value.clone().into()].into();
+            let mut style = crate::theme::composer_style();
+            if idx == self.edit_selected_idx {
+                style = style
                     .patch(crate::theme::accent_style())
                     .add_modifier(Modifier::BOLD);
-                line = line.set_style(style);
+            }
+            line = line.set_style(style);
+            Paragraph::new(line).render_ref(Rect::new(area.x, y, area.width, 1), buf);
+        }
+    }
+
+    fn render_modals(&self, area: Rect, buf: &mut Buffer) -> Option<(u16, u16)> {
+        if let Some(save) = self.save_modal.as_ref() {
+            let w = area.width.min(60).max(24);
+            let h = 6u16.min(area.height);
+            let x = area.x + (area.width.saturating_sub(w)) / 2;
+            let y = area.y + (area.height.saturating_sub(h)) / 2;
+            let rect = Rect::new(x, y, w, h);
+            Clear.render(rect, buf);
+            for yy in rect.top()..rect.bottom() {
+                for xx in rect.left()..rect.right() {
+                    buf[(xx, yy)].set_symbol(" ");
+                    buf[(xx, yy)].set_style(crate::theme::composer_style());
+                }
+            }
+
+            "Save theme as"
+                .bold()
+                .render_ref(Rect::new(rect.x + 2, rect.y, rect.width - 4, 1), buf);
+
+            let input = Rect::new(rect.x + 2, rect.y + 2, rect.width - 4, 1);
+            let shown = save.name.clone();
+            Paragraph::new(Line::from(shown))
+                .style(crate::theme::composer_style())
+                .render_ref(input, buf);
+
+            if let Some(err) = save.error.as_ref() {
+                err.as_str()
+                    .red()
+                    .render_ref(Rect::new(rect.x + 2, rect.y + 3, rect.width - 4, 1), buf);
+            } else if save.stage == SaveStage::ConfirmOverwrite {
+                "Overwrite? (y/n)"
+                    .yellow()
+                    .render_ref(Rect::new(rect.x + 2, rect.y + 3, rect.width - 4, 1), buf);
             } else {
-                line = line.set_style(crate::theme::composer_style());
+                "Enter to save, Esc to cancel"
+                    .dim()
+                    .render_ref(Rect::new(rect.x + 2, rect.y + 3, rect.width - 4, 1), buf);
             }
-            line.render(
-                Rect::new(list_area.x + 2, y, list_area.width.saturating_sub(2), 1),
-                buf,
-            );
+
+            let cursor_x = input.x + save.cursor.min(usize::from(input.width)) as u16;
+            return Some((cursor_x, input.y));
         }
 
-        // Footer key hints are rendered by the overlay layout, not in the list widget.
-    }
-}
+        let Some(picker) = self.color_picker.as_ref() else {
+            return None;
+        };
 
-impl ThemeSelectorOverlay {
-    pub(crate) fn handle_event(&mut self, tui: &mut tui::Tui, event: TuiEvent) -> Result<()> {
-        if self.frame_requester.is_none() {
-            self.frame_requester = Some(tui.frame_requester());
+        let w = area.width.min(72).max(28);
+        let h = 10u16.min(area.height);
+        let x = area.x + (area.width.saturating_sub(w)) / 2;
+        let y = area.y + (area.height.saturating_sub(h)) / 2;
+        let rect = Rect::new(x, y, w, h);
+        Clear.render(rect, buf);
+        for yy in rect.top()..rect.bottom() {
+            for xx in rect.left()..rect.right() {
+                buf[(xx, yy)].set_symbol(" ");
+                buf[(xx, yy)].set_style(crate::theme::composer_style());
+            }
         }
 
-        if matches!(event, TuiEvent::Draw) {
-            return self.handle_draw(tui);
+        Line::from(vec!["Edit color ".bold(), picker.key.dim()])
+            .render_ref(Rect::new(rect.x + 2, rect.y, rect.width - 4, 1), buf);
+
+        let inherit_label = if picker.inherit {
+            "inherit: on"
+        } else {
+            "inherit: off"
+        };
+        let derived_label = if picker.derived {
+            "derived: on"
+        } else {
+            "derived: off"
+        };
+        let hex_line: Line<'static> = vec![
+            "Hex: ".dim(),
+            picker.hex.clone().into(),
+            "   ".into(),
+            inherit_label.dim(),
+            " (i)".dim(),
+            "   ".into(),
+            derived_label.dim(),
+            " (d)".dim(),
+        ]
+        .into();
+        Paragraph::new(hex_line)
+            .style(crate::theme::composer_style())
+            .render_ref(Rect::new(rect.x + 2, rect.y + 1, rect.width - 4, 1), buf);
+
+        let r_rect = Rect::new(rect.x + 2, rect.y + 3, rect.width - 4, 1);
+        let g_rect = Rect::new(rect.x + 2, rect.y + 4, rect.width - 4, 1);
+        let b_rect = Rect::new(rect.x + 2, rect.y + 5, rect.width - 4, 1);
+        render_rgb_slider(
+            r_rect,
+            "R",
+            picker.r,
+            picker.focus == ColorPickerFocus::R,
+            buf,
+        );
+        render_rgb_slider(
+            g_rect,
+            "G",
+            picker.g,
+            picker.focus == ColorPickerFocus::G,
+            buf,
+        );
+        render_rgb_slider(
+            b_rect,
+            "B",
+            picker.b,
+            picker.focus == ColorPickerFocus::B,
+            buf,
+        );
+
+        if let Some(err) = picker.error.as_ref() {
+            err.as_str()
+                .red()
+                .render_ref(Rect::new(rect.x + 2, rect.y + 7, rect.width - 4, 1), buf);
+        } else {
+            "Esc cancels, Enter closes"
+                .dim()
+                .render_ref(Rect::new(rect.x + 2, rect.y + 7, rect.width - 4, 1), buf);
         }
 
-        match &mut self.mode {
-            ThemeSelectorMode::Editor(editor) => match event {
-                TuiEvent::Key(key_event) => {
-                    editor.handle_key_event(key_event);
-                    if editor.is_complete() {
-                        self.is_done = true;
+        if picker.focus == ColorPickerFocus::Hex && !picker.inherit && !picker.derived {
+            let input = Rect::new(rect.x + 7, rect.y + 1, rect.width - 4, 1);
+            let cursor_x = input.x + picker.cursor.min(picker.hex.len()) as u16;
+            return Some((cursor_x, input.y));
+        }
+        if !picker.inherit && !picker.derived {
+            let cursor_pos = match picker.focus {
+                ColorPickerFocus::R => Some((r_rect, picker.r_text.as_str(), picker.r_cursor)),
+                ColorPickerFocus::G => Some((g_rect, picker.g_text.as_str(), picker.g_cursor)),
+                ColorPickerFocus::B => Some((b_rect, picker.b_text.as_str(), picker.b_cursor)),
+                ColorPickerFocus::Hex => None,
+            };
+            if let Some((row_rect, value_text, cursor)) = cursor_pos {
+                let prefix = format!(
+                    "{}: ",
+                    match picker.focus {
+                        ColorPickerFocus::R => "R",
+                        ColorPickerFocus::G => "G",
+                        ColorPickerFocus::B => "B",
+                        ColorPickerFocus::Hex => "",
                     }
-                    tui.frame_requester().schedule_frame();
-                    Ok(())
-                }
-                _ => Ok(()),
-            },
-            ThemeSelectorMode::Picker {
-                preview_scroll,
-                diff_bg,
-            } => match event {
-                TuiEvent::Key(KeyEvent {
-                    code: KeyCode::Tab,
-                    kind: KeyEventKind::Press | KeyEventKind::Repeat,
-                    ..
-                }) => {
-                    let next = match self.edit_variant {
-                        codex_core::themes::ThemeVariant::Light => {
-                            codex_core::themes::ThemeVariant::Dark
-                        }
-                        codex_core::themes::ThemeVariant::Dark => {
-                            codex_core::themes::ThemeVariant::Light
-                        }
-                    };
-                    self.set_edit_variant(next);
-                    tui.frame_requester().schedule_frame();
-                    Ok(())
-                }
-                TuiEvent::Key(KeyEvent {
-                    code: KeyCode::Up,
-                    kind: KeyEventKind::Press | KeyEventKind::Repeat,
-                    ..
-                }) => {
-                    self.move_selection(-1);
-                    tui.frame_requester().schedule_frame();
-                    Ok(())
-                }
-                TuiEvent::Key(KeyEvent {
-                    code: KeyCode::Down,
-                    kind: KeyEventKind::Press | KeyEventKind::Repeat,
-                    ..
-                }) => {
-                    self.move_selection(1);
-                    tui.frame_requester().schedule_frame();
-                    Ok(())
-                }
-                TuiEvent::Key(KeyEvent {
-                    code: KeyCode::Char('u' | 'U'),
-                    modifiers: KeyModifiers::CONTROL,
-                    kind: KeyEventKind::Press | KeyEventKind::Repeat,
-                    ..
-                }) => {
-                    *preview_scroll = preview_scroll.saturating_sub(3);
-                    tui.frame_requester().schedule_frame();
-                    Ok(())
-                }
-                TuiEvent::Key(KeyEvent {
-                    code: KeyCode::Char('d' | 'D'),
-                    modifiers: KeyModifiers::CONTROL,
-                    kind: KeyEventKind::Press | KeyEventKind::Repeat,
-                    ..
-                }) => {
-                    *preview_scroll = preview_scroll.saturating_add(3);
-                    tui.frame_requester().schedule_frame();
-                    Ok(())
-                }
-                TuiEvent::Key(KeyEvent {
-                    code: KeyCode::Char('d' | 'D'),
-                    modifiers: KeyModifiers::NONE,
-                    kind: KeyEventKind::Press,
-                    ..
-                }) => {
-                    *diff_bg = !*diff_bg;
-                    tui.frame_requester().schedule_frame();
-                    Ok(())
-                }
-                TuiEvent::Key(KeyEvent {
-                    code: KeyCode::Char('e' | 'E'),
-                    kind: KeyEventKind::Press,
-                    ..
-                }) => {
-                    self.open_editor();
-                    tui.frame_requester().schedule_frame();
-                    Ok(())
-                }
-                TuiEvent::Key(KeyEvent {
-                    code: KeyCode::Enter,
-                    kind: KeyEventKind::Press,
-                    ..
-                }) => {
-                    self.apply_selection();
-                    Ok(())
-                }
-                TuiEvent::Key(KeyEvent {
-                    code: KeyCode::Esc,
-                    kind: KeyEventKind::Press | KeyEventKind::Repeat,
-                    ..
-                })
-                | TuiEvent::Key(KeyEvent {
-                    code: KeyCode::Char('q'),
-                    kind: KeyEventKind::Press,
-                    ..
-                }) => {
-                    self.cancel();
-                    Ok(())
-                }
-                TuiEvent::Mouse(MouseEvent {
-                    kind: MouseEventKind::ScrollUp,
-                    ..
-                }) => {
-                    *preview_scroll = preview_scroll.saturating_sub(1);
-                    tui.frame_requester().schedule_frame();
-                    Ok(())
-                }
-                TuiEvent::Mouse(MouseEvent {
-                    kind: MouseEventKind::ScrollDown,
-                    ..
-                }) => {
-                    *preview_scroll = preview_scroll.saturating_add(1);
-                    tui.frame_requester().schedule_frame();
-                    Ok(())
-                }
-                _ => Ok(()),
-            },
+                );
+                let bar_w = row_rect.width.saturating_sub(prefix.len() as u16 + 3 + 4);
+                let value_start = row_rect.x + prefix.len() as u16 + 1 + bar_w + 2;
+                let digits_start = value_start + 3u16.saturating_sub(value_text.len() as u16);
+                let cursor_x = digits_start + cursor.min(value_text.len()) as u16;
+                return Some((cursor_x, row_rect.y));
+            }
         }
+
+        None
     }
 
-    fn handle_draw(&mut self, tui: &mut tui::Tui) -> Result<()> {
-        match &mut self.mode {
-            ThemeSelectorMode::Editor(editor) => {
-                tui.draw(u16::MAX, |frame| {
-                    let area = frame.area();
-                    for y in area.top()..area.bottom() {
-                        for x in area.left()..area.right() {
-                            frame.buffer_mut()[(x, y)].set_symbol(" ");
-                            frame.buffer_mut()[(x, y)].set_style(crate::theme::transcript_style());
-                        }
-                    }
-                    editor.render(area, frame.buffer_mut());
-                    if let Some((x, y)) = editor.cursor_pos(area) {
-                        frame.set_cursor_position((x, y));
-                    }
-                })?;
-                Ok(())
-            }
-            ThemeSelectorMode::Picker { .. } => {
-                self.ensure_preview_applied();
-                let (requested_scroll, diff_bg) = match &self.mode {
-                    ThemeSelectorMode::Picker {
-                        preview_scroll,
-                        diff_bg,
-                    } => (*preview_scroll, *diff_bg),
-                    ThemeSelectorMode::Editor(_) => (0, true),
-                };
+    fn enter_edit_mode(&mut self) {
+        use codex_core::themes::ThemeCatalog;
 
-                let mut max_scroll = 0u16;
-                tui.draw(u16::MAX, |frame| {
-                    let area = frame.area();
-                    for y in area.top()..area.bottom() {
-                        for x in area.left()..area.right() {
-                            frame.buffer_mut()[(x, y)].set_symbol(" ");
-                            frame.buffer_mut()[(x, y)].set_style(crate::theme::transcript_style());
-                        }
-                    }
+        let terminal_bg = self.terminal_bg;
+        let variant = crate::theme::active_variant(&self.preview.config, terminal_bg);
+        let terminal_background_is_light = terminal_bg.is_some_and(crate::color::is_light);
 
-                    let parts = Layout::default()
-                        .direction(Direction::Vertical)
-                        .constraints([Constraint::Min(0), Constraint::Length(1)])
-                        .split(area);
+        let Ok(catalog) = ThemeCatalog::load(&self.preview.config) else {
+            return;
+        };
 
-                    let body_area = parts[0];
-                    let footer_area = parts[1];
+        let active = catalog.resolve_active(
+            &self.preview.config.themes,
+            Some(variant),
+            terminal_background_is_light,
+        );
 
-                    let body_parts = Layout::default()
-                        .direction(Direction::Horizontal)
-                        .constraints([Constraint::Percentage(20), Constraint::Percentage(80)])
-                        .split(body_area);
+        self.base_theme_name = Some(active.name.clone());
+        self.variant = Some(variant);
+        self.working_theme = Some(active.clone());
+        self.mode = ThemePreviewMode::Edit;
+        self.edit_tab = ThemeEditTab::Palette;
+        self.edit_selected_idx = 0;
+        self.edit_scroll_top = 0;
+        self.preview_scroll = 0;
+        self.max_preview_scroll = 0;
 
-                    let left = body_parts[0];
-                    let right = body_parts[1];
+        if let Some(theme) = self.working_theme.as_ref() {
+            crate::theme::preview_definition(theme);
+        }
+    }
 
-                    let title_height = 2u16.min(left.height);
+    fn exit_edit_mode_revert(&mut self) {
+        self.color_picker = None;
+        self.save_modal = None;
+        self.working_theme = None;
+        self.base_theme_name = None;
+        self.variant = None;
+        self.mode = ThemePreviewMode::Preview;
+        self.preview.app_event_tx.send(AppEvent::CancelThemePreview);
+    }
 
-                    let left_parts = Layout::default()
-                        .direction(Direction::Vertical)
-                        .constraints([Constraint::Length(title_height), Constraint::Min(0)])
-                        .split(left);
-                    let left_title_area = left_parts[0];
-                    let left_content_area = left_parts[1];
+    fn visible_keys(&self) -> &'static [&'static str] {
+        match self.edit_tab {
+            ThemeEditTab::Palette => palette_keys(),
+            ThemeEditTab::Roles => role_keys(),
+        }
+    }
 
-                    for y in left_title_area.top()..left_title_area.bottom() {
-                        for x in left_title_area.left()..left_title_area.right() {
-                            frame.buffer_mut()[(x, y)].set_symbol(" ");
-                            frame.buffer_mut()[(x, y)].set_style(crate::theme::composer_style());
-                        }
-                    }
+    fn selected_key(&self) -> Option<&'static str> {
+        self.visible_keys().get(self.edit_selected_idx).copied()
+    }
 
-                    let selected_title = Line::from(vec![
-                        "Themes (selecting for ".dim(),
-                        match self.edit_variant {
-                            codex_core::themes::ThemeVariant::Light => "Light mode".into(),
-                            codex_core::themes::ThemeVariant::Dark => "Dark mode".into(),
-                        },
-                        ")".dim(),
-                    ]);
-                    let wrapped_title =
-                        crate::wrapping::word_wrap_line(&selected_title, usize::from(left.width));
-                    let wrapped_title: Vec<Line<'_>> = wrapped_title
-                        .into_iter()
-                        .take(usize::from(title_height))
-                        .collect();
-                    Paragraph::new(Text::from(wrapped_title))
-                        .style(crate::theme::composer_style())
-                        .render_ref(left_title_area, frame.buffer_mut());
+    fn move_selection(&mut self, delta: isize) {
+        let keys = self.visible_keys();
+        if keys.is_empty() {
+            return;
+        }
+        let len = keys.len() as isize;
+        let next = (self.edit_selected_idx as isize + delta).rem_euclid(len) as usize;
+        self.edit_selected_idx = next;
 
-                    let right_parts = Layout::default()
-                        .direction(Direction::Vertical)
-                        .constraints([Constraint::Length(title_height), Constraint::Min(0)])
-                        .split(right);
-                    let right_title_area = right_parts[0];
-                    let right_content_area = right_parts[1];
-
-                    let right_title_area = Rect::new(
-                        right_title_area.x.saturating_add(1),
-                        right_title_area.y,
-                        right_title_area.width.saturating_sub(1),
-                        right_title_area.height,
-                    );
-                    Paragraph::new(Line::from("Theme Preview"))
-                        .style(crate::theme::transcript_style())
-                        .render_ref(right_title_area, frame.buffer_mut());
-
-                    let right_content_area = Rect::new(
-                        right_content_area.x.saturating_add(1),
-                        right_content_area.y,
-                        right_content_area.width.saturating_sub(1),
-                        right_content_area.height,
-                    );
-                    max_scroll = self.render_preview(
-                        right_content_area,
-                        frame.buffer_mut(),
-                        requested_scroll,
-                        diff_bg,
-                    );
-
-                    self.render_theme_list(left_content_area, frame.buffer_mut());
-
-                    let footer_parts = Layout::default()
-                        .direction(Direction::Horizontal)
-                        .constraints([Constraint::Percentage(20), Constraint::Percentage(80)])
-                        .split(footer_area);
-
-                    render_key_hints(
-                        footer_parts[0],
-                        frame.buffer_mut(),
-                        &[(&[KEY_UP, KEY_DOWN], "select"), (&[KEY_TAB], "toggle mode")],
-                    );
-                    render_key_hints(
-                        footer_parts[1],
-                        frame.buffer_mut(),
-                        &[
-                            (&[KEY_CTRL_U, KEY_CTRL_D], "scroll preview"),
-                            (&[KEY_D], "toggle diff highlight"),
-                        ],
-                    );
-                })?;
-
-                if let ThemeSelectorMode::Picker { preview_scroll, .. } = &mut self.mode
-                    && *preview_scroll > max_scroll
-                {
-                    *preview_scroll = max_scroll;
-                    tui.frame_requester().schedule_frame();
-                }
-                Ok(())
+        if self.edit_tab == ThemeEditTab::Roles {
+            let list_height = 4usize;
+            if self.edit_selected_idx < self.edit_scroll_top {
+                self.edit_scroll_top = self.edit_selected_idx;
+            } else if self.edit_selected_idx >= self.edit_scroll_top + list_height {
+                self.edit_scroll_top = self.edit_selected_idx + 1 - list_height;
             }
         }
+    }
+
+    fn editor_hit_test(&self, editor_area: Rect, column: u16, row: u16) -> Option<&'static str> {
+        let content = Rect::new(
+            editor_area.x,
+            editor_area.y.saturating_add(1),
+            editor_area.width,
+            editor_area.height.saturating_sub(1),
+        );
+        if content.is_empty() {
+            return None;
+        }
+
+        match self.edit_tab {
+            ThemeEditTab::Palette => {
+                let swatch_w = 6u16;
+                let cols = (content.width / swatch_w).max(1) as usize;
+                let x = column.saturating_sub(content.x);
+                let y = row.saturating_sub(content.y) as usize;
+                let col = usize::from(x / swatch_w);
+                let idx = y.saturating_mul(cols).saturating_add(col);
+                palette_keys().get(idx).copied()
+            }
+            ThemeEditTab::Roles => {
+                let y = row.saturating_sub(content.y) as usize;
+                let idx = self.edit_scroll_top.saturating_add(y);
+                role_keys().get(idx).copied()
+            }
+        }
+    }
+
+    fn open_color_picker(&mut self, key: &'static str) {
+        let Some(theme) = self.working_theme.as_ref() else {
+            return;
+        };
+
+        let current = if key.starts_with("palette.") {
+            palette_value(theme, key)
+        } else {
+            role_value(theme, key).unwrap_or_default()
+        };
+
+        let (inherit, rgb) = match parse_theme_color_as_rgb(theme, current.as_str()) {
+            Ok(value) => value,
+            Err(err) => {
+                self.color_picker = Some(ColorPickerState {
+                    key,
+                    original_value: current,
+                    hex: "000000".to_string(),
+                    cursor: 0,
+                    r: 0,
+                    g: 0,
+                    b: 0,
+                    r_text: "0".to_string(),
+                    g_text: "0".to_string(),
+                    b_text: "0".to_string(),
+                    r_cursor: 1,
+                    g_cursor: 1,
+                    b_cursor: 1,
+                    derived: false,
+                    inherit: false,
+                    focus: ColorPickerFocus::Hex,
+                    error: Some(err),
+                });
+                return;
+            }
+        };
+
+        let derived = current.trim().is_empty() && is_optional_role_key(key);
+        let (r, g, b, hex) = if inherit || derived {
+            (0, 0, 0, "000000".to_string())
+        } else if let Some((r, g, b)) = rgb {
+            (r, g, b, format!("{r:02X}{g:02X}{b:02X}"))
+        } else {
+            (0, 0, 0, "000000".to_string())
+        };
+        let r_text = r.to_string();
+        let g_text = g.to_string();
+        let b_text = b.to_string();
+        let r_cursor = r_text.len();
+        let g_cursor = g_text.len();
+        let b_cursor = b_text.len();
+
+        self.color_picker = Some(ColorPickerState {
+            key,
+            original_value: current,
+            hex,
+            cursor: 6,
+            r,
+            g,
+            b,
+            r_text,
+            g_text,
+            b_text,
+            r_cursor,
+            g_cursor,
+            b_cursor,
+            derived,
+            inherit,
+            focus: ColorPickerFocus::Hex,
+            error: None,
+        });
+    }
+
+    fn sync_picker_hex_from_rgb(picker: &mut ColorPickerState) {
+        if picker.inherit || picker.derived {
+            return;
+        }
+        picker.hex = format!("{:02X}{:02X}{:02X}", picker.r, picker.g, picker.b);
+        picker.cursor = picker.hex.len();
+    }
+
+    fn sync_picker_rgb_text_from_rgb(picker: &mut ColorPickerState) {
+        picker.r_text = picker.r.to_string();
+        picker.g_text = picker.g.to_string();
+        picker.b_text = picker.b.to_string();
+        picker.r_cursor = picker.r_text.len();
+        picker.g_cursor = picker.g_text.len();
+        picker.b_cursor = picker.b_text.len();
+    }
+
+    fn apply_color_picker_live(&mut self) {
+        let Some(picker) = self.color_picker.as_ref() else {
+            return;
+        };
+        let Some(theme) = self.working_theme.as_mut() else {
+            return;
+        };
+
+        if picker.derived && is_optional_role_key(picker.key) {
+            let _ = set_role_value(theme, picker.key, "");
+            crate::theme::preview_definition(theme);
+            return;
+        }
+
+        let value = if picker.inherit {
+            "inherit".to_string()
+        } else if picker.hex.len() == 6 {
+            format!("#{}", picker.hex)
+        } else {
+            return;
+        };
+
+        if picker.key.starts_with("palette.") {
+            set_palette_value(theme, picker.key, value.as_str());
+        } else {
+            let _ = set_role_value(theme, picker.key, value.as_str());
+        }
+        crate::theme::preview_definition(theme);
+    }
+
+    fn cancel_color_picker(&mut self) {
+        let Some(picker) = self.color_picker.take() else {
+            return;
+        };
+        let Some(theme) = self.working_theme.as_mut() else {
+            return;
+        };
+
+        if picker.key.starts_with("palette.") {
+            set_palette_value(theme, picker.key, picker.original_value.as_str());
+        } else {
+            let _ = set_role_value(theme, picker.key, picker.original_value.as_str());
+        }
+        crate::theme::preview_definition(theme);
+    }
+
+    fn open_save_modal(&mut self) {
+        let Some(base) = self.base_theme_name.clone() else {
+            return;
+        };
+        let suggested = if base == "default" {
+            "my-theme".to_string()
+        } else {
+            format!("{base}-custom")
+        };
+        self.save_modal = Some(SaveThemeState {
+            stage: SaveStage::Editing,
+            cursor: suggested.len(),
+            name: suggested,
+            overwrite_path: None,
+            error: None,
+        });
+    }
+
+    fn commit_save(&mut self) {
+        use codex_core::themes::ThemeCatalog;
+
+        let Some(save) = self.save_modal.as_mut() else {
+            return;
+        };
+        let Some(theme) = self.working_theme.as_ref() else {
+            save.error = Some("No theme loaded.".to_string());
+            return;
+        };
+        let Some(variant) = self.variant else {
+            save.error = Some("No active variant.".to_string());
+            return;
+        };
+
+        let name = save.name.trim().to_string();
+        if name.is_empty() {
+            save.error = Some("Theme name cannot be empty.".to_string());
+            return;
+        }
+
+        let mut out = theme.clone();
+        out.name = name.clone();
+        out.variant = variant;
+
+        if let Err(err) = out.validate() {
+            save.error = Some(format!("Theme is not valid: {err}"));
+            return;
+        }
+
+        let catalog = match ThemeCatalog::load(&self.preview.config) {
+            Ok(catalog) => catalog,
+            Err(err) => {
+                save.error = Some(format!("Failed to load themes: {err}"));
+                return;
+            }
+        };
+
+        if catalog.is_built_in_name(name.as_str()) {
+            save.error = Some(format!(
+                "Theme `{name}` is built-in and cannot be overwritten."
+            ));
+            return;
+        }
+
+        if let Some(existing) = catalog
+            .user_theme_path(name.as_str())
+            .map(ToOwned::to_owned)
+        {
+            save.stage = SaveStage::ConfirmOverwrite;
+            save.overwrite_path = Some(existing);
+            save.error = None;
+            return;
+        }
+
+        let dir = codex_core::themes::themes_dir(
+            &self.preview.config.codex_home,
+            &self.preview.config.themes,
+        );
+        if let Err(err) = std::fs::create_dir_all(&dir) {
+            save.error = Some(format!(
+                "Failed to create themes directory `{}`: {err}",
+                dir.display()
+            ));
+            return;
+        }
+
+        let yaml = match out.to_yaml() {
+            Ok(yaml) => yaml,
+            Err(err) => {
+                save.error = Some(format!("Failed to serialize theme YAML: {err}"));
+                return;
+            }
+        };
+
+        let path = unique_theme_path(&dir, name.as_str());
+        if let Err(err) = std::fs::write(&path, yaml) {
+            save.error = Some(format!("Failed to write `{}`: {err}", path.display()));
+            return;
+        }
+
+        self.preview
+            .app_event_tx
+            .send(AppEvent::PersistThemeSelection {
+                variant,
+                theme: name,
+            });
+        self.is_done = true;
+    }
+
+    fn commit_overwrite(&mut self, overwrite: bool) {
+        let Some(save) = self.save_modal.as_mut() else {
+            return;
+        };
+        if !overwrite {
+            save.stage = SaveStage::Editing;
+            save.overwrite_path = None;
+            save.error = None;
+            return;
+        }
+
+        let Some(path) = save.overwrite_path.clone() else {
+            save.stage = SaveStage::Editing;
+            save.error = None;
+            return;
+        };
+        let Some(theme) = self.working_theme.as_ref() else {
+            save.stage = SaveStage::Editing;
+            save.overwrite_path = None;
+            save.error = Some("No theme loaded.".to_string());
+            return;
+        };
+        let Some(variant) = self.variant else {
+            save.stage = SaveStage::Editing;
+            save.overwrite_path = None;
+            save.error = Some("No active variant.".to_string());
+            return;
+        };
+
+        let name = save.name.trim().to_string();
+        if name.is_empty() {
+            save.stage = SaveStage::Editing;
+            save.overwrite_path = None;
+            save.error = Some("Theme name cannot be empty.".to_string());
+            return;
+        }
+
+        let mut out = theme.clone();
+        out.name = name.clone();
+        out.variant = variant;
+
+        let yaml = match out.to_yaml() {
+            Ok(yaml) => yaml,
+            Err(err) => {
+                save.stage = SaveStage::Editing;
+                save.overwrite_path = None;
+                save.error = Some(format!("Failed to serialize theme YAML: {err}"));
+                return;
+            }
+        };
+
+        if let Err(err) = std::fs::write(&path, yaml) {
+            save.stage = SaveStage::Editing;
+            save.overwrite_path = None;
+            save.error = Some(format!("Failed to write `{}`: {err}", path.display()));
+            return;
+        }
+
+        self.preview
+            .app_event_tx
+            .send(AppEvent::PersistThemeSelection {
+                variant,
+                theme: name,
+            });
+        self.is_done = true;
     }
 
     pub(crate) fn is_done(&self) -> bool {
         self.is_done
     }
-}
-
-enum ThemeSelectorMode {
-    Picker { preview_scroll: u16, diff_bg: bool },
-    Editor(ThemeEditorView),
 }
 
 /// Generic widget for rendering a pager view.

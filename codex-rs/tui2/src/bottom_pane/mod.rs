@@ -50,16 +50,12 @@ mod queued_user_messages;
 mod scroll_state;
 mod selection_popup_common;
 mod textarea;
-mod theme_create_wizard_view;
-mod theme_editor_view;
 mod worktree_link_shared_wizard_view;
 mod worktrees_settings_view;
 pub(crate) use feedback_view::FeedbackNoteView;
 pub(crate) use prompt_args::parse_slash_name;
 pub(crate) use status_menu_view::StatusMenuTab;
 pub(crate) use status_menu_view::StatusMenuView;
-pub(crate) use theme_create_wizard_view::ThemeCreateWizardView;
-pub(crate) use theme_editor_view::ThemeEditorView;
 pub(crate) use worktree_link_shared_wizard_view::WorktreeLinkSharedWizardView;
 pub(crate) use worktrees_settings_view::WorktreesSettingsView;
 
@@ -390,6 +386,10 @@ impl BottomPane {
 
         self.mcp_startup_banner = next;
         self.request_redraw();
+    }
+
+    pub(crate) fn has_mcp_startup_banner(&self) -> bool {
+        self.mcp_startup_banner.is_some()
     }
 
     #[cfg(test)]

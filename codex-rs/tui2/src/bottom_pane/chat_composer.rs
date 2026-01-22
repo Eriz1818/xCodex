@@ -751,7 +751,21 @@ impl ChatComposer {
                             };
                             if run_on_enter {
                                 self.textarea.set_text("");
-                                return (InputResult::Submitted(text.trim_end().to_string()), true);
+                                let text = text.trim_end().to_string();
+                                if let Some((name, rest)) = parse_slash_name(&text)
+                                    && let Some((_n, cmd)) = built_in_slash_commands()
+                                        .into_iter()
+                                        .find(|(command_name, _)| *command_name == name)
+                                {
+                                    if rest.is_empty() {
+                                        return (InputResult::Command(cmd), true);
+                                    }
+                                    return (
+                                        InputResult::CommandWithArgs(cmd, rest.to_string()),
+                                        true,
+                                    );
+                                }
+                                return (InputResult::Submitted(text), true);
                             }
                             let cursor = text.len();
                             self.textarea.set_text(&text);
@@ -4486,6 +4500,36 @@ mod tests {
         assert!(
             matches!(composer.active_popup, ActivePopup::Command(_)),
             "'/my' should activate slash popup via custom prompt match"
+        );
+    }
+
+    #[test]
+    fn slash_popup_run_on_enter_worktree_subcommand_dispatches_command_with_args() {
+        use crossterm::event::KeyCode;
+        use crossterm::event::KeyEvent;
+        use crossterm::event::KeyModifiers;
+        use tokio::sync::mpsc::unbounded_channel;
+
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask xcodex to do anything".to_string(),
+            false,
+        );
+
+        composer.set_text_content("/worktree doctor".to_string());
+        assert!(matches!(composer.active_popup, ActivePopup::Command(_)));
+
+        let (result, _needs_redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+        assert_eq!(
+            result,
+            InputResult::CommandWithArgs(SlashCommand::Worktree, "doctor".to_string()),
+            "Selecting a `run_on_enter` worktree subcommand should dispatch, not submit a user message"
         );
     }
 
