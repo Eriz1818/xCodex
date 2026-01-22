@@ -97,7 +97,7 @@ pub(crate) fn build_transcript_lines(
         // and preserves intentional blank lines in copy.
         if !cell.is_stream_continuation() {
             if has_emitted_lines {
-                lines.push(Line::from(""));
+                lines.push(Line::from("").style(crate::theme::transcript_style()));
                 meta.push(TranscriptLineMeta::Spacer);
                 joiner_before.push(None);
             } else {
@@ -221,7 +221,8 @@ pub(crate) fn append_wrapped_transcript_cell(
 
     if !cell.is_stream_continuation() {
         if *has_emitted_lines {
-            out.lines.push(Line::from(""));
+            out.lines
+                .push(Line::from("").style(crate::theme::transcript_style()));
             out.meta.push(TranscriptLineMeta::Spacer);
             out.joiner_before.push(None);
         } else {
@@ -314,6 +315,7 @@ pub(crate) fn render_lines_to_ansi(
     lines: &[Line<'static>],
     line_meta: &[TranscriptLineMeta],
     is_user_cell: &[bool],
+    is_user_prompt_highlight: &[bool],
     width: u16,
 ) -> Vec<String> {
     use unicode_width::UnicodeWidthStr;
@@ -325,11 +327,33 @@ pub(crate) fn render_lines_to_ansi(
             // Determine whether this visual line belongs to a user-authored cell. We use this to
             // pad the background to the full terminal width so prompts appear as solid blocks in
             // scrollback.
-            let is_user_row = line_meta
+            let (is_user_row, is_user_prompt_highlight_row) = line_meta
                 .get(idx)
                 .and_then(TranscriptLineMeta::cell_index)
-                .map(|cell_index| is_user_cell.get(cell_index).copied().unwrap_or(false))
-                .unwrap_or(false);
+                .map(|cell_index| {
+                    (
+                        is_user_cell.get(cell_index).copied().unwrap_or(false),
+                        is_user_prompt_highlight
+                            .get(cell_index)
+                            .copied()
+                            .unwrap_or(false),
+                    )
+                })
+                .unwrap_or((false, false));
+
+            let base_style = crate::theme::transcript_style();
+            let row_style = if is_user_row {
+                base_style
+                    .patch(crate::style::user_message_style().patch(crate::theme::composer_style()))
+            } else {
+                base_style
+            };
+            let row_style = if is_user_prompt_highlight_row {
+                row_style.patch(crate::theme::user_prompt_highlight_style())
+            } else {
+                row_style
+            };
+            let line_style = crate::render::line_utils::merge_span_style(line.style, row_style);
 
             // Line-level styles in ratatui apply to the entire line, but spans can also have their
             // own styles. ANSI output is span-based, so we "bake" the line style into every span by
@@ -338,14 +362,13 @@ pub(crate) fn render_lines_to_ansi(
                 .spans
                 .iter()
                 .map(|span| ratatui::text::Span {
-                    style: span.style.patch(line.style),
+                    style: crate::render::line_utils::merge_span_style(span.style, line_style),
                     content: span.content.clone(),
                 })
                 .collect();
 
-            if is_user_row && width > 0 {
-                // For user rows, pad out to the full width so the background color extends across
-                // the line in terminal scrollback (mirrors the on-screen viewport behavior).
+            if width > 0 {
+                // Pad to full width so transcript background fills the row in scrollback.
                 let text: String = merged_spans
                     .iter()
                     .map(|span| span.content.as_ref())
@@ -355,9 +378,8 @@ pub(crate) fn render_lines_to_ansi(
                 if text_width < total_width {
                     let pad_len = total_width.saturating_sub(text_width);
                     if pad_len > 0 {
-                        let pad_style = crate::style::user_message_style();
                         merged_spans.push(ratatui::text::Span {
-                            style: pad_style,
+                            style: row_style,
                             content: " ".repeat(pad_len).into(),
                         });
                     }

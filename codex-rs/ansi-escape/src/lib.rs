@@ -27,14 +27,16 @@ pub fn ansi_escape_line(s: &str) -> Line<'static> {
     // Normalize tabs to spaces to avoid odd gutter collisions in transcript mode.
     let s = expand_tabs(s);
     let text = ansi_escape(&s);
-    match text.lines.as_slice() {
+    let mut line = match text.lines.as_slice() {
         [] => "".into(),
         [only] => only.clone(),
         [first, rest @ ..] => {
             tracing::warn!("ansi_escape_line: expected a single line, got {first:?} and {rest:?}");
             first.clone()
         }
-    }
+    };
+    strip_reset_colors(&mut line);
+    line
 }
 
 pub fn ansi_escape(s: &str) -> Text<'static> {
@@ -54,5 +56,22 @@ pub fn ansi_escape(s: &str) -> Text<'static> {
                 panic!();
             }
         },
+    }
+}
+
+fn strip_reset_colors(line: &mut Line<'static>) {
+    if line.style.fg == Some(ratatui::style::Color::Reset) {
+        line.style.fg = None;
+    }
+    if line.style.bg == Some(ratatui::style::Color::Reset) {
+        line.style.bg = None;
+    }
+    for span in &mut line.spans {
+        if span.style.fg == Some(ratatui::style::Color::Reset) {
+            span.style.fg = None;
+        }
+        if span.style.bg == Some(ratatui::style::Color::Reset) {
+            span.style.bg = None;
+        }
     }
 }

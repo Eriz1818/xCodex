@@ -215,6 +215,24 @@ impl TranscriptViewCache {
             .unwrap_or(false)
     }
 
+    pub(crate) fn is_user_prompt_highlight_row(&self, line_index: usize) -> bool {
+        let Some(cell_index) = self
+            .wrapped
+            .transcript
+            .meta
+            .get(line_index)
+            .and_then(TranscriptLineMeta::cell_index)
+        else {
+            return false;
+        };
+
+        self.wrapped
+            .is_user_prompt_highlight_cell
+            .get(cell_index)
+            .copied()
+            .unwrap_or(false)
+    }
+
     /// Render a single cached line index into the destination `buf`.
     ///
     /// This is the draw hot-path helper: it looks up the wrapped `Line` for `line_index`, applies
@@ -229,9 +247,16 @@ impl TranscriptViewCache {
         buf: &mut Buffer,
     ) {
         let is_user_row = self.is_user_row(line_index);
+        let is_user_prompt_highlight_row = self.is_user_prompt_highlight_row(line_index);
         let line = &self.wrapped.transcript.lines[line_index];
-        self.raster
-            .render_row_into(line_index, is_user_row, line, row_area, buf);
+        self.raster.render_row_into(
+            line_index,
+            is_user_row,
+            is_user_prompt_highlight_row,
+            line,
+            row_area,
+            buf,
+        );
     }
 }
 
@@ -278,6 +303,7 @@ struct WrappedTranscriptCache {
     /// We store this alongside the wrapped transcript so user-row styling can be derived cheaply
     /// from `TranscriptLineMeta::cell_index()` without re-inspecting the cell type every frame.
     is_user_cell: Vec<bool>,
+    is_user_prompt_highlight_cell: Vec<bool>,
 
     /// Whether tool output is expanded in the transcript.
     verbose_tool_output: bool,
@@ -306,6 +332,7 @@ impl WrappedTranscriptCache {
             },
             has_emitted_lines: false,
             is_user_cell: Vec::new(),
+            is_user_prompt_highlight_cell: Vec::new(),
             verbose_tool_output: false,
             expanded_exec_call_ids_fingerprint: 0,
             theme_version: crate::theme::theme_version(),
@@ -339,6 +366,7 @@ impl WrappedTranscriptCache {
             self.transcript.joiner_before.clear();
             self.has_emitted_lines = false;
             self.is_user_cell.clear();
+            self.is_user_prompt_highlight_cell.clear();
             self.verbose_tool_output = verbose_tool_output;
             self.expanded_exec_call_ids_fingerprint = expanded_exec_call_ids_fingerprint;
             self.theme_version = theme_version;
@@ -372,8 +400,15 @@ impl WrappedTranscriptCache {
         let base_opts: crate::wrapping::RtOptions<'_> =
             crate::wrapping::RtOptions::new(width.max(1) as usize);
         for (cell_index, cell) in cells.iter().enumerate().skip(old_cell_count) {
-            self.is_user_cell
-                .push(cell.as_any().is::<UserHistoryCell>());
+            let is_user_cell = cell.as_any().is::<UserHistoryCell>();
+            self.is_user_cell.push(is_user_cell);
+            self.is_user_prompt_highlight_cell.push(
+                is_user_cell
+                    && cell
+                        .as_any()
+                        .downcast_ref::<UserHistoryCell>()
+                        .is_some_and(|cell| cell.highlight),
+            );
             crate::transcript_render::append_wrapped_transcript_cell(
                 &mut self.transcript,
                 &mut self.has_emitted_lines,
@@ -413,12 +448,21 @@ impl WrappedTranscriptCache {
         self.has_emitted_lines = false;
         self.is_user_cell.clear();
         self.is_user_cell.reserve(cells.len());
+        self.is_user_prompt_highlight_cell.clear();
+        self.is_user_prompt_highlight_cell.reserve(cells.len());
 
         let base_opts: crate::wrapping::RtOptions<'_> =
             crate::wrapping::RtOptions::new(width.max(1) as usize);
         for (cell_index, cell) in cells.iter().enumerate() {
-            self.is_user_cell
-                .push(cell.as_any().is::<UserHistoryCell>());
+            let is_user_cell = cell.as_any().is::<UserHistoryCell>();
+            self.is_user_cell.push(is_user_cell);
+            self.is_user_prompt_highlight_cell.push(
+                is_user_cell
+                    && cell
+                        .as_any()
+                        .downcast_ref::<UserHistoryCell>()
+                        .is_some_and(|cell| cell.highlight),
+            );
             crate::transcript_render::append_wrapped_transcript_cell(
                 &mut self.transcript,
                 &mut self.has_emitted_lines,
@@ -525,6 +569,7 @@ impl TranscriptRasterCache {
         &mut self,
         line_index: usize,
         is_user_row: bool,
+        is_user_prompt_highlight_row: bool,
         line: &Line<'static>,
         row_area: Rect,
         buf: &mut Buffer,
@@ -551,12 +596,17 @@ impl TranscriptRasterCache {
         }
 
         if self.capacity == 0 {
-            let cells = rasterize_line(line, row_area.width, is_user_row);
+            let cells = rasterize_line(
+                line,
+                row_area.width,
+                is_user_row,
+                is_user_prompt_highlight_row,
+            );
             copy_row(row_area, buf, &cells);
             return;
         }
 
-        let key = raster_key(line_index, is_user_row);
+        let key = raster_key(line_index, is_user_row, is_user_prompt_highlight_row);
         let stamp = self.bump_clock();
         if let Some(row) = self.rows.get_mut(&key) {
             row.last_used = stamp;
@@ -565,7 +615,12 @@ impl TranscriptRasterCache {
             return;
         }
 
-        let cells = rasterize_line(line, row_area.width, is_user_row);
+        let cells = rasterize_line(
+            line,
+            row_area.width,
+            is_user_row,
+            is_user_prompt_highlight_row,
+        );
         copy_row(row_area, buf, &cells);
         self.rows.insert(
             key,
@@ -621,8 +676,11 @@ impl TranscriptRasterCache {
 /// - rebuilds clear the raster cache, so indices cannot alias across different transcripts
 ///
 /// `is_user_row` is included because user rows apply a row-wide base style that affects every cell.
-fn raster_key(line_index: usize, is_user_row: bool) -> u64 {
-    (line_index as u64) << 1 | u64::from(is_user_row)
+/// `is_user_prompt_highlight_row` is included because highlighted prompts use a different base style.
+fn raster_key(line_index: usize, is_user_row: bool, is_user_prompt_highlight_row: bool) -> u64 {
+    (line_index as u64) << 2
+        | (u64::from(is_user_row) << 1)
+        | u64::from(is_user_prompt_highlight_row)
 }
 
 /// Rasterize a single wrapped transcript [`Line`] into a 1-row cell vector.
@@ -637,15 +695,21 @@ fn rasterize_line(
     line: &Line<'static>,
     width: u16,
     is_user_row: bool,
+    is_user_prompt_highlight_row: bool,
 ) -> Vec<ratatui::buffer::Cell> {
     let scratch_area = Rect::new(0, 0, width, 1);
     let mut scratch = Buffer::empty(scratch_area);
 
     let base_style = crate::theme::transcript_style();
     let row_style = if is_user_row {
-        base_style.patch(crate::style::user_message_style())
+        base_style.patch(crate::style::user_message_style().patch(crate::theme::composer_style()))
     } else {
         base_style
+    };
+    let row_style = if is_user_prompt_highlight_row {
+        row_style.patch(crate::theme::user_prompt_highlight_style())
+    } else {
+        row_style
     };
     for x in 0..width {
         scratch[(x, 0)].set_style(row_style);
@@ -1044,14 +1108,24 @@ mod tests {
         line: &Line<'static>,
         width: u16,
         is_user_row: bool,
+        is_user_prompt_highlight_row: bool,
     ) -> Vec<ratatui::buffer::Cell> {
         let area = Rect::new(0, 0, width, 1);
         let mut scratch = Buffer::empty(area);
-        if is_user_row {
-            let base_style = crate::style::user_message_style();
-            for x in 0..width {
-                scratch[(x, 0)].set_style(base_style);
-            }
+        let base_style = crate::theme::transcript_style();
+        let row_style = if is_user_row {
+            base_style
+                .patch(crate::style::user_message_style().patch(crate::theme::composer_style()))
+        } else {
+            base_style
+        };
+        let row_style = if is_user_prompt_highlight_row {
+            row_style.patch(crate::theme::user_prompt_highlight_style())
+        } else {
+            row_style
+        };
+        for x in 0..width {
+            scratch[(x, 0)].set_style(row_style);
         }
         line.render_ref(area, &mut scratch);
         (0..width).map(|x| scratch[(x, 0)].clone()).collect()
@@ -1062,11 +1136,11 @@ mod tests {
         let width = 12;
         let line = Line::from(vec!["hello".into(), " ".into(), "world".magenta()]);
 
-        let non_user = rasterize_line(&line, width, false);
-        assert_eq!(non_user, direct_render_cells(&line, width, false));
+        let non_user = rasterize_line(&line, width, false, false);
+        assert_eq!(non_user, direct_render_cells(&line, width, false, false));
 
-        let user = rasterize_line(&line, width, true);
-        assert_eq!(user, direct_render_cells(&line, width, true));
+        let user = rasterize_line(&line, width, true, false);
+        assert_eq!(user, direct_render_cells(&line, width, true, false));
     }
 
     #[test]
@@ -1089,11 +1163,11 @@ mod tests {
 
         cache.render_row_index_into(0, area, &mut buf);
         assert_eq!(cache.raster.rows.len(), 1);
-        assert!(cache.raster.rows.contains_key(&raster_key(0, false)));
+        assert!(cache.raster.rows.contains_key(&raster_key(0, false, false)));
 
         cache.render_row_index_into(1, area, &mut buf);
         assert_eq!(cache.raster.rows.len(), 1);
-        assert!(cache.raster.rows.contains_key(&raster_key(1, false)));
+        assert!(cache.raster.rows.contains_key(&raster_key(1, false, false)));
     }
 
     #[test]
@@ -1130,6 +1204,7 @@ mod tests {
         let mut cache = TranscriptViewCache::new();
         let cells: Vec<Arc<dyn HistoryCell>> = vec![Arc::new(UserHistoryCell {
             message: "hello".to_string(),
+            highlight: false,
         })];
 
         let expanded_exec_call_ids = HashSet::new();
@@ -1141,6 +1216,6 @@ mod tests {
 
         cache.render_row_index_into(0, area, &mut buf);
         assert!(cache.is_user_row(0));
-        assert!(cache.raster.rows.contains_key(&raster_key(0, true)));
+        assert!(cache.raster.rows.contains_key(&raster_key(0, true, false)));
     }
 }

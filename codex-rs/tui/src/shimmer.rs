@@ -8,8 +8,7 @@ use ratatui::style::Style;
 use ratatui::text::Span;
 
 use crate::color::blend;
-use crate::terminal_palette::default_bg;
-use crate::terminal_palette::default_fg;
+use crate::theme::status_ramp_palette;
 
 static PROCESS_START: OnceLock<Instant> = OnceLock::new();
 
@@ -19,6 +18,15 @@ fn elapsed_since_start() -> Duration {
 }
 
 pub(crate) fn shimmer_spans(text: &str) -> Vec<Span<'static>> {
+    let (base_color, highlight_color) = status_ramp_palette();
+    shimmer_spans_with_palette(text, base_color, highlight_color)
+}
+
+pub(crate) fn shimmer_spans_with_palette(
+    text: &str,
+    base_color: (u8, u8, u8),
+    highlight_color: (u8, u8, u8),
+) -> Vec<Span<'static>> {
     let chars: Vec<char> = text.chars().collect();
     if chars.is_empty() {
         return Vec::new();
@@ -36,8 +44,6 @@ pub(crate) fn shimmer_spans(text: &str) -> Vec<Span<'static>> {
     let band_half_width = 5.0;
 
     let mut spans: Vec<Span<'static>> = Vec::with_capacity(chars.len());
-    let base_color = default_fg().unwrap_or((128, 128, 128));
-    let highlight_color = default_bg().unwrap_or((255, 255, 255));
     for (i, ch) in chars.iter().enumerate() {
         let i_pos = i as isize + padding as isize;
         let pos = pos as isize;

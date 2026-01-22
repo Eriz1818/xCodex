@@ -5,6 +5,7 @@ use codex_core::config::Config;
 use codex_core::themes::ThemeCatalog;
 use codex_core::themes::ThemeColorResolved;
 use codex_core::themes::ThemeVariant;
+use ratatui::style::Color;
 use ratatui::style::Style;
 use ratatui::style::Stylize as _;
 use std::sync::OnceLock;
@@ -14,12 +15,16 @@ use std::sync::RwLock;
 pub(crate) struct ThemeStyles {
     transcript: Style,
     composer: Style,
+    user_prompt_highlight: Style,
     status: Style,
+    status_ramp_fg: Option<(u8, u8, u8)>,
+    status_ramp_highlight: Option<(u8, u8, u8)>,
     selection: Style,
     dim: Style,
     border: Style,
     accent: Style,
     brand: Style,
+    command: Style,
     success: Style,
     warning: Style,
     error: Style,
@@ -27,6 +32,9 @@ pub(crate) struct ThemeStyles {
     diff_add: Style,
     diff_del: Style,
     diff_hunk: Style,
+    diff_add_highlight: Style,
+    diff_del_highlight: Style,
+    diff_hunk_highlight: Style,
     diff_add_text: Style,
     diff_del_text: Style,
     diff_hunk_text: Style,
@@ -129,8 +137,19 @@ pub(crate) fn composer_style() -> Style {
     get_styles().composer
 }
 
+pub(crate) fn user_prompt_highlight_style() -> Style {
+    get_styles().user_prompt_highlight
+}
+
 pub(crate) fn status_style() -> Style {
     get_styles().status
+}
+
+pub(crate) fn status_ramp_palette() -> ((u8, u8, u8), (u8, u8, u8)) {
+    let styles = get_styles();
+    let base = styles.status_ramp_fg.unwrap_or((40, 40, 40));
+    let highlight = styles.status_ramp_highlight.unwrap_or((245, 245, 245));
+    (base, highlight)
 }
 
 pub(crate) fn accent_style() -> Style {
@@ -139,6 +158,10 @@ pub(crate) fn accent_style() -> Style {
 
 pub(crate) fn brand_style() -> Style {
     get_styles().brand
+}
+
+pub(crate) fn command_style() -> Style {
+    get_styles().command
 }
 
 pub(crate) fn success_style() -> Style {
@@ -167,6 +190,18 @@ pub(crate) fn diff_del_style() -> Style {
 
 pub(crate) fn diff_hunk_style() -> Style {
     get_styles().diff_hunk
+}
+
+pub(crate) fn diff_add_highlight_style() -> Style {
+    get_styles().diff_add_highlight
+}
+
+pub(crate) fn diff_del_highlight_style() -> Style {
+    get_styles().diff_del_highlight
+}
+
+pub(crate) fn diff_hunk_highlight_style() -> Style {
+    get_styles().diff_hunk_highlight
 }
 
 pub(crate) fn diff_add_text_style() -> Style {
@@ -573,6 +608,14 @@ fn styles_for(
     let base_fg = resolve_color(theme, "roles.fg", &theme.roles.fg);
     let base_bg = resolve_color(theme, "roles.bg", &theme.roles.bg);
     let base = style_from_roles(base_fg, base_bg, Style::default());
+    let base_rgb = theme
+        .resolve_role("roles.fg", &theme.roles.fg)
+        .ok()
+        .and_then(|resolved| match resolved {
+            ThemeColorResolved::Rgb(rgb) => Some((rgb.0, rgb.1, rgb.2)),
+            ThemeColorResolved::Inherit => None,
+        })
+        .unwrap_or((40, 40, 40));
 
     let transcript_bg = to_color(theme.resolve_transcript_bg(), terminal_bg);
     let transcript = style_from_roles(base_fg, transcript_bg, base);
@@ -595,8 +638,102 @@ fn styles_for(
     });
     let composer = style_from_roles(base_fg, composer_bg, base);
 
+    fn highlight_fg(rgb: (u8, u8, u8)) -> ratatui::style::Color {
+        if is_light(rgb) {
+            best_color((0, 0, 0))
+        } else {
+            best_color((255, 255, 255))
+        }
+    }
+
+    fn shimmer_highlight_rgb(rgb: (u8, u8, u8)) -> (u8, u8, u8) {
+        let top = if is_light(rgb) {
+            (0, 0, 0)
+        } else {
+            (255, 255, 255)
+        };
+        blend(top, rgb, 0.7)
+    }
+
+    let user_prompt_highlight_bg = theme
+        .roles
+        .user_prompt_highlight_bg
+        .as_ref()
+        .and_then(|color| {
+            theme
+                .resolve_role("roles.user_prompt_highlight_bg", color)
+                .ok()
+        })
+        .and_then(|resolved| match resolved {
+            ThemeColorResolved::Rgb(rgb) => Some((rgb.0, rgb.1, rgb.2)),
+            ThemeColorResolved::Inherit => None,
+        });
+
+    let user_prompt_highlight = user_prompt_highlight_bg.map_or_else(
+        || match theme.resolve_composer_bg() {
+            ThemeColorResolved::Rgb(rgb) => {
+                let rgb = (rgb.0, rgb.1, rgb.2);
+                let top = if is_light(rgb) {
+                    (0, 0, 0)
+                } else {
+                    (255, 255, 255)
+                };
+                let bg_rgb = blend(top, rgb, 0.18);
+                Style::default()
+                    .bg(best_color(bg_rgb))
+                    .fg(highlight_fg(bg_rgb))
+            }
+            ThemeColorResolved::Inherit => {
+                let base_rgb = match theme.resolve_transcript_bg() {
+                    ThemeColorResolved::Rgb(rgb) => Some((rgb.0, rgb.1, rgb.2)),
+                    ThemeColorResolved::Inherit => terminal_bg,
+                };
+                base_rgb.map_or_else(Style::default, |rgb| {
+                    let top = if is_light(rgb) {
+                        (0, 0, 0)
+                    } else {
+                        (255, 255, 255)
+                    };
+                    let bg_rgb = blend(top, rgb, 0.18);
+                    Style::default()
+                        .bg(best_color(bg_rgb))
+                        .fg(highlight_fg(bg_rgb))
+                })
+            }
+        },
+        |bg_rgb| {
+            Style::default()
+                .bg(best_color(bg_rgb))
+                .fg(highlight_fg(bg_rgb))
+        },
+    );
+
     let status_bg = to_color(theme.resolve_status_bg(), terminal_bg);
     let status = style_from_roles(base_fg, status_bg, base);
+    let status_ramp_fg = theme
+        .roles
+        .status_ramp_fg
+        .as_ref()
+        .and_then(|color| theme.resolve_role("roles.status_ramp_fg", color).ok())
+        .and_then(|resolved| match resolved {
+            ThemeColorResolved::Rgb(rgb) => Some((rgb.0, rgb.1, rgb.2)),
+            ThemeColorResolved::Inherit => None,
+        })
+        .or(Some(base_rgb));
+    let status_ramp_highlight = theme
+        .roles
+        .status_ramp_highlight
+        .as_ref()
+        .and_then(|color| {
+            theme
+                .resolve_role("roles.status_ramp_highlight", color)
+                .ok()
+        })
+        .and_then(|resolved| match resolved {
+            ThemeColorResolved::Rgb(rgb) => Some((rgb.0, rgb.1, rgb.2)),
+            ThemeColorResolved::Inherit => None,
+        })
+        .or(Some(shimmer_highlight_rgb(base_rgb)));
 
     let selection_fg = resolve_color(theme, "roles.selection_fg", &theme.roles.selection_fg);
     let selection_bg = resolve_color(theme, "roles.selection_bg", &theme.roles.selection_bg);
@@ -615,6 +752,9 @@ fn styles_for(
 
     let brand_fg = resolve_color(theme, "roles.brand", &theme.roles.brand);
     let brand = style_from_roles(brand_fg, None, Style::default().magenta());
+
+    let command_fg = resolve_color(theme, "roles.command", &theme.roles.command);
+    let command = style_from_roles(command_fg, None, Style::default().magenta());
 
     let success_fg = resolve_color(theme, "roles.success", &theme.roles.success);
     let success = style_from_roles(success_fg, None, Style::default().green());
@@ -645,6 +785,32 @@ fn styles_for(
     let diff_hunk_bg = resolve_color(theme, "roles.diff_hunk_bg", &theme.roles.diff_hunk_bg);
     let diff_hunk = style_from_roles(diff_hunk_fg, diff_hunk_bg, Style::default().cyan());
 
+    fn fallback_diff_add_bg(variant: ThemeVariant) -> Color {
+        match variant {
+            ThemeVariant::Light => best_color((0xdf, 0xf5, 0xd8)),
+            ThemeVariant::Dark => best_color((0x1f, 0x3a, 0x24)),
+        }
+    }
+
+    fn fallback_diff_del_bg(variant: ThemeVariant) -> Color {
+        match variant {
+            ThemeVariant::Light => best_color((0xf6, 0xd6, 0xd6)),
+            ThemeVariant::Dark => best_color((0x3a, 0x1f, 0x1f)),
+        }
+    }
+
+    let diff_add_highlight = style_from_roles(
+        base_fg,
+        diff_add_bg.or_else(|| Some(fallback_diff_add_bg(theme.variant))),
+        Style::default(),
+    );
+    let diff_del_highlight = style_from_roles(
+        base_fg,
+        diff_del_bg.or_else(|| Some(fallback_diff_del_bg(theme.variant))),
+        Style::default(),
+    );
+    let diff_hunk_highlight = style_from_roles(base_fg, diff_hunk_bg, Style::default());
+
     let diff_add_text = style_from_roles(diff_add_fg, None, Style::default().green());
     let diff_del_text = style_from_roles(diff_del_fg, None, Style::default().red());
     let diff_hunk_text = style_from_roles(diff_hunk_fg, None, Style::default().cyan());
@@ -652,12 +818,16 @@ fn styles_for(
     ThemeStyles {
         transcript,
         composer,
+        user_prompt_highlight,
         status,
+        status_ramp_fg,
+        status_ramp_highlight,
         selection,
         dim,
         border,
         accent,
         brand,
+        command,
         success,
         warning,
         error,
@@ -665,6 +835,9 @@ fn styles_for(
         diff_add,
         diff_del,
         diff_hunk,
+        diff_add_highlight,
+        diff_del_highlight,
+        diff_hunk_highlight,
         diff_add_text,
         diff_del_text,
         diff_hunk_text,
@@ -675,12 +848,16 @@ fn fallback_styles() -> ThemeStyles {
     ThemeStyles {
         transcript: Style::default(),
         composer: Style::default(),
+        user_prompt_highlight: Style::default(),
         status: Style::default(),
+        status_ramp_fg: None,
+        status_ramp_highlight: None,
         selection: Style::default().cyan(),
         dim: Style::default().dim(),
         border: Style::default().dim(),
         accent: Style::default().cyan(),
         brand: Style::default().magenta(),
+        command: Style::default().magenta(),
         success: Style::default().green(),
         warning: Style::default().cyan(),
         error: Style::default().red(),
@@ -688,6 +865,9 @@ fn fallback_styles() -> ThemeStyles {
         diff_add: Style::default().green(),
         diff_del: Style::default().red(),
         diff_hunk: Style::default().cyan(),
+        diff_add_highlight: Style::default().bg(Color::Green),
+        diff_del_highlight: Style::default().bg(Color::Red),
+        diff_hunk_highlight: Style::default(),
         diff_add_text: Style::default().green(),
         diff_del_text: Style::default().red(),
         diff_hunk_text: Style::default().cyan(),

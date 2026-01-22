@@ -434,8 +434,9 @@ impl Renderable for WorktreeLinkSharedWizardView {
         let [content_area, footer_area] =
             Layout::vertical([Constraint::Fill(1), Constraint::Length(1)]).areas(area);
 
-        let base_style = user_message_style();
+        let base_style = user_message_style().patch(crate::theme::composer_style());
         Block::default().style(base_style).render(content_area, buf);
+        Block::default().style(base_style).render(footer_area, buf);
 
         let inner = content_area.inset(Insets::vh(1, 2));
         let header = self.header();
@@ -465,6 +466,7 @@ impl Renderable for WorktreeLinkSharedWizardView {
                     "Esc".cyan(),
                     " = Cancel".dim(),
                 ]))
+                .style(base_style)
                 .render(
                     Rect {
                         x: footer_area.x + 2,
@@ -516,6 +518,7 @@ impl Renderable for WorktreeLinkSharedWizardView {
             "Esc".cyan(),
             " = Back".dim(),
         ]))
+        .style(base_style)
         .render(
             Rect {
                 x: footer_area.x + 2,

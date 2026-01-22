@@ -296,6 +296,18 @@ pub struct Config {
     /// This is the same `tui.verbose_tool_output` value from `config.toml` (see [`Tui`]).
     pub tui_verbose_tool_output: bool,
 
+    /// When true, render diffs in the transcript with red/green background highlights.
+    ///
+    /// This is the same `tui.transcript_diff_highlight` value from `config.toml` (see [`Tui`]).
+    pub tui_transcript_diff_highlight: bool,
+
+    /// When true, highlight previous user prompts in the transcript so they're easier to spot
+    /// while scrolling.
+    ///
+    /// This is the same `tui.transcript_user_prompt_highlight` value from `config.toml` (see
+    /// [`Tui`]).
+    pub tui_transcript_user_prompt_highlight: bool,
+
     /// Enable application mouse capture in TUI2.
     ///
     /// This is the same `tui.mouse_capture` value from `config.toml` (see [`Tui`]).
@@ -1897,6 +1909,16 @@ impl Config {
                 .as_ref()
                 .map(|t| t.verbose_tool_output)
                 .unwrap_or(false),
+            tui_transcript_diff_highlight: cfg
+                .tui
+                .as_ref()
+                .map(|t| t.transcript_diff_highlight)
+                .unwrap_or(false),
+            tui_transcript_user_prompt_highlight: cfg
+                .tui
+                .as_ref()
+                .map(|t| t.transcript_user_prompt_highlight)
+                .unwrap_or(false),
             tui_mouse_capture: cfg.tui.as_ref().map(|t| t.mouse_capture).unwrap_or(true),
             otel: {
                 let t: OtelConfigToml = cfg.otel.unwrap_or_default();
@@ -2208,6 +2230,8 @@ persistence = "none"
                 ramps_devops: true,
                 mouse_capture: true,
                 verbose_tool_output: false,
+                transcript_diff_highlight: false,
+                transcript_user_prompt_highlight: false,
                 status_bar_show_git_branch: false,
                 status_bar_show_worktree: false,
                 composer_minimal_borders: false,
@@ -3872,6 +3896,8 @@ model_verbosity = "high"
                 tui_status_bar_show_worktree: false,
                 tui_composer_minimal_borders: false,
                 tui_verbose_tool_output: false,
+                tui_transcript_diff_highlight: false,
+                tui_transcript_user_prompt_highlight: false,
                 tui_mouse_capture: true,
                 otel: OtelConfig::default(),
             },
@@ -3973,6 +3999,8 @@ model_verbosity = "high"
             tui_status_bar_show_worktree: false,
             tui_composer_minimal_borders: false,
             tui_verbose_tool_output: false,
+            tui_transcript_diff_highlight: false,
+            tui_transcript_user_prompt_highlight: false,
             tui_mouse_capture: true,
             otel: OtelConfig::default(),
         };
@@ -4089,6 +4117,8 @@ model_verbosity = "high"
             tui_status_bar_show_worktree: false,
             tui_composer_minimal_borders: false,
             tui_verbose_tool_output: false,
+            tui_transcript_diff_highlight: false,
+            tui_transcript_user_prompt_highlight: false,
             tui_mouse_capture: true,
             otel: OtelConfig::default(),
         };
@@ -4191,6 +4221,8 @@ model_verbosity = "high"
             tui_status_bar_show_worktree: false,
             tui_composer_minimal_borders: false,
             tui_verbose_tool_output: false,
+            tui_transcript_diff_highlight: false,
+            tui_transcript_user_prompt_highlight: false,
             tui_mouse_capture: true,
             otel: OtelConfig::default(),
         };

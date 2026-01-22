@@ -636,7 +636,22 @@ impl App {
                 .iter()
                 .map(|cell| cell.as_any().is::<UserHistoryCell>())
                 .collect();
-            crate::transcript_render::render_lines_to_ansi(&lines, &line_meta, &is_user_cell, width)
+            let is_user_prompt_highlight: Vec<bool> = app
+                .transcript_cells
+                .iter()
+                .map(|cell| {
+                    cell.as_any()
+                        .downcast_ref::<UserHistoryCell>()
+                        .is_some_and(|cell| cell.highlight)
+                })
+                .collect();
+            crate::transcript_render::render_lines_to_ansi(
+                &lines,
+                &line_meta,
+                &is_user_cell,
+                &is_user_prompt_highlight,
+                width,
+            )
         };
 
         tui.terminal.clear()?;
@@ -828,6 +843,18 @@ impl App {
                     height: clear_height,
                 },
                 crate::theme::transcript_style(),
+            );
+        }
+        if total_lines <= max_transcript_height as usize && transcript_visible_height > 0 {
+            Self::clear_area_with_style(
+                frame.buffer,
+                Rect {
+                    x: area.x,
+                    y: area.y.saturating_add(transcript_visible_height),
+                    width: area.width,
+                    height: 1,
+                },
+                self.chat_widget.transcript_gap_style(),
             );
         }
 
@@ -1869,6 +1896,14 @@ impl App {
                 self.chat_widget.set_verbose_tool_output(verbose);
                 tui.frame_requester().schedule_frame();
             }
+            AppEvent::UpdateTranscriptDiffHighlight(enabled) => {
+                self.config.tui_transcript_diff_highlight = enabled;
+                tui.frame_requester().schedule_frame();
+            }
+            AppEvent::UpdateTranscriptUserPromptHighlight(enabled) => {
+                self.config.tui_transcript_user_prompt_highlight = enabled;
+                tui.frame_requester().schedule_frame();
+            }
             AppEvent::UpdateXtremeMode(mode) => {
                 self.config.tui_xtreme_mode = mode;
                 self.chat_widget.set_xtreme_mode(mode);
@@ -1973,6 +2008,7 @@ impl App {
                     "".into(),
                     "roles.fg / roles.bg — primary app text + surfaces".into(),
                     "roles.transcript_bg / roles.composer_bg / roles.status_bg — transcript, composer, and status bar backgrounds (derived by default)".into(),
+                    "roles.user_prompt_highlight_bg — background for highlighting past user prompts in the transcript (derived by default)".into(),
                     "roles.selection_fg / roles.selection_bg — selection highlight in pickers".into(),
                     "roles.cursor_fg / roles.cursor_bg — (reserved for future)".dim().into(),
                     "roles.border — box borders and tree chrome (status cards, tool blocks)".into(),
@@ -2542,6 +2578,64 @@ impl App {
                         } else {
                             self.chat_widget.add_error_message(format!(
                                 "Failed to save output verbosity: {err}"
+                            ));
+                        }
+                    }
+                }
+            }
+            AppEvent::PersistTranscriptDiffHighlight(enabled) => {
+                let profile = self.active_profile.as_deref();
+                match ConfigEditsBuilder::new(&self.config.codex_home)
+                    .with_profile(profile)
+                    .with_edits([ConfigEdit::SetPath {
+                        segments: vec!["tui".to_string(), "transcript_diff_highlight".to_string()],
+                        value: toml_edit::value(enabled),
+                    }])
+                    .apply()
+                    .await
+                {
+                    Ok(()) => {}
+                    Err(err) => {
+                        tracing::error!(error = %err, "failed to persist diff highlight toggle");
+                        if let Some(profile) = profile {
+                            self.chat_widget.add_error_message(format!(
+                                "Failed to save diff highlight setting for profile `{profile}`: {err}"
+                            ));
+                        } else {
+                            self.chat_widget.add_error_message(format!(
+                                "Failed to save diff highlight setting: {err}"
+                            ));
+                        }
+                    }
+                }
+            }
+            AppEvent::PersistTranscriptUserPromptHighlight(enabled) => {
+                let profile = self.active_profile.as_deref();
+                match ConfigEditsBuilder::new(&self.config.codex_home)
+                    .with_profile(profile)
+                    .with_edits([ConfigEdit::SetPath {
+                        segments: vec![
+                            "tui".to_string(),
+                            "transcript_user_prompt_highlight".to_string(),
+                        ],
+                        value: toml_edit::value(enabled),
+                    }])
+                    .apply()
+                    .await
+                {
+                    Ok(()) => {}
+                    Err(err) => {
+                        tracing::error!(
+                            error = %err,
+                            "failed to persist user prompt highlight toggle"
+                        );
+                        if let Some(profile) = profile {
+                            self.chat_widget.add_error_message(format!(
+                                "Failed to save user prompt highlight setting for profile `{profile}`: {err}"
+                            ));
+                        } else {
+                            self.chat_widget.add_error_message(format!(
+                                "Failed to save user prompt highlight setting: {err}"
                             ));
                         }
                     }
@@ -3470,6 +3564,7 @@ mod tests {
         let user_cell = |text: &str| -> Arc<dyn HistoryCell> {
             Arc::new(UserHistoryCell {
                 message: text.to_string(),
+                highlight: false,
             }) as Arc<dyn HistoryCell>
         };
         let agent_cell = |text: &str| -> Arc<dyn HistoryCell> {
@@ -3828,10 +3923,12 @@ mod tests {
         let is_user_cell = vec![true];
         let width: u16 = 10;
 
+        let is_user_prompt_highlight = vec![false];
         let rendered = crate::transcript_render::render_lines_to_ansi(
             &lines,
             &line_meta,
             &is_user_cell,
+            &is_user_prompt_highlight,
             width,
         );
         assert_eq!(rendered.len(), 1);

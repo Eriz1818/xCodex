@@ -21,8 +21,9 @@ use crate::app_event_sender::AppEventSender;
 use crate::exec_cell::spinner;
 use crate::key_hint;
 use crate::render::renderable::Renderable;
-use crate::shimmer::shimmer_spans;
+use crate::shimmer::shimmer_spans_with_palette;
 use crate::text_formatting::capitalize_first;
+use crate::theme::status_ramp_palette;
 use crate::tui::FrameRequester;
 use crate::wrapping::RtOptions;
 use crate::wrapping::word_wrap_lines;
@@ -211,6 +212,7 @@ impl Renderable for StatusIndicatorWidget {
 
         for y in area.top()..area.bottom() {
             for x in area.left()..area.right() {
+                buf[(x, y)].set_symbol(" ");
                 buf[(x, y)].set_style(crate::theme::status_style());
             }
         }
@@ -226,7 +228,8 @@ impl Renderable for StatusIndicatorWidget {
         spans.push(spinner(Some(self.last_resume_at), self.animations_enabled));
         spans.push(" ".into());
         if self.animations_enabled {
-            spans.extend(shimmer_spans(&self.header));
+            let (base, highlight) = status_ramp_palette();
+            spans.extend(shimmer_spans_with_palette(&self.header, base, highlight));
         } else if !self.header.is_empty() {
             spans.push(self.header.clone().into());
         }

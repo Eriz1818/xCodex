@@ -258,11 +258,15 @@ pub(crate) fn new_settings_card(
     xtreme_ui_enabled: bool,
     show_git_branch: bool,
     show_worktree: bool,
+    transcript_diff_highlight: bool,
+    transcript_user_prompt_highlight: bool,
 ) -> Box<dyn HistoryCell> {
     Box::new(SettingsHistoryCell {
         xtreme_ui_enabled,
         show_git_branch,
         show_worktree,
+        transcript_diff_highlight,
+        transcript_user_prompt_highlight,
     })
 }
 
@@ -271,6 +275,8 @@ struct SettingsHistoryCell {
     xtreme_ui_enabled: bool,
     show_git_branch: bool,
     show_worktree: bool,
+    transcript_diff_highlight: bool,
+    transcript_user_prompt_highlight: bool,
 }
 
 impl HistoryCell for SettingsHistoryCell {
@@ -301,10 +307,37 @@ impl HistoryCell for SettingsHistoryCell {
         }
 
         lines.push(Line::from(Vec::<Span<'static>>::new()));
+        lines.push("Transcript".bold().into());
+        {
+            let checkbox = if self.transcript_diff_highlight {
+                "[x]"
+            } else {
+                "[ ]"
+            };
+            lines.push(Line::from(format!("  {checkbox} Diff highlight")));
+        }
+        {
+            let checkbox = if self.transcript_user_prompt_highlight {
+                "[x]"
+            } else {
+                "[ ]"
+            };
+            lines.push(Line::from(format!("  {checkbox} Highlight past prompts")));
+        }
+
+        lines.push(Line::from(Vec::<Span<'static>>::new()));
         lines.push(
             vec![
                 "Usage: ".dim(),
                 "/settings status-bar <git-branch|worktree> [on|off|toggle|status]".cyan(),
+            ]
+            .into(),
+        );
+        lines.push(
+            vec![
+                "Usage: ".dim(),
+                "/settings transcript <diff-highlight|highlight-past-prompts> [on|off|toggle|status]"
+                    .cyan(),
             ]
             .into(),
         );

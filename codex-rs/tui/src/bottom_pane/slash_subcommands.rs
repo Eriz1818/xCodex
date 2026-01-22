@@ -82,6 +82,15 @@ const SETTINGS_STATUS_BAR_CHILDREN: &[SubcommandNode] = &[
     },
 ];
 
+const SETTINGS_TRANSCRIPT_CHILDREN: &[SubcommandNode] = &[SubcommandNode {
+    token: "diff-highlight",
+    full_name: "settings transcript diff-highlight",
+    description: "toggle/show diff highlight for transcript diffs",
+    run_on_enter: false,
+    insert_trailing_space: true,
+    children: &[],
+}];
+
 const SETTINGS_SUBCOMMANDS: &[SubcommandNode] = &[
     SubcommandNode {
         token: "status-bar",
@@ -90,6 +99,14 @@ const SETTINGS_SUBCOMMANDS: &[SubcommandNode] = &[
         run_on_enter: false,
         insert_trailing_space: true,
         children: SETTINGS_STATUS_BAR_CHILDREN,
+    },
+    SubcommandNode {
+        token: "transcript",
+        full_name: "settings transcript",
+        description: "show or update transcript settings",
+        run_on_enter: false,
+        insert_trailing_space: true,
+        children: SETTINGS_TRANSCRIPT_CHILDREN,
     },
     SubcommandNode {
         token: "worktrees",

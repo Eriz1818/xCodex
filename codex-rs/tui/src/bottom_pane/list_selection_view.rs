@@ -6,6 +6,7 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::Constraint;
 use ratatui::layout::Layout;
 use ratatui::layout::Rect;
+use ratatui::style::Color;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
 use ratatui::text::Span;
@@ -670,6 +671,18 @@ impl Renderable for ListSelectionView {
                     height: hint_area.height,
                 };
                 hint.clone().dim().render(hint_area, buf);
+            }
+        }
+
+        if let Some(base_bg) = base_style.bg {
+            let transcript_bg = crate::theme::transcript_style().bg;
+            for y in area.top()..area.bottom() {
+                for x in area.left()..area.right() {
+                    let cell = &mut buf[(x, y)];
+                    if cell.bg == Color::Reset || transcript_bg.is_some_and(|bg| cell.bg == bg) {
+                        cell.set_bg(base_bg);
+                    }
+                }
             }
         }
     }

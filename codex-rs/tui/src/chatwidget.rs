@@ -210,6 +210,10 @@ const RATE_LIMIT_WARNING_THRESHOLDS: [f64; 3] = [75.0, 90.0, 95.0];
 const NUDGE_MODEL_SLUG: &str = "gpt-5.1-codex-mini";
 const RATE_LIMIT_SWITCH_PROMPT_THRESHOLD: f64 = 90.0;
 
+fn transcript_spacer_line() -> Line<'static> {
+    Line::from("").style(crate::theme::transcript_style())
+}
+
 #[derive(Default)]
 struct RateLimitWarningState {
     secondary_index: usize,
@@ -1337,6 +1341,7 @@ impl ChatWidget {
         self.add_to_history(history_cell::new_patch_event(
             event.changes,
             &self.config.cwd,
+            self.config.tui_transcript_diff_highlight,
         ));
     }
 
@@ -2228,6 +2233,8 @@ impl ChatWidget {
                 status_cell,
                 self.config.tui_status_bar_show_git_branch,
                 self.config.tui_status_bar_show_worktree,
+                self.config.tui_transcript_diff_highlight,
+                self.config.tui_transcript_user_prompt_highlight,
                 self.config.tui_xtreme_mode,
                 self.config.tui_verbose_tool_output,
             );
@@ -2472,6 +2479,8 @@ impl ChatWidget {
                     status_cell,
                     self.config.tui_status_bar_show_git_branch,
                     self.config.tui_status_bar_show_worktree,
+                    self.config.tui_transcript_diff_highlight,
+                    self.config.tui_transcript_user_prompt_highlight,
                     self.config.tui_xtreme_mode,
                     self.config.tui_verbose_tool_output,
                 );
@@ -2486,6 +2495,8 @@ impl ChatWidget {
                     status_cell,
                     self.config.tui_status_bar_show_git_branch,
                     self.config.tui_status_bar_show_worktree,
+                    self.config.tui_transcript_diff_highlight,
+                    self.config.tui_transcript_user_prompt_highlight,
                     self.config.tui_xtreme_mode,
                     self.config.tui_verbose_tool_output,
                 );
@@ -2504,6 +2515,8 @@ impl ChatWidget {
                     status_cell,
                     self.config.tui_status_bar_show_git_branch,
                     self.config.tui_status_bar_show_worktree,
+                    self.config.tui_transcript_diff_highlight,
+                    self.config.tui_transcript_user_prompt_highlight,
                     self.config.tui_xtreme_mode,
                     self.config.tui_verbose_tool_output,
                 );
@@ -2518,6 +2531,8 @@ impl ChatWidget {
                     status_cell,
                     self.config.tui_status_bar_show_git_branch,
                     self.config.tui_status_bar_show_worktree,
+                    self.config.tui_transcript_diff_highlight,
+                    self.config.tui_transcript_user_prompt_highlight,
                     self.config.tui_xtreme_mode,
                     self.config.tui_verbose_tool_output,
                 );
@@ -2620,23 +2635,8 @@ impl ChatWidget {
             SlashCommand::Theme if trimmed.eq_ignore_ascii_case("help") => {
                 self.app_event_tx.send(AppEvent::OpenThemeHelp);
             }
-            SlashCommand::Theme
-                if trimmed.eq_ignore_ascii_case("create")
-                    || trimmed.to_ascii_lowercase().starts_with("create ") =>
-            {
-                self.open_theme_create_wizard(trimmed);
-            }
-            SlashCommand::Theme
-                if trimmed.eq_ignore_ascii_case("edit")
-                    || trimmed.to_ascii_lowercase().starts_with("edit ") =>
-            {
-                self.open_theme_editor(trimmed);
-            }
             SlashCommand::Theme if trimmed.eq_ignore_ascii_case("template") => {
                 self.write_theme_templates();
-            }
-            SlashCommand::Theme if trimmed.eq_ignore_ascii_case("preview") => {
-                self.app_event_tx.send(AppEvent::OpenThemePreview);
             }
             _ => self.dispatch_command(cmd),
         }
@@ -2910,21 +2910,30 @@ impl ChatWidget {
             let args: Vec<&str> = rest.split_whitespace().collect();
             let current_git_branch = self.config.tui_status_bar_show_git_branch;
             let current_worktree = self.config.tui_status_bar_show_worktree;
+            let current_diff_highlight = self.config.tui_transcript_diff_highlight;
+            let current_user_prompt_highlight = self.config.tui_transcript_user_prompt_highlight;
 
-            let (item, action) = match args.as_slice() {
-                [] | ["status-bar"] => {
-                    self.add_settings_output_with_values(current_git_branch, current_worktree);
+            let (section, item, action) = match args.as_slice() {
+                [] | ["status-bar"] | ["transcript"] => {
+                    self.add_settings_output_with_values(
+                        current_git_branch,
+                        current_worktree,
+                        current_diff_highlight,
+                        current_user_prompt_highlight,
+                    );
                     return;
                 }
                 ["worktrees"] => {
                     self.open_worktrees_settings_view();
                     return;
                 }
-                ["status-bar", item] => (*item, None),
-                ["status-bar", item, action] => (*item, Some(*action)),
+                ["status-bar", item] => ("status-bar", *item, None),
+                ["status-bar", item, action] => ("status-bar", *item, Some(*action)),
+                ["transcript", item] => ("transcript", *item, None),
+                ["transcript", item, action] => ("transcript", *item, Some(*action)),
                 _ => {
                     self.add_info_message(
-                        "Usage: /settings [status-bar|worktrees]".to_string(),
+                        "Usage: /settings [status-bar|transcript|worktrees]".to_string(),
                         None,
                     );
                     return;
@@ -2933,50 +2942,130 @@ impl ChatWidget {
 
             let mut next_git_branch = current_git_branch;
             let mut next_worktree = current_worktree;
+            let mut next_diff_highlight = current_diff_highlight;
+            let mut next_user_prompt_highlight = current_user_prompt_highlight;
+
             let item = item.to_ascii_lowercase();
             let action = action.map(str::to_ascii_lowercase);
 
-            let (selected, current) = match item.as_str() {
-                "git-branch" | "branch" => (&mut next_git_branch, current_git_branch),
-                "worktree" | "worktree-path" => (&mut next_worktree, current_worktree),
-                _ => {
-                    self.add_info_message(
-                        "Unknown setting. Use: git-branch | worktree".to_string(),
-                        None,
-                    );
-                    return;
-                }
-            };
-
-            let next = match action.as_deref() {
-                None | Some("toggle") => Some(!current),
-                Some("on") | Some("enable") | Some("true") => Some(true),
-                Some("off") | Some("disable") | Some("false") => Some(false),
-                Some("status") | Some("show") => None,
-                Some(_) => {
-                    self.add_info_message(
-                        "Usage: /settings status-bar <git-branch|worktree> [on|off|toggle|status]"
-                            .to_string(),
-                        None,
-                    );
-                    return;
-                }
-            };
-
-            if let Some(value) = next {
-                *selected = value;
-                self.app_event_tx.send(AppEvent::UpdateStatusBarGitOptions {
-                    show_git_branch: next_git_branch,
-                    show_worktree: next_worktree,
-                });
-                self.app_event_tx
-                    .send(AppEvent::PersistStatusBarGitOptions {
-                        show_git_branch: next_git_branch,
-                        show_worktree: next_worktree,
-                    });
+            enum SettingsAction {
+                Toggle,
+                Set(bool),
+                Status,
             }
 
-            self.add_settings_output_with_values(next_git_branch, next_worktree);
+            let action = match action.as_deref() {
+                None | Some("toggle") => SettingsAction::Toggle,
+                Some("on") | Some("enable") | Some("true") => SettingsAction::Set(true),
+                Some("off") | Some("disable") | Some("false") => SettingsAction::Set(false),
+                Some("status") | Some("show") => SettingsAction::Status,
+                Some(_) => {
+                    match section {
+                        "status-bar" => self.add_info_message(
+                            "Usage: /settings status-bar <git-branch|worktree> [on|off|toggle|status]"
+                                .to_string(),
+                            None,
+                        ),
+                        "transcript" => self.add_info_message(
+                            "Usage: /settings transcript <diff-highlight|highlight-past-prompts> [on|off|toggle|status]"
+                                .to_string(),
+                            None,
+                        ),
+                        _ => {}
+                    }
+                    return;
+                }
+            };
+
+            match section {
+                "status-bar" => {
+                    let selected = match item.as_str() {
+                        "git-branch" | "branch" => Some((&mut next_git_branch, current_git_branch)),
+                        "worktree" | "worktree-path" => {
+                            Some((&mut next_worktree, current_worktree))
+                        }
+                        _ => None,
+                    };
+                    let Some((selected, current)) = selected else {
+                        self.add_info_message(
+                            "Unknown setting. Use: git-branch | worktree".to_string(),
+                            None,
+                        );
+                        return;
+                    };
+
+                    let next = match action {
+                        SettingsAction::Toggle => Some(!current),
+                        SettingsAction::Set(value) => Some(value),
+                        SettingsAction::Status => None,
+                    };
+                    if let Some(value) = next {
+                        *selected = value;
+                        self.app_event_tx.send(AppEvent::UpdateStatusBarGitOptions {
+                            show_git_branch: next_git_branch,
+                            show_worktree: next_worktree,
+                        });
+                        self.app_event_tx
+                            .send(AppEvent::PersistStatusBarGitOptions {
+                                show_git_branch: next_git_branch,
+                                show_worktree: next_worktree,
+                            });
+                    }
+                }
+                "transcript" => {
+                    if item.as_str() != "diff-highlight"
+                        && item.as_str() != "highlight-past-prompts"
+                    {
+                        self.add_info_message(
+                            "Unknown setting. Use: diff-highlight | highlight-past-prompts"
+                                .to_string(),
+                            None,
+                        );
+                        return;
+                    }
+                    if item.as_str() == "diff-highlight" {
+                        let next = match action {
+                            SettingsAction::Toggle => Some(!current_diff_highlight),
+                            SettingsAction::Set(value) => Some(value),
+                            SettingsAction::Status => None,
+                        };
+                        if let Some(value) = next {
+                            next_diff_highlight = value;
+                            self.app_event_tx
+                                .send(AppEvent::UpdateTranscriptDiffHighlight(next_diff_highlight));
+                            self.app_event_tx
+                                .send(AppEvent::PersistTranscriptDiffHighlight(
+                                    next_diff_highlight,
+                                ));
+                        }
+                    } else {
+                        let next = match action {
+                            SettingsAction::Toggle => Some(!current_user_prompt_highlight),
+                            SettingsAction::Set(value) => Some(value),
+                            SettingsAction::Status => None,
+                        };
+                        if let Some(value) = next {
+                            next_user_prompt_highlight = value;
+                            self.app_event_tx
+                                .send(AppEvent::UpdateTranscriptUserPromptHighlight(
+                                    next_user_prompt_highlight,
+                                ));
+                            self.app_event_tx
+                                .send(AppEvent::PersistTranscriptUserPromptHighlight(
+                                    next_user_prompt_highlight,
+                                ));
+                        }
+                    }
+                }
+                _ => {}
+            }
+
+            self.add_settings_output_with_values(
+                next_git_branch,
+                next_worktree,
+                next_diff_highlight,
+                next_user_prompt_highlight,
+            );
             return;
         }
 
@@ -3026,21 +3115,21 @@ impl ChatWidget {
                     use codex_common::hooks_samples_install::HookSample;
                     let lines = vec![
                         vec!["/hooks init".magenta()].into(),
-                        Line::from(""),
+                        transcript_spacer_line(),
                         vec!["Choose a hook mode:".magenta().bold()].into(),
                         vec!["1) ".dim(), HookSample::External.title().into()].into(),
                         vec!["   ".into(), HookSample::External.description().dim()].into(),
-                        Line::from(""),
+                        transcript_spacer_line(),
                         vec!["2) ".dim(), HookSample::PythonHost.title().into()].into(),
                         vec!["   ".into(), HookSample::PythonHost.description().dim()].into(),
-                        Line::from(""),
+                        transcript_spacer_line(),
                         vec!["3) ".dim(), HookSample::Pyo3.title().into()].into(),
                         vec!["   ".into(), HookSample::Pyo3.description().dim()].into(),
-                        Line::from(""),
+                        transcript_spacer_line(),
                         vec!["Run: ".dim(), "/hooks init external".cyan()].into(),
                         vec!["Run: ".dim(), "/hooks init python-host".cyan()].into(),
                         vec!["Run: ".dim(), "/hooks init pyo3".cyan()].into(),
-                        Line::from(""),
+                        transcript_spacer_line(),
                         vec![
                             "Note: ".dim(),
                             "installing writes files; re-run with ".dim(),
@@ -3131,7 +3220,7 @@ impl ChatWidget {
                 ["install", "sdks", "list"] | ["install", "sdks", "--list"] => {
                     let mut lines = Vec::new();
                     lines.push(vec!["/hooks install sdks list".magenta()].into());
-                    lines.push(Line::from(""));
+                    lines.push(transcript_spacer_line());
                     lines.push(vec!["Available SDKs:".magenta().bold()].into());
                     for sdk in codex_common::hooks_sdk_install::all_hook_sdks() {
                         lines.push(
@@ -3159,7 +3248,7 @@ impl ChatWidget {
                     use codex_common::hooks_samples_install::HookSample;
                     let mut lines = Vec::new();
                     lines.push(vec!["/hooks install samples list".magenta()].into());
-                    lines.push(Line::from(""));
+                    lines.push(transcript_spacer_line());
                     lines.push(vec!["Available sample sets:".magenta().bold()].into());
                     for sample in [
                         HookSample::External,
@@ -3666,7 +3755,7 @@ impl ChatWidget {
                                 };
                                 let mut lines: Vec<Line<'static>> = Vec::new();
                                 lines.push(Line::from(format!("error: {err}")));
-                                lines.push(Line::from(""));
+                                lines.push(transcript_spacer_line());
                                 lines.push(Line::from("Try running this outside xcodex:"));
                                 lines.push(Line::from(format!(
                                     "  git -C {} worktree add -b {} {}",
@@ -3724,7 +3813,7 @@ impl ChatWidget {
                             }
 
                             if !linked_dirs.is_empty() {
-                                lines.push(Line::from(""));
+                                lines.push(transcript_spacer_line());
                                 lines.push(Line::from(
                                     "Shared dirs (writes land in workspace root):",
                                 ));
@@ -3801,7 +3890,7 @@ impl ChatWidget {
                             ]),
                             Line::from(vec!["  /worktree shared add docs/impl-plans".cyan()]),
                             Line::from(vec!["  /worktree shared add docs/personal".cyan()]),
-                            Line::from(""),
+                            transcript_spacer_line(),
                             Line::from(vec!["Then: ".dim(), "/worktree link-shared".cyan()]),
                             Line::from(vec!["Docs: ".dim(), "docs/xcodex/worktrees.md".cyan()]),
                         ];
@@ -3866,7 +3955,7 @@ impl ChatWidget {
                             ]),
                             Line::from(vec!["  /worktree shared add docs/impl-plans".cyan()]),
                             Line::from(vec!["  /worktree shared add docs/personal".cyan()]),
-                            Line::from(""),
+                            transcript_spacer_line(),
                             Line::from(vec![
                                 "Then: ".dim(),
                                 "/worktree link-shared".cyan(),
@@ -4047,7 +4136,10 @@ impl ChatWidget {
 
         // Only show the text portion in conversation history.
         if !text.is_empty() {
-            self.add_to_history(history_cell::new_user_prompt(text));
+            self.add_to_history(history_cell::new_user_prompt(
+                text,
+                self.config.tui_transcript_user_prompt_highlight,
+            ));
         }
         self.needs_final_message_separator = false;
     }
@@ -4231,7 +4323,8 @@ impl ChatWidget {
                     ));
                 } else {
                     // Show explanation when there are no structured findings.
-                    let mut rendered: Vec<ratatui::text::Line<'static>> = vec!["".into()];
+                    let mut rendered: Vec<ratatui::text::Line<'static>> =
+                        vec![transcript_spacer_line()];
                     append_markdown(&explanation, None, &mut rendered);
                     let body_cell = AgentMessageCell::new(rendered, false);
                     self.app_event_tx
@@ -4253,7 +4346,10 @@ impl ChatWidget {
     fn on_user_message_event(&mut self, event: UserMessageEvent) {
         let message = event.message.trim();
         if !message.is_empty() {
-            self.add_to_history(history_cell::new_user_prompt(message.to_string()));
+            self.add_to_history(history_cell::new_user_prompt(
+                message.to_string(),
+                self.config.tui_transcript_user_prompt_highlight,
+            ));
         }
     }
 
@@ -4347,12 +4443,16 @@ impl ChatWidget {
         &mut self,
         show_git_branch: bool,
         show_worktree: bool,
+        transcript_diff_highlight: bool,
+        transcript_user_prompt_highlight: bool,
     ) {
         let command = PlainHistoryCell::new(vec![Line::from(vec!["/settings".magenta()])]);
         let card = crate::status::new_settings_card(
             crate::xtreme::xtreme_ui_enabled(&self.config),
             show_git_branch,
             show_worktree,
+            transcript_diff_highlight,
+            transcript_user_prompt_highlight,
         );
         self.add_to_history(CompositeHistoryCell::new(vec![Box::new(command), card]));
     }
@@ -4397,7 +4497,7 @@ impl ChatWidget {
             }
         }
 
-        lines.push(Line::from(""));
+        lines.push(transcript_spacer_line());
         lines.push(vec!["Add: ".dim(), "/worktree shared add <dir>".cyan()].into());
         lines.push(vec!["Remove: ".dim(), "/worktree shared rm <dir>".cyan()].into());
         lines.push(
@@ -4428,7 +4528,7 @@ impl ChatWidget {
                 "Automation hooks run external programs on lifecycle events. ".into(),
                 "Treat hook payloads/logs as potentially sensitive.".dim(),
             ]),
-            Line::from(""),
+            transcript_spacer_line(),
             Line::from(vec!["Quickstart:".magenta().bold()]),
             Line::from(vec!["  xcodex hooks init".cyan()]),
             Line::from(vec!["  xcodex hooks install sdks list".cyan()]),
@@ -4441,7 +4541,7 @@ impl ChatWidget {
             ]),
             Line::from(vec!["  xcodex hooks list".cyan()]),
             Line::from(vec!["  xcodex hooks paths".cyan()]),
-            Line::from(""),
+            transcript_spacer_line(),
             Line::from(vec![
                 "Config: ".dim(),
                 format!("{}/config.toml", codex_home.display()).into(),
@@ -4454,7 +4554,7 @@ impl ChatWidget {
                 "Payloads: ".dim(),
                 format!("{}", payloads_dir.display()).into(),
             ]),
-            Line::from(""),
+            transcript_spacer_line(),
             Line::from(vec![
                 "Docs: ".dim(),
                 "docs/xcodex/hooks.md".cyan(),
@@ -5313,138 +5413,6 @@ impl ChatWidget {
             }
         };
         self.open_model_popup_with_presets(presets);
-    }
-
-    fn open_theme_create_wizard(&mut self, args: &str) {
-        use codex_core::themes::ThemeVariant;
-
-        let terminal_bg = crate::terminal_palette::default_bg();
-        let mut variant = crate::theme::active_variant(&self.config, terminal_bg);
-
-        let mut name = String::new();
-        let lower = args.to_ascii_lowercase();
-        let rest = lower
-            .strip_prefix("create")
-            .and_then(|_| args.get("create".len()..))
-            .unwrap_or_default()
-            .trim();
-
-        if !rest.is_empty() {
-            let mut parts = rest.split_whitespace();
-            if let Some(first) = parts.next() {
-                match first.to_ascii_lowercase().as_str() {
-                    "light" => {
-                        variant = ThemeVariant::Light;
-                        name = parts.collect::<Vec<_>>().join(" ");
-                    }
-                    "dark" => {
-                        variant = ThemeVariant::Dark;
-                        name = parts.collect::<Vec<_>>().join(" ");
-                    }
-                    _ => {
-                        name = rest.to_string();
-                    }
-                }
-            }
-        }
-
-        let mut view = crate::bottom_pane::ThemeCreateWizardView::new(
-            self.config.clone(),
-            variant,
-            self.app_event_tx.clone(),
-        );
-        if !name.trim().is_empty() {
-            view.set_initial_name(name.trim());
-        }
-        self.bottom_pane.show_view(Box::new(view));
-        self.request_redraw();
-    }
-
-    fn open_theme_editor(&mut self, args: &str) {
-        use codex_core::themes::ThemeCatalog;
-        use codex_core::themes::ThemeVariant;
-
-        let terminal_bg = crate::terminal_palette::default_bg();
-        let mut variant = crate::theme::active_variant(&self.config, terminal_bg);
-
-        let mut requested_theme: Option<String> = None;
-        let lower = args.to_ascii_lowercase();
-        let rest = lower
-            .strip_prefix("edit")
-            .and_then(|_| args.get("edit".len()..))
-            .unwrap_or_default()
-            .trim();
-
-        if !rest.is_empty() {
-            let mut parts = rest.split_whitespace();
-            if let Some(first) = parts.next() {
-                match first.to_ascii_lowercase().as_str() {
-                    "light" => {
-                        variant = ThemeVariant::Light;
-                        let name = parts.collect::<Vec<_>>().join(" ");
-                        if !name.trim().is_empty() {
-                            requested_theme = Some(name.trim().to_string());
-                        }
-                    }
-                    "dark" => {
-                        variant = ThemeVariant::Dark;
-                        let name = parts.collect::<Vec<_>>().join(" ");
-                        if !name.trim().is_empty() {
-                            requested_theme = Some(name.trim().to_string());
-                        }
-                    }
-                    _ => requested_theme = Some(rest.to_string()),
-                }
-            }
-        }
-
-        let catalog = match ThemeCatalog::load(&self.config) {
-            Ok(catalog) => catalog,
-            Err(err) => {
-                self.add_error_message(format!("Failed to load themes: {err}"));
-                return;
-            }
-        };
-
-        let base_name = if let Some(requested) = requested_theme {
-            requested
-        } else {
-            match variant {
-                ThemeVariant::Light => self.config.themes.light.as_deref(),
-                ThemeVariant::Dark => self.config.themes.dark.as_deref(),
-            }
-            .unwrap_or("default")
-            .to_string()
-        };
-        let base_theme = match catalog.get(&base_name) {
-            Some(theme) => theme.clone(),
-            None => {
-                self.add_error_message(format!("Unknown theme `{base_name}`."));
-                return;
-            }
-        };
-
-        let mut suggested = format!("{base_name}-custom");
-        if catalog.get(&suggested).is_some() {
-            for idx in 2.. {
-                let candidate = format!("{base_name}-custom-{idx}");
-                if catalog.get(&candidate).is_none() {
-                    suggested = candidate;
-                    break;
-                }
-            }
-        }
-
-        let view = crate::bottom_pane::ThemeEditorView::new(
-            self.config.clone(),
-            variant,
-            base_name,
-            base_theme,
-            suggested,
-            self.app_event_tx.clone(),
-        );
-        self.bottom_pane.show_view(Box::new(view));
-        self.request_redraw();
     }
 
     fn write_theme_templates(&mut self) {

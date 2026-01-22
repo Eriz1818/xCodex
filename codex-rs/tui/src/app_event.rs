@@ -95,6 +95,12 @@ pub(crate) enum AppEvent {
     /// Update whether tool output is shown verbosely in the transcript (runtime).
     UpdateVerboseToolOutput(bool),
 
+    /// Update whether transcript diffs use background highlight (runtime).
+    UpdateTranscriptDiffHighlight(bool),
+
+    /// Update whether user prompts are highlighted in the transcript (runtime).
+    UpdateTranscriptUserPromptHighlight(bool),
+
     /// Update whether xtreme mode styling is enabled (runtime).
     UpdateXtremeMode(XtremeMode),
 
@@ -197,6 +203,12 @@ pub(crate) enum AppEvent {
 
     /// Persist whether tool output is shown verbosely in the transcript.
     PersistVerboseToolOutput(bool),
+
+    /// Persist whether transcript diffs use background highlight.
+    PersistTranscriptDiffHighlight(bool),
+
+    /// Persist whether user prompts are highlighted in the transcript.
+    PersistTranscriptUserPromptHighlight(bool),
 
     /// Persist whether xtreme mode styling is enabled.
     PersistXtremeMode(XtremeMode),

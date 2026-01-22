@@ -1,3 +1,4 @@
+use std::fmt;
 use std::io::IsTerminal;
 use std::io::Result;
 use std::io::Stdout;
@@ -9,6 +10,7 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 
+use crossterm::Command;
 use crossterm::SynchronizedUpdate;
 use crossterm::event::DisableBracketedPaste;
 use crossterm::event::DisableFocusChange;
@@ -80,6 +82,48 @@ pub fn set_modes() -> Result<()> {
     // Mouse events instead of arrow keys.
     let _ = execute!(stdout(), EnableMouseCapture);
     Ok(())
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct EnableAlternateScroll;
+
+impl Command for EnableAlternateScroll {
+    fn write_ansi(&self, f: &mut impl fmt::Write) -> fmt::Result {
+        write!(f, "\x1b[?1007h")
+    }
+
+    #[cfg(windows)]
+    fn execute_winapi(&self) -> Result<()> {
+        Err(std::io::Error::other(
+            "tried to execute EnableAlternateScroll using WinAPI; use ANSI instead",
+        ))
+    }
+
+    #[cfg(windows)]
+    fn is_ansi_code_supported(&self) -> bool {
+        true
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct DisableAlternateScroll;
+
+impl Command for DisableAlternateScroll {
+    fn write_ansi(&self, f: &mut impl fmt::Write) -> fmt::Result {
+        write!(f, "\x1b[?1007l")
+    }
+
+    #[cfg(windows)]
+    fn execute_winapi(&self) -> Result<()> {
+        Err(std::io::Error::other(
+            "tried to execute DisableAlternateScroll using WinAPI; use ANSI instead",
+        ))
+    }
+
+    #[cfg(windows)]
+    fn is_ansi_code_supported(&self) -> bool {
+        true
+    }
 }
 
 /// Restore the terminal to its original state.
@@ -179,6 +223,22 @@ impl Tui {
     /// Set whether alternate screen is enabled. When false, enter_alt_screen() becomes a no-op.
     pub fn set_alt_screen_enabled(&mut self, enabled: bool) {
         self.alt_screen_enabled = enabled;
+    }
+
+    pub fn set_mouse_capture_enabled(&mut self, enabled: bool) {
+        if enabled {
+            let _ = execute!(self.terminal.backend_mut(), EnableMouseCapture);
+        } else {
+            let _ = execute!(self.terminal.backend_mut(), DisableMouseCapture);
+        }
+    }
+
+    pub fn set_alternate_scroll_enabled(&mut self, enabled: bool) {
+        if enabled {
+            let _ = execute!(self.terminal.backend_mut(), EnableAlternateScroll);
+        } else {
+            let _ = execute!(self.terminal.backend_mut(), DisableAlternateScroll);
+        }
     }
 
     pub fn frame_requester(&self) -> FrameRequester {

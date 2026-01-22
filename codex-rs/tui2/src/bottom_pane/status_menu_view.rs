@@ -5,7 +5,8 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::Constraint;
 use ratatui::layout::Layout;
 use ratatui::layout::Rect;
-use ratatui::style::Stylize;
+use ratatui::style::Modifier;
+use ratatui::style::Styled as _;
 use ratatui::text::Line;
 use ratatui::text::Span;
 use ratatui::widgets::Block;
@@ -37,6 +38,8 @@ pub(crate) struct StatusMenuView {
     complete: bool,
     status_bar_show_git_branch: bool,
     status_bar_show_worktree: bool,
+    transcript_diff_highlight: bool,
+    transcript_user_prompt_highlight: bool,
     verbose_tool_output: bool,
     xtreme_mode: XtremeMode,
     xtreme_ui_enabled: bool,
@@ -54,6 +57,8 @@ impl StatusMenuView {
         status_cell: Box<dyn HistoryCell>,
         status_bar_show_git_branch: bool,
         status_bar_show_worktree: bool,
+        transcript_diff_highlight: bool,
+        transcript_user_prompt_highlight: bool,
         xtreme_mode: XtremeMode,
         verbose_tool_output: bool,
     ) -> Self {
@@ -67,6 +72,8 @@ impl StatusMenuView {
             complete: false,
             status_bar_show_git_branch,
             status_bar_show_worktree,
+            transcript_diff_highlight,
+            transcript_user_prompt_highlight,
             verbose_tool_output,
             xtreme_mode,
             xtreme_ui_enabled,
@@ -79,34 +86,44 @@ impl StatusMenuView {
     }
 
     fn footer_hint_line() -> Line<'static> {
+        let key_style = crate::theme::accent_style().add_modifier(Modifier::BOLD);
+        let hint_style = crate::theme::dim_style();
         vec![
-            "Tab".bold(),
-            ": switch tab".dim(),
+            Span::from("Tab").set_style(key_style),
+            Span::from(": switch tab").set_style(hint_style),
             "  ".into(),
-            "↑/↓".bold(),
-            ": select/scroll".dim(),
+            Span::from("↑/↓").set_style(key_style),
+            Span::from(": select/scroll").set_style(hint_style),
             "  ".into(),
-            "Enter".bold(),
-            ": toggle/run".dim(),
+            Span::from("Enter").set_style(key_style),
+            Span::from(": toggle/run").set_style(hint_style),
             "  ".into(),
-            "Esc".bold(),
-            ": back/close".dim(),
+            Span::from("Esc").set_style(key_style),
+            Span::from(": back/close").set_style(hint_style),
         ]
         .into()
     }
 
     fn tab_line(&self) -> Line<'static> {
+        let active_style = crate::theme::accent_style().add_modifier(Modifier::BOLD);
+        let inactive_style = crate::theme::dim_style();
         let status = match self.tab {
-            StatusMenuTab::Status => "[ Status ]".bold().cyan(),
-            StatusMenuTab::Settings | StatusMenuTab::Tools => "[ Status ]".dim(),
+            StatusMenuTab::Status => Span::from("[ Status ]").set_style(active_style),
+            StatusMenuTab::Settings | StatusMenuTab::Tools => {
+                Span::from("[ Status ]").set_style(inactive_style)
+            }
         };
         let settings = match self.tab {
-            StatusMenuTab::Settings => "[ Settings ]".bold().cyan(),
-            StatusMenuTab::Status | StatusMenuTab::Tools => "[ Settings ]".dim(),
+            StatusMenuTab::Settings => Span::from("[ Settings ]").set_style(active_style),
+            StatusMenuTab::Status | StatusMenuTab::Tools => {
+                Span::from("[ Settings ]").set_style(inactive_style)
+            }
         };
         let tools = match self.tab {
-            StatusMenuTab::Tools => "[ ⚡Tools ]".bold().cyan(),
-            StatusMenuTab::Status | StatusMenuTab::Settings => "[ ⚡Tools ]".dim(),
+            StatusMenuTab::Tools => Span::from("[ ⚡Tools ]").set_style(active_style),
+            StatusMenuTab::Status | StatusMenuTab::Settings => {
+                Span::from("[ ⚡Tools ]").set_style(inactive_style)
+            }
         };
 
         vec![
@@ -116,13 +133,13 @@ impl StatusMenuView {
             "  ".into(),
             tools,
             "  ".into(),
-            "(bottom-pane)".dim(),
+            Span::from("(bottom-pane)").set_style(crate::theme::dim_style()),
         ]
         .into()
     }
 
     fn settings_row_count(&self) -> usize {
-        4
+        6
     }
 
     fn tools_row_count(&self) -> usize {
@@ -154,17 +171,27 @@ impl StatusMenuView {
                 lines.push(Line::from(""));
                 lines.push(
                     vec![
-                        "Tip: ".dim(),
-                        "Tab".bold(),
-                        " ".dim(),
-                        "to toggle settings or open ⚡Tools.".dim(),
+                        Span::from("Tip: ").set_style(crate::theme::dim_style()),
+                        Span::from("Tab")
+                            .set_style(crate::theme::accent_style().add_modifier(Modifier::BOLD)),
+                        Span::from(" ").set_style(crate::theme::dim_style()),
+                        Span::from("to toggle settings or open ⚡Tools.")
+                            .set_style(crate::theme::dim_style()),
                     ]
                     .into(),
                 );
             }
             StatusMenuTab::Settings => {
-                lines.push("Settings".bold().into());
-                lines.push("Toggles apply immediately and persist.".dim().into());
+                lines.push(
+                    Span::from("Settings")
+                        .set_style(crate::theme::accent_style().add_modifier(Modifier::BOLD))
+                        .into(),
+                );
+                lines.push(
+                    Span::from("Toggles apply immediately and persist.")
+                        .set_style(crate::theme::dim_style())
+                        .into(),
+                );
                 lines.push(Line::from(""));
                 lines.extend(self.build_settings_rows());
             }
@@ -172,11 +199,16 @@ impl StatusMenuView {
                 lines.push(
                     vec![
                         crate::xtreme::bolt_span(self.xtreme_ui_enabled),
-                        "Tools".bold(),
+                        Span::from("Tools")
+                            .set_style(crate::theme::accent_style().add_modifier(Modifier::BOLD)),
                     ]
                     .into(),
                 );
-                lines.push("Toggles and shortcuts.".dim().into());
+                lines.push(
+                    Span::from("Toggles and shortcuts.")
+                        .set_style(crate::theme::dim_style())
+                        .into(),
+                );
                 lines.push(Line::from(""));
                 lines.extend(self.build_tools_rows());
                 lines.push(Line::from(""));
@@ -192,7 +224,8 @@ impl StatusMenuView {
 
         let selected_prefix = |selected: bool| -> Span<'static> {
             if selected {
-                "› ".bold().cyan()
+                Span::from("› ")
+                    .set_style(crate::theme::accent_style().add_modifier(Modifier::BOLD))
             } else {
                 "  ".into()
             }
@@ -200,9 +233,9 @@ impl StatusMenuView {
 
         let checkbox = |enabled: bool| -> Span<'static> {
             if enabled {
-                "[x] ".green()
+                Span::from("[x] ").set_style(crate::theme::success_style())
             } else {
-                "[ ] ".dim()
+                Span::from("[ ] ").set_style(crate::theme::dim_style())
             }
         };
 
@@ -245,14 +278,49 @@ impl StatusMenuView {
             );
         }
 
-        // Row 3: Worktrees settings editor.
+        // Row 3: transcript diff highlight.
         {
             let selected = self.selected_settings_row == 3;
+            lines.push(
+                vec![
+                    selected_prefix(selected),
+                    checkbox(self.transcript_diff_highlight),
+                    "Transcript: diff highlight".into(),
+                ]
+                .into(),
+            );
+        }
+
+        // Row 4: transcript user prompt highlight.
+        {
+            let selected = self.selected_settings_row == 4;
+            lines.push(
+                vec![
+                    selected_prefix(selected),
+                    checkbox(self.transcript_user_prompt_highlight),
+                    "Transcript: highlight past prompts".into(),
+                ]
+                .into(),
+            );
+        }
+
+        // Row 5: Worktrees settings editor.
+        {
+            let selected = self.selected_settings_row == 5;
             lines.push(vec![selected_prefix(selected), "Worktrees…".into()].into());
         }
 
         lines.push(Line::from(""));
-        lines.push(vec!["Tip: ".dim(), "Tab".bold(), " ".dim(), "to ⚡Tools.".dim()].into());
+        lines.push(
+            vec![
+                Span::from("Tip: ").set_style(crate::theme::dim_style()),
+                Span::from("Tab")
+                    .set_style(crate::theme::accent_style().add_modifier(Modifier::BOLD)),
+                Span::from(" ").set_style(crate::theme::dim_style()),
+                Span::from("to ⚡Tools.").set_style(crate::theme::dim_style()),
+            ]
+            .into(),
+        );
 
         lines
     }
@@ -262,7 +330,8 @@ impl StatusMenuView {
 
         let selected_prefix = |selected: bool| -> Span<'static> {
             if selected {
-                "› ".bold().cyan()
+                Span::from("› ")
+                    .set_style(crate::theme::accent_style().add_modifier(Modifier::BOLD))
             } else {
                 "  ".into()
             }
@@ -270,9 +339,9 @@ impl StatusMenuView {
 
         let checkbox = |enabled: bool| -> Span<'static> {
             if enabled {
-                "[x] ".green()
+                Span::from("[x] ").set_style(crate::theme::success_style())
             } else {
-                "[ ] ".dim()
+                Span::from("[ ] ").set_style(crate::theme::dim_style())
             }
         };
 
@@ -290,7 +359,8 @@ impl StatusMenuView {
                     selected_prefix(selected),
                     checkbox(self.xtreme_ui_enabled),
                     "Xtreme mode ".into(),
-                    format!("({xtreme_mode_label})").dim(),
+                    Span::from(format!("({xtreme_mode_label})"))
+                        .set_style(crate::theme::dim_style()),
                 ]
                 .into(),
             );
@@ -348,7 +418,7 @@ impl StatusMenuView {
             _ => return Vec::new(),
         };
 
-        vec![vec![hint.dim()].into()]
+        vec![vec![Span::from(hint).set_style(crate::theme::dim_style())].into()]
     }
 
     fn switch_tab(&mut self) {
@@ -436,6 +506,28 @@ impl StatusMenuView {
                         .send(AppEvent::PersistVerboseToolOutput(self.verbose_tool_output));
                 }
                 3 => {
+                    self.transcript_diff_highlight = !self.transcript_diff_highlight;
+                    self.app_event_tx
+                        .send(AppEvent::UpdateTranscriptDiffHighlight(
+                            self.transcript_diff_highlight,
+                        ));
+                    self.app_event_tx
+                        .send(AppEvent::PersistTranscriptDiffHighlight(
+                            self.transcript_diff_highlight,
+                        ));
+                }
+                4 => {
+                    self.transcript_user_prompt_highlight = !self.transcript_user_prompt_highlight;
+                    self.app_event_tx
+                        .send(AppEvent::UpdateTranscriptUserPromptHighlight(
+                            self.transcript_user_prompt_highlight,
+                        ));
+                    self.app_event_tx
+                        .send(AppEvent::PersistTranscriptUserPromptHighlight(
+                            self.transcript_user_prompt_highlight,
+                        ));
+                }
+                5 => {
                     self.app_event_tx.send(AppEvent::OpenWorktreesSettingsView);
                     self.complete = true;
                 }
@@ -603,9 +695,9 @@ impl Renderable for StatusMenuView {
         let [content_area, footer_area] =
             Layout::vertical([Constraint::Fill(1), Constraint::Length(1)]).areas(area);
 
-        Block::default()
-            .style(user_message_style())
-            .render(content_area, buf);
+        let base_style = user_message_style().patch(crate::theme::composer_style());
+        Block::default().style(base_style).render(content_area, buf);
+        Block::default().style(base_style).render(footer_area, buf);
 
         let inner_area = content_area.inset(Insets::vh(1, 2));
         let status_width = inner_area.width.saturating_sub(2);
@@ -617,7 +709,9 @@ impl Renderable for StatusMenuView {
             Layout::vertical([Constraint::Length(header_height), Constraint::Fill(1)])
                 .areas(inner_area);
 
-        Paragraph::new(header_lines).render(header_area, buf);
+        Paragraph::new(header_lines)
+            .style(base_style)
+            .render(header_area, buf);
 
         let body_lines = self.body_lines(status_width);
         let max_scroll = if body_area.height == 0 {
@@ -633,6 +727,7 @@ impl Renderable for StatusMenuView {
         };
 
         Paragraph::new(body_lines)
+            .style(base_style)
             .scroll((scroll_y, 0))
             .render(body_area, buf);
 
@@ -642,7 +737,9 @@ impl Renderable for StatusMenuView {
             width: footer_area.width.saturating_sub(2),
             height: footer_area.height,
         };
-        footer_hint.dim().render(hint_area, buf);
+        Paragraph::new(footer_hint)
+            .style(base_style)
+            .render(hint_area, buf);
     }
 
     fn desired_height(&self, width: u16) -> u16 {
@@ -707,6 +804,8 @@ mod tests {
             status_cell,
             true,
             false,
+            false,
+            false,
             XtremeMode::On,
             false,
         );
@@ -726,6 +825,8 @@ mod tests {
             tx,
             status_cell,
             true,
+            false,
+            false,
             false,
             XtremeMode::On,
             false,
@@ -751,6 +852,8 @@ mod tests {
             status_cell,
             true,
             false,
+            false,
+            false,
             XtremeMode::On,
             false,
         );
@@ -770,6 +873,8 @@ mod tests {
             tx,
             status_cell,
             true,
+            false,
+            false,
             false,
             XtremeMode::On,
             false,

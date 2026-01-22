@@ -189,7 +189,10 @@ fn build_wrapped_line_from_range<'a>(
         &mut sliced
             .spans
             .into_iter()
-            .map(|s| s.patch_style(original.style))
+            .map(|mut s| {
+                s.style = crate::render::line_utils::merge_span_style(s.style, original.style);
+                s
+            })
             .collect(),
     );
     out.spans = spans;

@@ -484,6 +484,21 @@ pub struct Tui {
     #[serde(default)]
     pub verbose_tool_output: bool,
 
+    /// When true, render diffs in the transcript with red/green background highlights, while
+    /// keeping diff text in the normal transcript foreground color.
+    ///
+    /// When false (default), additions render as green text and deletions as red text (no
+    /// background highlight).
+    #[serde(default)]
+    pub transcript_diff_highlight: bool,
+
+    /// When true, highlight previous user prompts in the transcript so they're easier to spot
+    /// while scrolling.
+    ///
+    /// Defaults to `false`.
+    #[serde(default)]
+    pub transcript_user_prompt_highlight: bool,
+
     /// Show the current git branch in the bottom status bar.
     /// Defaults to `false`.
     #[serde(default)]

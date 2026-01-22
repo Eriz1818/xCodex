@@ -712,7 +712,7 @@ impl App {
                     // accrue extra blank lines between chunks.
                     if !cell.is_stream_continuation() {
                         if self.has_emitted_history_lines {
-                            display.insert(0, Line::from(""));
+                            display.insert(0, Line::from("").style(base_style));
                         } else {
                             self.has_emitted_history_lines = true;
                         }
@@ -808,6 +808,14 @@ impl App {
             AppEvent::UpdateVerboseToolOutput(verbose) => {
                 self.config.tui_verbose_tool_output = verbose;
                 self.chat_widget.set_verbose_tool_output(verbose);
+                tui.frame_requester().schedule_frame();
+            }
+            AppEvent::UpdateTranscriptDiffHighlight(enabled) => {
+                self.config.tui_transcript_diff_highlight = enabled;
+                tui.frame_requester().schedule_frame();
+            }
+            AppEvent::UpdateTranscriptUserPromptHighlight(enabled) => {
+                self.config.tui_transcript_user_prompt_highlight = enabled;
                 tui.frame_requester().schedule_frame();
             }
             AppEvent::UpdateXtremeMode(mode) => {
@@ -914,6 +922,8 @@ impl App {
                     "".into(),
                     "roles.fg / roles.bg — primary app text + surfaces".into(),
                     "roles.transcript_bg / roles.composer_bg / roles.status_bg — transcript, composer, and status bar backgrounds (derived by default)".into(),
+                    "roles.status_ramp_fg / roles.status_ramp_highlight — ramp text base + shimmer highlight (optional)".into(),
+                    "roles.user_prompt_highlight_bg — background for highlighting past user prompts in the transcript (derived by default)".into(),
                     "roles.selection_fg / roles.selection_bg — selection highlight in pickers".into(),
                     "roles.cursor_fg / roles.cursor_bg — (reserved for future)".dim().into(),
                     "roles.border — box borders and tree chrome (status cards, tool blocks)".into(),
@@ -1506,6 +1516,64 @@ impl App {
                         } else {
                             self.chat_widget.add_error_message(format!(
                                 "Failed to save output verbosity: {err}"
+                            ));
+                        }
+                    }
+                }
+            }
+            AppEvent::PersistTranscriptDiffHighlight(enabled) => {
+                let profile = self.active_profile.as_deref();
+                match ConfigEditsBuilder::new(&self.config.codex_home)
+                    .with_profile(profile)
+                    .with_edits([ConfigEdit::SetPath {
+                        segments: vec!["tui".to_string(), "transcript_diff_highlight".to_string()],
+                        value: toml_edit::value(enabled),
+                    }])
+                    .apply()
+                    .await
+                {
+                    Ok(()) => {}
+                    Err(err) => {
+                        tracing::error!(error = %err, "failed to persist diff highlight toggle");
+                        if let Some(profile) = profile {
+                            self.chat_widget.add_error_message(format!(
+                                "Failed to save diff highlight setting for profile `{profile}`: {err}"
+                            ));
+                        } else {
+                            self.chat_widget.add_error_message(format!(
+                                "Failed to save diff highlight setting: {err}"
+                            ));
+                        }
+                    }
+                }
+            }
+            AppEvent::PersistTranscriptUserPromptHighlight(enabled) => {
+                let profile = self.active_profile.as_deref();
+                match ConfigEditsBuilder::new(&self.config.codex_home)
+                    .with_profile(profile)
+                    .with_edits([ConfigEdit::SetPath {
+                        segments: vec![
+                            "tui".to_string(),
+                            "transcript_user_prompt_highlight".to_string(),
+                        ],
+                        value: toml_edit::value(enabled),
+                    }])
+                    .apply()
+                    .await
+                {
+                    Ok(()) => {}
+                    Err(err) => {
+                        tracing::error!(
+                            error = %err,
+                            "failed to persist user prompt highlight toggle"
+                        );
+                        if let Some(profile) = profile {
+                            self.chat_widget.add_error_message(format!(
+                                "Failed to save user prompt highlight setting for profile `{profile}`: {err}"
+                            ));
+                        } else {
+                            self.chat_widget.add_error_message(format!(
+                                "Failed to save user prompt highlight setting: {err}"
                             ));
                         }
                     }
@@ -2372,6 +2440,7 @@ mod tests {
         let user_cell = |text: &str| -> Arc<dyn HistoryCell> {
             Arc::new(UserHistoryCell {
                 message: text.to_string(),
+                highlight: false,
             }) as Arc<dyn HistoryCell>
         };
         let agent_cell = |text: &str| -> Arc<dyn HistoryCell> {

@@ -1,3 +1,4 @@
+use ratatui::style::Style;
 use ratatui::text::Line;
 use ratatui::text::Span;
 
@@ -22,6 +23,20 @@ pub fn push_owned_lines<'a>(src: &[Line<'a>], out: &mut Vec<Line<'static>>) {
     for l in src {
         out.push(line_to_static(l));
     }
+}
+
+/// Merge a line style into a span style without overriding existing span fg/bg.
+pub fn merge_span_style(span: Style, line: Style) -> Style {
+    let mut merged = span;
+    if merged.fg.is_none() {
+        merged.fg = line.fg;
+    }
+    if merged.bg.is_none() {
+        merged.bg = line.bg;
+    }
+    merged.add_modifier |= line.add_modifier;
+    merged.sub_modifier |= line.sub_modifier;
+    merged
 }
 
 /// Consider a line blank if it has no spans or only spans whose contents are
