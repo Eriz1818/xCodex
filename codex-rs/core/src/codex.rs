@@ -3220,7 +3220,7 @@ pub(crate) async fn run_turn(
                 };
 
                 // as long as compaction works well in getting us way below the token limit, we shouldn't worry about being in an infinite loop.
-                if token_limit_reached && needs_follow_up {
+                if auto_compact_enabled && token_limit_reached && needs_follow_up {
                     run_auto_compact(&sess, &turn_context).await;
                     continue;
                 }
