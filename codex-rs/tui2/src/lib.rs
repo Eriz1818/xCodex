@@ -619,8 +619,11 @@ async fn run_ratatui_app(
             let _ = writeln!(stdout, "{line}");
         }
         if !exit_info.token_usage.is_zero() {
+            let terminal_width = crossterm::terminal::size()
+                .map(|(w, _)| w)
+                .unwrap_or_default();
             for line in themed_exit_footer(exit_info).iter() {
-                let _ = writeln!(stdout, "{line}");
+                let _ = writeln!(stdout, "{}", themed_exit_line(line, terminal_width));
             }
         }
         if !exit_info.session_lines.is_empty() || !exit_info.token_usage.is_zero() {
@@ -645,46 +648,67 @@ fn restore() {
     }
 }
 
-fn themed_exit_footer(exit_info: &AppExitInfo) -> Vec<String> {
+fn themed_exit_footer(exit_info: &AppExitInfo) -> Vec<Vec<ratatui::text::Span<'static>>> {
     use ratatui::style::Stylize;
     use ratatui::text::Span;
 
-    let base_style = crate::theme::transcript_style();
     let usage_line =
         codex_core::protocol::FinalOutput::from(exit_info.token_usage.clone()).to_string();
 
-    let mut lines = vec![render_themed_spans(
-        vec![Span::from(usage_line)],
-        base_style,
-    )];
+    let mut lines = vec![vec![Span::from(usage_line)]];
 
     if let Some(conversation_id) = exit_info.conversation_id.as_ref() {
         let command = format!("xcodex resume {conversation_id}");
-        lines.push(render_themed_spans(
-            vec!["To continue this session, run ".into(), command.cyan()],
-            base_style,
-        ));
+        lines.push(vec![
+            "To continue this session, run ".into(),
+            command.cyan(),
+        ]);
     }
 
     lines
 }
 
-fn render_themed_spans(
-    spans: Vec<ratatui::text::Span<'static>>,
-    base_style: ratatui::style::Style,
-) -> String {
-    let merged: Vec<ratatui::text::Span<'static>> = spans
-        .into_iter()
-        .map(|span| ratatui::text::Span {
-            style: span.style.patch(base_style),
-            content: span.content,
+fn themed_exit_line(spans: &[ratatui::text::Span<'static>], width: u16) -> String {
+    use crate::render::line_utils::merge_span_style;
+    use ratatui::style::Color;
+    use unicode_width::UnicodeWidthStr;
+
+    let mut base_style = crate::theme::transcript_style();
+    if base_style.fg == Some(Color::Reset) {
+        base_style.fg = None;
+    }
+
+    let mut merged_spans: Vec<ratatui::text::Span<'static>> = spans
+        .iter()
+        .cloned()
+        .map(|mut span| {
+            span.style = merge_span_style(span.style, base_style);
+            span
         })
         .collect();
+    if merged_spans.is_empty() {
+        merged_spans.push("".into());
+    }
+
+    if width > 0 {
+        let text_width: usize = merged_spans
+            .iter()
+            .map(|span| span.content.as_ref().width())
+            .sum();
+        let total_width = usize::from(width);
+        if text_width < total_width {
+            let pad_len = total_width.saturating_sub(text_width);
+            if pad_len > 0 {
+                let mut pad_style = base_style;
+                pad_style.fg = None;
+                merged_spans.push(ratatui::text::Span::styled(" ".repeat(pad_len), pad_style));
+            }
+        }
+    }
 
     let mut buf: Vec<u8> = Vec::new();
-    let _ = crate::insert_history::write_spans(&mut buf, merged.iter());
+    let _ = crate::insert_history::write_spans(&mut buf, merged_spans.iter());
     let mut out = String::from_utf8(buf).unwrap_or_default();
-    // Ensure colors/attrs don't bleed into the user's shell prompt.
     out.push_str("\u{1b}[0m");
     out
 }
