@@ -618,7 +618,12 @@ async fn run_ratatui_app(
         for line in exit_info.session_lines.iter() {
             let _ = writeln!(stdout, "{line}");
         }
-        if !exit_info.session_lines.is_empty() {
+        if !exit_info.token_usage.is_zero() {
+            for line in themed_exit_footer(exit_info).iter() {
+                let _ = writeln!(stdout, "{line}");
+            }
+        }
+        if !exit_info.session_lines.is_empty() || !exit_info.token_usage.is_zero() {
             let _ = writeln!(stdout);
         }
     }
@@ -638,6 +643,50 @@ fn restore() {
             "failed to restore terminal. Run `reset` or restart your terminal to recover: {err}"
         );
     }
+}
+
+fn themed_exit_footer(exit_info: &AppExitInfo) -> Vec<String> {
+    use ratatui::style::Stylize;
+    use ratatui::text::Span;
+
+    let base_style = crate::theme::transcript_style();
+    let usage_line =
+        codex_core::protocol::FinalOutput::from(exit_info.token_usage.clone()).to_string();
+
+    let mut lines = vec![render_themed_spans(
+        vec![Span::from(usage_line)],
+        base_style,
+    )];
+
+    if let Some(conversation_id) = exit_info.conversation_id.as_ref() {
+        let command = format!("xcodex resume {conversation_id}");
+        lines.push(render_themed_spans(
+            vec!["To continue this session, run ".into(), command.cyan()],
+            base_style,
+        ));
+    }
+
+    lines
+}
+
+fn render_themed_spans(
+    spans: Vec<ratatui::text::Span<'static>>,
+    base_style: ratatui::style::Style,
+) -> String {
+    let merged: Vec<ratatui::text::Span<'static>> = spans
+        .into_iter()
+        .map(|span| ratatui::text::Span {
+            style: span.style.patch(base_style),
+            content: span.content,
+        })
+        .collect();
+
+    let mut buf: Vec<u8> = Vec::new();
+    let _ = crate::insert_history::write_spans(&mut buf, merged.iter());
+    let mut out = String::from_utf8(buf).unwrap_or_default();
+    // Ensure colors/attrs don't bleed into the user's shell prompt.
+    out.push_str("\u{1b}[0m");
+    out
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
