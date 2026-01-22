@@ -24,6 +24,7 @@ When filing issues, include repro steps and attach the files printed by `/feedba
 - Hide/show agent thoughts in the TUI with `/thoughts` (see [`docs/xcodex/thoughts.md`](docs/xcodex/thoughts.md)).
 - Switch a session between git worktrees with `/worktree` and manage shared dirs (see [`docs/xcodex/worktrees.md`](docs/xcodex/worktrees.md)).
 - Open ⚡Tools with `Ctrl+O` (or `/xtreme`) and customize the status bar with `/settings` (see [`docs/xcodex/settings.md`](docs/xcodex/settings.md)).
+- Customize the UI theme with `/theme` and `$CODEX_HOME/themes` (see [`docs/config.md#themes`](docs/config.md#themes) and [`docs/xcodex/themes-mbadolato.md`](docs/xcodex/themes-mbadolato.md)).
 - Automate xcodex with **three levels of hooks**: external (spawn), Python Host “py-box” (persistent), and in-proc PyO3 (advanced) (start at [`docs/xcodex/hooks.md`](docs/xcodex/hooks.md)).
 - Manage background terminals with `/ps` (list) and `/ps-kill` (terminate) (see [`docs/xcodex/background-terminals.md`](docs/xcodex/background-terminals.md)).
 
