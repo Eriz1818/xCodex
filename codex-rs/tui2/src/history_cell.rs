@@ -1195,7 +1195,7 @@ pub(crate) fn session_first_event_command_lines() -> Vec<Line<'static>> {
         ]),
         Line::from(vec![
             "  ".into(),
-            Span::from("/model").set_style(transcript_style),
+            Span::from("/model").set_style(crate::theme::accent_style()),
             " - choose what model and reasoning effort to use".dim(),
         ]),
         Line::from(vec![
@@ -1388,7 +1388,8 @@ impl HistoryCell for SessionHeaderHistoryCell {
             model_spans.push(Span::from(reasoning));
         }
         model_spans.push("   ".dim());
-        model_spans.push(CHANGE_MODEL_HINT_COMMAND.cyan());
+        model_spans
+            .push(Span::from(CHANGE_MODEL_HINT_COMMAND).set_style(crate::theme::accent_style()));
         model_spans.push(CHANGE_MODEL_HINT_EXPLANATION.dim());
 
         let dir_label = format!("{DIR_LABEL:<label_width$}");
@@ -2082,7 +2083,14 @@ impl HistoryCell for ExclusionSummaryCell {
 impl HistoryCell for DeprecationNoticeCell {
     fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
         let mut lines: Vec<Line<'static>> = Vec::new();
-        lines.push(vec!["⚠ ".red().bold(), self.summary.clone().red()].into());
+        lines.push(
+            vec![
+                Span::from("⚠ ")
+                    .set_style(crate::theme::warning_style().add_modifier(Modifier::BOLD)),
+                Span::from(self.summary.clone()).set_style(crate::theme::warning_style()),
+            ]
+            .into(),
+        );
 
         let wrap_width = width.saturating_sub(4).max(1) as usize;
 

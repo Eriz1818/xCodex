@@ -1450,7 +1450,7 @@ pub(crate) fn session_first_event_command_lines() -> Vec<Line<'static>> {
         ]),
         Line::from(vec![
             "  ".into(),
-            Span::from("/model").set_style(transcript_style),
+            Span::from("/model").set_style(crate::theme::accent_style()),
             " - choose what model and reasoning effort to use".dim(),
         ]),
         Line::from(vec![
@@ -1684,7 +1684,9 @@ impl HistoryCell for SessionHeaderHistoryCell {
                 spans.push(Span::from(reasoning));
             }
             spans.push("   ".dim());
-            spans.push(CHANGE_MODEL_HINT_COMMAND.cyan());
+            spans.push(
+                Span::from(CHANGE_MODEL_HINT_COMMAND).set_style(crate::theme::accent_style()),
+            );
             spans.push(CHANGE_MODEL_HINT_EXPLANATION.dim());
             spans
         };
