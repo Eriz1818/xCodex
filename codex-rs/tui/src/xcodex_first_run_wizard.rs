@@ -1053,7 +1053,7 @@ impl WidgetRef for &XcodexFirstRunWizardScreen {
                 let edit_hint = if self.import_source_home_is_editing {
                     " (editing)".cyan().dim()
                 } else {
-                    " (press e to edit)".dim()
+                    " (edit: e)".dim()
                 };
                 let src_display = if source_trimmed.is_empty() {
                     "<unset>".dim().to_string().into()
