@@ -27,10 +27,26 @@ When filing issues, include repro steps and attach the files printed by `/feedba
 - Customize the UI theme with `/theme` and `$CODEX_HOME/themes` (see [`docs/config.md#themes`](docs/config.md#themes) and [`docs/xcodex/themes-mbadolato.md`](docs/xcodex/themes-mbadolato.md)).
 - Automate xcodex with **three levels of hooks**: external (spawn), Python Host “py-box” (persistent), and in-proc PyO3 (advanced) (start at [`docs/xcodex/hooks.md`](docs/xcodex/hooks.md)).
 - Manage background terminals with `/ps` (list) and `/ps-kill` (terminate) (see [`docs/xcodex/background-terminals.md`](docs/xcodex/background-terminals.md)).
+- Inspect and manage MCP servers from inside the TUI with `/mcp` (including startup status, timings, and retry hints) (see [`docs/config.md#mcp_servers`](docs/config.md#mcp_servers)).
+- Keep sensitive paths out of AI context with ignore files (`.aiexclude` / `.xcodexignore`) (see [`docs/xcodex/ignore-files.md`](docs/xcodex/ignore-files.md) and [`docs/config.md#exclusion`](docs/config.md#exclusion-sensitive-path-controls)).
 
 **Fork-only docs**
 
 Fork-specific docs live in `docs/xcodex/` (start at [`docs/xcodex/README.md`](docs/xcodex/README.md)).
+
+## Roadmap
+
+High-level roadmap (subject to change):
+
+- `v0.3.1`: fork health (feature inventory + E2E tests + merge prep)
+- `v0.3.5`: resume/startup responsiveness + themed syntax highlighting + small QoL/bug fixes
+- `v0.4.0`: `/plan` + small feature + QoL/bug fixes
+- `v0.5.0`: observer-only sub-agents
+- `v0.6.0`: infinite mode (built on `/plan`)
+- `v0.7.0`: hooks expansion (beyond observer-only)
+- `v0.8.0`: workflow + packaging (per-project profiles, runbooks/macros, approval policy profiles, multi-account)
+- `v0.9.0`: UX/theming/integrations
+- `v1.0.0`: stability milestone
 
 ## Quickstart
 
@@ -78,6 +94,8 @@ scripts/install-xcodex.sh --release
 
 ## Usage
 
+See `xcodex --help` (or `docs/getting-started.md`).
+
 ## Docs
 
 Codex can access MCP servers. To configure them, refer to the [config docs](./docs/config.md#mcp_servers).
@@ -90,6 +108,8 @@ For large prompts, avoid putting the prompt on the command line. Read it from a 
 xcodex --file PROMPT.md
 cat PROMPT.md | xcodex
 ```
+
+When using stdin, end input with EOF (Ctrl-D on macOS/Linux; Ctrl-Z then Enter on Windows).
 
 ### Hooks (automation)
 

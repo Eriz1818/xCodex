@@ -33,7 +33,7 @@ Pinned paths config:
 
 ```toml
 [worktrees]
-pinned_paths = ["docs/impl-plans", "notes"]
+pinned_paths = ["notes/**"]
 ```
 
 Shared dirs config:
@@ -137,14 +137,14 @@ Notes:
 - `/worktree doctor` shows link status + untracked summaries for configured `shared_dirs`.
 - `/worktree shared add|rm|list` edits `worktrees.shared_dirs` without opening `config.toml`.
 - `/worktree link-shared` applies shared-dir links to the current worktree, with a guided workflow for non-empty dirs (migrate+link or replace+link).
-  - Migration includes ignored-but-not-tracked content (e.g. `docs/impl-plans` ignored via `.gitignore` / `.git/info/exclude`).
+  - Migration includes ignored-but-not-tracked content (e.g. untracked `notes/` or `tmp/` directories).
   - Use this after creating worktrees outside xcodex (e.g. `git worktree add ...`).
 - `/worktree link-shared --migrate` opens the same workflow but preselects migrate+link actions.
 - `/worktree init` opens a guided worktree creation flow and switches this session to it.
   - Fast path: `/worktree init <name> <branch> [<path>]` (non-interactive).
   - Default location: `workspace_root/.worktrees/<name>` (if `<path>` is omitted).
   - `<path>` is interpreted relative to the workspace root unless it’s absolute.
-  - Shared dirs: the flow starts from `worktrees.shared_dirs` and does not add defaults; use “Add shared dir…” to add new entries (persisted on success). Recommended: `docs/impl-plans`, `docs/personal`.
+  - Shared dirs: the flow starts from `worktrees.shared_dirs` and does not add defaults; use “Add shared dir…” to add new entries (persisted on success). Recommended: `notes`, `tmp`.
 
 ## Untracked files (advanced workflow)
 
@@ -169,7 +169,7 @@ If you want certain repo-relative paths to always resolve to the **workspace roo
 
 ```toml
 [worktrees]
-pinned_paths = ["docs/impl-plans", "notes/**"]
+pinned_paths = ["notes/**"]
 ```
 
 Edit from the TUI:

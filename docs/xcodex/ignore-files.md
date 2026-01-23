@@ -47,7 +47,7 @@ When a path matches an ignore pattern:
 
 Codex blocks excluded files in its *own* tools and prevents their content from reaching the model through normal workflows. However:
 
-- **Shell commands can still read excluded files** — If a subprocess (e.g., `cat`, `python`, `node`) reads an excluded file, Codex cannot prevent this at the OS level.
+- **Shell commands can still read excluded files via indirection** — Codex is not an OS-level boundary. xcodex can preflight and block obvious excluded-path references in `shell` tool calls (see `preflight_shell_paths`), but scripts/globs/indirect reads can still leak content if allowed to run.
 - **MCP servers operate outside Codex's control** — External MCP servers may read any file the OS allows.
 - **Content detection is pattern-based** — Codex can redact path mentions and common secret patterns, but cannot reliably detect "this text came from excluded file X" once it's in memory.
 
@@ -56,7 +56,7 @@ Codex blocks excluded files in its *own* tools and prevents their content from r
 | Scenario | Protected? |
 |----------|-----------|
 | User asks "read secrets/.env" | ✅ Blocked by structured tools |
-| User asks "run `cat secrets/.env`" | ⚠️ Shell command may succeed; content may reach model |
+| User asks "run `cat secrets/.env`" | ⚠️ May be blocked by preflight; if it runs (or reads indirectly), content may reach model |
 | MCP server reads excluded file | ⚠️ Depends on MCP policy (`unattested_output_policy`) |
 | User manually pastes secret content | ❌ Not protected (user action) |
 
@@ -101,7 +101,7 @@ Ignore files apply to Codex's structured file tools. They do **not** prevent ext
 | Tool Type | Exclusion Applied? |
 |-----------|-------------------|
 | Codex built-in tools (`read_file`, etc.) | ✅ Yes |
-| Shell commands (`cat`, `grep`, scripts) | ❌ No — OS allows access |
+| Shell commands (`cat`, `grep`, scripts) | ⚠️ Best-effort (preflight can block obvious excluded-path refs; not an OS boundary) |
 | MCP servers | ❌ No — but see `unattested_output_policy` |
 
 **To control MCP output handling**, set in `config.toml`:

@@ -8,7 +8,7 @@ For a full configuration reference, see [this documentation](https://developers.
 
 ## Connecting to MCP servers
 
-Codex can connect to MCP servers configured in `~/.codex/config.toml`. See the configuration reference for the latest MCP server options:
+Codex can connect to MCP servers configured in `$CODEX_HOME/config.toml` (default: `~/.codex/config.toml` for `codex`, `~/.xcodex/config.toml` for `xcodex`). See the configuration reference for the latest MCP server options:
 
 - https://developers.openai.com/codex/config-reference
 
@@ -93,7 +93,7 @@ Codex TUIs support theming via xcodex-native YAML theme files.
 
 ### Theme selection
 
-Theme selection is configured under the `[themes]` table in `~/.codex/config.toml`:
+Theme selection is configured under the `[themes]` table in `$CODEX_HOME/config.toml`:
 
 ```toml
 [themes]
@@ -863,11 +863,11 @@ if __name__ == "__main__":
     sys.exit(main())
 ```
 
-In xcodex, `notify` is deprecated. To run an external program after each completed turn, configure a hook in `~/.codex/config.toml`:
+In xcodex, `notify` is deprecated. To run an external program after each completed turn, configure a hook in `$CODEX_HOME/config.toml`:
 
 ```toml
 [hooks]
-agent_turn_complete = [["python3", "/Users/mbolin/.codex/notify.py"]]
+agent_turn_complete = [["python3", "/Users/mbolin/.xcodex/notify.py"]]
 ```
 
 > [!NOTE]
@@ -885,13 +885,13 @@ Hook stdout/stderr are redirected to log files under CODEX_HOME so hooks do not 
 
 ```toml
 [hooks]
-agent_turn_complete = [["python3", "/Users/alice/.codex/hook.py"]]
-approval_requested = [["python3", "/Users/alice/.codex/hook.py"]]
+agent_turn_complete = [["python3", "/Users/alice/.xcodex/hook.py"]]
+approval_requested = [["python3", "/Users/alice/.xcodex/hook.py"]]
 ```
 
 #### hooks.command (matcher + per-hook options)
 
-`hooks.command` is a higher-level command-hook config surface that mirrors Claude’s “event → matcher → hooks” schema while staying TOML-first in `~/.codex/config.toml`.
+`hooks.command` is a higher-level command-hook config surface that mirrors Claude’s “event → matcher → hooks” schema while staying TOML-first in `$CODEX_HOME/config.toml`.
 
 This is still observer-only: hook failures and outputs never block or modify the run.
 
