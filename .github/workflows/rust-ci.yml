@@ -138,8 +138,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@1.92
       - uses: taiki-e/install-action@44c6d64aa62cd779e873306675c7a58e86d6d532 # v2
         with:
-          tool: cargo-shear
-          version: 1.5.1
+          tool: cargo-shear@1.5.1
       - name: cargo shear
         run: cargo shear
 
@@ -237,6 +236,7 @@ jobs:
             golang:1.22 \
             bash -lc '
               set -euo pipefail
+              export PATH="/usr/local/go/bin:${PATH}"
               go build -o /tmp/hook ./cmd/log_jsonl
 
               CODEX_HOME="$(mktemp -d)"
