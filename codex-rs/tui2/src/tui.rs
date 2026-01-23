@@ -230,9 +230,6 @@ impl Tui {
     }
 
     pub fn set_mouse_capture_enabled(&mut self, enabled: bool) {
-        if enabled == self.mouse_capture_enabled {
-            return;
-        }
         if enabled {
             let _ = execute!(self.terminal.backend_mut(), EnableMouseCapture);
         } else {
@@ -242,9 +239,6 @@ impl Tui {
     }
 
     pub fn set_alternate_scroll_enabled(&mut self, enabled: bool) {
-        if enabled == self.alternate_scroll_enabled {
-            return;
-        }
         if enabled {
             let _ = execute!(self.terminal.backend_mut(), EnableAlternateScroll);
         } else {
