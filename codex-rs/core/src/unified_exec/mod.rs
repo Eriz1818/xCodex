@@ -439,6 +439,8 @@ mod tests {
     async fn unified_exec_timeouts() -> anyhow::Result<()> {
         skip_if_sandbox!(Ok(()));
 
+        const TEST_VAR_VALUE: &str = "unified_exec_var_123";
+
         let (session, turn) = test_session_and_turn().await;
 
         let open_shell = exec_command(&session, &turn, "bash -i", 2_500).await?;
@@ -451,7 +453,7 @@ mod tests {
         write_stdin(
             &session,
             process_id,
-            "export CODEX_INTERACTIVE_SHELL_VAR=codex\n",
+            format!("export CODEX_INTERACTIVE_SHELL_VAR={TEST_VAR_VALUE}\n").as_str(),
             2_500,
         )
         .await?;
@@ -464,7 +466,7 @@ mod tests {
         )
         .await?;
         assert!(
-            !out_2.output.contains("codex"),
+            !out_2.output.contains(TEST_VAR_VALUE),
             "timeout too short should yield incomplete output"
         );
 
@@ -473,7 +475,7 @@ mod tests {
         let out_3 = write_stdin(&session, process_id, "", 100).await?;
 
         assert!(
-            out_3.output.contains("codex"),
+            out_3.output.contains(TEST_VAR_VALUE),
             "subsequent poll should retrieve output"
         );
 

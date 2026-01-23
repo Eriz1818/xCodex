@@ -26,6 +26,7 @@ use bottom_pane_view::BottomPaneView;
 use codex_core::features::Features;
 use codex_core::skills::model::SkillMetadata;
 use codex_file_search::FileMatch;
+use codex_protocol::request_user_input::RequestUserInputEvent;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use ratatui::buffer::Buffer;
@@ -50,11 +51,13 @@ mod file_search_popup;
 mod footer;
 mod list_selection_view;
 mod prompt_args;
+mod request_user_input;
 mod skill_popup;
 mod slash_arg_hints;
 mod slash_subcommands;
 mod status_menu_view;
 pub(crate) use list_selection_view::SelectionViewParams;
+pub(crate) use request_user_input::RequestUserInputOverlay;
 mod feedback_view;
 pub(crate) use feedback_view::feedback_disabled_params;
 pub(crate) use feedback_view::feedback_selection_params;
@@ -771,8 +774,32 @@ impl BottomPane {
         self.push_view(Box::new(modal));
     }
 
+    /// Called when the agent requests user input.
+    pub fn push_user_input_request(&mut self, request: RequestUserInputEvent) {
+        let request = if let Some(view) = self.view_stack.last_mut() {
+            match view.try_consume_user_input_request(request) {
+                Some(request) => request,
+                None => {
+                    self.request_redraw();
+                    return;
+                }
+            }
+        } else {
+            request
+        };
+
+        let modal = RequestUserInputOverlay::new(request, self.app_event_tx.clone());
+        self.pause_status_timer_for_modal();
+        self.set_composer_input_enabled(
+            false,
+            Some("Answer the questions to continue.".to_string()),
+        );
+        self.push_view(Box::new(modal));
+    }
+
     fn on_active_view_complete(&mut self) {
         self.resume_status_timer_after_modal();
+        self.set_composer_input_enabled(true, None);
     }
 
     fn pause_status_timer_for_modal(&mut self) {
@@ -855,12 +882,15 @@ impl BottomPane {
             if let Some(banner) = &self.exclusion_summary_banner {
                 flex.push(0, RenderableItem::Borrowed(banner));
             }
-            flex.push(1, RenderableItem::Borrowed(&self.queued_user_messages));
-            if self.status.is_some()
+            let has_queued_messages = !self.queued_user_messages.messages.is_empty();
+            let has_status_or_footer = self.status.is_some()
                 || self.mcp_startup_banner.is_some()
-                || self.exclusion_summary_banner.is_some()
-                || !self.queued_user_messages.messages.is_empty()
-            {
+                || self.exclusion_summary_banner.is_some();
+            if has_queued_messages && has_status_or_footer {
+                flex.push(0, RenderableItem::Owned("".into()));
+            }
+            flex.push(1, RenderableItem::Borrowed(&self.queued_user_messages));
+            if !has_queued_messages && has_status_or_footer {
                 flex.push(0, RenderableItem::Owned("".into()));
             }
             let mut flex2 = FlexRenderable::new();
@@ -1103,6 +1133,62 @@ mod tests {
         let area = Rect::new(0, 0, 30, height);
         assert_snapshot!(
             "status_and_composer_fill_height_without_bottom_padding",
+            render_snapshot(&pane, area)
+        );
+    }
+
+    #[test]
+    fn status_only_snapshot() {
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let mut pane = BottomPane::new(BottomPaneParams {
+            app_event_tx: tx,
+            frame_requester: FrameRequester::test_dummy(),
+            has_input_focus: true,
+            enhanced_keys_supported: false,
+            placeholder_text: "Ask xcodex to do anything".to_string(),
+            disable_paste_burst: false,
+            xtreme_ui_enabled: true,
+            animations_enabled: true,
+            skills: Some(Vec::new()),
+        });
+
+        pane.set_task_running(true);
+
+        let width = 48;
+        let height = pane.desired_height(width);
+        let area = Rect::new(0, 0, width, height);
+        assert_snapshot!("status_only_snapshot", render_snapshot(&pane, area));
+    }
+
+    #[test]
+    fn status_with_details_and_queued_messages_snapshot() {
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let mut pane = BottomPane::new(BottomPaneParams {
+            app_event_tx: tx,
+            frame_requester: FrameRequester::test_dummy(),
+            has_input_focus: true,
+            enhanced_keys_supported: false,
+            placeholder_text: "Ask xcodex to do anything".to_string(),
+            disable_paste_burst: false,
+            xtreme_ui_enabled: true,
+            animations_enabled: true,
+            skills: Some(Vec::new()),
+        });
+
+        pane.set_task_running(true);
+        pane.update_status(
+            "Working".to_string(),
+            Some("First detail line\nSecond detail line".to_string()),
+        );
+        pane.set_queued_user_messages(vec!["Queued follow-up question".to_string()]);
+
+        let width = 48;
+        let height = pane.desired_height(width);
+        let area = Rect::new(0, 0, width, height);
+        assert_snapshot!(
+            "status_with_details_and_queued_messages_snapshot",
             render_snapshot(&pane, area)
         );
     }

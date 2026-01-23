@@ -1,18 +1,18 @@
 use crate::client_common::tools::ToolSpec;
+use crate::config::types::Personality;
 use crate::context_manager::estimate_reasoning_length;
 use crate::error::Result;
 use crate::truncate::approx_token_count;
 pub use codex_api::common::ResponseEvent;
+use codex_protocol::models::BaseInstructions;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::FunctionCallOutputContentItem;
 use codex_protocol::models::LocalShellAction;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::models::WebSearchAction;
-use codex_protocol::openai_models::ModelInfo;
 use futures::Stream;
 use serde::Deserialize;
 use serde_json::Value;
-use std::borrow::Cow;
 use std::collections::HashSet;
 use std::pin::Pin;
 use std::task::Context;
@@ -40,22 +40,16 @@ pub struct Prompt {
     /// Whether parallel tool calls are permitted for this prompt.
     pub(crate) parallel_tool_calls: bool,
 
-    /// Optional override for the built-in BASE_INSTRUCTIONS.
-    pub base_instructions_override: Option<String>,
+    pub base_instructions: BaseInstructions,
+
+    /// Optionally specify the personality of the model.
+    pub personality: Option<Personality>,
 
     /// Optional the output schema for the model's response.
     pub output_schema: Option<Value>,
 }
 
 impl Prompt {
-    pub(crate) fn get_full_instructions<'a>(&'a self, model: &'a ModelInfo) -> Cow<'a, str> {
-        Cow::Borrowed(
-            self.base_instructions_override
-                .as_deref()
-                .unwrap_or(model.base_instructions.as_str()),
-        )
-    }
-
     pub(crate) fn get_formatted_input(&self) -> Vec<ResponseItem> {
         let mut input = self.input.clone();
 
@@ -74,10 +68,9 @@ impl Prompt {
         input
     }
 
-    pub(crate) fn estimate_token_count(&self, model: &ModelInfo) -> i64 {
-        let instructions = self.get_full_instructions(model);
+    pub(crate) fn estimate_token_count(&self) -> i64 {
         let instructions_tokens =
-            i64::try_from(approx_token_count(instructions.as_ref())).unwrap_or(i64::MAX);
+            i64::try_from(approx_token_count(&self.base_instructions.text)).unwrap_or(i64::MAX);
 
         // IMPORTANT: this is a heuristic. Prefer counting the actual text fields that are
         // semantically visible to the model instead of serializing entire ResponseItems to JSON,
@@ -402,75 +395,7 @@ mod tests {
     use codex_api::create_text_param_for_request;
     use pretty_assertions::assert_eq;
 
-    use crate::config::test_config;
-    use crate::models_manager::manager::ModelsManager;
-
     use super::*;
-
-    struct InstructionsTestCase {
-        pub slug: &'static str,
-        pub expects_apply_patch_instructions: bool,
-    }
-    #[test]
-    fn get_full_instructions_no_user_content() {
-        let prompt = Prompt {
-            ..Default::default()
-        };
-        let prompt_with_apply_patch_instructions =
-            include_str!("../prompt_with_apply_patch_instructions.md");
-        let test_cases = vec![
-            InstructionsTestCase {
-                slug: "gpt-3.5",
-                expects_apply_patch_instructions: true,
-            },
-            InstructionsTestCase {
-                slug: "gpt-4.1",
-                expects_apply_patch_instructions: true,
-            },
-            InstructionsTestCase {
-                slug: "gpt-4o",
-                expects_apply_patch_instructions: true,
-            },
-            InstructionsTestCase {
-                slug: "gpt-5",
-                expects_apply_patch_instructions: true,
-            },
-            InstructionsTestCase {
-                slug: "gpt-5.1",
-                expects_apply_patch_instructions: false,
-            },
-            InstructionsTestCase {
-                slug: "codex-mini-latest",
-                expects_apply_patch_instructions: true,
-            },
-            InstructionsTestCase {
-                slug: "gpt-oss:120b",
-                expects_apply_patch_instructions: false,
-            },
-            InstructionsTestCase {
-                slug: "gpt-5.1-codex",
-                expects_apply_patch_instructions: false,
-            },
-            InstructionsTestCase {
-                slug: "gpt-5.1-codex-max",
-                expects_apply_patch_instructions: false,
-            },
-        ];
-        for test_case in test_cases {
-            let config = test_config();
-            let model_info = ModelsManager::construct_model_info_offline(test_case.slug, &config);
-            if test_case.expects_apply_patch_instructions {
-                assert_eq!(
-                    model_info.base_instructions.as_str(),
-                    prompt_with_apply_patch_instructions
-                );
-            }
-
-            let expected = model_info.base_instructions.as_str();
-            let full = prompt.get_full_instructions(&model_info);
-            assert_eq!(full, expected);
-        }
-    }
 
     #[test]
     fn serializes_text_verbosity_when_set() {
@@ -574,9 +499,6 @@ mod tests {
 
     #[test]
     fn estimate_token_count_includes_tool_specs() {
-        let config = test_config();
-        let model_info = ModelsManager::construct_model_info_offline("gpt-4.1", &config);
-
         let prompt_without = Prompt::default();
 
         let prompt_with = Prompt {
@@ -592,9 +514,6 @@ mod tests {
             ..Default::default()
         };
 
-        assert!(
-            prompt_with.estimate_token_count(&model_info)
-                > prompt_without.estimate_token_count(&model_info)
-        );
+        assert!(prompt_with.estimate_token_count() > prompt_without.estimate_token_count());
     }
 }

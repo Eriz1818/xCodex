@@ -95,6 +95,7 @@ use codex_protocol::ThreadId;
 use codex_protocol::account::PlanType;
 use codex_protocol::approvals::ElicitationRequestEvent;
 use codex_protocol::parse_command::ParsedCommand;
+use codex_protocol::request_user_input::RequestUserInputEvent;
 use codex_protocol::user_input::UserInput;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
@@ -425,6 +426,7 @@ pub(crate) struct ChatWidget {
     ramp_context: Option<String>,
     last_turn_completion_label: Option<String>,
     conversation_id: Option<ThreadId>,
+    forked_from: Option<ThreadId>,
     frame_requester: FrameRequester,
     // Whether to include the initial welcome banner on session configured
     show_welcome_banner: bool,
@@ -613,6 +615,7 @@ impl ChatWidget {
             .set_history_metadata(event.history_log_id, event.history_entry_count);
         self.set_skills(None);
         self.conversation_id = Some(event.session_id);
+        self.forked_from = event.forked_from_id;
         self.current_rollout_path = Some(event.rollout_path.clone());
         let initial_messages = event.initial_messages.clone();
         let model_for_header = event.model.clone();
@@ -633,7 +636,7 @@ impl ChatWidget {
         self.submit_op(Op::ListCustomPrompts);
         self.submit_op(Op::ListSkills {
             cwds: Vec::new(),
-            force_reload: false,
+            force_reload: true,
         });
         if let Some(user_message) = self.initial_user_message.take() {
             self.submit_user_message(user_message);
@@ -1350,6 +1353,14 @@ impl ChatWidget {
         );
     }
 
+    fn on_request_user_input(&mut self, ev: RequestUserInputEvent) {
+        let ev2 = ev.clone();
+        self.defer_or_handle(
+            |q| q.push_user_input(ev),
+            |s| s.handle_request_user_input_now(ev2),
+        );
+    }
+
     fn on_exec_command_begin(&mut self, ev: ExecCommandBeginEvent) {
         self.flush_answer_stream_with_separator();
         if ev.source == ExecCommandSource::UnifiedExecStartup {
@@ -1800,6 +1811,12 @@ impl ChatWidget {
         self.request_redraw();
     }
 
+    pub(crate) fn handle_request_user_input_now(&mut self, ev: RequestUserInputEvent) {
+        self.flush_answer_stream_with_separator();
+        self.bottom_pane.push_user_input_request(ev);
+        self.request_redraw();
+    }
+
     pub(crate) fn handle_exec_begin_now(&mut self, ev: ExecCommandBeginEvent) {
         // Ensure the status indicator is visible while the command runs.
         self.running_commands.insert(
@@ -2042,6 +2059,7 @@ impl ChatWidget {
             ramp_context: None,
             last_turn_completion_label: None,
             conversation_id: None,
+            forked_from: None,
             queued_user_messages: VecDeque::new(),
             show_welcome_banner: is_first_run,
             suppress_session_configured_redraw: false,
@@ -2176,6 +2194,7 @@ impl ChatWidget {
             ramp_context: None,
             last_turn_completion_label: None,
             conversation_id: None,
+            forked_from: None,
             queued_user_messages: VecDeque::new(),
             show_welcome_banner: false,
             suppress_session_configured_redraw: true,
@@ -3744,6 +3763,7 @@ impl ChatWidget {
                                 model: None,
                                 effort: None,
                                 summary: None,
+                                collaboration_mode: None,
                             },
                         ));
                         tx.send(AppEvent::CodexOp(codex_core::protocol::Op::ListSkills {
@@ -3949,6 +3969,7 @@ impl ChatWidget {
                                 model: None,
                                 effort: None,
                                 summary: None,
+                                collaboration_mode: None,
                             }));
                         self.app_event_tx.send(AppEvent::CodexOp(Op::ListSkills {
                             cwds: vec![path],
@@ -4108,6 +4129,9 @@ impl ChatWidget {
             }
             EventMsg::ElicitationRequest(ev) => {
                 self.on_elicitation_request(ev);
+            }
+            EventMsg::RequestUserInput(ev) => {
+                self.on_request_user_input(ev);
             }
             EventMsg::ExecCommandBegin(ev) => self.on_exec_command_begin(ev),
             EventMsg::TerminalInteraction(delta) => self.on_terminal_interaction(delta),
@@ -4350,6 +4374,7 @@ impl ChatWidget {
             total_usage,
             &self.conversation_id,
             session_stats,
+            self.forked_from,
             self.rate_limit_snapshot.as_ref(),
             self.plan_type,
             Local::now(),
@@ -5097,6 +5122,7 @@ impl ChatWidget {
                             model: None,
                             effort: None,
                             summary: None,
+                            collaboration_mode: None,
                         }));
                         tx.send(AppEvent::CodexOp(Op::ListSkills {
                             cwds: vec![path.clone()],
@@ -5231,6 +5257,7 @@ impl ChatWidget {
                 model: Some(switch_model.clone()),
                 effort: Some(Some(default_effort)),
                 summary: None,
+                collaboration_mode: None,
             }));
             tx.send(AppEvent::UpdateModel(switch_model.clone()));
             tx.send(AppEvent::UpdateReasoningEffort(Some(default_effort)));
@@ -5463,6 +5490,7 @@ impl ChatWidget {
                 model: Some(model_for_action.clone()),
                 effort: Some(effort_for_action),
                 summary: None,
+                collaboration_mode: None,
             }));
             tx.send(AppEvent::UpdateModel(model_for_action.clone()));
             tx.send(AppEvent::UpdateReasoningEffort(effort_for_action));
@@ -5634,6 +5662,7 @@ impl ChatWidget {
                 model: Some(model.clone()),
                 effort: Some(effort),
                 summary: None,
+                collaboration_mode: None,
             }));
         self.app_event_tx.send(AppEvent::UpdateModel(model.clone()));
         self.app_event_tx
@@ -5779,6 +5808,7 @@ impl ChatWidget {
                 model: None,
                 effort: None,
                 summary: None,
+                collaboration_mode: None,
             }));
             tx.send(AppEvent::UpdateAskForApprovalPolicy(approval));
             tx.send(AppEvent::UpdateSandboxPolicy(sandbox_clone));

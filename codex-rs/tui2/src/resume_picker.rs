@@ -9,6 +9,7 @@ use codex_core::Cursor;
 use codex_core::INTERACTIVE_SESSION_SOURCES;
 use codex_core::RolloutRecorder;
 use codex_core::ThreadItem;
+use codex_core::ThreadSortKey;
 use codex_core::ThreadsPage;
 use codex_core::path_utils;
 use codex_protocol::items::TurnItem;
@@ -159,6 +160,7 @@ async fn run_session_picker(
                 &request.codex_home,
                 PAGE_SIZE,
                 request.cursor.as_ref(),
+                ThreadSortKey::CreatedAt,
                 INTERACTIVE_SESSION_SOURCES,
                 Some(provider_filter.as_slice()),
                 request.default_provider.as_str(),
@@ -1564,6 +1566,7 @@ mod tests {
             &state.codex_home,
             PAGE_SIZE,
             None,
+            ThreadSortKey::CreatedAt,
             INTERACTIVE_SESSION_SOURCES,
             Some(&[String::from("openai")]),
             "openai",

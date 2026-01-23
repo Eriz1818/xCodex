@@ -146,7 +146,8 @@ impl WorktreeInitWizardView {
         self.step = step;
         match self.step {
             Step::Name => {
-                self.textarea.set_text(self.draft.name.as_str());
+                self.textarea
+                    .set_text_clearing_elements(self.draft.name.as_str());
             }
             Step::BranchMode => {
                 self.selection_state.selected_idx = Some(0);
@@ -162,13 +163,16 @@ impl WorktreeInitWizardView {
                 self.selection_state.scroll_top = 0;
             }
             Step::BranchName => {
-                self.textarea.set_text(self.draft.branch.as_str());
+                self.textarea
+                    .set_text_clearing_elements(self.draft.branch.as_str());
             }
             Step::BaseRef => {
-                self.textarea.set_text(self.draft.base_ref.as_str());
+                self.textarea
+                    .set_text_clearing_elements(self.draft.base_ref.as_str());
             }
             Step::Path => {
-                self.textarea.set_text(self.draft.path.as_str());
+                self.textarea
+                    .set_text_clearing_elements(self.draft.path.as_str());
             }
             Step::SharedDirs => {
                 if self.shared_dirs_visible_len() == 0 {
@@ -178,7 +182,7 @@ impl WorktreeInitWizardView {
                 }
             }
             Step::AddSharedDir => {
-                self.textarea.set_text("");
+                self.textarea.set_text_clearing_elements("");
             }
             Step::Confirm => {}
         }
@@ -507,7 +511,7 @@ impl WorktreeInitWizardView {
                 }
                 let default = self.default_worktree_path();
                 let text = default.display().to_string();
-                self.textarea.set_text(&text);
+                self.textarea.set_text_clearing_elements(&text);
                 true
             }
             Step::BranchName => {
@@ -518,7 +522,7 @@ impl WorktreeInitWizardView {
                     .current_branch
                     .clone()
                     .unwrap_or_else(|| String::from("main"));
-                self.textarea.set_text(&default);
+                self.textarea.set_text_clearing_elements(&default);
                 true
             }
             _ => false,
@@ -707,6 +711,7 @@ impl WorktreeInitWizardView {
                     model: None,
                     effort: None,
                     summary: None,
+                    collaboration_mode: None,
                 },
             ));
             app_event_tx.send(AppEvent::CodexOp(codex_core::protocol::Op::ListSkills {

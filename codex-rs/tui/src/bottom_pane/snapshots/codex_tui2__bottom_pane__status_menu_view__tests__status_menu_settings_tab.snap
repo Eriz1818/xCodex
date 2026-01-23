@@ -1,0 +1,19 @@
+---
+source: tui2/src/bottom_pane/status_menu_view.rs
+assertion_line: 670
+expression: "render_lines(&view, 60)"
+---
+                                                            
+  [ Status ]  [ Settings ]  [ ⚡ Tools ]  (bottom-pane)      
+                                                            
+  Settings                                                  
+  Toggles apply immediately and persist.                    
+                                                            
+    [x] Status bar: git branch                              
+    [ ] Status bar: worktree path                           
+  › [x] Transcript: verbose tool output                     
+    Worktrees…                                              
+                                                            
+  Tip: Tab to ⚡ Tools.                                      
+                                                            
+  Tab: switch tab  ↑/↓: select/scroll  Enter: toggle/run  Es

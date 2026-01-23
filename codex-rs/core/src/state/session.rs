@@ -21,6 +21,7 @@ pub(crate) struct SessionState {
     pub(crate) auto_compact_enabled: bool,
     pub(crate) low_context_warning_state: LowContextWarningState,
     pub(crate) mcp_startup_timeout_overrides: HashMap<String, Duration>,
+    pub(crate) server_reasoning_included: bool,
 }
 
 impl SessionState {
@@ -35,6 +36,7 @@ impl SessionState {
             auto_compact_enabled: false,
             low_context_warning_state: LowContextWarningState::default(),
             mcp_startup_timeout_overrides: HashMap::new(),
+            server_reasoning_included: false,
         }
     }
 
@@ -107,6 +109,19 @@ impl SessionState {
 
     pub(crate) fn set_auto_compact_enabled(&mut self, enabled: bool) {
         self.auto_compact_enabled = enabled;
+    }
+
+    pub(crate) fn get_total_token_usage(&self, server_reasoning_included: bool) -> i64 {
+        self.history
+            .get_total_token_usage(server_reasoning_included)
+    }
+
+    pub(crate) fn set_server_reasoning_included(&mut self, included: bool) {
+        self.server_reasoning_included = included;
+    }
+
+    pub(crate) fn server_reasoning_included(&self) -> bool {
+        self.server_reasoning_included
     }
 }
 

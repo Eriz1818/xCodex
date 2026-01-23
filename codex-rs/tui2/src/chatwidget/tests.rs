@@ -141,6 +141,7 @@ async fn resumed_initial_messages_render_history() {
             }),
         ]),
         rollout_path: rollout_file.path().to_path_buf(),
+        forked_from_id: None,
     };
 
     chat.handle_codex_event(Event {
@@ -448,6 +449,7 @@ async fn make_chatwidget_manual(
         ramp_context: None,
         last_turn_completion_label: None,
         conversation_id: None,
+        forked_from: None,
         frame_requester: FrameRequester::test_dummy(),
         show_welcome_banner: true,
         suppress_session_configured_redraw: false,

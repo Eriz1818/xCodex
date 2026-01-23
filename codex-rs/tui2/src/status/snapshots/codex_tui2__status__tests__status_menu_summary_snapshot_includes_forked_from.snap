@@ -1,0 +1,18 @@
+---
+source: tui2/src/status/tests.rs
+assertion_line: 305
+expression: rendered
+---
+ UI:             tui2
+ Model:          gpt-5.1-codex-max (reasoning high, summaries auto)
+ Directory:      /workspace/tests
+ Approval:       on-request
+ Sandbox:        read-only
+ Auto-compact:   disabled
+ Thoughts:       hidden
+ Session:        0f0f3c13-6cf9-4aa4-8b80-7d49c2f1be2e
+ Forked from:    e9f18a88-8081-4e51-9d4e-8af5cde2d8dd
+ Token usage:    1.9K total  (1K input + 900 output)
+ Context:                     [████████████████████] 99% left (2.25K used / 272K
+ Limits:         5h limit     [██████░░░░░░░░░░░░░░] 28% left (resets 03:14)
+                 Weekly limit [███████████░░░░░░░░░] 55% left (resets 03:24)

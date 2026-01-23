@@ -3,9 +3,9 @@ source: tui/src/bottom_pane/mod.rs
 expression: "render_snapshot(&pane, area)"
 ---
 • Charging (0s • esc to interrupt)              
+                                                
   ↳ Queued follow-up question                   
     ⌥ + ↑ edit                                  
-                                                
                                                 
 › Ask xcodex to do anything                     
                                                 

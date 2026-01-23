@@ -253,7 +253,7 @@ impl WorktreesSettingsView {
 
     fn start_add_entry(&mut self) {
         self.step = Step::AddEntry;
-        self.textarea.set_text("");
+        self.textarea.set_text_clearing_elements("");
     }
 
     fn apply_list_action(&mut self) {

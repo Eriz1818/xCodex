@@ -5,6 +5,8 @@
 
 use crate::config_loader::RequirementSource;
 pub use codex_protocol::config_types::AltScreenMode;
+pub use codex_protocol::config_types::ModeKind;
+pub use codex_protocol::config_types::Personality;
 pub use codex_protocol::config_types::WebSearchMode;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use std::collections::BTreeMap;
@@ -777,29 +779,22 @@ pub struct Tui {
     #[serde(default)]
     pub scroll_mode: ScrollInputMode,
 
-    /// Auto-mode threshold: maximum time (ms) for the first tick-worth of events to arrive.
-    ///
-    /// In `scroll_mode = "auto"`, TUI2 starts a stream as trackpad-like (to avoid overshoot) and
-    /// promotes it to wheel-like if `scroll_events_per_tick` events arrive "quickly enough". This
-    /// threshold controls what "quickly enough" means.
-    ///
-    /// Most users should leave this unset; it is primarily for terminals that emit wheel ticks
-    /// batched over longer time spans.
+    /// Override the wheel tick detection threshold (ms) for TUI2 auto scroll mode.
+    #[serde(default)]
     pub scroll_wheel_tick_detect_max_ms: Option<u64>,
 
-    /// Auto-mode fallback: maximum duration (ms) that a very small stream is still treated as wheel-like.
-    ///
-    /// This is only used when `scroll_events_per_tick` is effectively 1 (one event per wheel
-    /// notch). In that case, we cannot observe a "tick completion time", so TUI2 treats a
-    /// short-lived, small stream (<= 2 events) as wheel-like to preserve classic wheel behavior.
+    /// Override the wheel-like end-of-stream threshold (ms) for TUI2 auto scroll mode.
+    #[serde(default)]
     pub scroll_wheel_like_max_duration_ms: Option<u64>,
 
     /// Invert mouse scroll direction in TUI2.
-    ///
-    /// This flips the scroll sign after terminal detection. It is applied consistently to both
-    /// wheel and trackpad input.
     #[serde(default)]
     pub scroll_invert: bool,
+
+    /// Start the TUI in the specified collaboration mode (plan/execute/etc.).
+    /// Defaults to unset.
+    #[serde(default)]
+    pub experimental_mode: Option<ModeKind>,
 
     /// Controls whether the TUI uses the terminal's alternate screen buffer.
     ///
@@ -873,6 +868,20 @@ pub struct Notice {
 impl Notice {
     /// referenced by config_edit helpers when writing notice flags
     pub(crate) const TABLE_KEY: &'static str = "notice";
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct SkillConfig {
+    pub path: AbsolutePathBuf,
+    pub enabled: bool,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct SkillsConfig {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub config: Vec<SkillConfig>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema)]

@@ -11,11 +11,13 @@ use codex_core::config::CONFIG_TOML_FILE;
 use codex_core::config::ConfigToml;
 use codex_core::config::find_codex_home;
 use codex_core::config::is_xcodex_invocation;
+use codex_core::config::schema::config_schema_json;
 use codex_core::config_loader::ConfigLayerEntry;
 use codex_core::config_loader::ConfigLayerStackOrdering;
 use codex_core::config_loader::LoaderOverrides;
 use codex_core::config_loader::load_config_layers_state;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use serde_json::Value;
 use tokio::process::Command;
 use toml::Value as TomlValue;
 
@@ -311,23 +313,15 @@ fn command_name() -> &'static str {
 }
 
 fn unknown_key_paths(root: &TomlValue, known_paths: &BTreeSet<String>) -> Result<Vec<String>> {
-    let cfg: ConfigToml = root
-        .clone()
-        .try_into()
-        .context("failed to parse config for unknown-key detection")?;
-    let canonical_str = toml::to_string(&cfg).context("failed to serialize known config keys")?;
-    let canonical: TomlValue =
-        toml::from_str(&canonical_str).context("failed to deserialize known config keys")?;
-
     let original_paths = collect_leaf_paths(root);
-    let known_from_cfg = collect_leaf_paths(&canonical)
-        .intersection(known_paths)
-        .cloned()
+    let normalized_known = known_paths
+        .iter()
+        .map(|path| normalize_path(path))
         .collect::<BTreeSet<_>>();
 
     Ok(original_paths
-        .difference(&known_from_cfg)
-        .cloned()
+        .into_iter()
+        .filter(|path| !normalized_known.contains(&normalize_path(path)))
         .collect::<Vec<_>>())
 }
 
@@ -389,11 +383,123 @@ fn resolve_editor_command() -> std::result::Result<Vec<String>, &'static str> {
 }
 
 fn known_key_paths() -> Result<BTreeSet<String>> {
-    let cfg = ConfigToml::default();
-    let canonical_str = toml::to_string(&cfg).context("failed to serialize known config keys")?;
-    let canonical: TomlValue =
-        toml::from_str(&canonical_str).context("failed to deserialize known config keys")?;
-    Ok(collect_leaf_paths(&canonical))
+    let schema_bytes = config_schema_json().context("failed to load config schema json")?;
+    let schema: Value =
+        serde_json::from_slice(&schema_bytes).context("failed to parse config schema json")?;
+    let definitions = schema
+        .get("definitions")
+        .and_then(Value::as_object)
+        .cloned()
+        .unwrap_or_default();
+    let mut out = BTreeSet::new();
+    let mut visiting = BTreeSet::new();
+    collect_schema_paths(
+        &schema,
+        &definitions,
+        &mut Vec::new(),
+        &mut visiting,
+        &mut out,
+    );
+    Ok(out)
+}
+
+fn normalize_path(path: &str) -> String {
+    let mut parts = Vec::new();
+    for segment in path.split('.') {
+        let is_simple = segment
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_');
+        let token = if is_simple { segment } else { "*" };
+        if token == "*" && parts.last() == Some(&"*") {
+            continue;
+        }
+        parts.push(token);
+    }
+    parts.join(".")
+}
+
+fn collect_schema_paths(
+    schema: &Value,
+    definitions: &serde_json::Map<String, Value>,
+    prefix: &mut Vec<String>,
+    visiting: &mut BTreeSet<String>,
+    out: &mut BTreeSet<String>,
+) {
+    if let Some(reference) = schema.get("$ref").and_then(Value::as_str) {
+        if visiting.insert(reference.to_string()) {
+            if let Some(resolved) = resolve_schema_ref(reference, definitions) {
+                collect_schema_paths(resolved, definitions, prefix, visiting, out);
+            }
+            visiting.remove(reference);
+        }
+        return;
+    }
+
+    if let Some(all_of) = schema.get("allOf").and_then(Value::as_array) {
+        for entry in all_of {
+            collect_schema_paths(entry, definitions, prefix, visiting, out);
+        }
+    }
+    if let Some(any_of) = schema.get("anyOf").and_then(Value::as_array) {
+        for entry in any_of {
+            collect_schema_paths(entry, definitions, prefix, visiting, out);
+        }
+    }
+    if let Some(one_of) = schema.get("oneOf").and_then(Value::as_array) {
+        for entry in one_of {
+            collect_schema_paths(entry, definitions, prefix, visiting, out);
+        }
+    }
+
+    if let Some(properties) = schema.get("properties").and_then(Value::as_object) {
+        for (key, value) in properties {
+            prefix.push(key.clone());
+            collect_schema_paths(value, definitions, prefix, visiting, out);
+            prefix.pop();
+        }
+    }
+
+    if let Some(items) = schema.get("items") {
+        prefix.push("*".to_string());
+        collect_schema_paths(items, definitions, prefix, visiting, out);
+        prefix.pop();
+    }
+
+    if let Some(additional) = schema.get("additionalProperties") {
+        match additional {
+            Value::Bool(true) => {
+                if !prefix.is_empty() {
+                    let mut path = prefix.clone();
+                    path.push("*".to_string());
+                    out.insert(path.join("."));
+                }
+            }
+            Value::Object(_) | Value::Array(_) | Value::String(_) => {
+                prefix.push("*".to_string());
+                collect_schema_paths(additional, definitions, prefix, visiting, out);
+                prefix.pop();
+            }
+            _ => {}
+        }
+    }
+
+    if !prefix.is_empty()
+        && schema.get("properties").is_none()
+        && schema.get("items").is_none()
+        && schema.get("allOf").is_none()
+        && schema.get("anyOf").is_none()
+        && schema.get("oneOf").is_none()
+    {
+        out.insert(prefix.join("."));
+    }
+}
+
+fn resolve_schema_ref<'a>(
+    reference: &str,
+    definitions: &'a serde_json::Map<String, Value>,
+) -> Option<&'a Value> {
+    let key = reference.strip_prefix("#/definitions/")?;
+    definitions.get(key)
 }
 
 fn best_key_suggestion(unknown: &str, known_paths: &BTreeSet<String>) -> Option<String> {

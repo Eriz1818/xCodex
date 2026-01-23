@@ -3505,6 +3505,7 @@ mod tests {
                 history_entry_count: 0,
                 initial_messages: None,
                 rollout_path: PathBuf::new(),
+                forked_from_id: None,
             };
             Arc::new(new_session_info(
                 app.chat_widget.config_ref(),
@@ -3546,6 +3547,7 @@ mod tests {
                 history_entry_count: 0,
                 initial_messages: None,
                 rollout_path: PathBuf::new(),
+                forked_from_id: None,
             }),
         });
 
@@ -3834,6 +3836,7 @@ mod tests {
             history_entry_count: 0,
             initial_messages: None,
             rollout_path: PathBuf::new(),
+            forked_from_id: None,
         };
 
         app.chat_widget.handle_codex_event(Event {

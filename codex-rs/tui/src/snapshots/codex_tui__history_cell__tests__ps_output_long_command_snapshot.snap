@@ -1,6 +1,5 @@
 ---
 source: tui/src/history_cell.rs
-assertion_line: 1994
 expression: rendered
 ---
 /ps

@@ -115,10 +115,15 @@ fn config_doctor_reports_overrides_with_next_step() -> anyhow::Result<()> {
     let project_dir = tmp.path().join("project");
 
     fs::create_dir_all(&codex_home)?;
+    fs::create_dir_all(project_dir.join(".git"))?;
     fs::create_dir_all(project_dir.join(".codex"))?;
+    let project_dir = fs::canonicalize(&project_dir)?;
+    let project_key = project_dir.to_string_lossy().replace('\\', "\\\\");
     fs::write(
         codex_home.join("config.toml"),
-        "hide_agent_reasoning = true\n",
+        format!(
+            "hide_agent_reasoning = true\n\n[projects.\"{project_key}\"]\ntrust_level = \"trusted\"\n"
+        ),
     )?;
     fs::write(
         project_dir.join(".codex/config.toml"),

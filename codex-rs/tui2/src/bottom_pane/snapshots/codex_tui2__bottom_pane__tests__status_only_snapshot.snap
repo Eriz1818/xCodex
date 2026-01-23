@@ -1,0 +1,11 @@
+---
+source: tui2/src/bottom_pane/mod.rs
+assertion_line: 1161
+expression: "render_snapshot(&pane, area)"
+---
+• Charging (0s • esc to interrupt)              
+                                                
+                                                
+› Ask xcodex to do anything                     
+                                                
+  100% context left · ? for shortcuts
