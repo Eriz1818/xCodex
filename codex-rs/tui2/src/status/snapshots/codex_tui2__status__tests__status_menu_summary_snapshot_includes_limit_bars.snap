@@ -1,6 +1,5 @@
 ---
 source: tui2/src/status/tests.rs
-assertion_line: 234
 expression: rendered
 ---
  UI:             tui2

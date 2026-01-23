@@ -1,6 +1,5 @@
 ---
 source: tui2/src/xcodex_first_run_wizard.rs
-assertion_line: 1256
 expression: render_snapshot(&screen)
 ---
 
