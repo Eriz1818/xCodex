@@ -961,6 +961,7 @@ fn draw_picker(tui: &mut Tui, state: &PickerState) -> std::io::Result<()> {
     })
 }
 
+#[allow(dead_code)]
 fn render_list(
     frame: &mut crate::custom_terminal::Frame,
     area: Rect,
@@ -1197,6 +1198,7 @@ fn format_updated_label(row: &Row) -> String {
     }
 }
 
+#[allow(dead_code)]
 fn render_column_headers(
     frame: &mut crate::custom_terminal::Frame,
     area: Rect,

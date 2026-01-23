@@ -142,6 +142,7 @@ const KEY_Q: KeyBinding = key_hint::plain(KeyCode::Char('q'));
 const KEY_ESC: KeyBinding = key_hint::plain(KeyCode::Esc);
 const KEY_ENTER: KeyBinding = key_hint::plain(KeyCode::Enter);
 const KEY_CTRL_T: KeyBinding = key_hint::ctrl(KeyCode::Char('t'));
+#[allow(dead_code)]
 const KEY_CTRL_S: KeyBinding = key_hint::ctrl(KeyCode::Char('s'));
 const KEY_CTRL_C: KeyBinding = key_hint::ctrl(KeyCode::Char('c'));
 const KEY_CTRL_G: KeyBinding = key_hint::ctrl(KeyCode::Char('g'));

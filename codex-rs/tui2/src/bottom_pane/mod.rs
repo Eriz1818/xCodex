@@ -505,6 +505,7 @@ impl BottomPane {
         self.request_redraw();
     }
 
+    #[allow(dead_code)]
     pub(crate) fn has_mcp_startup_banner(&self) -> bool {
         self.mcp_startup_banner.is_some()
     }

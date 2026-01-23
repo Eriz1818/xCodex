@@ -695,11 +695,13 @@ pub(crate) fn new_unified_exec_interaction(
 
 #[derive(Debug)]
 // Live-only wait cell that shimmers while we poll; flushes into a static entry later.
+#[allow(dead_code)]
 pub(crate) struct UnifiedExecWaitCell {
     command_display: Option<String>,
     animations_enabled: bool,
 }
 
+#[allow(dead_code)]
 impl UnifiedExecWaitCell {
     pub(crate) fn new(command_display: Option<String>, animations_enabled: bool) -> Self {
         Self {
@@ -759,6 +761,7 @@ impl HistoryCell for UnifiedExecWaitCell {
     }
 }
 
+#[allow(dead_code)]
 pub(crate) fn new_unified_exec_wait_live(
     command_display: Option<String>,
     animations_enabled: bool,

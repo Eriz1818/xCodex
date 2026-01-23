@@ -534,6 +534,7 @@ pub(crate) struct ChatWidget {
     //
     // This gates rendering of the "Worked for …" separator so purely conversational turns don't
     // show an empty divider. It is reset when the separator is emitted.
+    #[allow(dead_code)]
     had_work_activity: bool,
     // Status-indicator elapsed seconds captured at the last emitted final-message separator.
     //

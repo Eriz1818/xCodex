@@ -489,6 +489,9 @@ fn set_restrictive_permissions(path: &Path, restrict_permissions: bool) -> std::
         return Ok(());
     }
 
+    #[cfg(not(unix))]
+    let _ = path;
+
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt as _;

@@ -12,6 +12,7 @@ use std::sync::OnceLock;
 use std::sync::RwLock;
 
 #[derive(Clone, Copy, Debug)]
+#[allow(dead_code)]
 pub(crate) struct ThemeStyles {
     transcript: Style,
     composer: Style,
@@ -156,6 +157,7 @@ pub(crate) fn accent_style() -> Style {
     get_styles().accent
 }
 
+#[allow(dead_code)]
 pub(crate) fn brand_style() -> Style {
     get_styles().brand
 }
@@ -180,14 +182,17 @@ pub(crate) fn link_style() -> Style {
     get_styles().link
 }
 
+#[allow(dead_code)]
 pub(crate) fn diff_add_style() -> Style {
     get_styles().diff_add
 }
 
+#[allow(dead_code)]
 pub(crate) fn diff_del_style() -> Style {
     get_styles().diff_del
 }
 
+#[allow(dead_code)]
 pub(crate) fn diff_hunk_style() -> Style {
     get_styles().diff_hunk
 }
@@ -216,6 +221,7 @@ pub(crate) fn diff_hunk_text_style() -> Style {
     get_styles().diff_hunk_text
 }
 
+#[allow(dead_code)]
 pub(crate) fn preview_lines(
     config: &Config,
     terminal_bg: Option<(u8, u8, u8)>,

@@ -77,6 +77,7 @@ use serde_json::json;
 pub(crate) enum Overlay {
     Transcript(TranscriptOverlay),
     Static(StaticOverlay),
+    #[allow(dead_code)]
     ThemePreview(ThemePreviewOverlay),
     ThemeSelector(ThemeSelectorOverlay),
 }
@@ -105,6 +106,7 @@ impl Overlay {
         Self::ThemeSelector(ThemeSelectorOverlay::new(app_event_tx, config, terminal_bg))
     }
 
+    #[allow(dead_code)]
     pub(crate) fn new_theme_preview(
         app_event_tx: AppEventSender,
         config: codex_core::config::Config,
@@ -224,6 +226,7 @@ pub(crate) struct ThemePreviewOverlay {
 }
 
 impl ThemePreviewOverlay {
+    #[allow(dead_code)]
     fn new(
         app_event_tx: AppEventSender,
         config: codex_core::config::Config,

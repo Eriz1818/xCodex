@@ -517,7 +517,6 @@ impl App {
                         format!("Failed to resume session from {path_display}")
                     })?;
                 let resumed_model = resumed.session_configured.model.clone();
-                model = resumed_model.clone();
                 let init = crate::chatwidget::ChatWidgetInit {
                     config: config.clone(),
                     frame_requester: tui.frame_requester(),
