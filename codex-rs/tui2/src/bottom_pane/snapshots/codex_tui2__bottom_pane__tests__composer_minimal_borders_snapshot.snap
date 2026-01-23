@@ -2,7 +2,9 @@
 source: tui2/src/bottom_pane/mod.rs
 expression: "render_snapshot(&pane, area)"
 ---
-────────────────────────────────────────────────
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+                                                
 › Ask xcodex to do anything                     
-────────────────────────────────────────────────
+                                                
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
   100% context left · ? for shortcuts

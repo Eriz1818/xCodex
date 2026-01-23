@@ -318,6 +318,7 @@ impl ChatComposer {
 
     pub(crate) fn set_minimal_borders(&mut self, minimal: bool) {
         self.minimal_borders = minimal;
+        self.textarea.set_use_transcript_style(minimal);
     }
 
     pub(crate) fn set_slash_popup_max_rows(&mut self, max_rows: usize) {
@@ -379,9 +380,16 @@ impl ChatComposer {
             }
             ActivePopup::None => Constraint::Max(footer_total_height),
         };
+        let composer_min_height = if self.minimal_borders { 5 } else { 3 };
         let [composer_rect, popup_rect] =
-            Layout::vertical([Constraint::Min(3), popup_constraint]).areas(area);
-        let textarea_rect = composer_rect.inset(Insets::tlbr(1, LIVE_PREFIX_COLS, 1, 1));
+            Layout::vertical([Constraint::Min(composer_min_height), popup_constraint]).areas(area);
+        let vertical_inset = if self.minimal_borders { 2 } else { 1 };
+        let textarea_rect = composer_rect.inset(Insets::tlbr(
+            vertical_inset,
+            LIVE_PREFIX_COLS,
+            vertical_inset,
+            1,
+        ));
         [composer_rect, textarea_rect, popup_rect]
     }
 
@@ -2747,9 +2755,13 @@ impl Renderable for ChatComposer {
         let footer_spacing = Self::footer_spacing(footer_hint_height);
         let footer_total_height = footer_hint_height + footer_spacing;
         const COLS_WITH_MARGIN: u16 = LIVE_PREFIX_COLS + 1;
-        self.textarea
+        let composer_padding = if self.minimal_borders { 4 } else { 2 };
+        let text_height = self
+            .textarea
             .desired_height(width.saturating_sub(COLS_WITH_MARGIN))
-            + 2
+            .max(1);
+        text_height
+            + composer_padding
             + match &self.active_popup {
                 ActivePopup::None => footer_total_height,
                 ActivePopup::Command(c) => c.calculate_required_height(width),
@@ -2798,10 +2810,24 @@ impl Renderable for ChatComposer {
             }
         }
         let style = user_message_style().patch(crate::theme::composer_style());
-        Block::default().style(style).render_ref(composer_rect, buf);
+        let base_style = if self.minimal_borders {
+            crate::theme::transcript_style()
+        } else {
+            style
+        };
+        if self.minimal_borders {
+            Block::default()
+                .style(base_style)
+                .render_ref(composer_rect, buf);
+        } else {
+            Block::default().style(style).render_ref(composer_rect, buf);
+        }
         if self.minimal_borders && composer_rect.width > 0 && composer_rect.height > 1 {
-            let border_style = style.patch(crate::theme::border_style());
-            let line = "─".repeat(composer_rect.width as usize);
+            let mut border_style = crate::theme::border_style();
+            if let Some(bg) = style.bg {
+                border_style = border_style.fg(bg);
+            }
+            let line = "━".repeat(composer_rect.width as usize);
             buf.set_string(composer_rect.x, composer_rect.y, &line, border_style);
             buf.set_string(
                 composer_rect.x,
@@ -2812,9 +2838,9 @@ impl Renderable for ChatComposer {
         }
         if !textarea_rect.is_empty() {
             let prefix_style = if self.input_enabled {
-                style.add_modifier(Modifier::BOLD)
+                base_style.add_modifier(Modifier::BOLD)
             } else {
-                style.add_modifier(Modifier::DIM)
+                base_style.add_modifier(Modifier::DIM)
             };
             let prefix = Span::from("›").set_style(prefix_style);
             buf.set_span(
@@ -2836,8 +2862,8 @@ impl Renderable for ChatComposer {
                     .unwrap_or("Input disabled.")
                     .to_string()
             };
-            let placeholder =
-                Span::from(text).set_style(style.add_modifier(Modifier::DIM | Modifier::ITALIC));
+            let placeholder = Span::from(text)
+                .set_style(base_style.add_modifier(Modifier::DIM | Modifier::ITALIC));
             Line::from(vec![placeholder]).render_ref(textarea_rect.inner(Margin::new(0, 0)), buf);
         }
     }

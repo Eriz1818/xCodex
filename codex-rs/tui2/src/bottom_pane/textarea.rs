@@ -34,6 +34,7 @@ pub(crate) struct TextArea {
     preferred_col: Option<usize>,
     elements: Vec<TextElement>,
     kill_buffer: String,
+    use_transcript_style: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -57,7 +58,12 @@ impl TextArea {
             preferred_col: None,
             elements: Vec::new(),
             kill_buffer: String::new(),
+            use_transcript_style: false,
         }
+    }
+
+    pub fn set_use_transcript_style(&mut self, enabled: bool) {
+        self.use_transcript_style = enabled;
     }
 
     pub fn set_text(&mut self, text: &str) {
@@ -1115,7 +1121,11 @@ impl TextArea {
         lines: &[Range<usize>],
         range: std::ops::Range<usize>,
     ) {
-        let base_style = user_message_style().patch(crate::theme::composer_style());
+        let base_style = if self.use_transcript_style {
+            crate::theme::transcript_style()
+        } else {
+            user_message_style().patch(crate::theme::composer_style())
+        };
         for (row, idx) in range.enumerate() {
             let r = &lines[idx];
             let y = area.y + row as u16;
