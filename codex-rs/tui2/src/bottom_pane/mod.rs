@@ -892,6 +892,9 @@ impl BottomPane {
                 flex.push(0, RenderableItem::Borrowed(banner));
             }
             if let Some(banner) = &self.exclusion_summary_banner {
+                if self.status.is_some() || self.mcp_startup_banner.is_some() {
+                    flex.push(0, RenderableItem::Owned(BlankLine.into()));
+                }
                 flex.push(0, RenderableItem::Borrowed(banner));
             }
             let has_queued_messages = !self.queued_user_messages.messages.is_empty();
