@@ -41,20 +41,16 @@ mod tests {
 
     #[test]
     fn extracts_bullets_for_matching_version() {
-        let bullets = whats_new_bullets_for_version("0.2.0").expect("expected bullets");
+        let bullets = whats_new_bullets_for_version("0.3.0").expect("expected bullets");
         assert_eq!(
             bullets,
             vec![
-                "Hooks: external hooks (spawn), Python Host “py-box” hooks (persistent), and PyO3 in-proc hooks (advanced)".to_string(),
-                "Hooks tooling: guided setup (`xcodex hooks init`), installers for SDKs + samples, and `xcodex hooks test`".to_string(),
-                "Hook ecosystem: typed SDK templates (Python/Rust/JS/TS/Go/Ruby/Java), copy/paste gallery, and a JSON Schema bundle".to_string(),
-                "Worktrees: switch between git worktrees with `/worktree` (plus shared dirs)".to_string(),
-                "⚡Tools: open the tools panel with `Ctrl+O` or `/xtreme`".to_string(),
-                "Status + settings: richer `/status` and `/settings` menus (worktrees, tools, toggles)".to_string(),
-                "Faster startup when resuming sessions".to_string(),
-                "Improved approval prompts in workspace-write mode".to_string(),
-                "Fix: better handling for remote arm64 builds".to_string(),
-                "Read more: docs/xcodex/releases/0.2.0.md".to_string(),
+                "Themes: theme picker + preview, plus a built-in theme bundle (see `docs/xcodex/themes.md`)".to_string(),
+                "Privacy: sensitive-path exclusion + redaction controls (see `docs/xcodex/ignore-files.md`)".to_string(),
+                "Collaboration modes: improved UI + presets for different coding styles".to_string(),
+                "Permissions: improved `/permissions` flow and clearer approval UX".to_string(),
+                "Config: layered config.toml support + more settings toggles".to_string(),
+                "Read more: docs/xcodex/releases/0.3.0.md".to_string(),
             ]
         );
     }

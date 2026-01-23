@@ -19,6 +19,14 @@ version_regex = "^0\\.1\\.0$"
 target_app = "cli"
 
 [[announcements]]
+# Short-lived announcement for the current fork release.
+content = "Tip: xcodex has themes (`/themes`) and sensitive-path controls. See docs/xcodex/themes.md and docs/xcodex/ignore-files.md."
+from_date = "2026-01-23"
+to_date = "2026-02-15"
+version_regex = "^0\\.3\\.0$"
+target_app = "cli"
+
+[[announcements]]
 # Example entry that should never match (kept as a reference).
 content = "This is a test announcement"
 version_regex = "^0\\.0\\.0$"

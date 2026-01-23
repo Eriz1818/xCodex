@@ -7,6 +7,16 @@ This project follows SemVer (`xcodex-vX.Y.Z` / `xcodex-vX.Y.Z-alpha.N` tags) and
 - `@eriz1818/xcodex` (CLI wrapper + native `xcodex` binaries + bundled `rg`)
 - `@eriz1818/xcodex-responses-api-proxy` (native proxy binary)
 
+## 0.3.0
+
+Themes, privacy controls, and collaboration UX improvements.
+
+- Themes: theme picker + preview, plus a built-in theme bundle.
+- Privacy: sensitive-path exclusion + redaction controls for AI-visible files.
+- Collaboration modes: improved UI + presets.
+- Permissions: improved `/permissions` flow and approval prompts.
+- Config: layered config support and more toggles.
+
 ## 0.2.0
 
 Hooks and packaging improvements.

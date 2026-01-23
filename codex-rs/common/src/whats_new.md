@@ -1,11 +1,7 @@
-What's new in ⚡xtreme-Codex v0.2.0
-- Hooks: external hooks (spawn), Python Host “py-box” hooks (persistent), and PyO3 in-proc hooks (advanced)
-- Hooks tooling: guided setup (`xcodex hooks init`), installers for SDKs + samples, and `xcodex hooks test`
-- Hook ecosystem: typed SDK templates (Python/Rust/JS/TS/Go/Ruby/Java), copy/paste gallery, and a JSON Schema bundle
-- Worktrees: switch between git worktrees with `/worktree` (plus shared dirs)
-- ⚡Tools: open the tools panel with `Ctrl+O` or `/xtreme`
-- Status + settings: richer `/status` and `/settings` menus (worktrees, tools, toggles)
-- Faster startup when resuming sessions
-- Improved approval prompts in workspace-write mode
-- Fix: better handling for remote arm64 builds
-- Read more: docs/xcodex/releases/0.2.0.md
+What's new in ⚡xtreme-Codex v0.3.0
+- Themes: theme picker + preview, plus a built-in theme bundle (see `docs/xcodex/themes.md`)
+- Privacy: sensitive-path exclusion + redaction controls (see `docs/xcodex/ignore-files.md`)
+- Collaboration modes: improved UI + presets for different coding styles
+- Permissions: improved `/permissions` flow and clearer approval UX
+- Config: layered config.toml support + more settings toggles
+- Read more: docs/xcodex/releases/0.3.0.md
