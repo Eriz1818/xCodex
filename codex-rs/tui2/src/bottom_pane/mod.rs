@@ -187,13 +187,17 @@ impl ExclusionSummaryBannerWidget {
         let wrapped = wrap(message, usize::from(content_width));
         let mut lines = Vec::with_capacity(wrapped.len());
 
+        let accent = crate::theme::accent_style();
         for (idx, part) in wrapped.into_iter().enumerate() {
             if idx == 0 {
-                lines.push(Line::from(vec![prefix.cyan(), part.to_string().cyan()]));
+                lines.push(Line::from(vec![
+                    Span::styled(prefix, accent),
+                    Span::styled(part.to_string(), accent),
+                ]));
             } else {
                 lines.push(Line::from(vec![
-                    Span::from(" ".repeat(usize::from(prefix_width))).cyan(),
-                    part.to_string().cyan(),
+                    Span::styled(" ".repeat(usize::from(prefix_width)), accent),
+                    Span::styled(part.to_string(), accent),
                 ]));
             }
         }
@@ -746,6 +750,11 @@ impl BottomPane {
                 status.update_header("Working".to_string());
             }
         }
+        self.request_redraw();
+    }
+
+    pub(crate) fn set_minimal_composer_borders(&mut self, minimal: bool) {
+        self.composer.set_minimal_borders(minimal);
         self.request_redraw();
     }
 
