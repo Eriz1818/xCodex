@@ -60,6 +60,7 @@ use crossterm::event::KeyEvent;
 use crossterm::event::KeyEventKind;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
+use ratatui::text::Span;
 use ratatui::widgets::Paragraph;
 use ratatui::widgets::Wrap;
 use std::collections::BTreeMap;
@@ -795,10 +796,14 @@ impl App {
                     tx.send(AppEvent::UpdateSlashCompletionBranches { branches });
                 });
                 if let Some(summary) = summary {
-                    let mut lines: Vec<Line<'static>> = vec![summary.usage_line.clone().into()];
+                    let base_style = crate::theme::transcript_style();
+                    let usage_line = Line::from(summary.usage_line.clone()).style(base_style);
+                    let mut lines: Vec<Line<'static>> = vec![usage_line];
                     if let Some(command) = summary.resume_command {
-                        let spans = vec!["To continue this session, run ".into(), command.cyan()];
-                        lines.push(spans.into());
+                        lines.push(Line::from(vec![
+                            "To continue this session, run ".into(),
+                            Span::styled(command, crate::theme::accent_style()),
+                        ]));
                     }
                     self.chat_widget.add_plain_history_lines(lines);
                 }
@@ -841,14 +846,15 @@ impl App {
                                     resumed.session_configured,
                                 );
                                 if let Some(summary) = summary {
-                                    let mut lines: Vec<Line<'static>> =
-                                        vec![summary.usage_line.clone().into()];
+                                    let base_style = crate::theme::transcript_style();
+                                    let usage_line =
+                                        Line::from(summary.usage_line.clone()).style(base_style);
+                                    let mut lines: Vec<Line<'static>> = vec![usage_line];
                                     if let Some(command) = summary.resume_command {
-                                        let spans = vec![
+                                        lines.push(Line::from(vec![
                                             "To continue this session, run ".into(),
-                                            command.cyan(),
-                                        ];
-                                        lines.push(spans.into());
+                                            Span::styled(command, crate::theme::accent_style()),
+                                        ]));
                                     }
                                     self.chat_widget.add_plain_history_lines(lines);
                                 }
@@ -891,14 +897,15 @@ impl App {
                                 forked.session_configured,
                             );
                             if let Some(summary) = summary {
-                                let mut lines: Vec<Line<'static>> =
-                                    vec![summary.usage_line.clone().into()];
+                                let base_style = crate::theme::transcript_style();
+                                let usage_line =
+                                    Line::from(summary.usage_line.clone()).style(base_style);
+                                let mut lines: Vec<Line<'static>> = vec![usage_line];
                                 if let Some(command) = summary.resume_command {
-                                    let spans = vec![
+                                    lines.push(Line::from(vec![
                                         "To continue this session, run ".into(),
-                                        command.cyan(),
-                                    ];
-                                    lines.push(spans.into());
+                                        Span::styled(command, crate::theme::accent_style()),
+                                    ]));
                                 }
                                 self.chat_widget.add_plain_history_lines(lines);
                             }

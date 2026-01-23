@@ -725,7 +725,6 @@ fn restore() {
 }
 
 fn themed_exit_footer(exit_info: &AppExitInfo) -> Vec<Vec<ratatui::text::Span<'static>>> {
-    use ratatui::style::Stylize;
     use ratatui::text::Span;
 
     let usage_line =
@@ -737,7 +736,7 @@ fn themed_exit_footer(exit_info: &AppExitInfo) -> Vec<Vec<ratatui::text::Span<'s
         let command = format!("xcodex resume {conversation_id}");
         lines.push(vec![
             "To continue this session, run ".into(),
-            command.cyan(),
+            Span::styled(command, crate::theme::accent_style()),
         ]);
     }
 
