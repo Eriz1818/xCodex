@@ -40,6 +40,7 @@ pub(crate) struct StatusMenuView {
     status_bar_show_worktree: bool,
     transcript_diff_highlight: bool,
     transcript_user_prompt_highlight: bool,
+    minimal_composer: bool,
     verbose_tool_output: bool,
     xtreme_mode: XtremeMode,
     xtreme_ui_enabled: bool,
@@ -59,6 +60,7 @@ impl StatusMenuView {
         status_bar_show_worktree: bool,
         transcript_diff_highlight: bool,
         transcript_user_prompt_highlight: bool,
+        minimal_composer: bool,
         xtreme_mode: XtremeMode,
         verbose_tool_output: bool,
     ) -> Self {
@@ -74,6 +76,7 @@ impl StatusMenuView {
             status_bar_show_worktree,
             transcript_diff_highlight,
             transcript_user_prompt_highlight,
+            minimal_composer,
             verbose_tool_output,
             xtreme_mode,
             xtreme_ui_enabled,
@@ -139,7 +142,7 @@ impl StatusMenuView {
     }
 
     fn settings_row_count(&self) -> usize {
-        5
+        6
     }
 
     fn tools_row_count(&self) -> usize {
@@ -290,9 +293,22 @@ impl StatusMenuView {
             );
         }
 
-        // Row 4: Worktrees settings editor.
+        // Row 4: minimal composer borders.
         {
             let selected = self.selected_settings_row == 4;
+            lines.push(
+                vec![
+                    selected_prefix(selected),
+                    checkbox(self.minimal_composer),
+                    "Composer: minimal borders".into(),
+                ]
+                .into(),
+            );
+        }
+
+        // Row 5: Worktrees settings editor.
+        {
+            let selected = self.selected_settings_row == 5;
             lines.push(vec![selected_prefix(selected), "Worktrees…".into()].into());
         }
 
@@ -507,6 +523,13 @@ impl StatusMenuView {
                         ));
                 }
                 4 => {
+                    self.minimal_composer = !self.minimal_composer;
+                    self.app_event_tx
+                        .send(AppEvent::UpdateMinimalComposer(self.minimal_composer));
+                    self.app_event_tx
+                        .send(AppEvent::PersistMinimalComposer(self.minimal_composer));
+                }
+                5 => {
                     self.app_event_tx.send(AppEvent::OpenWorktreesSettingsView);
                     self.complete = true;
                 }
@@ -785,6 +808,7 @@ mod tests {
             false,
             false,
             false,
+            false,
             XtremeMode::On,
             false,
         );
@@ -804,6 +828,7 @@ mod tests {
             tx,
             status_cell,
             true,
+            false,
             false,
             false,
             false,
@@ -832,6 +857,7 @@ mod tests {
             false,
             false,
             false,
+            false,
             XtremeMode::On,
             false,
         );
@@ -851,6 +877,7 @@ mod tests {
             tx,
             status_cell,
             true,
+            false,
             false,
             false,
             false,

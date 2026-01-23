@@ -13,6 +13,7 @@ expression: "render_lines(&view, 60)"
   › [x] Transcript: verbose tool output                     
     [ ] Transcript: diff highlight                          
     [ ] Transcript: highlight past prompts                  
+    [ ] Composer: minimal borders                           
     Worktrees…                                              
                                                             
   Tip: Tab to ⚡ Tools.                                      

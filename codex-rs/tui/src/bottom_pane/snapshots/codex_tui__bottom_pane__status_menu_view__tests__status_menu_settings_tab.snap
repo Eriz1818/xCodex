@@ -12,6 +12,7 @@ expression: "render_lines(&view, 60)"
   › [x] Status bar: worktree path                           
     [ ] Transcript: diff highlight                          
     [ ] Transcript: highlight past prompts                  
+    [ ] Composer: minimal borders                           
     Worktrees…                                              
                                                             
   Tip: Tab to ⚡ Tools.                                      

@@ -1576,11 +1576,6 @@
           "description": "Enable animations (welcome screen, shimmer effects, spinners). Defaults to `true`.",
           "type": "boolean"
         },
-        "composer_minimal_borders": {
-          "default": false,
-          "description": "When true, render the active composer with only top/bottom borders.\n\nDefaults to `false`.",
-          "type": "boolean"
-        },
         "confirm_exit_with_running_hooks": {
           "default": true,
           "description": "When true, the TUI asks for confirmation before exiting if external hooks are still running. Defaults to `true`.",
@@ -1594,6 +1589,11 @@
           ],
           "default": null,
           "description": "Start the TUI in the specified collaboration mode (plan/execute/etc.). Defaults to unset."
+        },
+        "minimal_composer": {
+          "default": false,
+          "description": "When true, render the active composer with only top/bottom borders.\n\nDefaults to `false`.",
+          "type": "boolean"
         },
         "mouse_capture": {
           "default": true,

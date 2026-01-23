@@ -170,6 +170,11 @@ impl ThemeSelectorOverlay {
         } else {
             "off"
         };
+        let minimal_composer = if self.config.tui_minimal_composer {
+            "on"
+        } else {
+            "off"
+        };
 
         let lines: Vec<Line<'static>> = vec![
             vec![
@@ -190,6 +195,12 @@ impl ThemeSelectorOverlay {
                 Span::from(KEY_CTRL_P),
                 "  ".into(),
                 format!("toggle prompt highlight ({prompt_highlight})").into(),
+            ]
+            .into(),
+            vec![
+                Span::from(KEY_CTRL_M),
+                "  ".into(),
+                format!("toggle minimal composer ({minimal_composer})").into(),
             ]
             .into(),
             vec![Span::from(KEY_CTRL_T), "  ".into(), "edit theme".into()].into(),
@@ -811,7 +822,7 @@ impl ThemeSelectorOverlay {
                 enhanced_keys_supported: false,
                 placeholder_text: "Ask xcodex to do anything".to_string(),
                 disable_paste_burst: false,
-                minimal_composer_borders: self.config.tui_composer_minimal_borders,
+                minimal_composer_borders: self.config.tui_minimal_composer,
                 xtreme_ui_enabled: crate::xtreme::xtreme_ui_enabled(&self.config),
                 animations_enabled: self.config.animations,
                 skills: None,
@@ -841,7 +852,7 @@ impl ThemeSelectorOverlay {
                 enhanced_keys_supported: false,
                 placeholder_text: "Ask xcodex to do anything".to_string(),
                 disable_paste_burst: false,
-                minimal_composer_borders: self.config.tui_composer_minimal_borders,
+                minimal_composer_borders: self.config.tui_minimal_composer,
                 xtreme_ui_enabled: crate::xtreme::xtreme_ui_enabled(&self.config),
                 animations_enabled: self.config.animations,
                 skills: None,
@@ -1121,6 +1132,16 @@ impl ThemeSelectorOverlay {
                             .send(AppEvent::UpdateTranscriptUserPromptHighlight(next));
                         self.app_event_tx
                             .send(AppEvent::PersistTranscriptUserPromptHighlight(next));
+                        tui.frame_requester().schedule_frame();
+                        Ok(())
+                    }
+                    e if KEY_CTRL_M.is_press(e) => {
+                        let next = !self.config.tui_minimal_composer;
+                        self.config.tui_minimal_composer = next;
+                        self.app_event_tx
+                            .send(AppEvent::UpdateMinimalComposer(next));
+                        self.app_event_tx
+                            .send(AppEvent::PersistMinimalComposer(next));
                         tui.frame_requester().schedule_frame();
                         Ok(())
                     }

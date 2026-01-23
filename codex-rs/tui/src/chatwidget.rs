@@ -2363,7 +2363,7 @@ impl ChatWidget {
                 enhanced_keys_supported,
                 placeholder_text: placeholder,
                 disable_paste_burst: config.disable_paste_burst,
-                minimal_composer_borders: config.tui_composer_minimal_borders,
+                minimal_composer_borders: config.tui_minimal_composer,
                 xtreme_ui_enabled,
                 animations_enabled: config.animations,
                 skills: None,
@@ -2522,7 +2522,7 @@ impl ChatWidget {
                 enhanced_keys_supported,
                 placeholder_text: placeholder,
                 disable_paste_burst: config.disable_paste_burst,
-                minimal_composer_borders: config.tui_composer_minimal_borders,
+                minimal_composer_borders: config.tui_minimal_composer,
                 xtreme_ui_enabled,
                 animations_enabled: config.animations,
                 skills: None,
@@ -2718,6 +2718,7 @@ impl ChatWidget {
                 self.config.tui_status_bar_show_worktree,
                 self.config.tui_transcript_diff_highlight,
                 self.config.tui_transcript_user_prompt_highlight,
+                self.config.tui_minimal_composer,
                 self.config.tui_xtreme_mode,
                 self.config.tui_verbose_tool_output,
             );
@@ -3025,6 +3026,7 @@ impl ChatWidget {
                     self.config.tui_status_bar_show_worktree,
                     self.config.tui_transcript_diff_highlight,
                     self.config.tui_transcript_user_prompt_highlight,
+                    self.config.tui_minimal_composer,
                     self.config.tui_xtreme_mode,
                     self.config.tui_verbose_tool_output,
                 );
@@ -3041,6 +3043,7 @@ impl ChatWidget {
                     self.config.tui_status_bar_show_worktree,
                     self.config.tui_transcript_diff_highlight,
                     self.config.tui_transcript_user_prompt_highlight,
+                    self.config.tui_minimal_composer,
                     self.config.tui_xtreme_mode,
                     self.config.tui_verbose_tool_output,
                 );
@@ -3061,6 +3064,7 @@ impl ChatWidget {
                     self.config.tui_status_bar_show_worktree,
                     self.config.tui_transcript_diff_highlight,
                     self.config.tui_transcript_user_prompt_highlight,
+                    self.config.tui_minimal_composer,
                     self.config.tui_xtreme_mode,
                     self.config.tui_verbose_tool_output,
                 );
@@ -3077,6 +3081,7 @@ impl ChatWidget {
                     self.config.tui_status_bar_show_worktree,
                     self.config.tui_transcript_diff_highlight,
                     self.config.tui_transcript_user_prompt_highlight,
+                    self.config.tui_minimal_composer,
                     self.config.tui_xtreme_mode,
                     self.config.tui_verbose_tool_output,
                 );
@@ -7448,6 +7453,12 @@ impl ChatWidget {
 
     pub(crate) fn set_transcript_diff_highlight(&mut self, enabled: bool) {
         self.config.tui_transcript_diff_highlight = enabled;
+        self.request_redraw();
+    }
+
+    pub(crate) fn set_minimal_composer(&mut self, enabled: bool) {
+        self.config.tui_minimal_composer = enabled;
+        self.bottom_pane.set_minimal_composer_borders(enabled);
         self.request_redraw();
     }
 

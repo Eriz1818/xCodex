@@ -33,7 +33,7 @@ status_bar_show_git_branch = false
 status_bar_show_worktree = false
 
 # Render the active composer with only top/bottom borders (default: false)
-# composer_minimal_borders = false
+# minimal_composer = false
 
 # Xcodex-only UI styling: auto | on | off (default: on)
 # xtreme_mode = "on"

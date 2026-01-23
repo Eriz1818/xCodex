@@ -117,6 +117,9 @@ pub(crate) enum AppEvent {
     /// Update whether transcript diffs use background highlight (runtime).
     UpdateTranscriptDiffHighlight(bool),
 
+    /// Update whether the active composer uses minimal borders (runtime).
+    UpdateMinimalComposer(bool),
+
     /// Update whether user prompts are highlighted in the transcript (runtime).
     UpdateTranscriptUserPromptHighlight(bool),
 
@@ -216,6 +219,9 @@ pub(crate) enum AppEvent {
 
     /// Persist whether transcript diffs use background highlight.
     PersistTranscriptDiffHighlight(bool),
+
+    /// Persist whether the active composer uses minimal borders.
+    PersistMinimalComposer(bool),
 
     /// Persist whether user prompts are highlighted in the transcript.
     PersistTranscriptUserPromptHighlight(bool),

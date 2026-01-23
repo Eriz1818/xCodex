@@ -159,6 +159,7 @@ const KEY_CTRL_S: KeyBinding = key_hint::ctrl(KeyCode::Char('s'));
 const KEY_CTRL_C: KeyBinding = key_hint::ctrl(KeyCode::Char('c'));
 const KEY_CTRL_G: KeyBinding = key_hint::ctrl(KeyCode::Char('g'));
 const KEY_CTRL_P: KeyBinding = key_hint::ctrl(KeyCode::Char('p'));
+const KEY_CTRL_M: KeyBinding = key_hint::ctrl(KeyCode::Char('m'));
 const KEY_QUESTION: KeyBinding = key_hint::plain(KeyCode::Char('?'));
 
 // Common pager navigation hints rendered on the first line
@@ -320,6 +321,22 @@ impl ThemePreviewOverlay {
                 self.preview
                     .app_event_tx
                     .send(AppEvent::PersistTranscriptUserPromptHighlight(next));
+                tui.frame_requester().schedule_frame();
+            }
+            TuiEvent::Key(KeyEvent {
+                code: KeyCode::Char('m' | 'M'),
+                modifiers: KeyModifiers::CONTROL,
+                kind: KeyEventKind::Press | KeyEventKind::Repeat,
+                ..
+            }) => {
+                let next = !self.preview.config.tui_minimal_composer;
+                self.preview.config.tui_minimal_composer = next;
+                self.preview
+                    .app_event_tx
+                    .send(AppEvent::UpdateMinimalComposer(next));
+                self.preview
+                    .app_event_tx
+                    .send(AppEvent::PersistMinimalComposer(next));
                 tui.frame_requester().schedule_frame();
             }
             TuiEvent::Key(KeyEvent {
@@ -791,6 +808,7 @@ impl ThemePreviewOverlay {
                 (&[KEY_CTRL_U, KEY_CTRL_D], "scroll"),
                 (&[KEY_CTRL_G], "diff highlight"),
                 (&[KEY_CTRL_P], "prompt highlight"),
+                (&[KEY_CTRL_M], "minimal composer"),
                 (&[KEY_CTRL_T], "edit"),
                 (&[KEY_Q], "quit"),
             ],

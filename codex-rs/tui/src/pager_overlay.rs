@@ -147,6 +147,7 @@ const KEY_CTRL_S: KeyBinding = key_hint::ctrl(KeyCode::Char('s'));
 const KEY_CTRL_C: KeyBinding = key_hint::ctrl(KeyCode::Char('c'));
 const KEY_CTRL_G: KeyBinding = key_hint::ctrl(KeyCode::Char('g'));
 const KEY_CTRL_P: KeyBinding = key_hint::ctrl(KeyCode::Char('p'));
+const KEY_CTRL_M: KeyBinding = key_hint::ctrl(KeyCode::Char('m'));
 const KEY_QUESTION: KeyBinding = key_hint::plain(KeyCode::Char('?'));
 
 // Common pager navigation hints rendered on the first line

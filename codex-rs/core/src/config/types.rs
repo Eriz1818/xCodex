@@ -713,8 +713,8 @@ pub struct Tui {
     /// When true, render the active composer with only top/bottom borders.
     ///
     /// Defaults to `false`.
-    #[serde(default)]
-    pub composer_minimal_borders: bool,
+    #[serde(default, alias = "composer_minimal_borders")]
+    pub minimal_composer: bool,
 
     /// When true, the TUI asks for confirmation before exiting if external hooks are still running.
     /// Defaults to `true`.

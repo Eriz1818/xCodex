@@ -308,8 +308,8 @@ pub struct Config {
 
     /// When true, render the active composer with only top/bottom borders.
     ///
-    /// This is the same `tui.composer_minimal_borders` value from `config.toml` (see [`Tui`]).
-    pub tui_composer_minimal_borders: bool,
+    /// This is the same `tui.minimal_composer` value from `config.toml` (see [`Tui`]).
+    pub tui_minimal_composer: bool,
 
     /// When true, show verbose tool output in the transcript (including large file reads).
     ///
@@ -2110,10 +2110,10 @@ impl Config {
                 .as_ref()
                 .map(|t| t.status_bar_show_worktree)
                 .unwrap_or(false),
-            tui_composer_minimal_borders: cfg
+            tui_minimal_composer: cfg
                 .tui
                 .as_ref()
-                .map(|t| t.composer_minimal_borders)
+                .map(|t| t.minimal_composer)
                 .unwrap_or(false),
             tui_verbose_tool_output: cfg
                 .tui
@@ -2527,7 +2527,7 @@ persistence = "none"
                 transcript_user_prompt_highlight: false,
                 status_bar_show_git_branch: false,
                 status_bar_show_worktree: false,
-                composer_minimal_borders: false,
+                minimal_composer: false,
                 confirm_exit_with_running_hooks: true,
                 scroll_events_per_tick: None,
                 scroll_wheel_lines: None,
@@ -4451,7 +4451,7 @@ model_verbosity = "high"
                 tui_alternate_screen: AltScreenMode::Auto,
                 tui_status_bar_show_git_branch: false,
                 tui_status_bar_show_worktree: false,
-                tui_composer_minimal_borders: false,
+                tui_minimal_composer: false,
                 tui_verbose_tool_output: false,
                 tui_transcript_diff_highlight: false,
                 tui_transcript_user_prompt_highlight: false,
@@ -4560,7 +4560,7 @@ model_verbosity = "high"
             tui_alternate_screen: AltScreenMode::Auto,
             tui_status_bar_show_git_branch: false,
             tui_status_bar_show_worktree: false,
-            tui_composer_minimal_borders: false,
+            tui_minimal_composer: false,
             tui_verbose_tool_output: false,
             tui_transcript_diff_highlight: false,
             tui_transcript_user_prompt_highlight: false,
@@ -4684,7 +4684,7 @@ model_verbosity = "high"
             tui_alternate_screen: AltScreenMode::Auto,
             tui_status_bar_show_git_branch: false,
             tui_status_bar_show_worktree: false,
-            tui_composer_minimal_borders: false,
+            tui_minimal_composer: false,
             tui_verbose_tool_output: false,
             tui_transcript_diff_highlight: false,
             tui_transcript_user_prompt_highlight: false,
@@ -4794,7 +4794,7 @@ model_verbosity = "high"
             tui_alternate_screen: AltScreenMode::Auto,
             tui_status_bar_show_git_branch: false,
             tui_status_bar_show_worktree: false,
-            tui_composer_minimal_borders: false,
+            tui_minimal_composer: false,
             tui_verbose_tool_output: false,
             tui_transcript_diff_highlight: false,
             tui_transcript_user_prompt_highlight: false,
