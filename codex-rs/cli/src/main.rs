@@ -732,8 +732,17 @@ fn handle_app_exit(exit_info: AppExitInfo) -> anyhow::Result<()> {
 
     let update_action = exit_info.update_action;
     let color_enabled = supports_color::on(Stream::Stdout).is_some();
-    for line in format_exit_messages(exit_info, color_enabled) {
-        println!("{line}");
+    if color_enabled {
+        let terminal_width = crossterm::terminal::size()
+            .map(|(w, _)| w)
+            .unwrap_or_default();
+        for line in codex_tui::themed_exit_footer(&exit_info, terminal_width) {
+            println!("{line}");
+        }
+    } else {
+        for line in format_exit_messages(exit_info, false) {
+            println!("{line}");
+        }
     }
     if let Some(action) = update_action {
         run_update_action(action)?;

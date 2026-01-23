@@ -735,6 +735,73 @@ fn get_login_status(config: &Config) -> LoginStatus {
     }
 }
 
+pub fn themed_exit_footer(exit_info: &AppExitInfo, width: u16) -> Vec<String> {
+    use crate::render::line_utils::merge_span_style;
+    use ratatui::style::Color;
+    use ratatui::text::Span;
+    use unicode_width::UnicodeWidthStr;
+
+    if exit_info.token_usage.is_zero() {
+        return Vec::new();
+    }
+
+    let usage_line =
+        codex_core::protocol::FinalOutput::from(exit_info.token_usage.clone()).to_string();
+
+    let mut lines = vec![vec![Span::from(usage_line)]];
+
+    if let Some(thread_id) = exit_info.thread_id.as_ref() {
+        let command = format!("xcodex resume {thread_id}");
+        lines.push(vec![
+            "To continue this session, run ".into(),
+            Span::styled(command, crate::theme::accent_style()),
+        ]);
+    }
+
+    let mut base_style = crate::theme::transcript_style();
+    if base_style.fg == Some(Color::Reset) {
+        base_style.fg = None;
+    }
+
+    lines
+        .into_iter()
+        .map(|spans| {
+            let mut merged_spans: Vec<Span<'static>> = spans
+                .into_iter()
+                .map(|mut span| {
+                    span.style = merge_span_style(span.style, base_style);
+                    span
+                })
+                .collect();
+            if merged_spans.is_empty() {
+                merged_spans.push("".into());
+            }
+
+            if width > 0 {
+                let text_width: usize = merged_spans
+                    .iter()
+                    .map(|span| span.content.as_ref().width())
+                    .sum();
+                let total_width = usize::from(width);
+                if text_width < total_width {
+                    let pad_len = total_width.saturating_sub(text_width);
+                    if pad_len > 0 {
+                        let mut pad_style = base_style;
+                        pad_style.fg = None;
+                        merged_spans.push(Span::styled(" ".repeat(pad_len), pad_style));
+                    }
+                }
+            }
+
+            let mut buf: Vec<u8> = Vec::new();
+            let _ = crate::insert_history::write_spans(&mut buf, merged_spans.iter());
+            let mut out = String::from_utf8(buf).unwrap_or_default();
+            out.push_str("\u{1b}[0m");
+            out
+        })
+        .collect()
+}
+
 async fn load_config_or_exit(
     cli_kv_overrides: Vec<(String, toml::Value)>,
     overrides: ConfigOverrides,
