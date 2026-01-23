@@ -2057,7 +2057,13 @@ pub(crate) fn new_exclusion_summary(
 impl HistoryCell for ExclusionSummaryCell {
     fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
         let mut lines: Vec<Line<'static>> = Vec::new();
-        lines.push(vec!["🛡  ".cyan().bold(), self.summary.clone().cyan()].into());
+        lines.push(
+            vec![
+                "🛡  ".set_style(crate::theme::accent_style()).bold(),
+                Span::from(self.summary.clone()).set_style(crate::theme::accent_style()),
+            ]
+            .into(),
+        );
 
         let wrap_width = width.saturating_sub(4).max(1) as usize;
         for detail in &self.details {

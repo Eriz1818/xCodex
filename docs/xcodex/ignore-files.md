@@ -123,4 +123,24 @@ on_match = "redact"               # "warn", "redact", or "block"
 files = [".aiexclude", ".xcodexignore"]  # Ignore filenames to load
 ```
 
+## Exclusion Layers
+
+Codex applies four exclusion layers. Each layer can be toggled independently in `config.toml`.
+
+- **L1: Path matching (filesystem gate)**  
+  Blocks file discovery and structured tool access (`read_file`, `list_dir`, `grep_files`, etc.)
+  when a path matches ignore patterns.
+- **L2: Secret pattern scanning (content redaction)**  
+  Redacts common secret patterns in outbound text (tokens, keys, etc.).
+- **L3: Prompt/content inclusion guard**  
+  Prevents excluded content from being included in prompts sent to the model.
+- **L4: Output scanning (response redaction)**  
+  Scans generated outputs and redacts secrets before display.
+
+### Toggles and Defaults
+
+- Each layer can be toggled individually (`path_matching`, `secret_patterns`, etc.).
+- `exclusion.enabled = false` turns **L1 and L3 off**.
+- `paranoid_mode = true` turns **L2 and L4 on**.
+
 See [config.md](../config.md) for the full `[exclusion]` schema.
