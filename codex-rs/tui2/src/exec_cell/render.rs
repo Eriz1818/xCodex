@@ -339,7 +339,7 @@ impl ExecCell {
 
             for (title, line) in call_lines {
                 let line = Line::from(line);
-                let title_style = if matches!(title, "Read" | "Search") {
+                let title_style = if matches!(title, "Read" | "Search" | "List") {
                     crate::theme::accent_style()
                 } else {
                     Style::default().cyan()
