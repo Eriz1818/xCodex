@@ -800,10 +800,12 @@ impl App {
                     let usage_line = Line::from(summary.usage_line.clone()).style(base_style);
                     let mut lines: Vec<Line<'static>> = vec![usage_line];
                     if let Some(command) = summary.resume_command {
-                        lines.push(Line::from(vec![
+                        let mut line = Line::from(vec![
                             "To continue this session, run ".into(),
                             Span::styled(command, crate::theme::accent_style()),
-                        ]));
+                        ]);
+                        line.style = base_style;
+                        lines.push(line);
                     }
                     self.chat_widget.add_plain_history_lines(lines);
                 }
@@ -851,10 +853,12 @@ impl App {
                                         Line::from(summary.usage_line.clone()).style(base_style);
                                     let mut lines: Vec<Line<'static>> = vec![usage_line];
                                     if let Some(command) = summary.resume_command {
-                                        lines.push(Line::from(vec![
+                                        let mut line = Line::from(vec![
                                             "To continue this session, run ".into(),
                                             Span::styled(command, crate::theme::accent_style()),
-                                        ]));
+                                        ]);
+                                        line.style = base_style;
+                                        lines.push(line);
                                     }
                                     self.chat_widget.add_plain_history_lines(lines);
                                 }
@@ -902,10 +906,12 @@ impl App {
                                     Line::from(summary.usage_line.clone()).style(base_style);
                                 let mut lines: Vec<Line<'static>> = vec![usage_line];
                                 if let Some(command) = summary.resume_command {
-                                    lines.push(Line::from(vec![
+                                    let mut line = Line::from(vec![
                                         "To continue this session, run ".into(),
                                         Span::styled(command, crate::theme::accent_style()),
-                                    ]));
+                                    ]);
+                                    line.style = base_style;
+                                    lines.push(line);
                                 }
                                 self.chat_widget.add_plain_history_lines(lines);
                             }
