@@ -111,6 +111,7 @@ impl SessionState {
         self.auto_compact_enabled = enabled;
     }
 
+    #[allow(dead_code)]
     pub(crate) fn get_total_token_usage(&self, server_reasoning_included: bool) -> i64 {
         self.history
             .get_total_token_usage(server_reasoning_included)
@@ -120,6 +121,7 @@ impl SessionState {
         self.server_reasoning_included = included;
     }
 
+    #[allow(dead_code)]
     pub(crate) fn server_reasoning_included(&self) -> bool {
         self.server_reasoning_included
     }

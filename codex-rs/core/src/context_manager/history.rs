@@ -95,6 +95,7 @@ impl ContextManager {
 
     // Estimate token usage using byte-based heuristics from the truncation helpers.
     // This is a coarse lower bound, not a tokenizer-accurate count.
+    #[allow(dead_code)]
     pub(crate) fn estimate_token_count(&self, turn_context: &TurnContext) -> Option<i64> {
         let model_info = turn_context.client.get_model_info();
         let personality = turn_context.client.config().model_personality;
@@ -247,6 +248,7 @@ impl ContextManager {
 
     /// When true, the server already accounted for past reasoning tokens and
     /// the client should not re-estimate them.
+    #[allow(dead_code)]
     pub(crate) fn get_total_token_usage(&self, server_reasoning_included: bool) -> i64 {
         let last_tokens = self
             .token_info

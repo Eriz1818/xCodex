@@ -942,6 +942,7 @@ impl Session {
             .clone()
     }
 
+    #[allow(dead_code)]
     async fn get_total_token_usage(&self) -> i64 {
         let state = self.state.lock().await;
         state.get_total_token_usage(state.server_reasoning_included())
