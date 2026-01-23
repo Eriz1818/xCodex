@@ -160,8 +160,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@1.90.0
         with:
           targets: ${{ matrix.target }}
-      - name: Ensure Rust target installed (macOS)
-        if: ${{ startsWith(matrix.runner, 'macos') }}
+      - name: Ensure Rust target installed
         shell: bash
         run: rustup target add ${{ matrix.target }}
 
