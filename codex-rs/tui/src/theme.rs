@@ -760,7 +760,7 @@ fn styles_for(
     let success = style_from_roles(success_fg, None, Style::default().green());
 
     let warning_fg = resolve_color(theme, "roles.warning", &theme.roles.warning);
-    let warning = style_from_roles(warning_fg, None, Style::default().cyan());
+    let warning = style_from_roles(warning_fg, None, Style::default().yellow());
 
     let error_fg = resolve_color(theme, "roles.error", &theme.roles.error);
     let error = style_from_roles(error_fg, None, Style::default().red());
