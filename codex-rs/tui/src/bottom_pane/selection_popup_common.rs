@@ -2,7 +2,7 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 // Note: Table-based layout previously used Constraint; the manual renderer
 // below no longer requires it.
-use ratatui::style::Color;
+use ratatui::style::Modifier;
 use ratatui::style::Style;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
@@ -239,11 +239,21 @@ pub(crate) fn render_rows(
     rows_all: &[GenericDisplayRow],
     state: &ScrollState,
     max_results: usize,
+    base_style: Style,
     empty_message: &str,
 ) {
+    for y in area.top()..area.bottom() {
+        for x in area.left()..area.right() {
+            buf[(x, y)].set_symbol(" ");
+            buf[(x, y)].set_style(base_style);
+        }
+    }
+
     if rows_all.is_empty() {
         if area.height > 0 {
-            Line::from(empty_message.dim().italic()).render(area, buf);
+            Line::from(empty_message.dim().italic())
+                .style(base_style)
+                .render(area, buf);
         }
         return;
     }
@@ -282,12 +292,21 @@ pub(crate) fn render_rows(
         }
 
         let mut full_line = build_full_line(row, desc_col);
-        if Some(i) == state.selected_idx {
-            // Match previous behavior: cyan + bold for the selected row.
-            // Reset the style first to avoid inheriting dim from keyboard shortcuts.
-            full_line.spans.iter_mut().for_each(|span| {
-                span.style = Style::default().fg(Color::Cyan).bold();
-            });
+        let row_style = if row.disabled_reason.is_some() {
+            base_style.patch(crate::theme::dim_style())
+        } else {
+            base_style
+        };
+
+        if row.disabled_reason.is_none() && Some(i) == state.selected_idx {
+            // Keep the popup background stable and use accent color for selection.
+            let style = base_style
+                .patch(crate::theme::accent_style())
+                .add_modifier(Modifier::BOLD);
+            full_line
+                .spans
+                .iter_mut()
+                .for_each(|span| span.style = style);
         }
 
         // Wrap with subsequent indent aligned to the description column.
@@ -304,15 +323,16 @@ pub(crate) fn render_rows(
             if cur_y >= area.y + area.height {
                 break;
             }
-            line.render(
-                Rect {
-                    x: area.x,
-                    y: cur_y,
-                    width: area.width,
-                    height: 1,
-                },
-                buf,
-            );
+            let line_area = Rect {
+                x: area.x,
+                y: cur_y,
+                width: area.width,
+                height: 1,
+            };
+            for x in line_area.left()..line_area.right() {
+                buf[(x, cur_y)].set_style(row_style);
+            }
+            line.render(line_area, buf);
             cur_y = cur_y.saturating_add(1);
         }
     }
@@ -325,11 +345,21 @@ pub(crate) fn render_rows_single_line(
     rows_all: &[GenericDisplayRow],
     state: &ScrollState,
     max_results: usize,
+    base_style: Style,
     empty_message: &str,
 ) {
+    for y in area.top()..area.bottom() {
+        for x in area.left()..area.right() {
+            buf[(x, y)].set_symbol(" ");
+            buf[(x, y)].set_style(base_style);
+        }
+    }
+
     if rows_all.is_empty() {
         if area.height > 0 {
-            Line::from(empty_message.dim().italic()).render(area, buf);
+            Line::from(empty_message.dim().italic())
+                .style(base_style)
+                .render(area, buf);
         }
         return;
     }
@@ -364,22 +394,33 @@ pub(crate) fn render_rows_single_line(
         }
 
         let mut full_line = build_full_line(row, desc_col);
-        if Some(i) == state.selected_idx {
-            full_line.spans.iter_mut().for_each(|span| {
-                span.style = Style::default().fg(Color::Cyan).bold();
-            });
+        let row_style = if row.disabled_reason.is_some() {
+            base_style.patch(crate::theme::dim_style())
+        } else {
+            base_style
+        };
+
+        if row.disabled_reason.is_none() && Some(i) == state.selected_idx {
+            let style = base_style
+                .patch(crate::theme::accent_style())
+                .add_modifier(Modifier::BOLD);
+            full_line
+                .spans
+                .iter_mut()
+                .for_each(|span| span.style = style);
         }
 
         let full_line = truncate_line_with_ellipsis_if_overflow(full_line, area.width as usize);
-        full_line.render(
-            Rect {
-                x: area.x,
-                y: cur_y,
-                width: area.width,
-                height: 1,
-            },
-            buf,
-        );
+        let line_area = Rect {
+            x: area.x,
+            y: cur_y,
+            width: area.width,
+            height: 1,
+        };
+        for x in line_area.left()..line_area.right() {
+            buf[(x, cur_y)].set_style(row_style);
+        }
+        full_line.render(line_area, buf);
         cur_y = cur_y.saturating_add(1);
     }
 }

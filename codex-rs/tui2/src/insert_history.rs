@@ -114,11 +114,16 @@ where
 
     for line in wrapped {
         queue!(writer, Print("\r\n"))?;
+        let fallback_bg = crate::theme::transcript_style().bg;
         queue!(
             writer,
             SetColors(Colors::new(
                 line.style.fg.map(Into::into).unwrap_or(CColor::Reset),
-                line.style.bg.map(Into::into).unwrap_or(CColor::Reset),
+                line.style
+                    .bg
+                    .or(fallback_bg)
+                    .map(Into::into)
+                    .unwrap_or(CColor::Reset),
             ))
         )?;
         queue!(writer, Clear(ClearType::UntilNewLine))?;
@@ -128,7 +133,7 @@ where
             .spans
             .iter()
             .map(|s| Span {
-                style: s.style.patch(line.style),
+                style: crate::render::line_utils::merge_span_style(s.style, line.style),
                 content: s.content.clone(),
             })
             .collect();

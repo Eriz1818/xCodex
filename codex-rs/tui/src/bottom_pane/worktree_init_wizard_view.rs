@@ -955,9 +955,9 @@ impl Renderable for WorktreeInitWizardView {
         let [content_area, footer_area] =
             Layout::vertical([Constraint::Fill(1), Constraint::Length(1)]).areas(area);
 
-        Block::default()
-            .style(user_message_style())
-            .render(content_area, buf);
+        let base_style = user_message_style().patch(crate::theme::composer_style());
+        Block::default().style(base_style).render(content_area, buf);
+        Block::default().style(base_style).render(footer_area, buf);
 
         let inner = content_area.inset(Insets::vh(1, 2));
         let header = self.header();
@@ -1063,7 +1063,9 @@ impl Renderable for WorktreeInitWizardView {
             width: footer_area.width.saturating_sub(2),
             height: 1,
         };
-        Paragraph::new(hint).render(hint_area, buf);
+        Paragraph::new(hint)
+            .style(base_style)
+            .render(hint_area, buf);
     }
 
     fn cursor_pos(&self, area: Rect) -> Option<(u16, u16)> {
@@ -1092,6 +1094,7 @@ impl Renderable for WorktreeInitWizardView {
 
 impl WorktreeInitWizardView {
     fn render_rows(&self, area: Rect, buf: &mut Buffer, rows: &[GenericDisplayRow], empty: &str) {
+        let base_style = user_message_style().patch(crate::theme::composer_style());
         let rows_width = area.width.saturating_sub(2).max(1);
         let height = measure_rows_height(rows, &self.selection_state, MAX_POPUP_ROWS, rows_width);
         let render_area = Rect {
@@ -1106,6 +1109,7 @@ impl WorktreeInitWizardView {
             rows,
             &self.selection_state,
             MAX_POPUP_ROWS,
+            base_style,
             empty,
         );
     }

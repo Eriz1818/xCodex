@@ -182,6 +182,7 @@ impl App {
         if !self.deferred_history_cells.is_empty() {
             let cells = std::mem::take(&mut self.deferred_history_cells);
             let width = tui.terminal.last_known_screen_size.width;
+            let base = crate::theme::transcript_style();
             let mut lines: Vec<ratatui::text::Line<'static>> = Vec::new();
             for cell in cells {
                 let mut display = cell.display_lines(width);
@@ -200,6 +201,9 @@ impl App {
                     }
                 }
 
+                for line in &mut display {
+                    line.style = base.patch(line.style);
+                }
                 lines.extend(display);
             }
             if !lines.is_empty() {
@@ -500,6 +504,7 @@ mod tests {
         let mut cells: Vec<Arc<dyn HistoryCell>> = vec![
             Arc::new(UserHistoryCell {
                 message: "first user".to_string(),
+                highlight: false,
             }) as Arc<dyn HistoryCell>,
             Arc::new(AgentMessageCell::new(vec![Line::from("assistant")], true))
                 as Arc<dyn HistoryCell>,
@@ -516,6 +521,7 @@ mod tests {
                 as Arc<dyn HistoryCell>,
             Arc::new(UserHistoryCell {
                 message: "first".to_string(),
+                highlight: false,
             }) as Arc<dyn HistoryCell>,
             Arc::new(AgentMessageCell::new(vec![Line::from("after")], false))
                 as Arc<dyn HistoryCell>,
@@ -544,11 +550,13 @@ mod tests {
                 as Arc<dyn HistoryCell>,
             Arc::new(UserHistoryCell {
                 message: "first".to_string(),
+                highlight: false,
             }) as Arc<dyn HistoryCell>,
             Arc::new(AgentMessageCell::new(vec![Line::from("between")], false))
                 as Arc<dyn HistoryCell>,
             Arc::new(UserHistoryCell {
                 message: "second".to_string(),
+                highlight: false,
             }) as Arc<dyn HistoryCell>,
             Arc::new(AgentMessageCell::new(vec![Line::from("tail")], false))
                 as Arc<dyn HistoryCell>,

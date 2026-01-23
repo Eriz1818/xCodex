@@ -154,6 +154,9 @@ animations = true
 status_bar_show_git_branch = false
 status_bar_show_worktree = false
 
+# Render the active composer with only top/bottom borders. Default: false
+# composer_minimal_borders = false
+
 # Suppress internal reasoning events from output. Default: false
 hide_agent_reasoning = false
 

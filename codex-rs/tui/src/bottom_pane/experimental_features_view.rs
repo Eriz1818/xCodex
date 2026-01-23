@@ -215,9 +215,9 @@ impl Renderable for ExperimentalFeaturesView {
         let [content_area, footer_area] =
             Layout::vertical([Constraint::Fill(1), Constraint::Length(1)]).areas(area);
 
-        Block::default()
-            .style(user_message_style())
-            .render(content_area, buf);
+        let base_style = user_message_style().patch(crate::theme::composer_style());
+        Block::default().style(base_style).render(content_area, buf);
+        Block::default().style(base_style).render(footer_area, buf);
 
         let header_height = self
             .header
@@ -252,6 +252,7 @@ impl Renderable for ExperimentalFeaturesView {
                 &rows,
                 &self.state,
                 MAX_POPUP_ROWS,
+                base_style,
                 "  No experimental features available for now",
             );
         }
@@ -262,7 +263,11 @@ impl Renderable for ExperimentalFeaturesView {
             width: footer_area.width.saturating_sub(2),
             height: footer_area.height,
         };
-        self.footer_hint.clone().dim().render(hint_area, buf);
+        self.footer_hint
+            .clone()
+            .dim()
+            .style(base_style)
+            .render(hint_area, buf);
     }
 
     fn desired_height(&self, width: u16) -> u16 {

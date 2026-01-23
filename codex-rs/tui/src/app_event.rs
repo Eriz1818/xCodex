@@ -14,6 +14,7 @@ use codex_common::approval_presets::ApprovalPreset;
 use codex_core::git_info::GitWorktreeEntry;
 use codex_core::protocol::Event;
 use codex_core::protocol::RateLimitSnapshot;
+use codex_core::themes::ThemeVariant;
 use codex_file_search::FileMatch;
 use codex_protocol::ThreadId;
 use codex_protocol::openai_models::ModelPreset;
@@ -120,6 +121,12 @@ pub(crate) enum AppEvent {
     /// Update whether tool output is shown verbosely in the transcript (runtime).
     UpdateVerboseToolOutput(bool),
 
+    /// Update whether transcript diffs use background highlight (runtime).
+    UpdateTranscriptDiffHighlight(bool),
+
+    /// Update whether user prompts are highlighted in the transcript (runtime).
+    UpdateTranscriptUserPromptHighlight(bool),
+
     /// Update whether xtreme mode styling is enabled (runtime).
     UpdateXtremeMode(XtremeMode),
 
@@ -225,8 +232,34 @@ pub(crate) enum AppEvent {
     /// Persist whether tool output is shown verbosely in the transcript.
     PersistVerboseToolOutput(bool),
 
+    /// Persist whether transcript diffs use background highlight.
+    PersistTranscriptDiffHighlight(bool),
+
+    /// Persist whether user prompts are highlighted in the transcript.
+    PersistTranscriptUserPromptHighlight(bool),
+
     /// Persist whether xtreme mode styling is enabled.
     PersistXtremeMode(XtremeMode),
+
+    /// Preview a theme without persisting changes.
+    PreviewTheme {
+        theme: String,
+    },
+
+    /// Cancel theme preview and revert to the config-selected theme.
+    CancelThemePreview,
+
+    /// Persist theme selection for the provided variant.
+    PersistThemeSelection {
+        variant: ThemeVariant,
+        theme: String,
+    },
+
+    /// Open the full-screen theme selector (live preview, Enter saves).
+    OpenThemeSelector,
+
+    /// Open the in-TUI theme help view.
+    OpenThemeHelp,
 
     /// Persist xcodex ramp settings.
     PersistRampsConfig {

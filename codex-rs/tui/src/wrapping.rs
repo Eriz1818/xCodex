@@ -196,7 +196,10 @@ where
             &mut sliced
                 .spans
                 .into_iter()
-                .map(|s| s.patch_style(line.style))
+                .map(|mut s| {
+                    s.style = crate::render::line_utils::merge_span_style(s.style, line.style);
+                    s
+                })
                 .collect(),
         );
         first_line.spans = spans;
@@ -224,7 +227,10 @@ where
             &mut sliced
                 .spans
                 .into_iter()
-                .map(|s| s.patch_style(line.style))
+                .map(|mut s| {
+                    s.style = crate::render::line_utils::merge_span_style(s.style, line.style);
+                    s
+                })
                 .collect(),
         );
         subsequent_line.spans = spans;

@@ -143,12 +143,14 @@ impl WidgetRef for &FileSearchPopup {
             "no matches"
         };
 
+        let base_style = crate::theme::transcript_style();
         render_rows(
             area.inset(Insets::tlbr(0, 2, 0, 0)),
             buf,
             &rows_all,
             &self.state,
             MAX_POPUP_ROWS,
+            base_style,
             empty_message,
         );
     }

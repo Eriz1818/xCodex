@@ -128,12 +128,14 @@ impl RequestUserInputOverlay {
                 // Ensure the selected option is visible in the scroll window.
                 option_state
                     .ensure_visible(option_rows.len(), sections.options_area.height as usize);
+                let base_style = crate::theme::transcript_style();
                 render_rows(
                     sections.options_area,
                     buf,
                     &option_rows,
                     &option_state,
                     option_rows.len().max(1),
+                    base_style,
                     "No options",
                 );
             }

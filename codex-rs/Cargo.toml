@@ -37,6 +37,7 @@ members = [
     "otel",
     "tui",
     "tui2",
+    "theme-ui",
     "utils/absolute-path",
     "utils/cargo-bin",
     "utils/git",
@@ -95,6 +96,7 @@ codex-rmcp-client = { path = "rmcp-client" }
 codex-stdio-to-uds = { path = "stdio-to-uds" }
 codex-tui = { path = "tui" }
 codex-tui2 = { path = "tui2" }
+codex-theme-ui = { path = "theme-ui" }
 codex-utils-absolute-path = { path = "utils/absolute-path" }
 codex-utils-cache = { path = "utils/cache" }
 codex-utils-cargo-bin = { path = "utils/cargo-bin" }

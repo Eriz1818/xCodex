@@ -126,12 +126,30 @@ fmt:
 # Run clippy with fixes applied. Prefer scoping: `just fix -p codex-tui`.
 fix *args:
     bash -lc 'set -euo pipefail; \
-      if [[ -z "${PYO3_PYTHON:-}" ]] && command -v python3.11 >/dev/null; then export PYO3_PYTHON="$(command -v python3.11)"; fi; \
+      if [[ -z "${PYO3_PYTHON:-}" ]]; then \
+        if command -v python3 >/dev/null; then \
+          export PYO3_PYTHON="$(command -v python3)"; \
+        elif command -v python >/dev/null; then \
+          export PYO3_PYTHON="$(command -v python)"; \
+        else \
+          echo "PYO3_PYTHON not set and no python3/python found in PATH." >&2; \
+          exit 1; \
+        fi; \
+      fi; \
       cargo clippy --fix --allow-dirty --allow-staged "$@"'
 
 clippy *args:
     bash -lc 'set -euo pipefail; \
-      if [[ -z "${PYO3_PYTHON:-}" ]] && command -v python3.11 >/dev/null; then export PYO3_PYTHON="$(command -v python3.11)"; fi; \
+      if [[ -z "${PYO3_PYTHON:-}" ]]; then \
+        if command -v python3 >/dev/null; then \
+          export PYO3_PYTHON="$(command -v python3)"; \
+        elif command -v python >/dev/null; then \
+          export PYO3_PYTHON="$(command -v python)"; \
+        else \
+          echo "PYO3_PYTHON not set and no python3/python found in PATH." >&2; \
+          exit 1; \
+        fi; \
+      fi; \
       cargo clippy "$@"'
 
 # Default test runner

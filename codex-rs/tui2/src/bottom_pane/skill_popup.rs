@@ -94,6 +94,7 @@ impl SkillPopup {
                     match_indices: indices,
                     display_shortcut: None,
                     description: Some(description),
+                    disabled_reason: None,
                     wrap_indent: None,
                 }
             })
@@ -147,6 +148,7 @@ impl WidgetRef for SkillPopup {
         } else {
             (area, None)
         };
+        let base_style = crate::theme::transcript_style();
         let rows = self.rows_from_matches(self.filtered());
         render_rows_single_line(
             list_area.inset(Insets::tlbr(0, 2, 0, 0)),
@@ -154,6 +156,7 @@ impl WidgetRef for SkillPopup {
             &rows,
             &self.state,
             MAX_POPUP_ROWS,
+            base_style,
             "no skills",
         );
         if let Some(hint_area) = hint_area {

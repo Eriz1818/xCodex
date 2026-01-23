@@ -57,6 +57,7 @@ pub(crate) mod sensitive_paths;
 mod session_prefix;
 mod stream_events_utils;
 mod text_encoding;
+pub mod themes;
 pub mod token_data;
 mod truncate;
 mod unified_exec;

@@ -1,8 +1,6 @@
 use diffy::Hunk;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
-use ratatui::style::Color;
-use ratatui::style::Modifier;
 use ratatui::style::Style;
 use ratatui::style::Stylize;
 use ratatui::text::Line as RtLine;
@@ -42,13 +40,13 @@ impl DiffSummary {
 impl Renderable for FileChange {
     fn render(&self, area: Rect, buf: &mut Buffer) {
         let mut lines = vec![];
-        render_change(self, &mut lines, area.width as usize);
+        render_change(self, &mut lines, area.width as usize, false);
         Paragraph::new(lines).render(area, buf);
     }
 
     fn desired_height(&self, width: u16) -> u16 {
         let mut lines = vec![];
-        render_change(self, &mut lines, width as usize);
+        render_change(self, &mut lines, width as usize, false);
         lines.len() as u16
     }
 }
@@ -63,7 +61,7 @@ impl From<DiffSummary> for Box<dyn Renderable> {
             }
             let mut path = RtLine::from(display_path_for(&row.path, &val.cwd));
             path.push_span(" ");
-            path.extend(render_line_count_summary(row.added, row.removed));
+            path.extend(render_line_count_summary(row.added, row.removed, false));
             rows.push(Box::new(path));
             rows.push(Box::new(RtLine::from("")));
             rows.push(Box::new(InsetRenderable::new(
@@ -80,9 +78,10 @@ pub(crate) fn create_diff_summary(
     changes: &HashMap<PathBuf, FileChange>,
     cwd: &Path,
     wrap_cols: usize,
+    diff_highlight: bool,
 ) -> Vec<RtLine<'static>> {
     let rows = collect_rows(changes);
-    render_changes_block(rows, wrap_cols, cwd)
+    render_changes_block(rows, wrap_cols, cwd, diff_highlight)
 }
 
 // Shared row for per-file presentation
@@ -123,17 +122,33 @@ fn collect_rows(changes: &HashMap<PathBuf, FileChange>) -> Vec<Row> {
     rows
 }
 
-fn render_line_count_summary(added: usize, removed: usize) -> Vec<RtSpan<'static>> {
+fn render_line_count_summary(
+    added: usize,
+    removed: usize,
+    diff_highlight: bool,
+) -> Vec<RtSpan<'static>> {
     let mut spans = Vec::new();
-    spans.push("(".into());
-    spans.push(format!("+{added}").green());
-    spans.push(" ".into());
-    spans.push(format!("-{removed}").red());
-    spans.push(")".into());
+    let base = crate::theme::transcript_style();
+    spans.push(RtSpan::styled("(", base));
+    spans.push(RtSpan::styled(
+        format!("+{added}"),
+        base.patch(style_add(diff_highlight)),
+    ));
+    spans.push(RtSpan::styled(" ", base));
+    spans.push(RtSpan::styled(
+        format!("-{removed}"),
+        base.patch(style_del(diff_highlight)),
+    ));
+    spans.push(RtSpan::styled(")", base));
     spans
 }
 
-fn render_changes_block(rows: Vec<Row>, wrap_cols: usize, cwd: &Path) -> Vec<RtLine<'static>> {
+fn render_changes_block(
+    rows: Vec<Row>,
+    wrap_cols: usize,
+    cwd: &Path,
+    diff_highlight: bool,
+) -> Vec<RtLine<'static>> {
     let mut out: Vec<RtLine<'static>> = Vec::new();
 
     let render_path = |row: &Row| -> Vec<RtSpan<'static>> {
@@ -150,7 +165,8 @@ fn render_changes_block(rows: Vec<Row>, wrap_cols: usize, cwd: &Path) -> Vec<RtL
     let total_removed: usize = rows.iter().map(|r| r.removed).sum();
     let file_count = rows.len();
     let noun = if file_count == 1 { "file" } else { "files" };
-    let mut header_spans: Vec<RtSpan<'static>> = vec!["• ".dim()];
+    let mut header_spans: Vec<RtSpan<'static>> =
+        vec![RtSpan::styled("• ", crate::theme::border_style())];
     if let [row] = &rows[..] {
         let verb = match &row.change {
             FileChange::Add { .. } => "Added",
@@ -161,39 +177,56 @@ fn render_changes_block(rows: Vec<Row>, wrap_cols: usize, cwd: &Path) -> Vec<RtL
         header_spans.push(" ".into());
         header_spans.extend(render_path(row));
         header_spans.push(" ".into());
-        header_spans.extend(render_line_count_summary(row.added, row.removed));
+        header_spans.extend(render_line_count_summary(
+            row.added,
+            row.removed,
+            diff_highlight,
+        ));
     } else {
         header_spans.push("Edited".bold());
         header_spans.push(format!(" {file_count} {noun} ").into());
-        header_spans.extend(render_line_count_summary(total_added, total_removed));
+        header_spans.extend(render_line_count_summary(
+            total_added,
+            total_removed,
+            diff_highlight,
+        ));
     }
     out.push(RtLine::from(header_spans));
 
     for (idx, r) in rows.into_iter().enumerate() {
         // Insert a blank separator between file chunks (except before the first)
         if idx > 0 {
-            out.push("".into());
+            out.push(RtLine::from(""));
         }
         // File header line (skip when single-file header already shows the name)
         let skip_file_header = file_count == 1;
         if !skip_file_header {
             let mut header: Vec<RtSpan<'static>> = Vec::new();
-            header.push("  └ ".dim());
+            header.push(RtSpan::styled("  └ ", crate::theme::border_style()));
             header.extend(render_path(&r));
             header.push(" ".into());
-            header.extend(render_line_count_summary(r.added, r.removed));
+            header.extend(render_line_count_summary(
+                r.added,
+                r.removed,
+                diff_highlight,
+            ));
             out.push(RtLine::from(header));
         }
 
         let mut lines = vec![];
-        render_change(&r.change, &mut lines, wrap_cols - 4);
+        render_change(&r.change, &mut lines, wrap_cols - 4, diff_highlight);
         out.extend(prefix_lines(lines, "    ".into(), "    ".into()));
     }
 
     out
 }
 
-fn render_change(change: &FileChange, out: &mut Vec<RtLine<'static>>, width: usize) {
+fn render_change(
+    change: &FileChange,
+    out: &mut Vec<RtLine<'static>>,
+    width: usize,
+    diff_highlight: bool,
+) {
     match change {
         FileChange::Add { content } => {
             let line_number_width = line_number_width(content.lines().count());
@@ -204,6 +237,7 @@ fn render_change(change: &FileChange, out: &mut Vec<RtLine<'static>>, width: usi
                     raw,
                     width,
                     line_number_width,
+                    diff_highlight,
                 ));
             }
         }
@@ -216,6 +250,7 @@ fn render_change(change: &FileChange, out: &mut Vec<RtLine<'static>>, width: usi
                     raw,
                     width,
                     line_number_width,
+                    diff_highlight,
                 ));
             }
         }
@@ -249,7 +284,10 @@ fn render_change(change: &FileChange, out: &mut Vec<RtLine<'static>>, width: usi
                     if !is_first_hunk {
                         let spacer = format!("{:width$} ", "", width = line_number_width.max(1));
                         let spacer_span = RtSpan::styled(spacer, style_gutter());
-                        out.push(RtLine::from(vec![spacer_span, "⋮".dim()]));
+                        out.push(RtLine::from(vec![
+                            spacer_span,
+                            RtSpan::styled("⋮", style_hunk(diff_highlight)),
+                        ]));
                     }
                     is_first_hunk = false;
 
@@ -265,6 +303,7 @@ fn render_change(change: &FileChange, out: &mut Vec<RtLine<'static>>, width: usi
                                     s,
                                     width,
                                     line_number_width,
+                                    diff_highlight,
                                 ));
                                 new_ln += 1;
                             }
@@ -276,6 +315,7 @@ fn render_change(change: &FileChange, out: &mut Vec<RtLine<'static>>, width: usi
                                     s,
                                     width,
                                     line_number_width,
+                                    diff_highlight,
                                 ));
                                 old_ln += 1;
                             }
@@ -287,6 +327,7 @@ fn render_change(change: &FileChange, out: &mut Vec<RtLine<'static>>, width: usi
                                     s,
                                     width,
                                     line_number_width,
+                                    diff_highlight,
                                 ));
                                 old_ln += 1;
                                 new_ln += 1;
@@ -359,6 +400,7 @@ fn push_wrapped_diff_line(
     text: &str,
     width: usize,
     line_number_width: usize,
+    diff_highlight: bool,
 ) -> Vec<RtLine<'static>> {
     let ln_str = line_number.to_string();
     let mut remaining_text: &str = text;
@@ -370,8 +412,8 @@ fn push_wrapped_diff_line(
 
     let mut first = true;
     let (sign_char, line_style) = match kind {
-        DiffLineType::Insert => ('+', style_add()),
-        DiffLineType::Delete => ('-', style_del()),
+        DiffLineType::Insert => ('+', style_add(diff_highlight)),
+        DiffLineType::Delete => ('-', style_del(diff_highlight)),
         DiffLineType::Context => (' ', style_context()),
     };
     let mut lines: Vec<RtLine<'static>> = Vec::new();
@@ -423,19 +465,35 @@ fn line_number_width(max_line_number: usize) -> usize {
 }
 
 fn style_gutter() -> Style {
-    Style::default().add_modifier(Modifier::DIM)
+    crate::theme::transcript_dim_style()
 }
 
 fn style_context() -> Style {
-    Style::default()
+    crate::theme::transcript_style()
 }
 
-fn style_add() -> Style {
-    Style::default().fg(Color::Green)
+fn style_add(diff_highlight: bool) -> Style {
+    if diff_highlight {
+        crate::theme::diff_add_highlight_style()
+    } else {
+        crate::theme::diff_add_text_style()
+    }
 }
 
-fn style_del() -> Style {
-    Style::default().fg(Color::Red)
+fn style_del(diff_highlight: bool) -> Style {
+    if diff_highlight {
+        crate::theme::diff_del_highlight_style()
+    } else {
+        crate::theme::diff_del_text_style()
+    }
+}
+
+fn style_hunk(diff_highlight: bool) -> Style {
+    if diff_highlight {
+        crate::theme::diff_hunk_highlight_style()
+    } else {
+        crate::theme::diff_hunk_text_style()
+    }
 }
 
 #[cfg(test)]
@@ -450,7 +508,7 @@ mod tests {
     use ratatui::widgets::WidgetRef;
     use ratatui::widgets::Wrap;
     fn diff_summary_for_tests(changes: &HashMap<PathBuf, FileChange>) -> Vec<RtLine<'static>> {
-        create_diff_summary(changes, &PathBuf::from("/"), 80)
+        create_diff_summary(changes, &PathBuf::from("/"), 80, false)
     }
 
     fn snapshot_lines(name: &str, lines: Vec<RtLine<'static>>, width: u16, height: u16) {
@@ -508,8 +566,14 @@ mod tests {
         let long_line = "this is a very long line that should wrap across multiple terminal columns and continue";
 
         // Call the wrapping function directly so we can precisely control the width
-        let lines =
-            push_wrapped_diff_line(1, DiffLineType::Insert, long_line, 80, line_number_width(1));
+        let lines = push_wrapped_diff_line(
+            1,
+            DiffLineType::Insert,
+            long_line,
+            80,
+            line_number_width(1),
+            false,
+        );
 
         // Render into a small terminal to capture the visual layout
         snapshot_lines("wrap_behavior_insert", lines, 90, 8);
@@ -628,7 +692,7 @@ mod tests {
             },
         );
 
-        let lines = create_diff_summary(&changes, &PathBuf::from("/"), 72);
+        let lines = create_diff_summary(&changes, &PathBuf::from("/"), 72, false);
 
         // Render with backend width wider than wrap width to avoid Paragraph auto-wrap.
         snapshot_lines("apply_update_block_wraps_long_lines", lines, 80, 12);
@@ -651,7 +715,7 @@ mod tests {
             },
         );
 
-        let lines = create_diff_summary(&changes, &PathBuf::from("/"), 28);
+        let lines = create_diff_summary(&changes, &PathBuf::from("/"), 28, false);
         snapshot_lines_text("apply_update_block_wraps_long_lines_text", &lines);
     }
 
@@ -678,7 +742,7 @@ mod tests {
             },
         );
 
-        let lines = create_diff_summary(&changes, &PathBuf::from("/"), 80);
+        let lines = create_diff_summary(&changes, &PathBuf::from("/"), 80, false);
         snapshot_lines_text("apply_update_block_line_numbers_three_digits_text", &lines);
     }
 
@@ -701,7 +765,7 @@ mod tests {
             },
         );
 
-        let lines = create_diff_summary(&changes, &cwd, 80);
+        let lines = create_diff_summary(&changes, &cwd, 80, false);
 
         snapshot_lines("apply_update_block_relativizes_path", lines, 80, 10);
     }

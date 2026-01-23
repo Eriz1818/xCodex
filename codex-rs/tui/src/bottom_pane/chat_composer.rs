@@ -81,7 +81,8 @@ use ratatui::layout::Constraint;
 use ratatui::layout::Layout;
 use ratatui::layout::Margin;
 use ratatui::layout::Rect;
-use ratatui::style::Stylize;
+use ratatui::style::Modifier;
+use ratatui::style::Styled;
 use ratatui::text::Line;
 use ratatui::text::Span;
 use ratatui::widgets::Block;
@@ -211,6 +212,7 @@ pub(crate) struct ChatComposer {
     attached_images: Vec<AttachedImage>,
     placeholder_text: String,
     xtreme_ui_enabled: bool,
+    minimal_borders: bool,
     is_task_running: bool,
     /// When false, the composer is temporarily read-only (e.g. during sandbox setup).
     input_enabled: bool,
@@ -230,6 +232,7 @@ pub(crate) struct ChatComposer {
     slash_completion_branches: Vec<String>,
     show_status_bar_git_branch: bool,
     show_status_bar_worktree: bool,
+    slash_popup_max_rows: usize,
     skills: Option<Vec<SkillMetadata>>,
     dismissed_skill_popup_token: Option<String>,
     /// When enabled, `Enter` submits immediately and `Tab` requests queuing behavior.
@@ -281,6 +284,7 @@ impl ChatComposer {
             attached_images: Vec::new(),
             placeholder_text,
             xtreme_ui_enabled: false,
+            minimal_borders: false,
             is_task_running: false,
             input_enabled: true,
             input_disabled_placeholder: None,
@@ -297,6 +301,7 @@ impl ChatComposer {
             slash_completion_branches: Vec::new(),
             show_status_bar_git_branch: false,
             show_status_bar_worktree: false,
+            slash_popup_max_rows: super::command_popup::DEFAULT_SLASH_POPUP_ROWS,
             skills: None,
             dismissed_skill_popup_token: None,
             steer_enabled: false,
@@ -309,6 +314,17 @@ impl ChatComposer {
 
     pub(crate) fn set_xtreme_ui_enabled(&mut self, enabled: bool) {
         self.xtreme_ui_enabled = enabled;
+    }
+
+    pub(crate) fn set_minimal_borders(&mut self, minimal: bool) {
+        self.minimal_borders = minimal;
+    }
+
+    pub(crate) fn set_slash_popup_max_rows(&mut self, max_rows: usize) {
+        self.slash_popup_max_rows = max_rows.max(1);
+        if let ActivePopup::Command(popup) = &mut self.active_popup {
+            popup.set_max_rows(self.slash_popup_max_rows);
+        }
     }
 
     pub fn set_skill_mentions(&mut self, skills: Option<Vec<SkillMetadata>>) {
@@ -1102,9 +1118,23 @@ impl ChatComposer {
                             };
                             if run_on_enter {
                                 self.textarea.set_text_clearing_elements("");
+                                let text = text.trim_end().to_string();
+                                if let Some((name, rest, _rest_offset)) = parse_slash_name(&text)
+                                    && let Some((_n, cmd)) = built_in_slash_commands()
+                                        .into_iter()
+                                        .find(|(command_name, _)| *command_name == name)
+                                {
+                                    if rest.is_empty() {
+                                        return (InputResult::Command(cmd), true);
+                                    }
+                                    return (
+                                        InputResult::CommandWithArgs(cmd, rest.to_string()),
+                                        true,
+                                    );
+                                }
                                 return (
                                     InputResult::Submitted {
-                                        text: text.trim_end().to_string(),
+                                        text,
                                         text_elements: Vec::new(),
                                     },
                                     true,
@@ -2562,6 +2592,7 @@ impl ChatComposer {
                         CommandPopupFlags {
                             collaboration_modes_enabled,
                         },
+                        self.slash_popup_max_rows,
                     );
                     command_popup.set_current_git_branch(self.status_bar_git_branch.clone());
                     command_popup
@@ -2766,14 +2797,26 @@ impl Renderable for ChatComposer {
                 }
             }
         }
-        let style = user_message_style();
+        let style = user_message_style().patch(crate::theme::composer_style());
         Block::default().style(style).render_ref(composer_rect, buf);
+        if self.minimal_borders && composer_rect.width > 0 && composer_rect.height > 1 {
+            let border_style = style.patch(crate::theme::border_style());
+            let line = "─".repeat(composer_rect.width as usize);
+            buf.set_string(composer_rect.x, composer_rect.y, &line, border_style);
+            buf.set_string(
+                composer_rect.x,
+                composer_rect.bottom().saturating_sub(1),
+                &line,
+                border_style,
+            );
+        }
         if !textarea_rect.is_empty() {
-            let prefix = if self.input_enabled {
-                "›".bold()
+            let prefix_style = if self.input_enabled {
+                style.add_modifier(Modifier::BOLD)
             } else {
-                "›".dim()
+                style.add_modifier(Modifier::DIM)
             };
+            let prefix = Span::from("›").set_style(prefix_style);
             buf.set_span(
                 textarea_rect.x - LIVE_PREFIX_COLS,
                 textarea_rect.y,
@@ -2793,7 +2836,8 @@ impl Renderable for ChatComposer {
                     .unwrap_or("Input disabled.")
                     .to_string()
             };
-            let placeholder = Span::from(text).dim();
+            let placeholder =
+                Span::from(text).set_style(style.add_modifier(Modifier::DIM | Modifier::ITALIC));
             Line::from(vec![placeholder]).render_ref(textarea_rect.inner(Margin::new(0, 0)), buf);
         }
     }
@@ -4282,10 +4326,7 @@ mod tests {
             composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
         assert_eq!(
             result,
-            InputResult::Submitted {
-                text: "/worktree doctor".to_string(),
-                text_elements: Vec::new(),
-            }
+            InputResult::CommandWithArgs(SlashCommand::Worktree, "doctor".to_string())
         );
         assert!(composer.textarea.is_empty(), "composer should be cleared");
     }
@@ -6385,6 +6426,66 @@ mod tests {
         assert!(
             matches!(composer.active_popup, ActivePopup::Command(_)),
             "expected /worktree subcommand popup to stay open while typing args"
+        );
+    }
+
+    #[test]
+    fn slash_popup_run_on_enter_theme_subcommand_dispatches_command_with_args() {
+        use crossterm::event::KeyCode;
+        use crossterm::event::KeyEvent;
+        use crossterm::event::KeyModifiers;
+        use tokio::sync::mpsc::unbounded_channel;
+
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask xcodex to do anything".to_string(),
+            false,
+        );
+
+        composer.set_text_content("/theme help".to_string(), Vec::new(), Vec::new());
+        assert!(matches!(composer.active_popup, ActivePopup::Command(_)));
+
+        let (result, _needs_redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+        assert_eq!(
+            result,
+            InputResult::CommandWithArgs(SlashCommand::Theme, "help".to_string()),
+            "Selecting a `run_on_enter` theme subcommand should dispatch, not submit a user message"
+        );
+    }
+
+    #[test]
+    fn slash_popup_run_on_enter_worktree_subcommand_dispatches_command_with_args() {
+        use crossterm::event::KeyCode;
+        use crossterm::event::KeyEvent;
+        use crossterm::event::KeyModifiers;
+        use tokio::sync::mpsc::unbounded_channel;
+
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask xcodex to do anything".to_string(),
+            false,
+        );
+
+        composer.set_text_content("/worktree doctor".to_string(), Vec::new(), Vec::new());
+        assert!(matches!(composer.active_popup, ActivePopup::Command(_)));
+
+        let (result, _needs_redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+        assert_eq!(
+            result,
+            InputResult::CommandWithArgs(SlashCommand::Worktree, "doctor".to_string()),
+            "Selecting a `run_on_enter` worktree subcommand should dispatch, not submit a user message"
         );
     }
 

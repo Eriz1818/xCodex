@@ -1756,6 +1756,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "codex-theme-ui"
+version = "0.2.0"
+
+[[package]]
 name = "codex-tui"
 version = "0.2.0"
 dependencies = [
@@ -1906,6 +1910,7 @@ dependencies = [
  "url",
  "uuid",
  "vt100",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]

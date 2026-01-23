@@ -1657,7 +1657,12 @@ async fn run_interactive_tui(
 
     if is_tui2_enabled(&interactive).await? {
         let result = tui2::run_main(interactive.into(), codex_linux_sandbox_exe).await?;
-        Ok(result.into())
+        // tui2 prints the fully-styled transcript (and themed exit footer) to stdout after
+        // leaving the alternate screen. Avoid printing a second, un-themed exit summary here.
+        let mut exit_info: AppExitInfo = result.into();
+        exit_info.token_usage = Default::default();
+        exit_info.thread_id = None;
+        Ok(exit_info)
     } else {
         codex_tui::run_main(interactive, codex_linux_sandbox_exe).await
     }

@@ -82,6 +82,15 @@ const SETTINGS_STATUS_BAR_CHILDREN: &[SubcommandNode] = &[
     },
 ];
 
+const SETTINGS_TRANSCRIPT_CHILDREN: &[SubcommandNode] = &[SubcommandNode {
+    token: "diff-highlight",
+    full_name: "settings transcript diff-highlight",
+    description: "toggle/show diff highlight for transcript diffs",
+    run_on_enter: false,
+    insert_trailing_space: true,
+    children: &[],
+}];
+
 const SETTINGS_SUBCOMMANDS: &[SubcommandNode] = &[
     SubcommandNode {
         token: "status-bar",
@@ -92,9 +101,36 @@ const SETTINGS_SUBCOMMANDS: &[SubcommandNode] = &[
         children: SETTINGS_STATUS_BAR_CHILDREN,
     },
     SubcommandNode {
+        token: "transcript",
+        full_name: "settings transcript",
+        description: "show or update transcript settings",
+        run_on_enter: false,
+        insert_trailing_space: true,
+        children: SETTINGS_TRANSCRIPT_CHILDREN,
+    },
+    SubcommandNode {
         token: "worktrees",
         full_name: "settings worktrees",
         description: "open worktrees settings editor",
+        run_on_enter: true,
+        insert_trailing_space: false,
+        children: &[],
+    },
+];
+
+const THEME_SUBCOMMANDS: &[SubcommandNode] = &[
+    SubcommandNode {
+        token: "help",
+        full_name: "theme help",
+        description: "show theme role mapping and format details",
+        run_on_enter: true,
+        insert_trailing_space: false,
+        children: &[],
+    },
+    SubcommandNode {
+        token: "template",
+        full_name: "theme template",
+        description: "write example theme YAML files to themes.dir",
         run_on_enter: true,
         insert_trailing_space: false,
         children: &[],
@@ -154,6 +190,11 @@ const SUBCOMMAND_ROOTS: &[SubcommandRoot] = &[
         root: "settings",
         anchor: SlashCommand::Settings,
         children: SETTINGS_SUBCOMMANDS,
+    },
+    SubcommandRoot {
+        root: "theme",
+        anchor: SlashCommand::Theme,
+        children: THEME_SUBCOMMANDS,
     },
 ];
 

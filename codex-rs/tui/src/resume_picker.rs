@@ -20,6 +20,9 @@ use crossterm::event::KeyEventKind;
 use ratatui::layout::Constraint;
 use ratatui::layout::Layout;
 use ratatui::layout::Rect;
+use ratatui::style::Modifier;
+use ratatui::style::Style;
+use ratatui::style::Styled as _;
 use ratatui::style::Stylize as _;
 use ratatui::text::Line;
 use ratatui::text::Span;
@@ -31,6 +34,7 @@ use unicode_width::UnicodeWidthStr;
 use crate::clipboard_copy;
 use crate::diff_render::display_path_for;
 use crate::key_hint;
+use crate::style::user_message_style;
 use crate::text_formatting::truncate_text;
 use crate::tui::FrameRequester;
 use crate::tui::Tui;
@@ -864,33 +868,40 @@ fn preview_from_head(head: &[serde_json::Value]) -> Option<String> {
 
 fn hint_line(state: &PickerState) -> Line<'static> {
     let action_label = state.action.action_label();
+    let dim_style = crate::theme::dim_style();
     let mut hint_spans: Vec<Span<'static>> = vec![
         key_hint::plain(KeyCode::Enter).into(),
-        Span::from(format!(" {action_label} ")).dim(),
+        Span::from(format!(" {action_label} ")).set_style(dim_style),
         "  ".into(),
         key_hint::plain(KeyCode::Esc).into(),
-        " new ".dim(),
+        Span::from(" new ").set_style(dim_style),
         "  ".into(),
         key_hint::plain(KeyCode::Tab).into(),
-        " all/dir ".dim(),
+        Span::from(" all/dir ").set_style(dim_style),
         "  ".into(),
         key_hint::ctrl(KeyCode::Char('y')).into(),
-        " copy ".dim(),
+        Span::from(" copy ").set_style(dim_style),
         "  ".into(),
         key_hint::ctrl(KeyCode::Char('c')).into(),
-        " quit ".dim(),
+        Span::from(" quit ").set_style(dim_style),
         "  ".into(),
         key_hint::plain(KeyCode::Up).into(),
-        "/".dim(),
+        Span::from("/").set_style(dim_style),
         key_hint::plain(KeyCode::Down).into(),
-        " to browse".dim(),
+        Span::from(" to browse").set_style(dim_style),
     ];
 
     if let Some(feedback) = state.copy_feedback.as_ref() {
-        hint_spans.extend(["    ".into(), "•".dim(), " ".into()]);
+        hint_spans.extend([
+            "    ".into(),
+            Span::from("•").set_style(dim_style),
+            " ".into(),
+        ]);
         match feedback {
-            CopyFeedback::Copied => hint_spans.push("Copied.".green().bold()),
-            CopyFeedback::Error(msg) => hint_spans.push(Span::from(msg.clone()).red().bold()),
+            CopyFeedback::Copied => hint_spans
+                .push(Span::from("Copied.").set_style(crate::theme::success_style().bold())),
+            CopyFeedback::Error(msg) => hint_spans
+                .push(Span::from(msg.clone()).set_style(crate::theme::error_style().bold())),
         }
     }
 
@@ -911,6 +922,7 @@ fn draw_picker(tui: &mut Tui, state: &PickerState) -> std::io::Result<()> {
         ])
         .areas(area);
 
+        let base_style = user_message_style().patch(crate::theme::composer_style());
         // Header
         let scope: &'static str = if state.show_all {
             "all dirs"
@@ -919,29 +931,33 @@ fn draw_picker(tui: &mut Tui, state: &PickerState) -> std::io::Result<()> {
         };
         frame.render_widget_ref(
             Line::from(vec![
-                state.action.title().bold().cyan(),
-                " — ".dim(),
-                scope.dim(),
-            ]),
+                Span::from(state.action.title()).set_style(crate::theme::accent_style().bold()),
+                Span::from(" — ").set_style(crate::theme::dim_style()),
+                Span::from(scope).set_style(crate::theme::dim_style()),
+            ])
+            .style(base_style),
             header,
         );
 
         // Search line
-        let q = if state.query.is_empty() {
-            "Type to search".dim().to_string()
+        let search_line = if state.query.is_empty() {
+            Line::from(vec![
+                Span::from("Type to search").set_style(crate::theme::dim_style()),
+            ])
         } else {
-            format!("Search: {}", state.query)
+            Line::from(format!("Search: {}", state.query))
         };
-        frame.render_widget_ref(Line::from(q), search);
+        frame.render_widget_ref(search_line.style(base_style), search);
+        let dim_style = crate::theme::dim_style();
 
         let metrics = calculate_column_metrics(&state.filtered_rows, state.show_all);
 
         // Column headers and list
-        render_column_headers(frame, columns, &metrics);
-        render_list(frame, list, state, &metrics);
+        render_column_headers_with_style(frame, columns, &metrics, base_style);
+        render_list_with_style(frame, list, state, &metrics, dim_style, base_style);
 
         // Hint line
-        frame.render_widget_ref(hint_line(state), hint);
+        frame.render_widget_ref(hint_line(state).style(base_style), hint);
     })
 }
 
@@ -951,14 +967,26 @@ fn render_list(
     state: &PickerState,
     metrics: &ColumnMetrics,
 ) {
+    let dim_style = crate::theme::dim_style();
+    render_list_with_style(frame, area, state, metrics, dim_style, Style::default());
+}
+
+fn render_list_with_style(
+    frame: &mut crate::custom_terminal::Frame,
+    area: Rect,
+    state: &PickerState,
+    metrics: &ColumnMetrics,
+    dim_style: Style,
+    base_style: Style,
+) {
     if area.height == 0 {
         return;
     }
 
     let rows = &state.filtered_rows;
     if rows.is_empty() {
-        let message = render_empty_state_line(state);
-        frame.render_widget_ref(message, area);
+        let message = render_empty_state_line(state, dim_style);
+        frame.render_widget_ref(message.style(base_style), area);
         return;
     }
 
@@ -978,12 +1006,16 @@ fn render_list(
         .enumerate()
     {
         let is_sel = start + idx == state.selected;
-        let marker = if is_sel { "> ".bold() } else { "  ".into() };
+        let marker = if is_sel {
+            Span::from("> ").set_style(crate::theme::accent_style().add_modifier(Modifier::BOLD))
+        } else {
+            "  ".into()
+        };
         let marker_width = 2usize;
         let updated_span = if max_updated_width == 0 {
             None
         } else {
-            Some(Span::from(format!("{updated_label:<max_updated_width$}")).dim())
+            Some(Span::from(format!("{updated_label:<max_updated_width$}")).set_style(dim_style))
         };
         let branch_span = if max_branch_width == 0 {
             None
@@ -994,10 +1026,13 @@ fn render_list(
                     empty = "-",
                     width = max_branch_width
                 ))
-                .dim(),
+                .set_style(dim_style),
             )
         } else {
-            Some(Span::from(format!("{branch_label:<max_branch_width$}")).cyan())
+            Some(
+                Span::from(format!("{branch_label:<max_branch_width$}"))
+                    .set_style(crate::theme::accent_style()),
+            )
         };
         let cwd_span = if max_cwd_width == 0 {
             None
@@ -1008,10 +1043,10 @@ fn render_list(
                     empty = "-",
                     width = max_cwd_width
                 ))
-                .dim(),
+                .set_style(dim_style),
             )
         } else {
-            Some(Span::from(format!("{cwd_label:<max_cwd_width$}")).dim())
+            Some(Span::from(format!("{cwd_label:<max_cwd_width$}")).set_style(dim_style))
         };
 
         let mut preview_width = area.width as usize;
@@ -1050,52 +1085,73 @@ fn render_list(
 
         let line: Line = spans.into();
         let rect = Rect::new(area.x, y, area.width, 1);
-        frame.render_widget_ref(line, rect);
+        frame.render_widget_ref(line.style(base_style), rect);
         y = y.saturating_add(1);
     }
 
     if state.pagination.loading.is_pending() && y < area.y.saturating_add(area.height) {
-        let loading_line: Line = vec!["  ".into(), "Loading older sessions…".italic().dim()].into();
+        let loading_line: Line = vec![
+            "  ".into(),
+            Span::from("Loading older sessions…")
+                .set_style(dim_style.add_modifier(Modifier::ITALIC)),
+        ]
+        .into();
         let rect = Rect::new(area.x, y, area.width, 1);
-        frame.render_widget_ref(loading_line, rect);
+        frame.render_widget_ref(loading_line.style(base_style), rect);
     }
 }
 
-fn render_empty_state_line(state: &PickerState) -> Line<'static> {
+fn render_empty_state_line(state: &PickerState, dim_style: Style) -> Line<'static> {
     if !state.query.is_empty() {
         if state.search_state.is_active()
             || (state.pagination.loading.is_pending() && state.pagination.next_cursor.is_some())
         {
-            return vec!["Searching…".italic().dim()].into();
+            return vec![
+                Span::from("Searching…").set_style(dim_style.add_modifier(Modifier::ITALIC)),
+            ]
+            .into();
         }
         if state.pagination.reached_scan_cap {
             let msg = format!(
                 "Search scanned first {} sessions; more may exist",
                 state.pagination.num_scanned_files
             );
-            return vec![Span::from(msg).italic().dim()].into();
+            return vec![Span::from(msg).set_style(dim_style.add_modifier(Modifier::ITALIC))]
+                .into();
         }
-        return vec!["No results for your search".italic().dim()].into();
+        return vec![
+            Span::from("No results for your search")
+                .set_style(dim_style.add_modifier(Modifier::ITALIC)),
+        ]
+        .into();
     }
 
     if state.all_rows.is_empty() && state.pagination.num_scanned_files == 0 {
-        return vec!["No sessions yet".italic().dim()].into();
+        return vec![
+            Span::from("No sessions yet").set_style(dim_style.add_modifier(Modifier::ITALIC)),
+        ]
+        .into();
     }
 
     if state.pagination.loading.is_pending() {
-        return vec!["Loading older sessions…".italic().dim()].into();
+        return vec![
+            Span::from("Loading older sessions…")
+                .set_style(dim_style.add_modifier(Modifier::ITALIC)),
+        ]
+        .into();
     }
 
     if !state.show_all {
         return Line::from(vec![
-            "No sessions in this directory".italic().dim(),
+            Span::from("No sessions in this directory")
+                .set_style(dim_style.add_modifier(Modifier::ITALIC)),
             " (".into(),
             key_hint::plain(KeyCode::Tab).into(),
-            " to show all)".italic().dim(),
+            Span::from(" to show all)").set_style(dim_style.add_modifier(Modifier::ITALIC)),
         ]);
     }
 
-    vec!["No sessions yet".italic().dim()].into()
+    vec![Span::from("No sessions yet").set_style(dim_style.add_modifier(Modifier::ITALIC))].into()
 }
 
 fn human_time_ago(ts: DateTime<Utc>) -> String {
@@ -1146,6 +1202,15 @@ fn render_column_headers(
     area: Rect,
     metrics: &ColumnMetrics,
 ) {
+    render_column_headers_with_style(frame, area, metrics, Style::default());
+}
+
+fn render_column_headers_with_style(
+    frame: &mut crate::custom_terminal::Frame,
+    area: Rect,
+    metrics: &ColumnMetrics,
+    base_style: Style,
+) {
     if area.height == 0 {
         return;
     }
@@ -1157,7 +1222,9 @@ fn render_column_headers(
             text = "Updated",
             width = metrics.max_updated_width
         );
-        spans.push(Span::from(label).bold());
+        spans.push(
+            Span::from(label).set_style(crate::theme::accent_style().add_modifier(Modifier::BOLD)),
+        );
         spans.push("  ".into());
     }
     if metrics.max_branch_width > 0 {
@@ -1166,7 +1233,9 @@ fn render_column_headers(
             text = "Branch",
             width = metrics.max_branch_width
         );
-        spans.push(Span::from(label).bold());
+        spans.push(
+            Span::from(label).set_style(crate::theme::accent_style().add_modifier(Modifier::BOLD)),
+        );
         spans.push("  ".into());
     }
     if metrics.max_cwd_width > 0 {
@@ -1175,11 +1244,16 @@ fn render_column_headers(
             text = "CWD",
             width = metrics.max_cwd_width
         );
-        spans.push(Span::from(label).bold());
+        spans.push(
+            Span::from(label).set_style(crate::theme::accent_style().add_modifier(Modifier::BOLD)),
+        );
         spans.push("  ".into());
     }
-    spans.push("Conversation".bold());
-    frame.render_widget_ref(Line::from(spans), area);
+    spans.push(
+        Span::from("Conversation")
+            .set_style(crate::theme::accent_style().add_modifier(Modifier::BOLD)),
+    );
+    frame.render_widget_ref(Line::from(spans).style(base_style), area);
 }
 
 struct ColumnMetrics {
@@ -1603,14 +1677,19 @@ mod tests {
 
             frame.render_widget_ref(
                 Line::from(vec![
-                    "Resume session".bold().cyan(),
-                    " — ".dim(),
-                    "all dirs".dim(),
+                    Span::from("Resume session").set_style(crate::theme::accent_style().bold()),
+                    Span::from(" — ").set_style(crate::theme::dim_style()),
+                    Span::from("all dirs").set_style(crate::theme::dim_style()),
                 ]),
                 header,
             );
 
-            frame.render_widget_ref(Line::from("Type to search".dim()), search);
+            frame.render_widget_ref(
+                Line::from(vec![
+                    Span::from("Type to search").set_style(crate::theme::dim_style()),
+                ]),
+                search,
+            );
 
             render_column_headers(&mut frame, columns, &metrics);
             render_list(&mut frame, list, &state, &metrics);

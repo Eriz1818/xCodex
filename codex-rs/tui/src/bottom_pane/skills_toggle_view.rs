@@ -348,12 +348,14 @@ impl Renderable for SkillsToggleView {
                 width: rows_width.max(1),
                 height: list_area.height,
             };
+            let base_style = crate::theme::transcript_style();
             render_rows_single_line(
                 render_area,
                 buf,
                 &rows,
                 &self.state,
                 render_area.height as usize,
+                base_style,
                 "no matches",
             );
         }

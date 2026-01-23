@@ -21,8 +21,9 @@ use crate::app_event_sender::AppEventSender;
 use crate::exec_cell::spinner;
 use crate::key_hint;
 use crate::render::renderable::Renderable;
-use crate::shimmer::shimmer_spans;
+use crate::shimmer::shimmer_spans_with_palette;
 use crate::text_formatting::capitalize_first;
+use crate::theme::status_ramp_palette;
 use crate::tui::FrameRequester;
 use crate::wrapping::RtOptions;
 use crate::wrapping::word_wrap_lines;
@@ -167,12 +168,21 @@ impl StatusIndicatorWidget {
         }
 
         let prefix_width = UnicodeWidthStr::width(DETAILS_PREFIX);
+        let dim_style = crate::theme::status_dim_style();
         let opts = RtOptions::new(usize::from(width))
-            .initial_indent(Line::from(DETAILS_PREFIX.dim()))
-            .subsequent_indent(Line::from(Span::from(" ".repeat(prefix_width)).dim()))
+            .initial_indent(Line::from(Span::styled(DETAILS_PREFIX, dim_style)))
+            .subsequent_indent(Line::from(Span::styled(
+                " ".repeat(prefix_width),
+                dim_style,
+            )))
             .break_words(true);
 
-        let mut out = word_wrap_lines(details.lines().map(|line| vec![line.dim()]), opts);
+        let mut out = word_wrap_lines(
+            details
+                .lines()
+                .map(|line| vec![Span::styled(line.to_string(), dim_style)]),
+            opts,
+        );
 
         if out.len() > DETAILS_MAX_LINES {
             out.truncate(DETAILS_MAX_LINES);
@@ -182,7 +192,7 @@ impl StatusIndicatorWidget {
                 && let Some(span) = last.spans.last_mut()
             {
                 let trimmed: String = span.content.as_ref().chars().take(max_base_len).collect();
-                *span = format!("{trimmed}…").dim();
+                *span = Span::styled(format!("{trimmed}…"), dim_style);
             }
         }
 
@@ -200,6 +210,13 @@ impl Renderable for StatusIndicatorWidget {
             return;
         }
 
+        for y in area.top()..area.bottom() {
+            for x in area.left()..area.right() {
+                buf[(x, y)].set_symbol(" ");
+                buf[(x, y)].set_style(crate::theme::status_style());
+            }
+        }
+
         // Schedule next animation frame.
         self.frame_requester
             .schedule_frame_in(Duration::from_millis(32));
@@ -211,7 +228,8 @@ impl Renderable for StatusIndicatorWidget {
         spans.push(spinner(Some(self.last_resume_at), self.animations_enabled));
         spans.push(" ".into());
         if self.animations_enabled {
-            spans.extend(shimmer_spans(&self.header));
+            let (base, highlight) = status_ramp_palette();
+            spans.extend(shimmer_spans_with_palette(&self.header, base, highlight));
         } else if !self.header.is_empty() {
             spans.push(self.header.clone().into());
         }
@@ -235,7 +253,9 @@ impl Renderable for StatusIndicatorWidget {
             lines.extend(details.into_iter().take(max_details));
         }
 
-        Paragraph::new(Text::from(lines)).render_ref(area, buf);
+        Paragraph::new(Text::from(lines))
+            .style(crate::theme::status_style())
+            .render_ref(area, buf);
     }
 }
 

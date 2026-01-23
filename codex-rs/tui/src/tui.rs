@@ -15,10 +15,13 @@ use crossterm::Command;
 use crossterm::SynchronizedUpdate;
 use crossterm::event::DisableBracketedPaste;
 use crossterm::event::DisableFocusChange;
+use crossterm::event::DisableMouseCapture;
 use crossterm::event::EnableBracketedPaste;
 use crossterm::event::EnableFocusChange;
+use crossterm::event::EnableMouseCapture;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyboardEnhancementFlags;
+use crossterm::event::MouseEvent;
 use crossterm::event::PopKeyboardEnhancementFlags;
 use crossterm::event::PushKeyboardEnhancementFlags;
 use crossterm::terminal::EnterAlternateScreen;
@@ -229,6 +232,7 @@ fn set_panic_hook() {
 pub enum TuiEvent {
     Key(KeyEvent),
     Paste(String),
+    Mouse(MouseEvent),
     Draw,
 }
 
@@ -249,6 +253,8 @@ pub struct Tui {
     notification_backend: Option<DesktopNotificationBackend>,
     // When false, enter_alt_screen() becomes a no-op (for Zellij scrollback support)
     alt_screen_enabled: bool,
+    mouse_capture_enabled: bool,
+    alternate_scroll_enabled: bool,
 }
 
 impl Tui {
@@ -277,6 +283,8 @@ impl Tui {
             enhanced_keys_supported,
             notification_backend: Some(detect_backend()),
             alt_screen_enabled: true,
+            mouse_capture_enabled: true,
+            alternate_scroll_enabled: false,
         }
     }
 
@@ -435,6 +443,32 @@ impl Tui {
         Ok(())
     }
 
+    pub fn set_mouse_capture_enabled(&mut self, enabled: bool) {
+        if enabled {
+            let _ = execute!(self.terminal.backend_mut(), EnableMouseCapture);
+        } else {
+            let _ = execute!(self.terminal.backend_mut(), DisableMouseCapture);
+        }
+        self.mouse_capture_enabled = enabled;
+    }
+
+    pub fn set_alternate_scroll_enabled(&mut self, enabled: bool) {
+        if enabled {
+            let _ = execute!(self.terminal.backend_mut(), EnableAlternateScroll);
+        } else {
+            let _ = execute!(self.terminal.backend_mut(), DisableAlternateScroll);
+        }
+        self.alternate_scroll_enabled = enabled;
+    }
+
+    pub fn mouse_capture_enabled(&self) -> bool {
+        self.mouse_capture_enabled
+    }
+
+    pub fn alternate_scroll_enabled(&self) -> bool {
+        self.alternate_scroll_enabled
+    }
+
     /// Leave alternate screen and restore the previously saved inline viewport, if any.
     pub fn leave_alt_screen(&mut self) -> Result<()> {
         if !self.alt_screen_enabled {
@@ -442,6 +476,8 @@ impl Tui {
         }
         // Disable alternate scroll when leaving alt-screen
         let _ = execute!(self.terminal.backend_mut(), DisableAlternateScroll);
+        // Ensure mouse capture is off when leaving alt-screen.
+        let _ = execute!(self.terminal.backend_mut(), DisableMouseCapture);
         let _ = execute!(self.terminal.backend_mut(), LeaveAlternateScreen);
         if let Some(saved) = self.alt_saved_viewport.take() {
             self.terminal.set_viewport_area(saved);

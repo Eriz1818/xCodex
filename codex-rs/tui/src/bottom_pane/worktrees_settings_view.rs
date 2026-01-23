@@ -427,9 +427,9 @@ impl Renderable for WorktreesSettingsView {
         let [content_area, footer_area] =
             Layout::vertical([Constraint::Fill(1), Constraint::Length(1)]).areas(area);
 
-        Block::default()
-            .style(user_message_style())
-            .render(content_area, buf);
+        let base_style = user_message_style().patch(crate::theme::composer_style());
+        Block::default().style(base_style).render(content_area, buf);
+        Block::default().style(base_style).render(footer_area, buf);
 
         let inner = content_area.inset(Insets::vh(1, 2));
         let header = self.header();
@@ -447,11 +447,12 @@ impl Renderable for WorktreesSettingsView {
                     &rows,
                     &self.state,
                     MAX_POPUP_ROWS,
+                    base_style,
                     "  (no entries)",
                 );
             }
             Step::AddEntry => {
-                let block = Block::default().style(user_message_style());
+                let block = Block::default().style(base_style);
                 let [title_area, input_area] =
                     Layout::vertical([Constraint::Length(1), Constraint::Fill(1)]).areas(body_area);
                 block.render(body_area, buf);
@@ -474,7 +475,7 @@ impl Renderable for WorktreesSettingsView {
             }
         }
 
-        self.footer_line().dim().render(
+        self.footer_line().dim().style(base_style).render(
             Rect {
                 x: footer_area.x + 2,
                 y: footer_area.y,

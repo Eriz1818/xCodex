@@ -100,11 +100,17 @@ pub(crate) fn footer_height(props: FooterProps<'_>) -> u16 {
 }
 
 pub(crate) fn render_footer(area: Rect, buf: &mut Buffer, props: FooterProps<'_>) {
+    for y in area.top()..area.bottom() {
+        for x in area.left()..area.right() {
+            buf[(x, y)].set_style(crate::theme::status_style());
+        }
+    }
     Paragraph::new(prefix_lines(
         footer_lines(props),
         " ".repeat(FOOTER_INDENT_COLS).into(),
         " ".repeat(FOOTER_INDENT_COLS).into(),
     ))
+    .style(crate::theme::status_style())
     .render(area, buf);
 }
 
@@ -196,17 +202,23 @@ fn append_status_bar_items(line: &mut Line<'static>, props: FooterProps<'_>) {
     if props.show_status_bar_git_branch
         && let Some(branch) = props.status_bar_git_branch
     {
-        line.push_span(" · ".dim());
-        line.push_span("branch: ".dim());
-        line.push_span(Span::from(branch.to_string()).cyan());
+        line.push_span(Span::styled(" · ", crate::theme::dim_style()));
+        line.push_span(Span::styled("branch: ", crate::theme::dim_style()));
+        line.push_span(Span::styled(
+            branch.to_string(),
+            crate::theme::accent_style(),
+        ));
     }
 
     if props.show_status_bar_worktree
         && let Some(worktree) = props.status_bar_worktree
     {
-        line.push_span(" · ".dim());
-        line.push_span("wt: ".dim());
-        line.push_span(Span::from(worktree.to_string()).dim());
+        line.push_span(Span::styled(" · ", crate::theme::dim_style()));
+        line.push_span(Span::styled("wt: ", crate::theme::dim_style()));
+        line.push_span(Span::styled(
+            worktree.to_string(),
+            crate::theme::dim_style(),
+        ));
     }
 }
 

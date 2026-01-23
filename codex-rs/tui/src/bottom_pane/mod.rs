@@ -23,7 +23,7 @@ use crate::render::renderable::FlexRenderable;
 use crate::render::renderable::Renderable;
 use crate::render::renderable::RenderableItem;
 use crate::tui::FrameRequester;
-use bottom_pane_view::BottomPaneView;
+pub(crate) use bottom_pane_view::BottomPaneView;
 use codex_core::features::Features;
 use codex_core::skills::model::SkillMetadata;
 use codex_file_search::FileMatch;
@@ -276,6 +276,7 @@ pub(crate) struct BottomPaneParams {
     pub(crate) enhanced_keys_supported: bool,
     pub(crate) placeholder_text: String,
     pub(crate) disable_paste_burst: bool,
+    pub(crate) minimal_composer_borders: bool,
     pub(crate) xtreme_ui_enabled: bool,
     pub(crate) animations_enabled: bool,
     pub(crate) skills: Option<Vec<SkillMetadata>>,
@@ -290,6 +291,7 @@ impl BottomPane {
             enhanced_keys_supported,
             placeholder_text,
             disable_paste_burst,
+            minimal_composer_borders,
             xtreme_ui_enabled,
             animations_enabled,
             skills,
@@ -301,6 +303,7 @@ impl BottomPane {
             placeholder_text,
             disable_paste_burst,
         );
+        composer.set_minimal_borders(minimal_composer_borders);
         composer.set_xtreme_ui_enabled(xtreme_ui_enabled);
         composer.set_skill_mentions(skills);
 
@@ -335,6 +338,10 @@ impl BottomPane {
 
     pub fn set_collaboration_modes_enabled(&mut self, enabled: bool) {
         self.composer.set_collaboration_modes_enabled(enabled);
+    }
+
+    pub fn set_slash_popup_max_rows(&mut self, max_rows: usize) {
+        self.composer.set_slash_popup_max_rows(max_rows);
         self.request_redraw();
     }
 
@@ -977,11 +984,11 @@ impl BottomPane {
                 || self.exclusion_summary_banner.is_some()
                 || !self.unified_exec_footer.is_empty();
             if has_queued_messages && has_status_or_footer {
-                flex.push(0, RenderableItem::Owned("".into()));
+                flex.push(0, RenderableItem::Owned(BlankLine.into()));
             }
             flex.push(1, RenderableItem::Borrowed(&self.queued_user_messages));
             if !has_queued_messages && has_status_or_footer {
-                flex.push(0, RenderableItem::Owned("".into()));
+                flex.push(0, RenderableItem::Owned(BlankLine.into()));
             }
             let mut flex2 = FlexRenderable::new();
             flex2.push(1, RenderableItem::Owned(flex.into()));
@@ -991,8 +998,27 @@ impl BottomPane {
     }
 }
 
+#[derive(Clone, Copy, Debug)]
+struct BlankLine;
+
+impl Renderable for BlankLine {
+    fn render(&self, _area: Rect, _buf: &mut Buffer) {}
+    fn desired_height(&self, _width: u16) -> u16 {
+        1
+    }
+}
+
 impl Renderable for BottomPane {
     fn render(&self, area: Rect, buf: &mut Buffer) {
+        if area.is_empty() {
+            return;
+        }
+        for y in area.top()..area.bottom() {
+            for x in area.left()..area.right() {
+                buf[(x, y)].set_symbol(" ");
+                buf[(x, y)].set_style(crate::theme::transcript_style());
+            }
+        }
         self.as_renderable().render(area, buf);
     }
     fn desired_height(&self, width: u16) -> u16 {
@@ -1055,6 +1081,7 @@ mod tests {
             enhanced_keys_supported: false,
             placeholder_text: "Ask xcodex to do anything".to_string(),
             disable_paste_burst: false,
+            minimal_composer_borders: false,
             xtreme_ui_enabled: true,
             animations_enabled: true,
             skills: Some(Vec::new()),
@@ -1079,6 +1106,7 @@ mod tests {
             enhanced_keys_supported: false,
             placeholder_text: "Ask xcodex to do anything".to_string(),
             disable_paste_burst: false,
+            minimal_composer_borders: false,
             xtreme_ui_enabled: true,
             animations_enabled: true,
             skills: Some(Vec::new()),
@@ -1114,6 +1142,7 @@ mod tests {
             enhanced_keys_supported: false,
             placeholder_text: "Ask xcodex to do anything".to_string(),
             disable_paste_burst: false,
+            minimal_composer_borders: false,
             xtreme_ui_enabled: true,
             animations_enabled: true,
             skills: Some(Vec::new()),
@@ -1182,6 +1211,7 @@ mod tests {
             enhanced_keys_supported: false,
             placeholder_text: "Ask xcodex to do anything".to_string(),
             disable_paste_burst: false,
+            minimal_composer_borders: false,
             xtreme_ui_enabled: true,
             animations_enabled: true,
             skills: Some(Vec::new()),
@@ -1210,6 +1240,7 @@ mod tests {
             enhanced_keys_supported: false,
             placeholder_text: "Ask xcodex to do anything".to_string(),
             disable_paste_burst: false,
+            minimal_composer_borders: false,
             xtreme_ui_enabled: true,
             animations_enabled: true,
             skills: Some(Vec::new()),
@@ -1242,6 +1273,7 @@ mod tests {
             enhanced_keys_supported: false,
             placeholder_text: "Ask Codex to do anything".to_string(),
             disable_paste_burst: false,
+            minimal_composer_borders: false,
             xtreme_ui_enabled: false,
             animations_enabled: true,
             skills: Some(Vec::new()),
@@ -1266,6 +1298,7 @@ mod tests {
             enhanced_keys_supported: false,
             placeholder_text: "Ask Codex to do anything".to_string(),
             disable_paste_burst: false,
+            minimal_composer_borders: false,
             xtreme_ui_enabled: false,
             animations_enabled: true,
             skills: Some(Vec::new()),
@@ -1288,6 +1321,32 @@ mod tests {
     }
 
     #[test]
+    fn composer_minimal_borders_snapshot() {
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let pane = BottomPane::new(BottomPaneParams {
+            app_event_tx: tx,
+            frame_requester: FrameRequester::test_dummy(),
+            has_input_focus: true,
+            enhanced_keys_supported: false,
+            placeholder_text: "Ask xcodex to do anything".to_string(),
+            disable_paste_burst: false,
+            minimal_composer_borders: true,
+            xtreme_ui_enabled: true,
+            animations_enabled: true,
+            skills: Some(Vec::new()),
+        });
+
+        let width = 48;
+        let height = pane.desired_height(width);
+        let area = Rect::new(0, 0, width, height);
+        assert_snapshot!(
+            "composer_minimal_borders_snapshot",
+            render_snapshot(&pane, area)
+        );
+    }
+
+    #[test]
     fn queued_messages_visible_when_status_hidden_snapshot() {
         let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
         let tx = AppEventSender::new(tx_raw);
@@ -1298,6 +1357,7 @@ mod tests {
             enhanced_keys_supported: false,
             placeholder_text: "Ask xcodex to do anything".to_string(),
             disable_paste_burst: false,
+            minimal_composer_borders: false,
             xtreme_ui_enabled: true,
             animations_enabled: true,
             skills: Some(Vec::new()),
@@ -1327,6 +1387,7 @@ mod tests {
             enhanced_keys_supported: false,
             placeholder_text: "Ask xcodex to do anything".to_string(),
             disable_paste_burst: false,
+            minimal_composer_borders: false,
             xtreme_ui_enabled: true,
             animations_enabled: true,
             skills: Some(Vec::new()),
@@ -1355,6 +1416,7 @@ mod tests {
             enhanced_keys_supported: false,
             placeholder_text: "Ask Codex to do anything".to_string(),
             disable_paste_burst: false,
+            minimal_composer_borders: false,
             xtreme_ui_enabled: false,
             animations_enabled: true,
             skills: Some(vec![SkillMetadata {
@@ -1401,6 +1463,7 @@ mod tests {
             enhanced_keys_supported: false,
             placeholder_text: "Ask Codex to do anything".to_string(),
             disable_paste_burst: false,
+            minimal_composer_borders: false,
             xtreme_ui_enabled: false,
             animations_enabled: true,
             skills: Some(Vec::new()),
@@ -1437,6 +1500,7 @@ mod tests {
             enhanced_keys_supported: false,
             placeholder_text: "Ask Codex to do anything".to_string(),
             disable_paste_burst: false,
+            minimal_composer_borders: false,
             xtreme_ui_enabled: false,
             animations_enabled: true,
             skills: Some(Vec::new()),

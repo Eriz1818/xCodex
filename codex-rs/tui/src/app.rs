@@ -484,6 +484,7 @@ impl App {
             codex_core::terminal::user_agent(),
             SessionSource::Cli,
         );
+        crate::theme::init(&config, crate::terminal_palette::default_bg());
 
         let enhanced_keys_supported = tui.enhanced_keys_supported();
         let mut chat_widget = match session_selection {
@@ -729,6 +730,7 @@ impl App {
                     let pasted = pasted.replace("\r", "\n");
                     self.chat_widget.handle_paste(pasted);
                 }
+                TuiEvent::Mouse(_) => {}
                 TuiEvent::Draw => {
                     if self.backtrack_render_pending {
                         self.backtrack_render_pending = false;
@@ -933,12 +935,16 @@ impl App {
                 self.transcript_cells.push(cell.clone());
                 let mut display = cell.display_lines(tui.terminal.last_known_screen_size.width);
                 if !display.is_empty() {
+                    let base_style = crate::theme::transcript_style();
+                    for line in &mut display {
+                        line.style = base_style.patch(line.style);
+                    }
                     // Only insert a separating blank line for new cells that are not
                     // part of an ongoing stream. Streaming continuations should not
                     // accrue extra blank lines between chunks.
                     if !cell.is_stream_continuation() {
                         if self.has_emitted_history_lines {
-                            display.insert(0, Line::from(""));
+                            display.insert(0, Line::from("").style(base_style));
                         } else {
                             self.has_emitted_history_lines = true;
                         }
@@ -1104,9 +1110,143 @@ impl App {
                 self.chat_widget.set_verbose_tool_output(verbose);
                 tui.frame_requester().schedule_frame();
             }
+            AppEvent::UpdateTranscriptDiffHighlight(enabled) => {
+                self.config.tui_transcript_diff_highlight = enabled;
+                self.chat_widget.set_transcript_diff_highlight(enabled);
+                tui.frame_requester().schedule_frame();
+            }
+            AppEvent::UpdateTranscriptUserPromptHighlight(enabled) => {
+                self.config.tui_transcript_user_prompt_highlight = enabled;
+                self.chat_widget
+                    .set_transcript_user_prompt_highlight(enabled);
+                tui.frame_requester().schedule_frame();
+            }
             AppEvent::UpdateXtremeMode(mode) => {
                 self.config.tui_xtreme_mode = mode;
                 self.chat_widget.set_xtreme_mode(mode);
+                tui.frame_requester().schedule_frame();
+            }
+            AppEvent::PreviewTheme { theme } => {
+                crate::theme::preview(&self.config, crate::terminal_palette::default_bg(), &theme);
+                tui.frame_requester().schedule_frame();
+            }
+            AppEvent::CancelThemePreview => {
+                crate::theme::apply_from_config(
+                    &self.config,
+                    crate::terminal_palette::default_bg(),
+                );
+                tui.frame_requester().schedule_frame();
+            }
+            AppEvent::PersistThemeSelection { variant, theme } => {
+                use codex_core::config::edit::ConfigEdit;
+
+                let profile = self.active_profile.as_deref();
+                let (config_key, label) = match variant {
+                    codex_core::themes::ThemeVariant::Light => ("light", "Light"),
+                    codex_core::themes::ThemeVariant::Dark => ("dark", "Dark"),
+                };
+
+                let edit = if theme == "default" {
+                    ConfigEdit::ClearPath {
+                        segments: vec!["themes".to_string(), config_key.to_string()],
+                    }
+                } else {
+                    ConfigEdit::SetPath {
+                        segments: vec!["themes".to_string(), config_key.to_string()],
+                        value: toml_edit::value(theme.clone()),
+                    }
+                };
+
+                let result = ConfigEditsBuilder::new(&self.config.codex_home)
+                    .with_profile(profile)
+                    .with_edits([edit])
+                    .apply()
+                    .await;
+
+                match result {
+                    Ok(()) => {
+                        match variant {
+                            codex_core::themes::ThemeVariant::Light => {
+                                self.config.themes.light =
+                                    (theme != "default").then(|| theme.clone());
+                            }
+                            codex_core::themes::ThemeVariant::Dark => {
+                                self.config.themes.dark =
+                                    (theme != "default").then(|| theme.clone());
+                            }
+                        }
+                        self.chat_widget
+                            .set_themes_config(self.config.themes.clone());
+                        crate::theme::apply_from_config(
+                            &self.config,
+                            crate::terminal_palette::default_bg(),
+                        );
+
+                        let mut message = format!("Theme changed to `{theme}` for {label} mode.");
+                        if let Some(profile) = profile {
+                            message.push_str(" (profile: ");
+                            message.push_str(profile);
+                            message.push(')');
+                        }
+                        self.chat_widget.add_info_message(message, None);
+                    }
+                    Err(err) => {
+                        crate::theme::apply_from_config(
+                            &self.config,
+                            crate::terminal_palette::default_bg(),
+                        );
+                        tracing::error!(error = %err, "failed to persist theme selection");
+                        if let Some(profile) = profile {
+                            self.chat_widget.add_error_message(format!(
+                                "Failed to save theme for profile `{profile}`: {err}"
+                            ));
+                        } else {
+                            self.chat_widget
+                                .add_error_message(format!("Failed to save theme: {err}"));
+                        }
+                    }
+                }
+                tui.frame_requester().schedule_frame();
+            }
+            AppEvent::OpenThemeSelector => {
+                let _ = tui.enter_alt_screen();
+                let terminal_bg = crate::terminal_palette::default_bg();
+                self.overlay = Some(Overlay::new_theme_selector(
+                    self.app_event_tx.clone(),
+                    self.config.clone(),
+                    terminal_bg,
+                ));
+                tui.frame_requester().schedule_frame();
+            }
+            AppEvent::OpenThemeHelp => {
+                let _ = tui.enter_alt_screen();
+                let lines: Vec<ratatui::text::Line<'static>> = vec![
+                    "Theme keys".bold().into(),
+                    "".into(),
+                    "roles.fg / roles.bg — primary app text + surfaces".into(),
+                    "roles.transcript_bg / roles.composer_bg / roles.status_bg — transcript, composer, and status bar backgrounds (derived by default)".into(),
+                    "roles.status_ramp_fg / roles.status_ramp_highlight — ramp text base + shimmer highlight (optional)".into(),
+                    "roles.user_prompt_highlight_bg — background for highlighting past user prompts in the transcript (derived by default)".into(),
+                    "roles.selection_fg / roles.selection_bg — selection highlight in pickers".into(),
+                    "roles.cursor_fg / roles.cursor_bg — (reserved for future)".dim().into(),
+                    "roles.border — box borders and tree chrome (status cards, tool blocks)".into(),
+                    "roles.dim — secondary text (derived from fg/bg)".into(),
+                    "".into(),
+                    "Diff roles".bold().into(),
+                    "roles.diff_add_fg / roles.diff_add_bg — additions in /diff overlay".into(),
+                    "roles.diff_del_fg / roles.diff_del_bg — deletions in /diff overlay".into(),
+                    "roles.diff_hunk_fg / roles.diff_hunk_bg — hunk separators in /diff overlay".into(),
+                    "Tip: set roles.diff_*_bg to `inherit` for text-only diffs.".dim().into(),
+                    "".into(),
+                    "Palette keys".bold().into(),
+                    "palette.* defines ANSI slots (0–15). They matter for legacy ANSI-colored UI and external tool output; xcodex themes do not swap the terminal palette.".into(),
+                    "".into(),
+                    "Tip: run `/theme` to preview + save. `/theme template` writes example YAML files.".into(),
+                ];
+                self.overlay = Some(Overlay::new_static_with_lines(
+                    lines,
+                    "T H E M E".to_string(),
+                ));
                 tui.frame_requester().schedule_frame();
             }
             AppEvent::UpdateRampsConfig {
@@ -1711,6 +1851,64 @@ impl App {
                         } else {
                             self.chat_widget.add_error_message(format!(
                                 "Failed to save output verbosity: {err}"
+                            ));
+                        }
+                    }
+                }
+            }
+            AppEvent::PersistTranscriptDiffHighlight(enabled) => {
+                let profile = self.active_profile.as_deref();
+                match ConfigEditsBuilder::new(&self.config.codex_home)
+                    .with_profile(profile)
+                    .with_edits([ConfigEdit::SetPath {
+                        segments: vec!["tui".to_string(), "transcript_diff_highlight".to_string()],
+                        value: toml_edit::value(enabled),
+                    }])
+                    .apply()
+                    .await
+                {
+                    Ok(()) => {}
+                    Err(err) => {
+                        tracing::error!(error = %err, "failed to persist diff highlight toggle");
+                        if let Some(profile) = profile {
+                            self.chat_widget.add_error_message(format!(
+                                "Failed to save diff highlight setting for profile `{profile}`: {err}"
+                            ));
+                        } else {
+                            self.chat_widget.add_error_message(format!(
+                                "Failed to save diff highlight setting: {err}"
+                            ));
+                        }
+                    }
+                }
+            }
+            AppEvent::PersistTranscriptUserPromptHighlight(enabled) => {
+                let profile = self.active_profile.as_deref();
+                match ConfigEditsBuilder::new(&self.config.codex_home)
+                    .with_profile(profile)
+                    .with_edits([ConfigEdit::SetPath {
+                        segments: vec![
+                            "tui".to_string(),
+                            "transcript_user_prompt_highlight".to_string(),
+                        ],
+                        value: toml_edit::value(enabled),
+                    }])
+                    .apply()
+                    .await
+                {
+                    Ok(()) => {}
+                    Err(err) => {
+                        tracing::error!(
+                            error = %err,
+                            "failed to persist user prompt highlight toggle"
+                        );
+                        if let Some(profile) = profile {
+                            self.chat_widget.add_error_message(format!(
+                                "Failed to save user prompt highlight setting for profile `{profile}`: {err}"
+                            ));
+                        } else {
+                            self.chat_widget.add_error_message(format!(
+                                "Failed to save user prompt highlight setting: {err}"
                             ));
                         }
                     }
@@ -2752,6 +2950,7 @@ mod tests {
                 message: text.to_string(),
                 text_elements: Vec::new(),
                 local_image_paths: Vec::new(),
+                highlight: false,
             }) as Arc<dyn HistoryCell>
         };
         let agent_cell = |text: &str| -> Arc<dyn HistoryCell> {

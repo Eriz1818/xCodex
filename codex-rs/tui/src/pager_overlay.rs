@@ -15,40 +15,69 @@
 //! recomputed. `ChatWidget` is responsible for producing a key that changes when the active cell
 //! mutates in place or when its transcript output is time-dependent.
 
+use std::collections::HashMap;
 use std::io::Result;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
+use crate::app_event::AppEvent;
+use crate::app_event_sender::AppEventSender;
+use crate::bottom_pane::BottomPane;
+use crate::bottom_pane::BottomPaneParams;
 use crate::chatwidget::ActiveCellTranscriptKey;
+use crate::history_cell::AgentMessageCell;
+use crate::history_cell::FinalMessageSeparator;
 use crate::history_cell::HistoryCell;
 use crate::history_cell::UserHistoryCell;
 use crate::key_hint;
 use crate::key_hint::KeyBinding;
 use crate::render::Insets;
+use crate::render::RectExt;
 use crate::render::renderable::InsetRenderable;
 use crate::render::renderable::Renderable;
 use crate::style::user_message_style;
 use crate::tui;
 use crate::tui::TuiEvent;
+use codex_core::protocol::FileChange;
+use codex_protocol::ThreadId;
+use codex_protocol::plan_tool::PlanItemArg;
+use codex_protocol::plan_tool::StepStatus;
+use codex_protocol::plan_tool::UpdatePlanArgs;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
+use crossterm::event::KeyEventKind;
+use crossterm::event::KeyModifiers;
+use crossterm::event::MouseButton;
+use crossterm::event::MouseEvent;
+use crossterm::event::MouseEventKind;
 use ratatui::buffer::Buffer;
 use ratatui::buffer::Cell;
+use ratatui::layout::Constraint;
+use ratatui::layout::Direction;
+use ratatui::layout::Layout;
 use ratatui::layout::Rect;
+use ratatui::style::Modifier;
 use ratatui::style::Style;
+use ratatui::style::Styled;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
 use ratatui::text::Span;
 use ratatui::text::Text;
+use ratatui::widgets::Block;
+use ratatui::widgets::BorderType;
+use ratatui::widgets::Borders;
 use ratatui::widgets::Clear;
 use ratatui::widgets::Paragraph;
 use ratatui::widgets::Widget;
 use ratatui::widgets::WidgetRef;
 use ratatui::widgets::Wrap;
+use serde_json::json;
 
 pub(crate) enum Overlay {
     Transcript(TranscriptOverlay),
     Static(StaticOverlay),
+    ThemeSelector(ThemeSelectorOverlay),
 }
 
 impl Overlay {
@@ -67,10 +96,19 @@ impl Overlay {
         Self::Static(StaticOverlay::with_renderables(renderables, title))
     }
 
+    pub(crate) fn new_theme_selector(
+        app_event_tx: AppEventSender,
+        config: codex_core::config::Config,
+        terminal_bg: Option<(u8, u8, u8)>,
+    ) -> Self {
+        Self::ThemeSelector(ThemeSelectorOverlay::new(app_event_tx, config, terminal_bg))
+    }
+
     pub(crate) fn handle_event(&mut self, tui: &mut tui::Tui, event: TuiEvent) -> Result<()> {
         match self {
             Overlay::Transcript(o) => o.handle_event(tui, event),
             Overlay::Static(o) => o.handle_event(tui, event),
+            Overlay::ThemeSelector(o) => o.handle_event(tui, event),
         }
     }
 
@@ -78,6 +116,7 @@ impl Overlay {
         match self {
             Overlay::Transcript(o) => o.is_done(),
             Overlay::Static(o) => o.is_done(),
+            Overlay::ThemeSelector(o) => o.is_done(),
         }
     }
 }
@@ -98,11 +137,16 @@ const KEY_CTRL_F: KeyBinding = key_hint::ctrl(KeyCode::Char('f'));
 const KEY_CTRL_D: KeyBinding = key_hint::ctrl(KeyCode::Char('d'));
 const KEY_CTRL_B: KeyBinding = key_hint::ctrl(KeyCode::Char('b'));
 const KEY_CTRL_U: KeyBinding = key_hint::ctrl(KeyCode::Char('u'));
+const KEY_TAB: KeyBinding = key_hint::plain(KeyCode::Tab);
 const KEY_Q: KeyBinding = key_hint::plain(KeyCode::Char('q'));
 const KEY_ESC: KeyBinding = key_hint::plain(KeyCode::Esc);
 const KEY_ENTER: KeyBinding = key_hint::plain(KeyCode::Enter);
 const KEY_CTRL_T: KeyBinding = key_hint::ctrl(KeyCode::Char('t'));
+const KEY_CTRL_S: KeyBinding = key_hint::ctrl(KeyCode::Char('s'));
 const KEY_CTRL_C: KeyBinding = key_hint::ctrl(KeyCode::Char('c'));
+const KEY_CTRL_G: KeyBinding = key_hint::ctrl(KeyCode::Char('g'));
+const KEY_CTRL_P: KeyBinding = key_hint::ctrl(KeyCode::Char('p'));
+const KEY_QUESTION: KeyBinding = key_hint::plain(KeyCode::Char('?'));
 
 // Common pager navigation hints rendered on the first line
 const PAGER_KEY_HINTS: &[(&[KeyBinding], &str)] = &[
@@ -131,6 +175,11 @@ fn render_key_hints(area: Rect, buf: &mut Buffer, pairs: &[(&[KeyBinding], &str)
     }
     Paragraph::new(vec![Line::from(spans).dim()]).render_ref(area, buf);
 }
+
+include!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../theme-ui/src/theme_selector_overlay.rs"
+));
 
 /// Generic widget for rendering a pager view.
 struct PagerView {
@@ -163,7 +212,14 @@ impl PagerView {
     }
 
     fn render(&mut self, area: Rect, buf: &mut Buffer) {
-        Clear.render(area, buf);
+        if !area.is_empty() {
+            for y in area.top()..area.bottom() {
+                for x in area.left()..area.right() {
+                    buf[(x, y)].set_symbol(" ");
+                    buf[(x, y)].set_style(crate::theme::transcript_style());
+                }
+            }
+        }
         self.render_header(area, buf);
         let content_area = self.content_area(area);
         self.update_last_content_height(content_area.height);
@@ -238,7 +294,7 @@ impl PagerView {
         let sep_rect = Rect::new(full_area.x, sep_y, full_area.width, 1);
 
         Span::from("─".repeat(sep_rect.width as usize))
-            .dim()
+            .style(crate::theme::border_style())
             .render_ref(sep_rect, buf);
         let percent = if total_len == 0 {
             100
@@ -255,7 +311,7 @@ impl PagerView {
         let pct_w = pct_text.chars().count() as u16;
         let pct_x = sep_rect.x + sep_rect.width - pct_w - 1;
         Span::from(pct_text)
-            .dim()
+            .style(crate::theme::dim_style())
             .render_ref(Rect::new(pct_x, sep_rect.y, pct_w, 1), buf);
     }
 
@@ -950,7 +1006,8 @@ mod tests {
                 content: "hello\nworld\n".to_string(),
             },
         );
-        let approval_cell: Arc<dyn HistoryCell> = Arc::new(new_patch_event(approval_changes, &cwd));
+        let approval_cell: Arc<dyn HistoryCell> =
+            Arc::new(new_patch_event(approval_changes, &cwd, false));
         cells.push(approval_cell);
 
         let mut apply_changes = HashMap::new();
@@ -960,7 +1017,8 @@ mod tests {
                 content: "hello\nworld\n".to_string(),
             },
         );
-        let apply_begin_cell: Arc<dyn HistoryCell> = Arc::new(new_patch_event(apply_changes, &cwd));
+        let apply_begin_cell: Arc<dyn HistoryCell> =
+            Arc::new(new_patch_event(apply_changes, &cwd, false));
         cells.push(apply_begin_cell);
 
         let apply_end_cell: Arc<dyn HistoryCell> =

@@ -246,7 +246,11 @@ impl App {
         let _ = tui.leave_alt_screen();
         let was_backtrack = self.backtrack.overlay_preview_active;
         if !self.deferred_history_lines.is_empty() {
-            let lines = std::mem::take(&mut self.deferred_history_lines);
+            let mut lines = std::mem::take(&mut self.deferred_history_lines);
+            let base = crate::theme::transcript_style();
+            for line in &mut lines {
+                line.style = base.patch(line.style);
+            }
             tui.insert_history_lines(lines);
         }
         self.overlay = None;
@@ -262,8 +266,13 @@ impl App {
     pub(crate) fn render_transcript_once(&mut self, tui: &mut tui::Tui) {
         if !self.transcript_cells.is_empty() {
             let width = tui.terminal.last_known_screen_size.width;
+            let base = crate::theme::transcript_style();
             for cell in &self.transcript_cells {
-                tui.insert_history_lines(cell.display_lines(width));
+                let mut lines = cell.display_lines(width);
+                for line in &mut lines {
+                    line.style = base.patch(line.style);
+                }
+                tui.insert_history_lines(lines);
             }
         }
     }
@@ -582,6 +591,7 @@ mod tests {
                 message: "first user".to_string(),
                 text_elements: Vec::new(),
                 local_image_paths: Vec::new(),
+                highlight: false,
             }) as Arc<dyn HistoryCell>,
             Arc::new(AgentMessageCell::new(vec![Line::from("assistant")], true))
                 as Arc<dyn HistoryCell>,
@@ -600,6 +610,7 @@ mod tests {
                 message: "first".to_string(),
                 text_elements: Vec::new(),
                 local_image_paths: Vec::new(),
+                highlight: false,
             }) as Arc<dyn HistoryCell>,
             Arc::new(AgentMessageCell::new(vec![Line::from("after")], false))
                 as Arc<dyn HistoryCell>,
@@ -630,6 +641,7 @@ mod tests {
                 message: "first".to_string(),
                 text_elements: Vec::new(),
                 local_image_paths: Vec::new(),
+                highlight: false,
             }) as Arc<dyn HistoryCell>,
             Arc::new(AgentMessageCell::new(vec![Line::from("between")], false))
                 as Arc<dyn HistoryCell>,
@@ -637,6 +649,7 @@ mod tests {
                 message: "second".to_string(),
                 text_elements: Vec::new(),
                 local_image_paths: Vec::new(),
+                highlight: false,
             }) as Arc<dyn HistoryCell>,
             Arc::new(AgentMessageCell::new(vec![Line::from("tail")], false))
                 as Arc<dyn HistoryCell>,

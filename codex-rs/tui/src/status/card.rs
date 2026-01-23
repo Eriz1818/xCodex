@@ -286,11 +286,15 @@ pub(crate) fn new_settings_card(
     xtreme_ui_enabled: bool,
     show_git_branch: bool,
     show_worktree: bool,
+    transcript_diff_highlight: bool,
+    transcript_user_prompt_highlight: bool,
 ) -> Box<dyn HistoryCell> {
     Box::new(SettingsHistoryCell {
         xtreme_ui_enabled,
         show_git_branch,
         show_worktree,
+        transcript_diff_highlight,
+        transcript_user_prompt_highlight,
     })
 }
 
@@ -299,6 +303,8 @@ struct SettingsHistoryCell {
     xtreme_ui_enabled: bool,
     show_git_branch: bool,
     show_worktree: bool,
+    transcript_diff_highlight: bool,
+    transcript_user_prompt_highlight: bool,
 }
 
 impl HistoryCell for SettingsHistoryCell {
@@ -329,10 +335,37 @@ impl HistoryCell for SettingsHistoryCell {
         }
 
         lines.push(Line::from(Vec::<Span<'static>>::new()));
+        lines.push("Transcript".bold().into());
+        {
+            let checkbox = if self.transcript_diff_highlight {
+                "[x]"
+            } else {
+                "[ ]"
+            };
+            lines.push(Line::from(format!("  {checkbox} Diff highlight")));
+        }
+        {
+            let checkbox = if self.transcript_user_prompt_highlight {
+                "[x]"
+            } else {
+                "[ ]"
+            };
+            lines.push(Line::from(format!("  {checkbox} Highlight past prompts")));
+        }
+
+        lines.push(Line::from(Vec::<Span<'static>>::new()));
         lines.push(
             vec![
                 "Usage: ".dim(),
                 "/settings status-bar <git-branch|worktree> [on|off|toggle|status]".cyan(),
+            ]
+            .into(),
+        );
+        lines.push(
+            vec![
+                "Usage: ".dim(),
+                "/settings transcript <diff-highlight|highlight-past-prompts> [on|off|toggle|status]"
+                    .cyan(),
             ]
             .into(),
         );
@@ -879,15 +912,17 @@ impl HistoryCell for StatusHistoryCell {
         let value_width = formatter.value_width(available_inner_width);
 
         let note_first_line = Line::from(vec![
-            Span::from("Visit ").cyan(),
-            "https://chatgpt.com/codex/settings/usage"
-                .cyan()
-                .underlined(),
-            Span::from(" for up-to-date").cyan(),
+            Span::styled("Visit ", crate::theme::accent_style()),
+            Span::styled(
+                "https://chatgpt.com/codex/settings/usage",
+                crate::theme::link_style().add_modifier(Modifier::UNDERLINED),
+            ),
+            Span::styled(" for up-to-date", crate::theme::accent_style()),
         ]);
-        let note_second_line = Line::from(vec![
-            Span::from("information on rate limits and credits").cyan(),
-        ]);
+        let note_second_line = Line::from(vec![Span::styled(
+            "information on rate limits and credits",
+            crate::theme::accent_style(),
+        )]);
         let note_lines = word_wrap_lines(
             [note_first_line, note_second_line],
             RtOptions::new(available_inner_width),
@@ -921,7 +956,10 @@ impl HistoryCell for StatusHistoryCell {
         lines.push(formatter.line(
             "Auto-compact",
             vec![if self.auto_compact_enabled {
-                "enabled".green().bold()
+                Span::styled(
+                    "enabled",
+                    crate::theme::success_style().add_modifier(Modifier::BOLD),
+                )
             } else {
                 "disabled".dim()
             }],

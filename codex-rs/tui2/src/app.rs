@@ -75,11 +75,10 @@ use crossterm::event::KeyEventKind;
 use crossterm::event::MouseButton;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
+use ratatui::style::Style;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
-use ratatui::widgets::Clear;
 use ratatui::widgets::Paragraph;
-use ratatui::widgets::WidgetRef;
 use ratatui::widgets::Wrap;
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -425,6 +424,18 @@ pub(crate) struct App {
     shared_dirs_write_notice_shown: bool,
 }
 impl App {
+    fn clear_area_with_style(buf: &mut Buffer, area: Rect, style: Style) {
+        if area.width == 0 || area.height == 0 {
+            return;
+        }
+        for y in area.y..area.bottom() {
+            for x in area.x..area.right() {
+                buf[(x, y)].set_symbol(" ");
+                buf[(x, y)].set_style(style);
+            }
+        }
+    }
+
     async fn shutdown_current_conversation(&mut self) {
         if let Some(conversation_id) = self.chat_widget.conversation_id() {
             self.suppress_shutdown_complete = true;
@@ -478,6 +489,8 @@ impl App {
         if let Some(updated_model) = config.model.clone() {
             model = updated_model;
         }
+
+        crate::theme::init(&config, crate::terminal_palette::default_bg());
 
         let enhanced_keys_supported = tui.enhanced_keys_supported();
         let mut chat_widget = match session_selection {
@@ -704,7 +717,22 @@ impl App {
                 .iter()
                 .map(|cell| cell.as_any().is::<UserHistoryCell>())
                 .collect();
-            crate::transcript_render::render_lines_to_ansi(&lines, &line_meta, &is_user_cell, width)
+            let is_user_prompt_highlight: Vec<bool> = app
+                .transcript_cells
+                .iter()
+                .map(|cell| {
+                    cell.as_any()
+                        .downcast_ref::<UserHistoryCell>()
+                        .is_some_and(|cell| cell.highlight)
+                })
+                .collect();
+            crate::transcript_render::render_lines_to_ansi(
+                &lines,
+                &line_meta,
+                &is_user_cell,
+                &is_user_prompt_highlight,
+                width,
+            )
         };
 
         tui.terminal.clear()?;
@@ -770,14 +798,15 @@ impl App {
                         self.chat_widget.render(chat_area, frame.buffer);
                         let chat_bottom = chat_area.y.saturating_add(chat_area.height);
                         if chat_bottom < frame.area().bottom() {
-                            Clear.render_ref(
+                            Self::clear_area_with_style(
+                                frame.buffer,
                                 Rect {
                                     x: frame.area().x,
                                     y: chat_bottom,
                                     width: frame.area().width,
                                     height: frame.area().bottom().saturating_sub(chat_bottom),
                                 },
-                                frame.buffer,
+                                crate::theme::base_style(),
                             );
                         }
                         if let Some((x, y)) = self.chat_widget.cursor_pos(chat_area) {
@@ -853,7 +882,11 @@ impl App {
         );
         let total_lines = self.transcript_view_cache.lines().len();
         if total_lines == 0 {
-            Clear.render_ref(transcript_full_area, frame.buffer);
+            Self::clear_area_with_style(
+                frame.buffer,
+                transcript_full_area,
+                crate::theme::transcript_style(),
+            );
             self.transcript_scroll = TranscriptScroll::default();
             self.transcript_view_top = 0;
             self.transcript_total_lines = 0;
@@ -883,14 +916,27 @@ impl App {
 
         let clear_height = chat_top.saturating_sub(area.y);
         if clear_height > 0 {
-            Clear.render_ref(
+            Self::clear_area_with_style(
+                frame.buffer,
                 Rect {
                     x: area.x,
                     y: area.y,
                     width: area.width,
                     height: clear_height,
                 },
+                crate::theme::transcript_style(),
+            );
+        }
+        if total_lines <= max_transcript_height as usize && transcript_visible_height > 0 {
+            Self::clear_area_with_style(
                 frame.buffer,
+                Rect {
+                    x: area.x,
+                    y: area.y.saturating_add(transcript_visible_height),
+                    width: area.width,
+                    height: 1,
+                },
+                self.chat_widget.transcript_gap_style(),
             );
         }
 
@@ -1745,10 +1791,14 @@ impl App {
                     tx.send(AppEvent::UpdateSlashCompletionBranches { branches });
                 });
                 if let Some(summary) = summary {
-                    let mut lines: Vec<Line<'static>> = vec![summary.usage_line.clone().into()];
+                    let base_style = crate::theme::transcript_style();
+                    let usage_line = Line::from(summary.usage_line.clone()).style(base_style);
+                    let mut lines: Vec<Line<'static>> = vec![usage_line];
                     if let Some(command) = summary.resume_command {
                         let spans = vec!["To continue this session, run ".into(), command.cyan()];
-                        lines.push(spans.into());
+                        let mut line: Line<'static> = spans.into();
+                        line.style = base_style;
+                        lines.push(line);
                     }
                     self.chat_widget.add_plain_history_lines(lines);
                 }
@@ -1800,14 +1850,18 @@ impl App {
                                 );
                                 self.current_model = resumed_model;
                                 if let Some(summary) = summary {
-                                    let mut lines: Vec<Line<'static>> =
-                                        vec![summary.usage_line.clone().into()];
+                                    let base_style = crate::theme::transcript_style();
+                                    let usage_line =
+                                        Line::from(summary.usage_line.clone()).style(base_style);
+                                    let mut lines: Vec<Line<'static>> = vec![usage_line];
                                     if let Some(command) = summary.resume_command {
                                         let spans = vec![
                                             "To continue this session, run ".into(),
                                             command.cyan(),
                                         ];
-                                        lines.push(spans.into());
+                                        let mut line: Line<'static> = spans.into();
+                                        line.style = base_style;
+                                        lines.push(line);
                                     }
                                     self.chat_widget.add_plain_history_lines(lines);
                                 }
@@ -1995,9 +2049,139 @@ impl App {
                 self.chat_widget.set_verbose_tool_output(verbose);
                 tui.frame_requester().schedule_frame();
             }
+            AppEvent::UpdateTranscriptDiffHighlight(enabled) => {
+                self.config.tui_transcript_diff_highlight = enabled;
+                tui.frame_requester().schedule_frame();
+            }
+            AppEvent::UpdateTranscriptUserPromptHighlight(enabled) => {
+                self.config.tui_transcript_user_prompt_highlight = enabled;
+                tui.frame_requester().schedule_frame();
+            }
             AppEvent::UpdateXtremeMode(mode) => {
                 self.config.tui_xtreme_mode = mode;
                 self.chat_widget.set_xtreme_mode(mode);
+                tui.frame_requester().schedule_frame();
+            }
+            AppEvent::PreviewTheme { theme } => {
+                crate::theme::preview(&self.config, crate::terminal_palette::default_bg(), &theme);
+                tui.frame_requester().schedule_frame();
+            }
+            AppEvent::CancelThemePreview => {
+                crate::theme::apply_from_config(
+                    &self.config,
+                    crate::terminal_palette::default_bg(),
+                );
+                tui.frame_requester().schedule_frame();
+            }
+            AppEvent::PersistThemeSelection { variant, theme } => {
+                use codex_core::config::edit::ConfigEdit;
+
+                let profile = self.active_profile.as_deref();
+                let (config_key, label) = match variant {
+                    codex_core::themes::ThemeVariant::Light => ("light", "Light"),
+                    codex_core::themes::ThemeVariant::Dark => ("dark", "Dark"),
+                };
+
+                let edit = if theme == "default" {
+                    ConfigEdit::ClearPath {
+                        segments: vec!["themes".to_string(), config_key.to_string()],
+                    }
+                } else {
+                    ConfigEdit::SetPath {
+                        segments: vec!["themes".to_string(), config_key.to_string()],
+                        value: toml_edit::value(theme.clone()),
+                    }
+                };
+
+                let result = ConfigEditsBuilder::new(&self.config.codex_home)
+                    .with_profile(profile)
+                    .with_edits([edit])
+                    .apply()
+                    .await;
+
+                match result {
+                    Ok(()) => {
+                        match variant {
+                            codex_core::themes::ThemeVariant::Light => {
+                                self.config.themes.light =
+                                    (theme != "default").then(|| theme.clone());
+                            }
+                            codex_core::themes::ThemeVariant::Dark => {
+                                self.config.themes.dark =
+                                    (theme != "default").then(|| theme.clone());
+                            }
+                        }
+                        self.chat_widget
+                            .set_themes_config(self.config.themes.clone());
+                        crate::theme::apply_from_config(
+                            &self.config,
+                            crate::terminal_palette::default_bg(),
+                        );
+
+                        let mut message = format!("Theme changed to `{theme}` for {label} mode.");
+                        if let Some(profile) = profile {
+                            message.push_str(" (profile: ");
+                            message.push_str(profile);
+                            message.push(')');
+                        }
+                        self.chat_widget.add_info_message(message, None);
+                    }
+                    Err(err) => {
+                        crate::theme::apply_from_config(
+                            &self.config,
+                            crate::terminal_palette::default_bg(),
+                        );
+                        tracing::error!(error = %err, "failed to persist theme selection");
+                        if let Some(profile) = profile {
+                            self.chat_widget.add_error_message(format!(
+                                "Failed to save theme for profile `{profile}`: {err}"
+                            ));
+                        } else {
+                            self.chat_widget
+                                .add_error_message(format!("Failed to save theme: {err}"));
+                        }
+                    }
+                }
+                tui.frame_requester().schedule_frame();
+            }
+            AppEvent::OpenThemeSelector => {
+                let _ = tui.enter_alt_screen();
+                let terminal_bg = crate::terminal_palette::default_bg();
+                self.overlay = Some(Overlay::new_theme_selector(
+                    self.app_event_tx.clone(),
+                    self.config.clone(),
+                    terminal_bg,
+                ));
+                tui.frame_requester().schedule_frame();
+            }
+            AppEvent::OpenThemeHelp => {
+                let _ = tui.enter_alt_screen();
+                let lines: Vec<ratatui::text::Line<'static>> = vec![
+                    "Theme keys".bold().into(),
+                    "".into(),
+                    "roles.fg / roles.bg — primary app text + surfaces".into(),
+                    "roles.transcript_bg / roles.composer_bg / roles.status_bg — transcript, composer, and status bar backgrounds (derived by default)".into(),
+                    "roles.user_prompt_highlight_bg — background for highlighting past user prompts in the transcript (derived by default)".into(),
+                    "roles.selection_fg / roles.selection_bg — selection highlight in pickers".into(),
+                    "roles.cursor_fg / roles.cursor_bg — (reserved for future)".dim().into(),
+                    "roles.border — box borders and tree chrome (status cards, tool blocks)".into(),
+                    "roles.dim — secondary text (derived from fg/bg)".into(),
+                    "".into(),
+                    "Diff roles".bold().into(),
+                    "roles.diff_add_fg / roles.diff_add_bg — additions in /diff overlay".into(),
+                    "roles.diff_del_fg / roles.diff_del_bg — deletions in /diff overlay".into(),
+                    "roles.diff_hunk_fg / roles.diff_hunk_bg — hunk separators in /diff overlay".into(),
+                    "Tip: set roles.diff_*_bg to `inherit` for text-only diffs.".dim().into(),
+                    "".into(),
+                    "Palette keys".bold().into(),
+                    "palette.* defines ANSI slots (0–15). They matter for legacy ANSI-colored UI and external tool output; xcodex themes do not swap the terminal palette.".into(),
+                    "".into(),
+                    "Tip: run `/theme` to preview + save; press Ctrl+T to edit colors (palette/roles). `/theme template` writes example YAML files.".into(),
+                ];
+                self.overlay = Some(Overlay::new_static_with_lines(
+                    lines,
+                    "T H E M E".to_string(),
+                ));
                 tui.frame_requester().schedule_frame();
             }
             AppEvent::UpdateRampsConfig {
@@ -2535,6 +2719,64 @@ impl App {
                         } else {
                             self.chat_widget.add_error_message(format!(
                                 "Failed to save output verbosity: {err}"
+                            ));
+                        }
+                    }
+                }
+            }
+            AppEvent::PersistTranscriptDiffHighlight(enabled) => {
+                let profile = self.active_profile.as_deref();
+                match ConfigEditsBuilder::new(&self.config.codex_home)
+                    .with_profile(profile)
+                    .with_edits([ConfigEdit::SetPath {
+                        segments: vec!["tui".to_string(), "transcript_diff_highlight".to_string()],
+                        value: toml_edit::value(enabled),
+                    }])
+                    .apply()
+                    .await
+                {
+                    Ok(()) => {}
+                    Err(err) => {
+                        tracing::error!(error = %err, "failed to persist diff highlight toggle");
+                        if let Some(profile) = profile {
+                            self.chat_widget.add_error_message(format!(
+                                "Failed to save diff highlight setting for profile `{profile}`: {err}"
+                            ));
+                        } else {
+                            self.chat_widget.add_error_message(format!(
+                                "Failed to save diff highlight setting: {err}"
+                            ));
+                        }
+                    }
+                }
+            }
+            AppEvent::PersistTranscriptUserPromptHighlight(enabled) => {
+                let profile = self.active_profile.as_deref();
+                match ConfigEditsBuilder::new(&self.config.codex_home)
+                    .with_profile(profile)
+                    .with_edits([ConfigEdit::SetPath {
+                        segments: vec![
+                            "tui".to_string(),
+                            "transcript_user_prompt_highlight".to_string(),
+                        ],
+                        value: toml_edit::value(enabled),
+                    }])
+                    .apply()
+                    .await
+                {
+                    Ok(()) => {}
+                    Err(err) => {
+                        tracing::error!(
+                            error = %err,
+                            "failed to persist user prompt highlight toggle"
+                        );
+                        if let Some(profile) = profile {
+                            self.chat_widget.add_error_message(format!(
+                                "Failed to save user prompt highlight setting for profile `{profile}`: {err}"
+                            ));
+                        } else {
+                            self.chat_widget.add_error_message(format!(
+                                "Failed to save user prompt highlight setting: {err}"
                             ));
                         }
                     }
@@ -3483,6 +3725,7 @@ mod tests {
         let user_cell = |text: &str| -> Arc<dyn HistoryCell> {
             Arc::new(UserHistoryCell {
                 message: text.to_string(),
+                highlight: false,
             }) as Arc<dyn HistoryCell>
         };
         let agent_cell = |text: &str| -> Arc<dyn HistoryCell> {
@@ -3872,10 +4115,12 @@ mod tests {
         let is_user_cell = vec![true];
         let width: u16 = 10;
 
+        let is_user_prompt_highlight = vec![false];
         let rendered = crate::transcript_render::render_lines_to_ansi(
             &lines,
             &line_meta,
             &is_user_cell,
+            &is_user_prompt_highlight,
             width,
         );
         assert_eq!(rendered.len(), 1);
