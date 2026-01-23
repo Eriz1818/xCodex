@@ -812,10 +812,13 @@ impl App {
             }
             AppEvent::UpdateTranscriptDiffHighlight(enabled) => {
                 self.config.tui_transcript_diff_highlight = enabled;
+                self.chat_widget.set_transcript_diff_highlight(enabled);
                 tui.frame_requester().schedule_frame();
             }
             AppEvent::UpdateTranscriptUserPromptHighlight(enabled) => {
                 self.config.tui_transcript_user_prompt_highlight = enabled;
+                self.chat_widget
+                    .set_transcript_user_prompt_highlight(enabled);
                 tui.frame_requester().schedule_frame();
             }
             AppEvent::UpdateXtremeMode(mode) => {

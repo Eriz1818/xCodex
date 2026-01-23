@@ -6582,6 +6582,16 @@ impl ChatWidget {
         self.request_redraw();
     }
 
+    pub(crate) fn set_transcript_diff_highlight(&mut self, enabled: bool) {
+        self.config.tui_transcript_diff_highlight = enabled;
+        self.request_redraw();
+    }
+
+    pub(crate) fn set_transcript_user_prompt_highlight(&mut self, enabled: bool) {
+        self.config.tui_transcript_user_prompt_highlight = enabled;
+        self.request_redraw();
+    }
+
     pub(crate) fn set_xtreme_mode(&mut self, mode: codex_core::config::types::XtremeMode) {
         self.config.tui_xtreme_mode = mode;
         self.bottom_pane
