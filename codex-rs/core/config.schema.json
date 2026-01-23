@@ -1495,6 +1495,46 @@
       },
       "type": "object"
     },
+    "ThemeMode": {
+      "enum": [
+        "auto",
+        "light",
+        "dark"
+      ],
+      "type": "string"
+    },
+    "Themes": {
+      "additionalProperties": false,
+      "description": "Global theme configuration for xcodex.\n\nThemes are stored as YAML files under `dir` (defaults to `$CODEX_HOME/themes`).",
+      "properties": {
+        "dark": {
+          "description": "Theme name used when in dark mode (or when `theme_mode = \"dark\"`).",
+          "type": "string"
+        },
+        "dir": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/AbsolutePathBuf"
+            }
+          ],
+          "description": "Directory containing user theme YAML files (`*.yml` / `*.yaml`).\n\nDefaults to `$CODEX_HOME/themes`."
+        },
+        "light": {
+          "description": "Theme name used when in light mode (or when `theme_mode = \"light\"`).",
+          "type": "string"
+        },
+        "theme_mode": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/ThemeMode"
+            }
+          ],
+          "default": "auto",
+          "description": "Select whether to use the light or dark theme explicitly, or auto-select.\n\n`auto` is resolved by the frontend (TUI) based on the current terminal background."
+        }
+      },
+      "type": "object"
+    },
     "ToolsToml": {
       "additionalProperties": false,
       "properties": {
@@ -1534,6 +1574,11 @@
         "animations": {
           "default": true,
           "description": "Enable animations (welcome screen, shimmer effects, spinners). Defaults to `true`.",
+          "type": "boolean"
+        },
+        "composer_minimal_borders": {
+          "default": false,
+          "description": "When true, render the active composer with only top/bottom borders.\n\nDefaults to `false`.",
           "type": "boolean"
         },
         "confirm_exit_with_running_hooks": {
@@ -1650,6 +1695,16 @@
         "status_bar_show_worktree": {
           "default": false,
           "description": "Show the active git worktree root (repo root) in the bottom status bar. Defaults to `false`.",
+          "type": "boolean"
+        },
+        "transcript_diff_highlight": {
+          "default": false,
+          "description": "When true, render diffs in the transcript with red/green background highlights, while keeping diff text in the normal transcript foreground color.\n\nWhen false (default), additions render as green text and deletions as red text (no background highlight).",
+          "type": "boolean"
+        },
+        "transcript_user_prompt_highlight": {
+          "default": false,
+          "description": "When true, highlight previous user prompts in the transcript so they're easier to spot while scrolling.\n\nDefaults to `false`.",
           "type": "boolean"
         },
         "verbose_tool_output": {
@@ -2249,6 +2304,14 @@
         }
       ],
       "description": "User-level skill config entries keyed by SKILL.md path."
+    },
+    "themes": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/Themes"
+        }
+      ],
+      "description": "Global theme configuration for xcodex."
     },
     "tool_output_token_limit": {
       "description": "Token budget applied when storing tool/function outputs in the context manager.",
