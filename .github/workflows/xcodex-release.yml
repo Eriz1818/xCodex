@@ -227,6 +227,21 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y musl-tools pkg-config
 
+      - if: ${{ contains(matrix.target, 'linux-musl') }}
+        name: Configure musl linker
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "CC=musl-gcc" >> "$GITHUB_ENV"
+          case "${{ matrix.target }}" in
+            x86_64-unknown-linux-musl)
+              echo "CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER=musl-gcc" >> "$GITHUB_ENV"
+              ;;
+            aarch64-unknown-linux-musl)
+              echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER=musl-gcc" >> "$GITHUB_ENV"
+              ;;
+          esac
+
       - name: Cargo build
         shell: bash
         run: |
