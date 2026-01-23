@@ -189,6 +189,8 @@ pub struct Tui {
     notification_backend: Option<DesktopNotificationBackend>,
     // When false, enter_alt_screen() becomes a no-op (for Zellij scrollback support)
     alt_screen_enabled: bool,
+    mouse_capture_enabled: bool,
+    alternate_scroll_enabled: bool,
 }
 
 impl Tui {
@@ -217,6 +219,8 @@ impl Tui {
             enhanced_keys_supported,
             notification_backend: Some(detect_backend()),
             alt_screen_enabled: true,
+            mouse_capture_enabled: true,
+            alternate_scroll_enabled: false,
         }
     }
 
@@ -226,19 +230,35 @@ impl Tui {
     }
 
     pub fn set_mouse_capture_enabled(&mut self, enabled: bool) {
+        if enabled == self.mouse_capture_enabled {
+            return;
+        }
         if enabled {
             let _ = execute!(self.terminal.backend_mut(), EnableMouseCapture);
         } else {
             let _ = execute!(self.terminal.backend_mut(), DisableMouseCapture);
         }
+        self.mouse_capture_enabled = enabled;
     }
 
     pub fn set_alternate_scroll_enabled(&mut self, enabled: bool) {
+        if enabled == self.alternate_scroll_enabled {
+            return;
+        }
         if enabled {
             let _ = execute!(self.terminal.backend_mut(), EnableAlternateScroll);
         } else {
             let _ = execute!(self.terminal.backend_mut(), DisableAlternateScroll);
         }
+        self.alternate_scroll_enabled = enabled;
+    }
+
+    pub fn mouse_capture_enabled(&self) -> bool {
+        self.mouse_capture_enabled
+    }
+
+    pub fn alternate_scroll_enabled(&self) -> bool {
+        self.alternate_scroll_enabled
     }
 
     pub fn frame_requester(&self) -> FrameRequester {

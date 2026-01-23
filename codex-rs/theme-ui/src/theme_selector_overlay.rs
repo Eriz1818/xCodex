@@ -14,6 +14,8 @@ pub(crate) struct ThemeSelectorOverlay {
     is_done: bool,
     frame_requester: Option<crate::tui::FrameRequester>,
     picker_mouse_mode: bool,
+    restore_mouse_capture_enabled: Option<bool>,
+    restore_alternate_scroll_enabled: Option<bool>,
     last_selector_area: Option<Rect>,
     last_preview_area: Option<Rect>,
     last_editor_area: Option<Rect>,
@@ -33,6 +35,10 @@ impl ThemeSelectorOverlay {
         if should_enable == self.picker_mouse_mode {
             return;
         }
+        if should_enable {
+            self.restore_mouse_capture_enabled = Some(tui.mouse_capture_enabled());
+            self.restore_alternate_scroll_enabled = Some(tui.alternate_scroll_enabled());
+        }
         self.picker_mouse_mode = should_enable;
         tui.set_mouse_capture_enabled(should_enable);
         tui.set_alternate_scroll_enabled(!should_enable);
@@ -43,8 +49,10 @@ impl ThemeSelectorOverlay {
             return;
         }
         self.picker_mouse_mode = false;
-        tui.set_mouse_capture_enabled(false);
-        tui.set_alternate_scroll_enabled(true);
+        let mouse_capture = self.restore_mouse_capture_enabled.take().unwrap_or(true);
+        let alternate_scroll = self.restore_alternate_scroll_enabled.take().unwrap_or(false);
+        tui.set_mouse_capture_enabled(mouse_capture);
+        tui.set_alternate_scroll_enabled(alternate_scroll);
     }
 
     fn new(
@@ -124,6 +132,8 @@ impl ThemeSelectorOverlay {
             is_done: false,
             frame_requester: None,
             picker_mouse_mode: false,
+            restore_mouse_capture_enabled: None,
+            restore_alternate_scroll_enabled: None,
             last_selector_area: None,
             last_preview_area: None,
             last_editor_area: None,
