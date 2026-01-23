@@ -570,7 +570,7 @@ fn to_color(
 
 fn styles_for(
     theme: &codex_core::themes::ThemeDefinition,
-    _terminal_fg: Option<(u8, u8, u8)>,
+    terminal_fg: Option<(u8, u8, u8)>,
     terminal_bg: Option<(u8, u8, u8)>,
 ) -> ThemeStyles {
     fn resolve_color(
@@ -613,7 +613,7 @@ fn styles_for(
         .ok()
         .and_then(|resolved| match resolved {
             ThemeColorResolved::Rgb(rgb) => Some((rgb.0, rgb.1, rgb.2)),
-            ThemeColorResolved::Inherit => None,
+            ThemeColorResolved::Inherit => terminal_fg,
         })
         .unwrap_or((40, 40, 40));
 
