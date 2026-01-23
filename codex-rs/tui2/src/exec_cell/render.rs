@@ -339,7 +339,12 @@ impl ExecCell {
 
             for (title, line) in call_lines {
                 let line = Line::from(line);
-                let initial_indent = Line::from(vec![title.cyan(), " ".into()]);
+                let title_style = if matches!(title, "Read" | "Search") {
+                    crate::theme::accent_style()
+                } else {
+                    Style::default().cyan()
+                };
+                let initial_indent = Line::from(vec![Span::styled(title, title_style), " ".into()]);
                 let subsequent_indent = " ".repeat(initial_indent.width()).into();
                 let wrapped = word_wrap_line(
                     &line,
