@@ -164,6 +164,20 @@ jobs:
         shell: bash
         run: rustup target add ${{ matrix.target }}
 
+      - name: Setup Python (macOS)
+        if: ${{ startsWith(matrix.runner, 'macos') }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Pin PyO3 interpreter (macOS)
+        if: ${{ startsWith(matrix.runner, 'macos') }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -V
+          echo "PYO3_PYTHON=$(python -c 'import sys; print(sys.executable)')" >> "$GITHUB_ENV"
+
       - name: Install sccache
         uses: taiki-e/install-action@44c6d64aa62cd779e873306675c7a58e86d6d532 # v2
         with:
