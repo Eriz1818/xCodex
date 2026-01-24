@@ -140,7 +140,7 @@ jobs:
     needs: tag-check
     name: Build - ${{ matrix.runner }} - ${{ matrix.target }}
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 30
+    timeout-minutes: 40
     permissions:
       contents: read
       id-token: write
@@ -280,8 +280,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          echo "RUSTFLAGS=-C lto=off -C codegen-units=8" >> "$GITHUB_ENV"
-          echo "CARGO_BUILD_JOBS=1" >> "$GITHUB_ENV"
+          echo "RUSTFLAGS=-C lto=off -C codegen-units=4" >> "$GITHUB_ENV"
+          echo "CARGO_BUILD_JOBS=2" >> "$GITHUB_ENV"
 
       - name: Install cargo-chef
         if: ${{ !contains(matrix.target, 'pc-windows') && !contains(matrix.target, 'linux-musl') }}
