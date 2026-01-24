@@ -186,6 +186,11 @@ jobs:
       - uses: dtolnay/rust-toolchain@1.92
         with:
           targets: ${{ matrix.target }}
+      - if: ${{ contains(matrix.target, 'pc-windows') }}
+        name: Pin Rust toolchain on Windows
+        uses: dtolnay/rust-toolchain@1.91
+        with:
+          targets: ${{ matrix.target }}
       - name: Ensure Rust target installed
         shell: bash
         run: rustup target add ${{ matrix.target }}
