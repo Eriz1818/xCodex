@@ -1629,32 +1629,8 @@ impl ChatWidget {
         if self.stream_controller.is_none() {
             // If the previous turn inserted non-stream history (exec output, patch status, MCP
             // calls), render a separator before starting the next streamed assistant message.
-            if self.needs_final_message_separator && !self.turn_summary.is_empty() {
-                let elapsed_seconds = self
-                    .bottom_pane
-                    .status_widget()
-                    .map(super::status_indicator_widget::StatusIndicatorWidget::elapsed_seconds);
-                let show_ramp_separator = self.ramps_status_enabled();
-                let xtreme_ui_enabled = crate::xtreme::xtreme_ui_enabled(&self.config);
-                let completion_label = self.last_turn_completion_label.take();
-                let turn_summary = if self.turn_summary.is_empty() {
-                    None
-                } else {
-                    Some(self.turn_summary.clone())
-                };
-                self.add_to_history(history_cell::FinalMessageSeparator::new(
-                    elapsed_seconds,
-                    show_ramp_separator,
-                    xtreme_ui_enabled,
-                    completion_label,
-                    turn_summary,
-                ));
-                self.needs_final_message_separator = false;
-                self.turn_summary = history_cell::TurnSummary::default();
+            if self.maybe_insert_final_message_separator() {
                 needs_redraw = true;
-            } else if self.needs_final_message_separator {
-                // Reset the flag even if we don't show separator (no work was done)
-                self.needs_final_message_separator = false;
             }
             // Streaming must not capture the current viewport width: width-derived wraps are
             // applied later, at render time, so the transcript can reflow on resize.
@@ -1670,6 +1646,39 @@ impl ChatWidget {
         }
     }
 
+    fn maybe_insert_final_message_separator(&mut self) -> bool {
+        if self.stream_controller.is_some() {
+            return false;
+        }
+
+        if self.needs_final_message_separator && !self.turn_summary.is_empty() {
+            let elapsed_seconds = self
+                .bottom_pane
+                .status_widget()
+                .map(super::status_indicator_widget::StatusIndicatorWidget::elapsed_seconds);
+            let show_ramp_separator = self.ramps_status_enabled();
+            let xtreme_ui_enabled = crate::xtreme::xtreme_ui_enabled(&self.config);
+            let completion_label = self.last_turn_completion_label.take();
+            let turn_summary = Some(self.turn_summary.clone());
+            self.add_to_history(history_cell::FinalMessageSeparator::new(
+                elapsed_seconds,
+                show_ramp_separator,
+                xtreme_ui_enabled,
+                completion_label,
+                turn_summary,
+            ));
+            self.needs_final_message_separator = false;
+            self.turn_summary = history_cell::TurnSummary::default();
+            true
+        } else {
+            if self.needs_final_message_separator {
+                // Reset the flag even if we don't show separator (no work was done)
+                self.needs_final_message_separator = false;
+            }
+            false
+        }
+    }
+
     pub(crate) fn handle_exec_end_now(&mut self, ev: ExecCommandEndEvent) {
         let running = self.running_commands.remove(&ev.call_id);
         let should_stabilize = self.ramps_status_active() && self.running_commands.is_empty();
@@ -1679,10 +1688,13 @@ impl ChatWidget {
             }
             return;
         }
+        let orphaned_begin = running.is_none();
         let (command, parsed, source) = match running {
             Some(rc) => (rc.command, rc.parsed_cmd, rc.source),
             None => (ev.command.clone(), ev.parsed_cmd.clone(), ev.source),
         };
+        let is_cargo_test =
+            crate::exec_command::strip_bash_lc_and_escape(&command).starts_with("cargo test");
         let is_unified_exec_interaction =
             matches!(source, ExecCommandSource::UnifiedExecInteraction);
 
@@ -1701,6 +1713,14 @@ impl ChatWidget {
                 ev.interaction_input.clone(),
                 self.config.animations,
             )));
+        }
+
+        if orphaned_begin {
+            self.turn_summary.exec_commands = self.turn_summary.exec_commands.saturating_add(1);
+            self.session_stats.exec_commands = self.session_stats.exec_commands.saturating_add(1);
+            if is_cargo_test {
+                self.session_stats.tests_run = self.session_stats.tests_run.saturating_add(1);
+            }
         }
 
         if let Some(cell) = self
@@ -6908,16 +6928,19 @@ impl ChatWidget {
     }
 
     pub(crate) fn add_info_message(&mut self, message: String, hint: Option<String>) {
+        self.maybe_insert_final_message_separator();
         self.add_to_history(history_cell::new_info_event(message, hint));
         self.request_redraw();
     }
 
     pub(crate) fn add_plain_history_lines(&mut self, lines: Vec<Line<'static>>) {
+        self.maybe_insert_final_message_separator();
         self.add_boxed_history(Box::new(PlainHistoryCell::new(lines)));
         self.request_redraw();
     }
 
     pub(crate) fn add_error_message(&mut self, message: String) {
+        self.maybe_insert_final_message_separator();
         self.add_to_history(history_cell::new_error_event(message));
         self.request_redraw();
     }

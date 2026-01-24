@@ -2074,6 +2074,101 @@ async fn exec_end_without_begin_uses_event_command() {
 }
 
 #[tokio::test]
+async fn final_message_separator_is_inserted_before_info_message_after_exec() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.on_task_started();
+
+    let begin = begin_exec(&mut chat, "call-info-sep", "echo ok");
+    end_exec(&mut chat, begin, "ok\n", "", 0);
+
+    let cells = drain_insert_history(&mut rx);
+    assert_eq!(cells.len(), 1, "expected finalized exec cell to flush");
+
+    chat.add_info_message("done".to_string(), None);
+
+    let cells = drain_insert_history(&mut rx);
+    assert_eq!(
+        cells.len(),
+        2,
+        "expected separator + info message after exec output"
+    );
+
+    let separator = lines_to_single_string(&cells[0]);
+    assert!(
+        separator.trim_start().starts_with('─'),
+        "expected separator cell, got: {separator:?}"
+    );
+
+    let info = lines_to_single_string(&cells[1]);
+    assert!(
+        info.contains("• done"),
+        "expected info message to render, got: {info:?}"
+    );
+}
+
+#[tokio::test]
+async fn orphaned_exec_end_counts_toward_turn_summary_for_separator() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.on_task_started();
+
+    let command = vec![
+        "bash".to_string(),
+        "-lc".to_string(),
+        "echo orphaned".to_string(),
+    ];
+    let parsed_cmd = codex_core::parse_command::parse_command(&command);
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    chat.handle_codex_event(Event {
+        id: "call-orphan-sep".to_string(),
+        msg: EventMsg::ExecCommandEnd(ExecCommandEndEvent {
+            call_id: "call-orphan-sep".to_string(),
+            process_id: None,
+            turn_id: "turn-1".to_string(),
+            command,
+            cwd,
+            parsed_cmd,
+            source: ExecCommandSource::Agent,
+            interaction_input: None,
+            stdout: "done".to_string(),
+            stderr: String::new(),
+            aggregated_output: "done".to_string(),
+            exit_code: 0,
+            duration: std::time::Duration::from_millis(5),
+            formatted_output: "done".to_string(),
+        }),
+    });
+
+    let cells = drain_insert_history(&mut rx);
+    assert_eq!(cells.len(), 1, "expected orphaned exec cell to flush");
+
+    chat.handle_codex_event(Event {
+        id: "agent-after-orphan".to_string(),
+        msg: EventMsg::AgentMessage(AgentMessageEvent {
+            message: "hello".to_string(),
+        }),
+    });
+
+    let cells = drain_insert_history(&mut rx);
+    assert_eq!(
+        cells.len(),
+        2,
+        "expected separator + agent message after orphaned exec output"
+    );
+
+    let separator = lines_to_single_string(&cells[0]);
+    assert!(
+        separator.trim_start().starts_with('─'),
+        "expected separator cell, got: {separator:?}"
+    );
+
+    let msg = lines_to_single_string(&cells[1]);
+    assert!(
+        msg.contains("hello"),
+        "expected agent message to render, got: {msg:?}"
+    );
+}
+
+#[tokio::test]
 async fn exec_history_shows_unified_exec_startup_commands() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
     chat.on_task_started();
