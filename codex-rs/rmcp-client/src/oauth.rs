@@ -168,8 +168,17 @@ fn load_oauth_tokens_from_keyring<K: KeyringStore>(
     server_name: &str,
     url: &str,
 ) -> Result<Option<StoredOAuthTokens>> {
+    load_oauth_tokens_from_keyring_impl(keyring_store, server_name, url, is_xcodex_invocation())
+}
+
+fn load_oauth_tokens_from_keyring_impl<K: KeyringStore>(
+    keyring_store: &K,
+    server_name: &str,
+    url: &str,
+    is_xcodex: bool,
+) -> Result<Option<StoredOAuthTokens>> {
     let key = compute_store_key(server_name, url)?;
-    match keyring_store.load(keyring_service(), &key) {
+    match keyring_store.load(keyring_service_impl(is_xcodex), &key) {
         Ok(Some(serialized)) => {
             let mut tokens: StoredOAuthTokens = serde_json::from_str(&serialized)
                 .context("failed to deserialize OAuth tokens from keyring")?;
@@ -177,7 +186,7 @@ fn load_oauth_tokens_from_keyring<K: KeyringStore>(
             Ok(Some(tokens))
         }
         Ok(None) => {
-            if is_xcodex_invocation() {
+            if is_xcodex {
                 load_oauth_tokens_from_keyring_service(keyring_store, CODEX_KEYRING_SERVICE, &key)
             } else {
                 Ok(None)
@@ -280,8 +289,24 @@ fn delete_oauth_tokens_from_keyring_and_file<K: KeyringStore>(
     server_name: &str,
     url: &str,
 ) -> Result<bool> {
+    delete_oauth_tokens_from_keyring_and_file_impl(
+        keyring_store,
+        store_mode,
+        server_name,
+        url,
+        is_xcodex_invocation(),
+    )
+}
+
+fn delete_oauth_tokens_from_keyring_and_file_impl<K: KeyringStore>(
+    keyring_store: &K,
+    store_mode: OAuthCredentialsStoreMode,
+    server_name: &str,
+    url: &str,
+    is_xcodex: bool,
+) -> Result<bool> {
     let key = compute_store_key(server_name, url)?;
-    let keyring_result = keyring_store.delete(keyring_service(), &key);
+    let keyring_result = keyring_store.delete(keyring_service_impl(is_xcodex), &key);
     let keyring_removed = match keyring_result {
         Ok(removed) => removed,
         Err(error) => {
@@ -641,8 +666,10 @@ fn sha_256_prefix(value: &Value) -> Result<String> {
 mod tests {
     use super::*;
     use anyhow::Result;
+    use codex_keyring_store::CredentialStoreError;
     use keyring::Error as KeyringError;
     use pretty_assertions::assert_eq;
+    use std::collections::HashMap;
     use std::sync::Mutex;
     use std::sync::MutexGuard;
     use std::sync::OnceLock;
@@ -688,6 +715,45 @@ mod tests {
         assert_eq!(XCODEX_KEYRING_SERVICE, keyring_service_impl(true));
     }
 
+    #[derive(Debug, Default)]
+    struct ServiceAwareKeyringStore {
+        entries: Mutex<HashMap<(String, String), String>>,
+    }
+
+    impl KeyringStore for ServiceAwareKeyringStore {
+        fn load(
+            &self,
+            service: &str,
+            account: &str,
+        ) -> Result<Option<String>, CredentialStoreError> {
+            let guard = self.entries.lock().unwrap_or_else(PoisonError::into_inner);
+            Ok(guard
+                .get(&(service.to_string(), account.to_string()))
+                .cloned())
+        }
+
+        fn save(
+            &self,
+            service: &str,
+            account: &str,
+            value: &str,
+        ) -> Result<(), CredentialStoreError> {
+            let mut guard = self.entries.lock().unwrap_or_else(PoisonError::into_inner);
+            guard.insert(
+                (service.to_string(), account.to_string()),
+                value.to_string(),
+            );
+            Ok(())
+        }
+
+        fn delete(&self, service: &str, account: &str) -> Result<bool, CredentialStoreError> {
+            let mut guard = self.entries.lock().unwrap_or_else(PoisonError::into_inner);
+            Ok(guard
+                .remove(&(service.to_string(), account.to_string()))
+                .is_some())
+        }
+    }
+
     #[test]
     fn load_oauth_tokens_reads_from_keyring_when_available() -> Result<()> {
         let _env = TempCodexHome::new();
@@ -702,6 +768,49 @@ mod tests {
             super::load_oauth_tokens_from_keyring(&store, &tokens.server_name, &tokens.url)?
                 .expect("tokens should load from keyring");
         assert_tokens_match_without_expiry(&loaded, &expected);
+        Ok(())
+    }
+
+    #[test]
+    fn load_oauth_tokens_does_not_cross_read_from_xcodex_to_codex() -> Result<()> {
+        let _env = TempCodexHome::new();
+        let store = ServiceAwareKeyringStore::default();
+        let tokens = sample_tokens();
+        let serialized = serde_json::to_string(&tokens)?;
+        let key = super::compute_store_key(&tokens.server_name, &tokens.url)?;
+
+        store.save(keyring_service_impl(true), &key, &serialized)?;
+
+        let loaded = super::load_oauth_tokens_from_keyring_impl(
+            &store,
+            &tokens.server_name,
+            &tokens.url,
+            false,
+        )?;
+        assert_eq!(loaded, None);
+        Ok(())
+    }
+
+    #[test]
+    fn xcodex_load_falls_back_to_codex_keyring_when_missing() -> Result<()> {
+        let _env = TempCodexHome::new();
+        let store = ServiceAwareKeyringStore::default();
+        let tokens = sample_tokens();
+        let serialized = serde_json::to_string(&tokens)?;
+        let key = super::compute_store_key(&tokens.server_name, &tokens.url)?;
+
+        store.save(keyring_service_impl(false), &key, &serialized)?;
+
+        let loaded = super::load_oauth_tokens_from_keyring_impl(
+            &store,
+            &tokens.server_name,
+            &tokens.url,
+            true,
+        )?;
+        assert!(
+            loaded.is_some(),
+            "expected fallback to Codex keyring service"
+        );
         Ok(())
     }
 
@@ -816,6 +925,36 @@ mod tests {
         assert!(removed);
         assert!(!store.contains(&key));
         assert!(!super::fallback_file_path()?.exists());
+        Ok(())
+    }
+
+    #[test]
+    fn xcodex_delete_does_not_remove_codex_keyring_entry() -> Result<()> {
+        let _env = TempCodexHome::new();
+        let store = ServiceAwareKeyringStore::default();
+        let tokens = sample_tokens();
+        let serialized = serde_json::to_string(&tokens)?;
+        let key = super::compute_store_key(&tokens.server_name, &tokens.url)?;
+
+        store.save(keyring_service_impl(false), &key, &serialized)?;
+        store.save(keyring_service_impl(true), &key, &serialized)?;
+
+        let removed = super::delete_oauth_tokens_from_keyring_and_file_impl(
+            &store,
+            OAuthCredentialsStoreMode::Auto,
+            &tokens.server_name,
+            &tokens.url,
+            true,
+        )?;
+        assert_eq!(true, removed);
+        assert_eq!(
+            true,
+            store.load(keyring_service_impl(false), &key)?.is_some()
+        );
+        assert_eq!(
+            false,
+            store.load(keyring_service_impl(true), &key)?.is_some()
+        );
         Ok(())
     }
 
