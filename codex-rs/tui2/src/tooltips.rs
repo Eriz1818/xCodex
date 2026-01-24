@@ -7,6 +7,17 @@ const ANNOUNCEMENT_TIP_URL: &str =
 const RAW_CODEX_TOOLTIPS: &str = include_str!("../tooltips.txt");
 const RAW_XCODEX_TOOLTIPS: &str = include_str!("../tooltips_xcodex.txt");
 
+fn normalize_tip_text(tip: &str) -> String {
+    let tip = tip.trim();
+    let tip = tip
+        .strip_prefix("⚡Tips:")
+        .or_else(|| tip.strip_prefix("Tips:"))
+        .or_else(|| tip.strip_prefix("Tip:"))
+        .unwrap_or(tip)
+        .trim_start();
+    tip.to_string()
+}
+
 fn parse_tooltips(raw: &'static str) -> Vec<&'static str> {
     raw.lines()
         .map(str::trim)
@@ -34,16 +45,16 @@ fn beta_tooltips() -> Vec<&'static str> {
 
 /// Pick a random tooltip to show to the user when starting Codex.
 pub(crate) fn random_tooltip() -> Option<String> {
-    if let Some(announcement) = announcement::fetch_announcement_tip() {
-        return Some(announcement);
-    }
     let mut rng = rand::rng();
     pick_tooltip(&mut rng, ALL_CODEX_TOOLTIPS.as_slice()).map(str::to_string)
 }
 
-pub(crate) fn random_xcodex_tooltip() -> Option<&'static str> {
+pub(crate) fn random_xcodex_tooltip() -> Option<String> {
+    if let Some(announcement) = announcement::fetch_announcement_tip() {
+        return Some(normalize_tip_text(&announcement));
+    }
     let mut rng = rand::rng();
-    pick_tooltip(&mut rng, XCODEX_TOOLTIPS.as_slice())
+    pick_tooltip(&mut rng, XCODEX_TOOLTIPS.as_slice()).map(str::to_string)
 }
 
 fn pick_tooltip<R: Rng + ?Sized>(rng: &mut R, tooltips: &[&'static str]) -> Option<&'static str> {

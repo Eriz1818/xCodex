@@ -1261,7 +1261,7 @@ impl HistoryCell for TooltipHistoryCell {
             .max(1);
         let mut lines: Vec<Line<'static>> = Vec::new();
         append_markdown(
-            &format!("**Tip:** {tip}", tip = self.tip),
+            &format!("**Tips:** {}", self.tip),
             Some(wrap_width),
             &mut lines,
         );
@@ -1272,12 +1272,12 @@ impl HistoryCell for TooltipHistoryCell {
 
 #[derive(Debug)]
 struct XcodexTooltipsHistoryCell {
-    xcodex_tip: Option<&'static str>,
+    xcodex_tip: Option<String>,
     codex_tip: Option<String>,
 }
 
 impl XcodexTooltipsHistoryCell {
-    fn new(xcodex_tip: Option<&'static str>, codex_tip: Option<String>) -> Option<Self> {
+    fn new(xcodex_tip: Option<String>, codex_tip: Option<String>) -> Option<Self> {
         if xcodex_tip.is_some() || codex_tip.is_some() {
             Some(Self {
                 xcodex_tip,
@@ -1298,7 +1298,7 @@ impl HistoryCell for XcodexTooltipsHistoryCell {
             .max(1);
         let mut lines: Vec<Line<'static>> = Vec::new();
 
-        if let Some(tip) = self.xcodex_tip {
+        if let Some(tip) = self.xcodex_tip.as_deref() {
             append_markdown(&format!("**⚡Tips:** {tip}"), Some(wrap_width), &mut lines);
         }
         if let Some(tip) = self.codex_tip.as_deref() {
@@ -2765,9 +2765,11 @@ mod tests {
 
     #[test]
     fn xcodex_tooltips_history_cell_renders_both_lines() {
-        let cell =
-            XcodexTooltipsHistoryCell::new(Some("xcodex tip"), Some("codex tip".to_string()))
-                .unwrap();
+        let cell = XcodexTooltipsHistoryCell::new(
+            Some("xcodex tip".to_string()),
+            Some("codex tip".to_string()),
+        )
+        .unwrap();
         assert_eq!(
             render_lines(&cell.display_lines(80)),
             vec!["  ⚡Tips: xcodex tip", "  Tips: codex tip"],
