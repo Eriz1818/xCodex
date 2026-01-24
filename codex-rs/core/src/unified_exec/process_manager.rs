@@ -47,13 +47,12 @@ use crate::unified_exec::process::OutputHandles;
 use crate::unified_exec::process::UnifiedExecProcess;
 use crate::unified_exec::resolve_max_tokens;
 
-const UNIFIED_EXEC_ENV: [(&str, &str); 10] = [
-    ("NO_COLOR", "1"),
-    ("TERM", "dumb"),
+const UNIFIED_EXEC_ENV: [(&str, &str); 9] = [
+    ("TERM", "xterm-256color"),
     ("LANG", "C.UTF-8"),
     ("LC_CTYPE", "C.UTF-8"),
     ("LC_ALL", "C.UTF-8"),
-    ("COLORTERM", ""),
+    ("COLORTERM", "truecolor"),
     ("PAGER", "cat"),
     ("GIT_PAGER", "cat"),
     ("GH_PAGER", "cat"),
@@ -702,12 +701,11 @@ mod tests {
     fn unified_exec_env_injects_defaults() {
         let env = apply_unified_exec_env(HashMap::new());
         let expected = HashMap::from([
-            ("NO_COLOR".to_string(), "1".to_string()),
-            ("TERM".to_string(), "dumb".to_string()),
+            ("TERM".to_string(), "xterm-256color".to_string()),
             ("LANG".to_string(), "C.UTF-8".to_string()),
             ("LC_CTYPE".to_string(), "C.UTF-8".to_string()),
             ("LC_ALL".to_string(), "C.UTF-8".to_string()),
-            ("COLORTERM".to_string(), String::new()),
+            ("COLORTERM".to_string(), "truecolor".to_string()),
             ("PAGER".to_string(), "cat".to_string()),
             ("GIT_PAGER".to_string(), "cat".to_string()),
             ("GH_PAGER".to_string(), "cat".to_string()),
@@ -720,12 +718,12 @@ mod tests {
     #[test]
     fn unified_exec_env_overrides_existing_values() {
         let mut base = HashMap::new();
-        base.insert("NO_COLOR".to_string(), "0".to_string());
+        base.insert("TERM".to_string(), "vt100".to_string());
         base.insert("PATH".to_string(), "/usr/bin".to_string());
 
         let env = apply_unified_exec_env(base);
 
-        assert_eq!(env.get("NO_COLOR"), Some(&"1".to_string()));
+        assert_eq!(env.get("TERM"), Some(&"xterm-256color".to_string()));
         assert_eq!(env.get("PATH"), Some(&"/usr/bin".to_string()));
     }
 

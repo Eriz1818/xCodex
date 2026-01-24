@@ -71,7 +71,7 @@ fn default_login() -> bool {
 }
 
 fn default_tty() -> bool {
-    false
+    true
 }
 
 #[async_trait]
