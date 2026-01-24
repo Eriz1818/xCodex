@@ -20,6 +20,9 @@ use codex_core::config::Config;
 use codex_core::config::ConfigBuilder;
 use codex_core::config::Constrained;
 use codex_core::config::ConstraintError;
+use codex_core::config::types::McpServerConfig;
+use codex_core::config::types::McpServerDisabledReason;
+use codex_core::config::types::McpServerTransportConfig;
 use codex_core::config_loader::RequirementSource;
 use codex_core::features::Feature;
 use codex_core::models_manager::manager::ModelsManager;
@@ -40,6 +43,8 @@ use codex_core::protocol::ExecPolicyAmendment;
 use codex_core::protocol::ExitedReviewModeEvent;
 use codex_core::protocol::FileChange;
 use codex_core::protocol::HookProcessBeginEvent;
+use codex_core::protocol::McpAuthStatus;
+use codex_core::protocol::McpListToolsResponseEvent;
 use codex_core::protocol::McpStartupCompleteEvent;
 use codex_core::protocol::McpStartupStatus;
 use codex_core::protocol::McpStartupUpdateEvent;
@@ -82,8 +87,10 @@ use insta::assert_snapshot;
 use pretty_assertions::assert_eq;
 #[cfg(target_os = "windows")]
 use serial_test::serial;
+use std::collections::HashMap;
 use std::collections::HashSet;
 use std::path::PathBuf;
+use std::time::Duration;
 use tempfile::NamedTempFile;
 use tempfile::tempdir;
 use tokio::sync::mpsc::error::TryRecvError;
@@ -1025,6 +1032,325 @@ async fn mcp_startup_banner_clears_after_user_submits_prompt() {
         chat.bottom_pane.mcp_startup_banner_message().is_none(),
         "expected banner to clear after the user submits a prompt"
     );
+}
+
+#[tokio::test]
+async fn mcp_slash_command_inserts_empty_output_when_unconfigured() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    chat.submit_user_message(UserMessage::from("/mcp".to_string()));
+
+    let rendered = drain_insert_history(&mut rx);
+    let rendered_text = rendered
+        .iter()
+        .map(|lines| lines_to_single_string(lines))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert_snapshot!("mcp_empty_output", rendered_text);
+}
+
+#[tokio::test]
+async fn mcp_slash_command_requests_tool_list_when_servers_exist() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(None).await;
+
+    let server_cfg = McpServerConfig {
+        transport: McpServerTransportConfig::Stdio {
+            command: "true".to_string(),
+            args: Vec::new(),
+            env: None,
+            env_vars: Vec::new(),
+            cwd: None,
+        },
+        enabled: true,
+        disabled_reason: None,
+        startup_timeout_sec: None,
+        tool_timeout_sec: None,
+        enabled_tools: None,
+        disabled_tools: None,
+    };
+    chat.config.mcp_servers =
+        Constrained::allow_any(HashMap::from([("dummy".to_string(), server_cfg)]));
+
+    chat.submit_user_message(UserMessage::from("/mcp".to_string()));
+
+    assert!(drain_insert_history(&mut rx).is_empty());
+    match op_rx.try_recv() {
+        Ok(Op::ListMcpTools) => {}
+        other => panic!("expected ListMcpTools op, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn mcp_slash_command_retry_without_failed_servers_emits_info() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    chat.submit_user_message(UserMessage::from("/mcp retry".to_string()));
+
+    let rendered = drain_insert_history(&mut rx);
+    let rendered_text = rendered
+        .iter()
+        .map(|lines| lines_to_single_string(lines))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert_snapshot!("mcp_retry_no_failed_servers", rendered_text);
+}
+
+#[tokio::test]
+async fn mcp_slash_command_timeout_with_invalid_seconds_emits_usage() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    chat.submit_user_message(UserMessage::from("/mcp timeout alpha nope".to_string()));
+
+    let rendered = drain_insert_history(&mut rx);
+    let rendered_text = rendered
+        .iter()
+        .map(|lines| lines_to_single_string(lines))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert_snapshot!("mcp_timeout_invalid_seconds", rendered_text);
+}
+
+#[tokio::test]
+async fn mcp_slash_command_retry_failed_servers_submits_retry_op() {
+    use codex_core::protocol::McpStartupFailure;
+
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(None).await;
+
+    chat.handle_codex_event(Event {
+        id: "mcp-startup".into(),
+        msg: EventMsg::McpStartupComplete(McpStartupCompleteEvent {
+            ready: Vec::new(),
+            failed: vec![McpStartupFailure {
+                server: "alpha".to_string(),
+                error: "boom".to_string(),
+            }],
+            cancelled: Vec::new(),
+        }),
+    });
+
+    assert!(
+        !chat.mcp_failed_servers.is_empty(),
+        "expected failed servers"
+    );
+    assert!(drain_insert_history(&mut rx).is_empty());
+
+    chat.submit_user_message(UserMessage::from("/mcp retry failed".to_string()));
+
+    match op_rx.try_recv() {
+        Ok(Op::McpRetry { servers }) => assert_eq!(servers, vec!["alpha".to_string()]),
+        other => panic!("expected McpRetry op, got {other:?}"),
+    }
+    assert!(drain_insert_history(&mut rx).is_empty());
+}
+
+#[tokio::test]
+async fn mcp_slash_command_retry_specific_server_submits_retry_op() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(None).await;
+
+    chat.submit_user_message(UserMessage::from("/mcp retry beta".to_string()));
+
+    match op_rx.try_recv() {
+        Ok(Op::McpRetry { servers }) => assert_eq!(servers, vec!["beta".to_string()]),
+        other => panic!("expected McpRetry op, got {other:?}"),
+    }
+    assert!(drain_insert_history(&mut rx).is_empty());
+}
+
+#[tokio::test]
+async fn mcp_tools_output_renders_startup_status_and_retry_hints() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    let alpha_cfg = McpServerConfig {
+        transport: McpServerTransportConfig::Stdio {
+            command: "alpha-cmd".to_string(),
+            args: vec!["--alpha".to_string()],
+            env: None,
+            env_vars: Vec::new(),
+            cwd: None,
+        },
+        enabled: true,
+        disabled_reason: None,
+        startup_timeout_sec: None,
+        tool_timeout_sec: None,
+        enabled_tools: None,
+        disabled_tools: None,
+    };
+
+    let beta_cfg = McpServerConfig {
+        transport: McpServerTransportConfig::Stdio {
+            command: "beta-cmd".to_string(),
+            args: vec!["--beta".to_string()],
+            env: None,
+            env_vars: Vec::new(),
+            cwd: None,
+        },
+        enabled: true,
+        disabled_reason: None,
+        startup_timeout_sec: None,
+        tool_timeout_sec: None,
+        enabled_tools: None,
+        disabled_tools: None,
+    };
+
+    let gamma_cfg = McpServerConfig {
+        transport: McpServerTransportConfig::Stdio {
+            command: "gamma-cmd".to_string(),
+            args: Vec::new(),
+            env: None,
+            env_vars: Vec::new(),
+            cwd: None,
+        },
+        enabled: false,
+        disabled_reason: Some(McpServerDisabledReason::Unknown),
+        startup_timeout_sec: None,
+        tool_timeout_sec: None,
+        enabled_tools: None,
+        disabled_tools: None,
+    };
+
+    chat.config.mcp_servers = Constrained::allow_any(HashMap::from([
+        ("alpha".to_string(), alpha_cfg),
+        ("beta".to_string(), beta_cfg),
+        ("gamma".to_string(), gamma_cfg),
+    ]));
+
+    chat.mcp_startup_status = Some(HashMap::from([
+        ("alpha".to_string(), McpStartupStatus::Starting),
+        (
+            "beta".to_string(),
+            McpStartupStatus::Failed {
+                error: "timed out after 5 seconds".to_string(),
+            },
+        ),
+    ]));
+    chat.mcp_startup_durations = HashMap::from([("beta".to_string(), Duration::from_millis(1200))]);
+    chat.mcp_startup_duration = Some(Duration::from_secs_f64(2.5));
+
+    chat.handle_codex_event(Event {
+        id: "mcp-tools".into(),
+        msg: EventMsg::McpListToolsResponse(McpListToolsResponseEvent {
+            tools: HashMap::new(),
+            resources: HashMap::new(),
+            resource_templates: HashMap::new(),
+            auth_statuses: HashMap::from([
+                ("alpha".to_string(), McpAuthStatus::NotLoggedIn),
+                ("beta".to_string(), McpAuthStatus::OAuth),
+                ("gamma".to_string(), McpAuthStatus::Unsupported),
+            ]),
+        }),
+    });
+
+    let rendered = drain_insert_history(&mut rx);
+    let rendered_text = rendered
+        .iter()
+        .map(|lines| lines_to_single_string(lines))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert_snapshot!("mcp_tools_output_startup_statuses", rendered_text);
+}
+
+#[tokio::test]
+async fn mcp_tools_output_renders_tools_resources_and_templates() {
+    use mcp_types::Resource;
+    use mcp_types::ResourceTemplate;
+    use mcp_types::Tool;
+    use mcp_types::ToolInputSchema;
+
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    let alpha_cfg = McpServerConfig {
+        transport: McpServerTransportConfig::Stdio {
+            command: "alpha-cmd".to_string(),
+            args: Vec::new(),
+            env: None,
+            env_vars: Vec::new(),
+            cwd: None,
+        },
+        enabled: true,
+        disabled_reason: None,
+        startup_timeout_sec: None,
+        tool_timeout_sec: None,
+        enabled_tools: None,
+        disabled_tools: None,
+    };
+
+    chat.config.mcp_servers =
+        Constrained::allow_any(HashMap::from([("alpha".to_string(), alpha_cfg)]));
+
+    chat.mcp_startup_status = Some(HashMap::from([(
+        "alpha".to_string(),
+        McpStartupStatus::Ready,
+    )]));
+
+    let tools = HashMap::from([(
+        "mcp__alpha__list".to_string(),
+        Tool {
+            annotations: None,
+            description: Some("list resources".to_string()),
+            input_schema: ToolInputSchema {
+                properties: None,
+                required: None,
+                r#type: "object".to_string(),
+            },
+            name: "list".to_string(),
+            output_schema: None,
+            title: Some("List".to_string()),
+        },
+    )]);
+
+    let resources = HashMap::from([(
+        "alpha".to_string(),
+        vec![
+            Resource {
+                annotations: None,
+                description: None,
+                mime_type: None,
+                name: "alpha-resource".to_string(),
+                size: None,
+                title: Some("Alpha resource".to_string()),
+                uri: "file:///alpha.txt".to_string(),
+            },
+            Resource {
+                annotations: None,
+                description: None,
+                mime_type: None,
+                name: "alpha-other".to_string(),
+                size: None,
+                title: None,
+                uri: "file:///other.txt".to_string(),
+            },
+        ],
+    )]);
+
+    let templates = HashMap::from([(
+        "alpha".to_string(),
+        vec![ResourceTemplate {
+            annotations: None,
+            description: None,
+            mime_type: None,
+            name: "alpha-template".to_string(),
+            title: Some("Alpha template".to_string()),
+            uri_template: "file:///{path}".to_string(),
+        }],
+    )]);
+
+    chat.handle_codex_event(Event {
+        id: "mcp-tools".into(),
+        msg: EventMsg::McpListToolsResponse(McpListToolsResponseEvent {
+            tools,
+            resources,
+            resource_templates: templates,
+            auth_statuses: HashMap::from([("alpha".to_string(), McpAuthStatus::BearerToken)]),
+        }),
+    });
+
+    let rendered = drain_insert_history(&mut rx);
+    let rendered_text = rendered
+        .iter()
+        .map(|lines| lines_to_single_string(lines))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert_snapshot!("mcp_tools_output_tools_resources_templates", rendered_text);
 }
 
 #[tokio::test]

@@ -1,0 +1,16 @@
+---
+source: tui/src/chatwidget/tests.rs
+expression: rendered_text
+---
+/mcp
+
+🔌  MCP Tools
+
+  • alpha
+    • Status: enabled
+    • Startup: Ready
+    • Auth: Bearer token
+    • Command: alpha-cmd
+    • Tools: list
+    • Resources: Alpha resource (file:///alpha.txt), alpha-other (file:///other.txt)
+    • Resource templates: Alpha template (file:///{path})
