@@ -281,7 +281,6 @@ jobs:
         run: |
           set -euo pipefail
           echo "RUSTFLAGS=-C lto=off -C codegen-units=4" >> "$GITHUB_ENV"
-          echo "CARGO_BUILD_JOBS=2" >> "$GITHUB_ENV"
 
       - name: Install cargo-chef
         if: ${{ !contains(matrix.target, 'pc-windows') && !contains(matrix.target, 'linux-musl') }}
@@ -299,11 +298,18 @@ jobs:
           cargo chef prepare --recipe-path "$RECIPE"
           cargo chef cook --recipe-path "$RECIPE" --target ${{ matrix.target }} --release --all-features
 
-      - name: Cargo build
+      - name: Build dependencies (Windows only)
+        if: ${{ contains(matrix.target, 'pc-windows') }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "Building dependencies sequentially to prevent corruption..."
+          cargo build --target ${{ matrix.target }} --release --lib -j 1
+
+      - name: Build binaries
         shell: bash
         run: |
           if [[ "${{ contains(matrix.target, 'pc-windows') }}" == 'true' ]]; then
-            cargo clean --target ${{ matrix.target }} --release
             cargo build --target ${{ matrix.target }} --release --bin codex --bin codex-responses-api-proxy --bin codex-windows-sandbox-setup --bin codex-command-runner
           else
             cargo build --target ${{ matrix.target }} --release --bin codex --bin codex-responses-api-proxy
