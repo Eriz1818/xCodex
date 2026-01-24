@@ -21,6 +21,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.92
 
       - name: Validate tag matches Cargo.toml version
         shell: bash
@@ -126,6 +127,15 @@ jobs:
           print("✅ Native artifact target preflight passed.")
           PY
 
+      - name: Verify config schema fixture
+        shell: bash
+        working-directory: codex-rs
+        run: |
+          set -euo pipefail
+          echo "If this fails, run: just write-config-schema to overwrite fixture with intentional changes."
+          cargo run -p codex-core --bin codex-write-config-schema
+          git diff --exit-code core/config.schema.json
+
   build:
     needs: tag-check
     name: Build - ${{ matrix.runner }} - ${{ matrix.target }}
@@ -142,11 +152,11 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - runner: macos-latest
+          - runner: macos-15-xlarge
             target: aarch64-apple-darwin
-          - runner: macos-latest
+          - runner: macos-15-xlarge
             target: x86_64-apple-darwin
-          - runner: ubuntu-latest
+          - runner: ubuntu-24.04
             target: x86_64-unknown-linux-musl
           - runner: ubuntu-24.04-arm
             target: aarch64-unknown-linux-musl
@@ -157,7 +167,7 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@1.90.0
+      - uses: dtolnay/rust-toolchain@1.92
         with:
           targets: ${{ matrix.target }}
       - name: Ensure Rust target installed
