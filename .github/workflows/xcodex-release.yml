@@ -167,6 +167,12 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+      - name: Clean Windows build state
+        if: ${{ contains(matrix.target, 'pc-windows') }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf "$GITHUB_WORKSPACE/codex-rs/target" "$GITHUB_WORKSPACE/.sccache"
       - name: Configure cache epoch (Windows)
         if: ${{ contains(matrix.target, 'pc-windows') }}
         shell: bash
@@ -226,7 +232,8 @@ jobs:
             sccache-${{ matrix.runner }}-${{ matrix.target }}-${{ hashFiles('**/Cargo.lock') }}-
             sccache-${{ matrix.runner }}-${{ matrix.target }}-
 
-      - uses: actions/cache@v4
+      - if: ${{ !contains(matrix.target, 'pc-windows') }}
+        uses: actions/cache@v4
         with:
           path: |
             ~/.cargo/bin/
@@ -234,6 +241,16 @@ jobs:
             ~/.cargo/registry/cache/
             ~/.cargo/git/db/
             ${{ github.workspace }}/codex-rs/target/
+          key: cargo-${{ matrix.runner }}-${{ matrix.target }}-release-${{ env.CACHE_EPOCH }}-${{ hashFiles('**/Cargo.lock') }}
+      - if: ${{ contains(matrix.target, 'pc-windows') }}
+        name: Cache cargo artifacts (Windows, no target/)
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
           key: cargo-${{ matrix.runner }}-${{ matrix.target }}-release-${{ env.CACHE_EPOCH }}-${{ hashFiles('**/Cargo.lock') }}
 
       - if: ${{ contains(matrix.target, 'linux-musl') }}
