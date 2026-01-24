@@ -276,7 +276,6 @@ jobs:
         run: |
           set -euo pipefail
           echo "RUSTFLAGS=-C lto=off -C codegen-units=8" >> "$GITHUB_ENV"
-          echo "CARGO_TARGET_DIR=${RUNNER_TEMP}/cargo-target" >> "$GITHUB_ENV"
 
       - name: Install cargo-chef
         if: ${{ !contains(matrix.target, 'pc-windows') && !contains(matrix.target, 'linux-musl') }}
@@ -298,11 +297,7 @@ jobs:
         shell: bash
         run: |
           if [[ "${{ contains(matrix.target, 'pc-windows') }}" == 'true' ]]; then
-            cargo clean -p codex-responses-api-proxy
-            RUSTFLAGS="-C debuginfo=0 -C link-arg=/INCREMENTAL:NO" \
-              CARGO_INCREMENTAL=0 \
-              cargo build --target ${{ matrix.target }} --release --bin codex-responses-api-proxy
-            cargo build --target ${{ matrix.target }} --release --bin codex --bin codex-windows-sandbox-setup --bin codex-command-runner
+            cargo build --target ${{ matrix.target }} --release --bin codex --bin codex-responses-api-proxy --bin codex-windows-sandbox-setup --bin codex-command-runner
           else
             cargo build --target ${{ matrix.target }} --release --bin codex --bin codex-responses-api-proxy
           fi
@@ -321,19 +316,18 @@ jobs:
       - name: Stage artifacts
         shell: bash
         run: |
-          target_root="${CARGO_TARGET_DIR:-target}"
           dest="dist/${{ matrix.target }}"
           mkdir -p "$dest"
           target="${{ matrix.target }}"
 
           if [[ "${{ contains(matrix.target, 'pc-windows') }}" == 'true' ]]; then
-            cp "${target_root}/${target}/release/codex.exe" "$dest/xcodex-${target}.exe"
-            cp "${target_root}/${target}/release/codex-responses-api-proxy.exe" "$dest/xcodex-responses-api-proxy-${target}.exe"
-            cp "${target_root}/${target}/release/codex-windows-sandbox-setup.exe" "$dest/codex-windows-sandbox-setup-${target}.exe"
-            cp "${target_root}/${target}/release/codex-command-runner.exe" "$dest/codex-command-runner-${target}.exe"
+            cp "target/${target}/release/codex.exe" "$dest/xcodex-${target}.exe"
+            cp "target/${target}/release/codex-responses-api-proxy.exe" "$dest/xcodex-responses-api-proxy-${target}.exe"
+            cp "target/${target}/release/codex-windows-sandbox-setup.exe" "$dest/codex-windows-sandbox-setup-${target}.exe"
+            cp "target/${target}/release/codex-command-runner.exe" "$dest/codex-command-runner-${target}.exe"
           else
-            cp "${target_root}/${target}/release/codex" "$dest/xcodex-${target}"
-            cp "${target_root}/${target}/release/codex-responses-api-proxy" "$dest/xcodex-responses-api-proxy-${target}"
+            cp "target/${target}/release/codex" "$dest/xcodex-${target}"
+            cp "target/${target}/release/codex-responses-api-proxy" "$dest/xcodex-responses-api-proxy-${target}"
           fi
 
       - name: Compress artifacts
