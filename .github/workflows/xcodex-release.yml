@@ -234,7 +234,7 @@ jobs:
         name: Install musl build tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y musl-tools pkg-config
+          sudo apt-get install -y musl-dev musl-tools pkg-config
 
       - if: ${{ contains(matrix.target, 'linux-musl') }}
         name: Configure musl linker
