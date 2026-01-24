@@ -221,6 +221,13 @@ jobs:
       - name: Enable sccache wrapper
         shell: bash
         run: echo "RUSTC_WRAPPER=sccache" >> "$GITHUB_ENV"
+      - name: Disable sccache on Windows release builds
+        if: ${{ contains(matrix.target, 'pc-windows') }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "RUSTC_WRAPPER=" >> "$GITHUB_ENV"
+          echo "SCCACHE_DISABLE=1" >> "$GITHUB_ENV"
 
       - name: Restore sccache cache (fallback)
         if: ${{ env.SCCACHE_GHA_ENABLED != 'true' }}
@@ -258,6 +265,20 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y musl-dev musl-tools pkg-config
+      - if: ${{ contains(matrix.target, 'linux-musl') }}
+        name: Configure musl linker
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "CC=musl-gcc" >> "$GITHUB_ENV"
+          case "${{ matrix.target }}" in
+            x86_64-unknown-linux-musl)
+              echo "CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER=musl-gcc" >> "$GITHUB_ENV"
+              ;;
+            aarch64-unknown-linux-musl)
+              echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER=musl-gcc" >> "$GITHUB_ENV"
+              ;;
+          esac
 
       - if: ${{ contains(matrix.target, 'pc-windows') }}
         name: Reduce Windows link load
