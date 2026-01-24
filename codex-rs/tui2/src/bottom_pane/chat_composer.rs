@@ -2450,6 +2450,7 @@ impl Renderable for ChatComposer {
             if let Some(bg) = style.bg {
                 border_style = border_style.fg(bg);
             }
+            border_style = border_style.add_modifier(Modifier::BOLD);
             let line = "━".repeat(composer_rect.width as usize);
             buf.set_string(composer_rect.x, composer_rect.y, &line, border_style);
             buf.set_string(
