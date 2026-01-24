@@ -115,17 +115,14 @@ where
     for line in wrapped {
         queue!(writer, Print("\r\n"))?;
         let fallback_bg = crate::theme::transcript_style().bg;
-        queue!(
-            writer,
-            SetColors(Colors::new(
-                line.style.fg.map(Into::into).unwrap_or(CColor::Reset),
-                line.style
-                    .bg
-                    .or(fallback_bg)
-                    .map(Into::into)
-                    .unwrap_or(CColor::Reset),
-            ))
-        )?;
+        let starting_fg = line.style.fg.map(Into::into).unwrap_or(CColor::Reset);
+        let starting_bg = line
+            .style
+            .bg
+            .or(fallback_bg)
+            .map(Into::into)
+            .unwrap_or(CColor::Reset);
+        queue!(writer, SetColors(Colors::new(starting_fg, starting_bg,)))?;
         queue!(writer, Clear(ClearType::UntilNewLine))?;
         // Merge line-level style into each span so that ANSI colors reflect
         // line styles (e.g., blockquotes with green fg).
@@ -137,7 +134,7 @@ where
                 content: s.content.clone(),
             })
             .collect();
-        write_spans(writer, merged_spans.iter())?;
+        write_spans_with_starting_colors(writer, merged_spans.iter(), starting_fg, starting_bg)?;
     }
 
     queue!(writer, ResetScrollRegion)?;
@@ -264,8 +261,20 @@ pub(crate) fn write_spans<'a, I>(mut writer: &mut impl Write, content: I) -> io:
 where
     I: IntoIterator<Item = &'a Span<'a>>,
 {
-    let mut fg = CColor::Reset;
-    let mut bg = CColor::Reset;
+    write_spans_with_starting_colors(&mut writer, content, CColor::Reset, CColor::Reset)
+}
+
+fn write_spans_with_starting_colors<'a, I>(
+    mut writer: &mut impl Write,
+    content: I,
+    starting_fg: CColor,
+    starting_bg: CColor,
+) -> io::Result<()>
+where
+    I: IntoIterator<Item = &'a Span<'a>>,
+{
+    let mut fg = starting_fg;
+    let mut bg = starting_bg;
     let mut last_modifier = Modifier::empty();
     for span in content {
         let mut modifier = Modifier::empty();
@@ -280,7 +289,8 @@ where
             last_modifier = modifier;
         }
         let next_fg = span.style.fg.map(Into::into).unwrap_or(CColor::Reset);
-        let next_bg = span.style.bg.map(Into::into).unwrap_or(CColor::Reset);
+        // Preserve the existing row background unless a span explicitly changes it.
+        let next_bg = span.style.bg.map(Into::into).unwrap_or(bg);
         if next_fg != fg || next_bg != bg {
             queue!(writer, SetColors(Colors::new(next_fg, next_bg)))?;
             fg = next_fg;
@@ -319,6 +329,31 @@ mod tests {
             Print("A"),
             SetAttribute(crossterm::style::Attribute::NormalIntensity),
             Print("B"),
+            SetAttribute(crossterm::style::Attribute::Reset),
+        )
+        .unwrap();
+
+        assert_eq!(
+            String::from_utf8(actual).unwrap(),
+            String::from_utf8(expected).unwrap()
+        );
+    }
+
+    #[test]
+    fn write_spans_preserves_background_when_span_has_no_bg() {
+        #[expect(clippy::disallowed_methods)]
+        let spans = [Span::styled("+", Style::default().fg(Color::Green))];
+
+        let mut actual: Vec<u8> = Vec::new();
+        write_spans_with_starting_colors(&mut actual, spans.iter(), CColor::Reset, CColor::Blue)
+            .unwrap();
+
+        let expected_green: CColor = Color::Green.into();
+        let mut expected: Vec<u8> = Vec::new();
+        queue!(
+            expected,
+            SetColors(Colors::new(expected_green, CColor::Blue)),
+            Print("+"),
             SetAttribute(crossterm::style::Attribute::Reset),
         )
         .unwrap();
