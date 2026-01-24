@@ -5,7 +5,6 @@ use crossterm::event::KeyEvent;
 use crossterm::event::KeyModifiers;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
-use ratatui::style::Color;
 use ratatui::widgets::StatefulWidgetRef;
 use ratatui::widgets::WidgetRef;
 use std::cell::Ref;
@@ -1145,7 +1144,7 @@ impl TextArea {
                 }
                 let styled = &self.text[overlap_start..overlap_end];
                 let x_off = self.text[line_range.start..overlap_start].width() as u16;
-                let style = base_style.fg(Color::Cyan);
+                let style = base_style.patch(crate::theme::accent_style());
                 buf.set_string(area.x + x_off, y, styled, style);
             }
         }
