@@ -264,8 +264,16 @@ jobs:
         name: Install musl build tools
         run: |
           set -euo pipefail
+          target="${{ matrix.target }}"
           sudo apt-get update
           sudo apt-get install -y musl-dev musl-tools pkg-config
+          if [[ "${target}" == "aarch64-unknown-linux-musl" ]]; then
+            if apt-cache show gcc-aarch64-linux-musl >/dev/null 2>&1; then
+              sudo apt-get install -y gcc-aarch64-linux-musl
+            else
+              echo "gcc-aarch64-linux-musl not available; falling back to system musl tools."
+            fi
+          fi
       - if: ${{ contains(matrix.target, 'linux-musl') }}
         name: Configure musl linker
         shell: bash
@@ -297,15 +305,16 @@ jobs:
         run: |
           set -euo pipefail
           echo "RUSTFLAGS=-C lto=off -C codegen-units=8" >> "$GITHUB_ENV"
+          echo "CARGO_TARGET_DIR=${RUNNER_TEMP}/cargo-target" >> "$GITHUB_ENV"
 
       - name: Install cargo-chef
-        if: ${{ !contains(matrix.target, 'pc-windows') }}
+        if: ${{ !contains(matrix.target, 'pc-windows') && !contains(matrix.target, 'linux-musl') }}
         uses: taiki-e/install-action@44c6d64aa62cd779e873306675c7a58e86d6d532 # v2
         with:
           tool: cargo-chef@0.1.71
 
       - name: Pre-warm dependency cache (cargo-chef)
-        if: ${{ !contains(matrix.target, 'pc-windows') }}
+        if: ${{ !contains(matrix.target, 'pc-windows') && !contains(matrix.target, 'linux-musl') }}
         shell: bash
         run: |
           set -euo pipefail
@@ -337,18 +346,19 @@ jobs:
       - name: Stage artifacts
         shell: bash
         run: |
+          target_root="${CARGO_TARGET_DIR:-target}"
           dest="dist/${{ matrix.target }}"
           mkdir -p "$dest"
           target="${{ matrix.target }}"
 
           if [[ "${{ contains(matrix.target, 'pc-windows') }}" == 'true' ]]; then
-            cp "target/${target}/release/codex.exe" "$dest/xcodex-${target}.exe"
-            cp "target/${target}/release/codex-responses-api-proxy.exe" "$dest/xcodex-responses-api-proxy-${target}.exe"
-            cp "target/${target}/release/codex-windows-sandbox-setup.exe" "$dest/codex-windows-sandbox-setup-${target}.exe"
-            cp "target/${target}/release/codex-command-runner.exe" "$dest/codex-command-runner-${target}.exe"
+            cp "${target_root}/${target}/release/codex.exe" "$dest/xcodex-${target}.exe"
+            cp "${target_root}/${target}/release/codex-responses-api-proxy.exe" "$dest/xcodex-responses-api-proxy-${target}.exe"
+            cp "${target_root}/${target}/release/codex-windows-sandbox-setup.exe" "$dest/codex-windows-sandbox-setup-${target}.exe"
+            cp "${target_root}/${target}/release/codex-command-runner.exe" "$dest/codex-command-runner-${target}.exe"
           else
-            cp "target/${target}/release/codex" "$dest/xcodex-${target}"
-            cp "target/${target}/release/codex-responses-api-proxy" "$dest/xcodex-responses-api-proxy-${target}"
+            cp "${target_root}/${target}/release/codex" "$dest/xcodex-${target}"
+            cp "${target_root}/${target}/release/codex-responses-api-proxy" "$dest/xcodex-responses-api-proxy-${target}"
           fi
 
       - name: Compress artifacts
