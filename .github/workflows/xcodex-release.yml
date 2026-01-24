@@ -167,6 +167,12 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+      - name: Configure cache epoch (Windows)
+        if: ${{ contains(matrix.target, 'pc-windows') }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "CACHE_EPOCH=2026-01-24-win-rlib-reset" >> "$GITHUB_ENV"
       - uses: dtolnay/rust-toolchain@1.92
         with:
           targets: ${{ matrix.target }}
@@ -228,7 +234,7 @@ jobs:
             ~/.cargo/registry/cache/
             ~/.cargo/git/db/
             ${{ github.workspace }}/codex-rs/target/
-          key: cargo-${{ matrix.runner }}-${{ matrix.target }}-release-${{ hashFiles('**/Cargo.lock') }}
+          key: cargo-${{ matrix.runner }}-${{ matrix.target }}-release-${{ env.CACHE_EPOCH }}-${{ hashFiles('**/Cargo.lock') }}
 
       - if: ${{ contains(matrix.target, 'linux-musl') }}
         name: Install musl build tools
@@ -283,6 +289,12 @@ jobs:
           else
             cargo build --target ${{ matrix.target }} --release --bin codex --bin codex-responses-api-proxy
           fi
+      - if: ${{ failure() && contains(matrix.target, 'pc-windows') }}
+        name: Clean Windows caches after failure
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf "$GITHUB_WORKSPACE/codex-rs/target" "$GITHUB_WORKSPACE/.sccache"
 
       - if: ${{ contains(matrix.target, 'pc-windows') }}
         name: Install zstd
