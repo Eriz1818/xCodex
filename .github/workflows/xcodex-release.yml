@@ -244,14 +244,12 @@ jobs:
           echo "CC=musl-gcc" >> "$GITHUB_ENV"
           case "${{ matrix.target }}" in
             x86_64-unknown-linux-musl)
-              echo "LIBRARY_PATH=/usr/lib/x86_64-linux-musl" >> "$GITHUB_ENV"
-              echo "RUSTFLAGS=-C linker=rust-lld -C link-self-contained=yes -C link-arg=-L/usr/lib/x86_64-linux-musl" >> "$GITHUB_ENV"
-              echo "CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER=rust-lld" >> "$GITHUB_ENV"
+              echo "RUSTFLAGS=-C linker=musl-gcc -C link-self-contained=yes" >> "$GITHUB_ENV"
+              echo "CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER=musl-gcc" >> "$GITHUB_ENV"
               ;;
             aarch64-unknown-linux-musl)
-              echo "LIBRARY_PATH=/usr/lib/aarch64-linux-musl" >> "$GITHUB_ENV"
-              echo "RUSTFLAGS=-C linker=rust-lld -C link-self-contained=yes -C link-arg=-L/usr/lib/aarch64-linux-musl" >> "$GITHUB_ENV"
-              echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER=rust-lld" >> "$GITHUB_ENV"
+              echo "RUSTFLAGS=-C linker=musl-gcc -C link-self-contained=yes" >> "$GITHUB_ENV"
+              echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER=musl-gcc" >> "$GITHUB_ENV"
               ;;
           esac
 
