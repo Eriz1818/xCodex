@@ -2053,7 +2053,7 @@ impl ChatWidget {
             )));
         }
 
-        if orphaned_begin {
+        if orphaned_begin && !matches!(source, ExecCommandSource::UserShell) {
             self.turn_summary.exec_commands = self.turn_summary.exec_commands.saturating_add(1);
             self.session_stats.exec_commands = self.session_stats.exec_commands.saturating_add(1);
             if is_cargo_test {
@@ -2214,17 +2214,20 @@ impl ChatWidget {
             return;
         }
 
-        self.turn_summary.exec_commands = self.turn_summary.exec_commands.saturating_add(1);
-        self.session_stats.exec_commands = self.session_stats.exec_commands.saturating_add(1);
-        if crate::exec_command::strip_bash_lc_and_escape(&ev.command).starts_with("cargo test") {
-            self.session_stats.tests_run = self.session_stats.tests_run.saturating_add(1);
-        }
-        if self.ramps_status_active() {
-            self.set_ramp_stage(crate::ramps::RampStage::Active);
-        } else if crate::xtreme::xtreme_ui_enabled(&self.config)
-            && self.current_status_header == "Charging"
-        {
-            self.set_status_header("Overclocking".to_string());
+        if !matches!(ev.source, ExecCommandSource::UserShell) {
+            self.turn_summary.exec_commands = self.turn_summary.exec_commands.saturating_add(1);
+            self.session_stats.exec_commands = self.session_stats.exec_commands.saturating_add(1);
+            if crate::exec_command::strip_bash_lc_and_escape(&ev.command).starts_with("cargo test")
+            {
+                self.session_stats.tests_run = self.session_stats.tests_run.saturating_add(1);
+            }
+            if self.ramps_status_active() {
+                self.set_ramp_stage(crate::ramps::RampStage::Active);
+            } else if crate::xtreme::xtreme_ui_enabled(&self.config)
+                && self.current_status_header == "Charging"
+            {
+                self.set_status_header("Overclocking".to_string());
+            }
         }
 
         let interaction_input = ev.interaction_input.clone();
@@ -3248,7 +3251,9 @@ impl ChatWidget {
 
     fn flush_active_cell(&mut self) {
         if let Some(active) = self.active_cell.take() {
-            self.needs_final_message_separator = true;
+            if Self::should_mark_separator_for_cell(active.as_ref()) {
+                self.needs_final_message_separator = true;
+            }
             self.app_event_tx.send(AppEvent::InsertHistoryCell(active));
         }
     }
@@ -3269,7 +3274,9 @@ impl ChatWidget {
         if !keep_placeholder_header_active && !cell.display_lines(u16::MAX).is_empty() {
             // Only break exec grouping if the cell renders visible lines.
             self.flush_active_cell();
-            self.needs_final_message_separator = true;
+            if Self::should_mark_separator_for_cell(cell.as_ref()) {
+                self.needs_final_message_separator = true;
+            }
         }
         self.app_event_tx.send(AppEvent::InsertHistoryCell(cell));
     }
@@ -7765,21 +7772,25 @@ impl ChatWidget {
     }
 
     pub(crate) fn add_info_message(&mut self, message: String, hint: Option<String>) {
-        self.maybe_insert_final_message_separator();
         self.add_to_history(history_cell::new_info_event(message, hint));
         self.request_redraw();
     }
 
     pub(crate) fn add_plain_history_lines(&mut self, lines: Vec<Line<'static>>) {
-        self.maybe_insert_final_message_separator();
         self.add_boxed_history(Box::new(PlainHistoryCell::new(lines)));
         self.request_redraw();
     }
 
     pub(crate) fn add_error_message(&mut self, message: String) {
-        self.maybe_insert_final_message_separator();
         self.add_to_history(history_cell::new_error_event(message));
         self.request_redraw();
+    }
+
+    fn should_mark_separator_for_cell(cell: &dyn HistoryCell) -> bool {
+        cell.as_any()
+            .downcast_ref::<ExecCell>()
+            .map(|exec| exec.calls.iter().any(|call| !call.is_user_shell_command()))
+            .unwrap_or(true)
     }
 
     pub(crate) fn add_mcp_output(&mut self) {
