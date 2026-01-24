@@ -263,6 +263,7 @@ jobs:
       - if: ${{ contains(matrix.target, 'linux-musl') }}
         name: Install musl build tools
         run: |
+          set -euo pipefail
           sudo apt-get update
           sudo apt-get install -y musl-dev musl-tools pkg-config
       - if: ${{ contains(matrix.target, 'linux-musl') }}
@@ -270,13 +271,23 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          echo "CC=musl-gcc" >> "$GITHUB_ENV"
+          musl_gcc="musl-gcc"
+          if command -v x86_64-linux-musl-gcc >/dev/null 2>&1; then
+            musl_gcc="x86_64-linux-musl-gcc"
+          elif command -v aarch64-linux-musl-gcc >/dev/null 2>&1; then
+            musl_gcc="aarch64-linux-musl-gcc"
+          fi
+
+          echo "CC=${musl_gcc}" >> "$GITHUB_ENV"
+          echo "PKG_CONFIG_ALLOW_CROSS=1" >> "$GITHUB_ENV"
+          echo "PKG_CONFIG_ALL_STATIC=1" >> "$GITHUB_ENV"
+          echo "OPENSSL_STATIC=1" >> "$GITHUB_ENV"
           case "${{ matrix.target }}" in
             x86_64-unknown-linux-musl)
-              echo "CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER=musl-gcc" >> "$GITHUB_ENV"
+              echo "CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER=${musl_gcc}" >> "$GITHUB_ENV"
               ;;
             aarch64-unknown-linux-musl)
-              echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER=musl-gcc" >> "$GITHUB_ENV"
+              echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER=${musl_gcc}" >> "$GITHUB_ENV"
               ;;
           esac
 
@@ -299,6 +310,7 @@ jobs:
         run: |
           set -euo pipefail
           RECIPE="${RUNNER_TEMP}/chef-recipe.json"
+          export CARGO_TARGET_DIR="${RUNNER_TEMP}/cargo-chef-target"
           cargo chef prepare --recipe-path "$RECIPE"
           cargo chef cook --recipe-path "$RECIPE" --target ${{ matrix.target }} --release --all-features
 

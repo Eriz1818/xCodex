@@ -2074,7 +2074,7 @@ async fn exec_end_without_begin_uses_event_command() {
 }
 
 #[tokio::test]
-async fn final_message_separator_is_inserted_before_info_message_after_exec() {
+async fn final_message_separator_is_not_inserted_before_info_message_after_exec() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
     chat.on_task_started();
 
@@ -2089,17 +2089,11 @@ async fn final_message_separator_is_inserted_before_info_message_after_exec() {
     let cells = drain_insert_history(&mut rx);
     assert_eq!(
         cells.len(),
-        2,
-        "expected separator + info message after exec output"
+        1,
+        "expected only info message after exec output"
     );
 
-    let separator = lines_to_single_string(&cells[0]);
-    assert!(
-        separator.trim_start().starts_with('─'),
-        "expected separator cell, got: {separator:?}"
-    );
-
-    let info = lines_to_single_string(&cells[1]);
+    let info = lines_to_single_string(&cells[0]);
     assert!(
         info.contains("• done"),
         "expected info message to render, got: {info:?}"
