@@ -281,6 +281,7 @@ jobs:
         run: |
           set -euo pipefail
           echo "RUSTFLAGS=-C lto=off -C codegen-units=8" >> "$GITHUB_ENV"
+          echo "CARGO_BUILD_JOBS=1" >> "$GITHUB_ENV"
 
       - name: Install cargo-chef
         if: ${{ !contains(matrix.target, 'pc-windows') && !contains(matrix.target, 'linux-musl') }}
@@ -302,6 +303,7 @@ jobs:
         shell: bash
         run: |
           if [[ "${{ contains(matrix.target, 'pc-windows') }}" == 'true' ]]; then
+            cargo clean --target ${{ matrix.target }} --release
             cargo build --target ${{ matrix.target }} --release --bin codex --bin codex-responses-api-proxy --bin codex-windows-sandbox-setup --bin codex-command-runner
           else
             cargo build --target ${{ matrix.target }} --release --bin codex --bin codex-responses-api-proxy
