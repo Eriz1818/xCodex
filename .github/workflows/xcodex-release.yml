@@ -255,12 +255,6 @@ jobs:
       - name: Enable sccache wrapper
         shell: bash
         run: echo "RUSTC_WRAPPER=sccache" >> "$GITHUB_ENV"
-      - name: Enable sccache on Windows release builds
-        if: ${{ contains(matrix.target, 'pc-windows') }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          echo "SCCACHE_GHA_ENABLED=true" >> "$GITHUB_ENV"
 
       - name: Restore sccache cache (fallback)
         if: ${{ env.SCCACHE_GHA_ENABLED != 'true' }}
