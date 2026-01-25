@@ -201,7 +201,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          rm -rf "$GITHUB_WORKSPACE/codex-rs/target" "$GITHUB_WORKSPACE/.sccache"
+          rm -rf "$GITHUB_WORKSPACE/.sccache"
       - name: Configure cache epoch (Windows)
         if: ${{ contains(matrix.target, 'pc-windows') }}
         shell: bash
@@ -255,13 +255,12 @@ jobs:
       - name: Enable sccache wrapper
         shell: bash
         run: echo "RUSTC_WRAPPER=sccache" >> "$GITHUB_ENV"
-      - name: Disable sccache on Windows release builds
+      - name: Enable sccache on Windows release builds
         if: ${{ contains(matrix.target, 'pc-windows') }}
         shell: bash
         run: |
           set -euo pipefail
-          echo "RUSTC_WRAPPER=" >> "$GITHUB_ENV"
-          echo "SCCACHE_DISABLE=1" >> "$GITHUB_ENV"
+          echo "SCCACHE_GHA_ENABLED=true" >> "$GITHUB_ENV"
 
       - name: Restore sccache cache (fallback)
         if: ${{ env.SCCACHE_GHA_ENABLED != 'true' }}
