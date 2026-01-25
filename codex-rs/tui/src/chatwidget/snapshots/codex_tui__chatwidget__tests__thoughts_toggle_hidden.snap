@@ -1,0 +1,5 @@
+---
+source: tui/src/chatwidget/tests.rs
+expression: "history_lines.join(\"\\n\")"
+---
+• Thoughts hidden.

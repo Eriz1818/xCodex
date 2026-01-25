@@ -164,6 +164,7 @@ use crate::slash_command::SlashCommand;
 use crate::status::RateLimitSnapshotDisplay;
 use crate::text_formatting::truncate_text;
 use crate::tui::FrameRequester;
+use crate::xcodex_plugins;
 mod interrupts;
 use self::interrupts::InterruptManager;
 mod agent;
@@ -1086,6 +1087,21 @@ impl ChatWidget {
 
     fn set_mcp_startup_banner(&mut self, message: Option<String>) {
         self.bottom_pane.set_mcp_startup_banner(message);
+    }
+
+    pub(crate) fn clear_mcp_startup_banner(&mut self) {
+        self.set_mcp_startup_banner(None);
+    }
+
+    pub(crate) fn mcp_failed_servers(&self) -> &[String] {
+        &self.mcp_failed_servers
+    }
+
+    pub(crate) fn persist_mcp_startup_timeout(&self, server: String, startup_timeout_sec: u64) {
+        self.app_event_tx.send(AppEvent::PersistMcpStartupTimeout {
+            server,
+            startup_timeout_sec,
+        });
     }
 
     fn set_exclusion_summary_banner(&mut self, message: Option<String>) {
@@ -2483,17 +2499,6 @@ impl ChatWidget {
                 self.app_event_tx
                     .send(AppEvent::CodexOp(Op::SetAutoCompact { enabled }));
             }
-            SlashCommand::Thoughts => {
-                let hide = !self.config.hide_agent_reasoning;
-                self.set_hide_agent_reasoning(hide);
-                let status = if hide { "hidden" } else { "shown" };
-                self.add_info_message(format!("Thoughts {status}."), None);
-                self.app_event_tx
-                    .send(AppEvent::UpdateHideAgentReasoning(hide));
-                self.app_event_tx
-                    .send(AppEvent::PersistHideAgentReasoning(hide));
-                self.request_redraw();
-            }
             SlashCommand::Review => {
                 self.open_review_popup();
             }
@@ -2748,11 +2753,11 @@ impl ChatWidget {
                     },
                 });
             }
-            SlashCommand::Theme if trimmed.eq_ignore_ascii_case("help") => {
-                self.app_event_tx.send(AppEvent::OpenThemeHelp);
-            }
-            SlashCommand::Theme if trimmed.eq_ignore_ascii_case("template") => {
-                self.write_theme_templates();
+            SlashCommand::Theme => {
+                if xcodex_plugins::try_handle_theme_subcommand(self, trimmed) {
+                    return;
+                }
+                self.dispatch_command(cmd);
             }
             _ => self.dispatch_command(cmd),
         }
@@ -2864,49 +2869,12 @@ impl ChatWidget {
             && name == "mcp"
         {
             let args: Vec<&str> = rest.split_whitespace().collect();
+            if xcodex_plugins::try_handle_mcp_subcommand(self, args.as_slice()) {
+                return;
+            }
             match args.as_slice() {
                 [] | ["list"] => {
                     self.dispatch_command(SlashCommand::Mcp);
-                }
-                ["retry"] | ["retry", "failed"] => {
-                    if self.mcp_failed_servers.is_empty() {
-                        self.add_info_message("No failed MCP servers to retry.".to_string(), None);
-                    } else {
-                        let servers = self.mcp_failed_servers.clone();
-                        self.set_mcp_startup_banner(None);
-                        self.submit_op(Op::McpRetry { servers });
-                    }
-                }
-                ["retry", server] => {
-                    self.set_mcp_startup_banner(None);
-                    self.submit_op(Op::McpRetry {
-                        servers: vec![(*server).to_string()],
-                    });
-                }
-                ["timeout", server, seconds] => {
-                    let secs: u64 = match seconds.parse() {
-                        Ok(secs) => secs,
-                        Err(_) => {
-                            self.add_info_message(
-                                "Usage: /mcp timeout <name> <seconds>".to_string(),
-                                None,
-                            );
-                            return;
-                        }
-                    };
-                    let server = (*server).to_string();
-                    self.set_mcp_startup_banner(None);
-                    self.app_event_tx.send(AppEvent::PersistMcpStartupTimeout {
-                        server: server.clone(),
-                        startup_timeout_sec: secs,
-                    });
-                    self.submit_op(Op::McpSetStartupTimeout {
-                        server: server.clone(),
-                        startup_timeout_sec: secs,
-                    });
-                    self.submit_op(Op::McpRetry {
-                        servers: vec![server],
-                    });
                 }
                 _ => {
                     self.add_info_message(
@@ -2986,50 +2954,8 @@ impl ChatWidget {
         if image_paths.is_empty()
             && text.lines().count() == 1
             && let Some((name, rest)) = parse_slash_name(text.as_str())
-            && name == "thoughts"
+            && xcodex_plugins::try_handle_slash_command(self, name, rest)
         {
-            let args: Vec<&str> = rest.split_whitespace().collect();
-            let next_hide = match args.as_slice() {
-                [] => Some(!self.config.hide_agent_reasoning),
-                [arg] => match arg.to_ascii_lowercase().as_str() {
-                    "on" | "show" | "true" => Some(false),
-                    "off" | "hide" | "false" => Some(true),
-                    "toggle" => Some(!self.config.hide_agent_reasoning),
-                    "status" => None,
-                    _ => {
-                        self.add_info_message(
-                            "Usage: /thoughts [on|off|toggle|status]".to_string(),
-                            None,
-                        );
-                        return;
-                    }
-                },
-                _ => {
-                    self.add_info_message(
-                        "Usage: /thoughts [on|off|toggle|status]".to_string(),
-                        None,
-                    );
-                    return;
-                }
-            };
-
-            if let Some(hide) = next_hide {
-                self.set_hide_agent_reasoning(hide);
-                let status = if hide { "hidden" } else { "shown" };
-                self.add_info_message(format!("Thoughts {status}."), None);
-                self.app_event_tx
-                    .send(AppEvent::UpdateHideAgentReasoning(hide));
-                self.app_event_tx
-                    .send(AppEvent::PersistHideAgentReasoning(hide));
-            } else {
-                let status = if self.config.hide_agent_reasoning {
-                    "hidden"
-                } else {
-                    "shown"
-                };
-                self.add_info_message(format!("Thoughts are currently {status}."), None);
-            }
-            self.request_redraw();
             return;
         }
 
@@ -5612,7 +5538,7 @@ impl ChatWidget {
         self.open_model_popup_with_presets(presets);
     }
 
-    fn write_theme_templates(&mut self) {
+    pub(crate) fn write_theme_templates(&mut self) {
         use codex_core::themes::ThemeCatalog;
         use codex_core::themes::ThemeVariant;
 
@@ -5672,6 +5598,10 @@ impl ChatWidget {
         message.push_str("\nSelect a theme with `/theme`.");
 
         self.add_info_message(message, None);
+    }
+
+    pub(crate) fn open_theme_help(&mut self) {
+        self.app_event_tx.send(AppEvent::OpenThemeHelp);
     }
 
     pub(crate) fn open_model_popup_with_presets(&mut self, presets: Vec<ModelPreset>) {
@@ -6925,6 +6855,18 @@ impl ChatWidget {
             self.reasoning_buffer.clear();
             self.full_reasoning_buffer.clear();
         }
+    }
+
+    pub(crate) fn hide_agent_reasoning(&self) -> bool {
+        self.config.hide_agent_reasoning
+    }
+
+    pub(crate) fn apply_hide_agent_reasoning(&mut self, hide: bool) {
+        self.set_hide_agent_reasoning(hide);
+        self.app_event_tx
+            .send(AppEvent::UpdateHideAgentReasoning(hide));
+        self.app_event_tx
+            .send(AppEvent::PersistHideAgentReasoning(hide));
     }
 
     pub(crate) fn add_info_message(&mut self, message: String, hint: Option<String>) {

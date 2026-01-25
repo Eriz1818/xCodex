@@ -1,0 +1,12 @@
+---
+source: tui/src/bottom_pane/chat_composer.rs
+expression: terminal.backend()
+---
+"                                                            "
+"› /worktree                                                 "
+"                                                            "
+"  /worktree detect       refresh git worktree list and open "
+"                         picker                             "
+"  /worktree doctor       show shared-dir + untracked status "
+"                         for this worktree                  "
+"  /worktree init         create a new worktree and switch to"

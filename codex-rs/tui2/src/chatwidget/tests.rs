@@ -695,6 +695,66 @@ async fn mcp_slash_command_timeout_with_invalid_seconds_emits_usage() {
 }
 
 #[tokio::test]
+async fn thoughts_slash_command_toggles_and_persists() {
+    let (mut chat, mut rx, _ops) = make_chatwidget_manual(None).await;
+
+    chat.set_hide_agent_reasoning(false);
+    while rx.try_recv().is_ok() {}
+
+    chat.submit_user_message(UserMessage::from("/thoughts".to_string()));
+
+    let mut update_events = Vec::new();
+    let mut persist_events = Vec::new();
+    let mut history_lines = Vec::new();
+    while let Ok(ev) = rx.try_recv() {
+        match ev {
+            AppEvent::InsertHistoryCell(cell) => {
+                history_lines.push(lines_to_single_string(&cell.display_lines(80)));
+            }
+            AppEvent::UpdateHideAgentReasoning(hide) => update_events.push(hide),
+            AppEvent::PersistHideAgentReasoning(hide) => persist_events.push(hide),
+            _ => {}
+        }
+    }
+
+    assert!(
+        chat.hide_agent_reasoning(),
+        "expected thoughts to be hidden"
+    );
+    assert_eq!(update_events, vec![true]);
+    assert_eq!(persist_events, vec![true]);
+    assert_snapshot!("thoughts_toggle_hidden", history_lines.join("\n"));
+}
+
+#[tokio::test]
+async fn thoughts_slash_command_status_reports_without_updates() {
+    let (mut chat, mut rx, _ops) = make_chatwidget_manual(None).await;
+
+    chat.set_hide_agent_reasoning(true);
+    while rx.try_recv().is_ok() {}
+
+    chat.submit_user_message(UserMessage::from("/thoughts status".to_string()));
+
+    let mut update_events = Vec::new();
+    let mut persist_events = Vec::new();
+    let mut history_lines = Vec::new();
+    while let Ok(ev) = rx.try_recv() {
+        match ev {
+            AppEvent::InsertHistoryCell(cell) => {
+                history_lines.push(lines_to_single_string(&cell.display_lines(80)));
+            }
+            AppEvent::UpdateHideAgentReasoning(hide) => update_events.push(hide),
+            AppEvent::PersistHideAgentReasoning(hide) => persist_events.push(hide),
+            _ => {}
+        }
+    }
+
+    assert_eq!(update_events, Vec::<bool>::new());
+    assert_eq!(persist_events, Vec::<bool>::new());
+    assert_snapshot!("thoughts_status_hidden", history_lines.join("\n"));
+}
+
+#[tokio::test]
 async fn mcp_slash_command_timeout_persists_and_retries() {
     let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(None).await;
 

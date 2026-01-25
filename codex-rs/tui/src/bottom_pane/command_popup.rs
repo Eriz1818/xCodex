@@ -13,6 +13,8 @@ use crate::render::Insets;
 use crate::render::RectExt;
 use crate::slash_command::SlashCommand;
 use crate::slash_command::built_in_slash_commands;
+use crate::xcodex_plugins::PluginSlashCommand;
+use crate::xcodex_plugins::plugin_slash_commands;
 use codex_common::fuzzy_match::fuzzy_match;
 use codex_protocol::custom_prompts::CustomPrompt;
 use codex_protocol::custom_prompts::PROMPTS_CMD_PREFIX;
@@ -63,6 +65,7 @@ pub(crate) struct CommandPopup {
     command_filter: String,
     command_line: String,
     builtins: Vec<(&'static str, SlashCommand)>,
+    plugin_commands: Vec<PluginSlashCommand>,
     prompts: Vec<CustomPrompt>,
     slash_completion_branches: Vec<String>,
     current_git_branch: Option<String>,
@@ -88,14 +91,24 @@ impl CommandPopup {
             .filter(|(_, cmd)| allow_elevate_sandbox || *cmd != SlashCommand::ElevateSandbox)
             .filter(|(_, cmd)| flags.collaboration_modes_enabled || *cmd != SlashCommand::Collab)
             .collect();
+        let plugin_commands: Vec<PluginSlashCommand> = plugin_slash_commands().to_vec();
         // Exclude prompts that collide with builtin command names and sort by name.
-        let exclude: HashSet<String> = builtins.iter().map(|(n, _)| (*n).to_string()).collect();
+        let exclude: HashSet<String> = builtins
+            .iter()
+            .map(|(n, _)| (*n).to_string())
+            .chain(
+                plugin_commands
+                    .iter()
+                    .map(|command| command.name.to_string()),
+            )
+            .collect();
         prompts.retain(|p| !exclude.contains(&p.name));
         prompts.sort_by(|a, b| a.name.cmp(&b.name));
         Self {
             command_filter: String::new(),
             command_line: String::new(),
             builtins,
+            plugin_commands,
             prompts,
             slash_completion_branches: Vec::new(),
             current_git_branch: None,
@@ -110,6 +123,11 @@ impl CommandPopup {
             .builtins
             .iter()
             .map(|(n, _)| (*n).to_string())
+            .chain(
+                self.plugin_commands
+                    .iter()
+                    .map(|command| command.name.to_string()),
+            )
             .collect();
         prompts.retain(|p| !exclude.contains(&p.name));
         prompts.sort_by(|a, b| a.name.cmp(&b.name));
@@ -220,6 +238,17 @@ impl CommandPopup {
             for (_, cmd) in self.builtins.iter() {
                 out.push((CommandItem::Builtin(*cmd), None));
             }
+            for command in self.plugin_commands.iter() {
+                out.push((
+                    CommandItem::BuiltinText {
+                        name: command.name,
+                        description: command.description,
+                        run_on_enter: command.run_on_enter,
+                        insert_trailing_space: command.insert_trailing_space,
+                    },
+                    None,
+                ));
+            }
             // Then prompts, already sorted by name.
             for idx in 0..self.prompts.len() {
                 out.push((CommandItem::UserPrompt(idx), None));
@@ -282,6 +311,19 @@ impl CommandPopup {
 
         for (_, cmd) in self.builtins.iter() {
             push_match(CommandItem::Builtin(*cmd), cmd.command(), None, 0);
+        }
+        for command in self.plugin_commands.iter() {
+            push_match(
+                CommandItem::BuiltinText {
+                    name: command.name,
+                    description: command.description,
+                    run_on_enter: command.run_on_enter,
+                    insert_trailing_space: command.insert_trailing_space,
+                },
+                command.name,
+                Some(command.name),
+                0,
+            );
         }
 
         // Support both search styles:
@@ -579,6 +621,28 @@ mod tests {
     }
 
     #[test]
+    fn filter_includes_thoughts_plugin_command() {
+        let mut popup = CommandPopup::new(
+            Vec::new(),
+            CommandPopupFlags::default(),
+            DEFAULT_SLASH_POPUP_ROWS,
+        );
+        popup.on_composer_text_change("/tho".to_string());
+
+        let matches = popup.filtered_items();
+        let has_thoughts = matches.iter().any(|item| match item {
+            CommandItem::BuiltinText { name, .. } => *name == "thoughts",
+            CommandItem::Builtin(_) => false,
+            CommandItem::ArgValue { .. } => false,
+            CommandItem::UserPrompt(_) => false,
+        });
+        assert!(
+            has_thoughts,
+            "expected '/thoughts' to appear among filtered commands"
+        );
+    }
+
+    #[test]
     fn selecting_init_by_exact_match() {
         let mut popup = CommandPopup::new(
             Vec::new(),
@@ -822,6 +886,15 @@ mod tests {
     }
 
     #[test]
+    fn worktree_subcommand_hint_uses_plugin_order() {
+        let hint = subcommand_list_hint("worktree").expect("worktree hint");
+        assert_eq!(
+            hint,
+            "Type space for subcommands: detect, doctor, init, shared, link-shared"
+        );
+    }
+
+    #[test]
     fn settings_subcommands_are_suggested_under_settings() {
         let mut popup = CommandPopup::new(
             Vec::new(),
@@ -870,6 +943,63 @@ mod tests {
             subcommands.contains(&"settings status-bar git-branch")
                 && subcommands.contains(&"settings status-bar worktree"),
             "expected /settings status-bar to suggest nested subcommands, got {subcommands:?}"
+        );
+    }
+
+    #[test]
+    fn mcp_subcommands_are_suggested_under_mcp() {
+        let mut popup = CommandPopup::new(
+            Vec::new(),
+            CommandPopupFlags::default(),
+            DEFAULT_SLASH_POPUP_ROWS,
+        );
+
+        popup.on_composer_text_change("/mcp ".to_string());
+
+        let items = popup.filtered_items();
+        assert!(
+            !items
+                .iter()
+                .any(|item| matches!(item, CommandItem::Builtin(SlashCommand::Mcp))),
+            "expected /mcp root command to be hidden in subcommand context"
+        );
+
+        let subcommands: Vec<&str> = items
+            .into_iter()
+            .filter_map(|item| match item {
+                CommandItem::BuiltinText { name, .. } => Some(name),
+                _ => None,
+            })
+            .collect();
+
+        assert!(
+            subcommands.contains(&"mcp retry") && subcommands.contains(&"mcp timeout"),
+            "expected /mcp to suggest subcommands, got {subcommands:?}"
+        );
+    }
+
+    #[test]
+    fn mcp_retry_subcommands_are_suggested_under_retry() {
+        let mut popup = CommandPopup::new(
+            Vec::new(),
+            CommandPopupFlags::default(),
+            DEFAULT_SLASH_POPUP_ROWS,
+        );
+
+        popup.on_composer_text_change("/mcp retry ".to_string());
+
+        let items = popup.filtered_items();
+        let subcommands: Vec<&str> = items
+            .into_iter()
+            .filter_map(|item| match item {
+                CommandItem::BuiltinText { name, .. } => Some(name),
+                _ => None,
+            })
+            .collect();
+
+        assert!(
+            subcommands.contains(&"mcp retry failed"),
+            "expected /mcp retry to suggest failed, got {subcommands:?}"
         );
     }
 

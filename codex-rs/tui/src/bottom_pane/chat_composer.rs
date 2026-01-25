@@ -4035,7 +4035,7 @@ mod tests {
         );
         composer.set_steer_enabled(true);
 
-        // Type "/mo" humanlike so paste-burst doesn’t interfere.
+        // Type "/mo" humanlike so paste-burst doesn't interfere.
         type_chars_humanlike(&mut composer, &['/', 'm', 'o']);
 
         let mut terminal = match Terminal::new(TestBackend::new(60, 5)) {
@@ -4102,7 +4102,7 @@ mod tests {
         );
         composer.set_steer_enabled(true);
 
-        // Type "/res" humanlike so paste-burst doesn’t interfere.
+        // Type "/res" humanlike so paste-burst doesn't interfere.
         type_chars_humanlike(&mut composer, &['/', 'r', 'e', 's']);
 
         let mut terminal = Terminal::new(TestBackend::new(60, 6)).expect("terminal");
@@ -4112,6 +4112,36 @@ mod tests {
 
         // Snapshot should show /resume as the first entry for /res.
         insta::assert_snapshot!("slash_popup_res", terminal.backend());
+    }
+
+    #[test]
+    fn slash_popup_worktree_for_worktree_ui() {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask xcodex to do anything".to_string(),
+            false,
+        );
+
+        // Type "/worktree " humanlike so paste-burst doesn't interfere.
+        type_chars_humanlike(
+            &mut composer,
+            &['/', 'w', 'o', 'r', 'k', 't', 'r', 'e', 'e', ' '],
+        );
+
+        let mut terminal = Terminal::new(TestBackend::new(60, 8)).expect("terminal");
+        terminal
+            .draw(|f| composer.render(f.area(), f.buffer_mut()))
+            .expect("draw composer");
+
+        insta::assert_snapshot!("slash_popup_worktree", terminal.backend());
     }
 
     #[test]

@@ -97,6 +97,7 @@ mod updates;
 mod version;
 mod whats_new;
 mod xcodex_first_run_wizard;
+mod xcodex_plugins;
 mod xtreme;
 
 mod wrapping;
