@@ -43,6 +43,7 @@ class BinaryComponent:
     dest_dir: str  # directory under vendor/<target>/ where the binary is installed
     binary_basename: str  # executable name inside dest_dir (before optional .exe)
     targets: tuple[str, ...] | None = None  # limit installation to specific targets
+    windows_job_bin: str | None = None  # workflow "bin" name for Windows artifact folders
 
 
 WINDOWS_TARGETS = tuple(target for target in BINARY_TARGETS if "windows" in target)
@@ -52,6 +53,7 @@ BINARY_COMPONENTS = {
         artifact_prefix="xcodex",
         dest_dir="xcodex",
         binary_basename="xcodex",
+        windows_job_bin="codex",
     ),
     "xcodex-responses-api-proxy": BinaryComponent(
         artifact_prefix="xcodex-responses-api-proxy",
@@ -332,11 +334,22 @@ def _install_single_binary(
     target: str,
     component: BinaryComponent,
 ) -> Path:
-    artifact_subdir = artifacts_dir / target
     archive_name = _archive_name_for_target(component.artifact_prefix, target)
-    archive_path = artifact_subdir / archive_name
-    if not archive_path.exists():
-        raise FileNotFoundError(f"Expected artifact not found: {archive_path}")
+    artifact_subdirs = [artifacts_dir / target]
+    if "windows" in target:
+        windows_job_bin = component.windows_job_bin or component.binary_basename
+        artifact_subdirs.append(artifacts_dir / f"{target}-{windows_job_bin}")
+
+    archive_path = None
+    for artifact_subdir in artifact_subdirs:
+        candidate = artifact_subdir / archive_name
+        if candidate.exists():
+            archive_path = candidate
+            break
+
+    if archive_path is None:
+        expected_paths = ", ".join(str(subdir / archive_name) for subdir in artifact_subdirs)
+        raise FileNotFoundError(f"Expected artifact not found in: {expected_paths}")
 
     dest_dir = vendor_dir / target / component.dest_dir
     dest_dir.mkdir(parents=True, exist_ok=True)
