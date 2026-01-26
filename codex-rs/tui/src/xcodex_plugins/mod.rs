@@ -1,5 +1,5 @@
 mod mcp;
-mod theme;
+pub(crate) mod theme;
 mod thoughts;
 mod worktree;
 

@@ -2076,126 +2076,20 @@ impl App {
                 tui.frame_requester().schedule_frame();
             }
             AppEvent::PreviewTheme { theme } => {
-                crate::theme::preview(&self.config, crate::terminal_palette::default_bg(), &theme);
-                tui.frame_requester().schedule_frame();
+                crate::xcodex_plugins::theme::preview_theme(self, tui, &theme);
             }
             AppEvent::CancelThemePreview => {
-                crate::theme::apply_from_config(
-                    &self.config,
-                    crate::terminal_palette::default_bg(),
-                );
-                tui.frame_requester().schedule_frame();
+                crate::xcodex_plugins::theme::cancel_theme_preview(self, tui);
             }
             AppEvent::PersistThemeSelection { variant, theme } => {
-                use codex_core::config::edit::ConfigEdit;
-
-                let profile = self.active_profile.as_deref();
-                let (config_key, label) = match variant {
-                    codex_core::themes::ThemeVariant::Light => ("light", "Light"),
-                    codex_core::themes::ThemeVariant::Dark => ("dark", "Dark"),
-                };
-
-                let edit = if theme == "default" {
-                    ConfigEdit::ClearPath {
-                        segments: vec!["themes".to_string(), config_key.to_string()],
-                    }
-                } else {
-                    ConfigEdit::SetPath {
-                        segments: vec!["themes".to_string(), config_key.to_string()],
-                        value: toml_edit::value(theme.clone()),
-                    }
-                };
-
-                let result = ConfigEditsBuilder::new(&self.config.codex_home)
-                    .with_profile(profile)
-                    .with_edits([edit])
-                    .apply()
+                crate::xcodex_plugins::theme::persist_theme_selection(self, tui, variant, theme)
                     .await;
-
-                match result {
-                    Ok(()) => {
-                        match variant {
-                            codex_core::themes::ThemeVariant::Light => {
-                                self.config.themes.light =
-                                    (theme != "default").then(|| theme.clone());
-                            }
-                            codex_core::themes::ThemeVariant::Dark => {
-                                self.config.themes.dark =
-                                    (theme != "default").then(|| theme.clone());
-                            }
-                        }
-                        self.chat_widget
-                            .set_themes_config(self.config.themes.clone());
-                        crate::theme::apply_from_config(
-                            &self.config,
-                            crate::terminal_palette::default_bg(),
-                        );
-
-                        let mut message = format!("Theme changed to `{theme}` for {label} mode.");
-                        if let Some(profile) = profile {
-                            message.push_str(" (profile: ");
-                            message.push_str(profile);
-                            message.push(')');
-                        }
-                        self.chat_widget.add_info_message(message, None);
-                    }
-                    Err(err) => {
-                        crate::theme::apply_from_config(
-                            &self.config,
-                            crate::terminal_palette::default_bg(),
-                        );
-                        tracing::error!(error = %err, "failed to persist theme selection");
-                        if let Some(profile) = profile {
-                            self.chat_widget.add_error_message(format!(
-                                "Failed to save theme for profile `{profile}`: {err}"
-                            ));
-                        } else {
-                            self.chat_widget
-                                .add_error_message(format!("Failed to save theme: {err}"));
-                        }
-                    }
-                }
-                tui.frame_requester().schedule_frame();
             }
             AppEvent::OpenThemeSelector => {
-                let _ = tui.enter_alt_screen();
-                let terminal_bg = crate::terminal_palette::default_bg();
-                self.overlay = Some(Overlay::new_theme_selector(
-                    self.app_event_tx.clone(),
-                    self.config.clone(),
-                    terminal_bg,
-                ));
-                tui.frame_requester().schedule_frame();
+                crate::xcodex_plugins::theme::open_theme_selector(self, tui);
             }
             AppEvent::OpenThemeHelp => {
-                let _ = tui.enter_alt_screen();
-                let lines: Vec<ratatui::text::Line<'static>> = vec![
-                    "Theme keys".bold().into(),
-                    "".into(),
-                    "roles.fg / roles.bg — primary app text + surfaces".into(),
-                    "roles.transcript_bg / roles.composer_bg / roles.status_bg — transcript, composer, and status bar backgrounds (derived by default)".into(),
-                    "roles.user_prompt_highlight_bg — background for highlighting past user prompts in the transcript (derived by default)".into(),
-                    "roles.selection_fg / roles.selection_bg — selection highlight in pickers".into(),
-                    "roles.cursor_fg / roles.cursor_bg — (reserved for future)".dim().into(),
-                    "roles.border — box borders and tree chrome (status cards, tool blocks)".into(),
-                    "roles.dim — secondary text (derived from fg/bg)".into(),
-                    "".into(),
-                    "Diff roles".bold().into(),
-                    "roles.diff_add_fg / roles.diff_add_bg — additions in /diff overlay".into(),
-                    "roles.diff_del_fg / roles.diff_del_bg — deletions in /diff overlay".into(),
-                    "roles.diff_hunk_fg / roles.diff_hunk_bg — hunk separators in /diff overlay".into(),
-                    "Tip: set roles.diff_*_bg to `inherit` for text-only diffs.".dim().into(),
-                    "".into(),
-                    "Palette keys".bold().into(),
-                    "palette.* defines ANSI slots (0–15). They matter for legacy ANSI-colored UI and external tool output; xcodex themes do not swap the terminal palette.".into(),
-                    "".into(),
-                    "Tip: run `/theme` to preview + save; press Ctrl+T to edit colors (palette/roles). `/theme template` writes example YAML files.".into(),
-                ];
-                self.overlay = Some(Overlay::new_static_with_lines(
-                    lines,
-                    "T H E M E".to_string(),
-                ));
-                tui.frame_requester().schedule_frame();
+                crate::xcodex_plugins::theme::open_theme_help(self, tui);
             }
             AppEvent::UpdateRampsConfig {
                 rotate,
