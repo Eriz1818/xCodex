@@ -207,9 +207,6 @@
             "steer": {
               "type": "boolean"
             },
-            "tui2": {
-              "type": "boolean"
-            },
             "undo": {
               "type": "boolean"
             },
@@ -1625,7 +1622,7 @@
           "type": "boolean"
         },
         "scroll_events_per_tick": {
-          "description": "Override the *wheel* event density used to normalize TUI2 scrolling.\n\nTerminals generally deliver both mouse wheels and trackpads as discrete `scroll up/down` mouse events with direction but no magnitude. Unfortunately, the *number* of raw events per physical wheel notch varies by terminal (commonly 1, 3, or 9+). TUI2 uses this value to normalize that raw event density into consistent \"wheel tick\" behavior.\n\nWheel math (conceptually):\n\n- A single event contributes `1 / scroll_events_per_tick` tick-equivalents. - Wheel-like streams then scale that by `scroll_wheel_lines` so one physical notch scrolls a fixed number of lines.\n\nTrackpad math is intentionally *not* fully tied to this value: in trackpad-like mode, TUI2 uses `min(scroll_events_per_tick, 3)` as the divisor so terminals with dense wheel ticks (e.g. 9 events per notch) do not make trackpads feel artificially slow.\n\nDefaults are derived per terminal from [`crate::terminal::TerminalInfo`] when TUI2 starts. See `codex-rs/tui2/docs/scroll_input_model.md` for the probe data and rationale.",
+          "description": "Override the *wheel* event density used to normalize TUI2 scrolling.\n\nTerminals generally deliver both mouse wheels and trackpads as discrete `scroll up/down` mouse events with direction but no magnitude. Unfortunately, the *number* of raw events per physical wheel notch varies by terminal (commonly 1, 3, or 9+). TUI2 uses this value to normalize that raw event density into consistent \"wheel tick\" behavior.\n\nWheel math (conceptually):\n\n- A single event contributes `1 / scroll_events_per_tick` tick-equivalents. - Wheel-like streams then scale that by `scroll_wheel_lines` so one physical notch scrolls a fixed number of lines.\n\nTrackpad math is intentionally *not* fully tied to this value: in trackpad-like mode, TUI2 uses `min(scroll_events_per_tick, 3)` as the divisor so terminals with dense wheel ticks (e.g. 9 events per notch) do not make trackpads feel artificially slow.\n\nDefaults are derived per terminal from [`crate::terminal::TerminalInfo`] when TUI2 starts. See `codex-rs/xcodex/tui2/docs/scroll_input_model.md` for the probe data and rationale.",
           "format": "uint16",
           "minimum": 0.0,
           "type": "integer"
@@ -1670,7 +1667,7 @@
           "type": "integer"
         },
         "scroll_wheel_lines": {
-          "description": "Override how many transcript lines one physical *wheel notch* should scroll in TUI2.\n\nThis is the \"classic feel\" knob. Defaults to 3.\n\nWheel-like per-event contribution is `scroll_wheel_lines / scroll_events_per_tick`. For example, in a terminal that emits 9 events per notch, the default `3 / 9` yields 1/3 of a line per event and totals 3 lines once the full notch burst arrives.\n\nSee `codex-rs/tui2/docs/scroll_input_model.md` for details on the stream model and the wheel/trackpad heuristic.",
+          "description": "Override how many transcript lines one physical *wheel notch* should scroll in TUI2.\n\nThis is the \"classic feel\" knob. Defaults to 3.\n\nWheel-like per-event contribution is `scroll_wheel_lines / scroll_events_per_tick`. For example, in a terminal that emits 9 events per notch, the default `3 / 9` yields 1/3 of a line per event and totals 3 lines once the full notch burst arrives.\n\nSee `codex-rs/xcodex/tui2/docs/scroll_input_model.md` for details on the stream model and the wheel/trackpad heuristic.",
           "format": "uint16",
           "minimum": 0.0,
           "type": "integer"
@@ -1985,9 +1982,6 @@
           "type": "boolean"
         },
         "steer": {
-          "type": "boolean"
-        },
-        "tui2": {
           "type": "boolean"
         },
         "undo": {

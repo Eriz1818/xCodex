@@ -170,7 +170,6 @@ Supported features:
 | `view_image_tool`                     |  true   | Stable       | Include the `view_image` tool                         |
 | `web_search_request`                  |  false  | Stable       | Allow the model to issue web searches                 |
 | `enable_experimental_windows_sandbox` |  false  | Experimental | Use the Windows restricted-token sandbox              |
-| `tui2`                                |  false  | Experimental | Use the experimental TUI v2 (viewport) implementation |
 | `skills`                              |  false  | Experimental | Enable discovery and injection of skills              |
 
 Notes:
@@ -1184,7 +1183,7 @@ status_bar_show_worktree = false
 # or 9+). TUI2 normalizes raw event density into consistent wheel behavior (default: ~3 lines per
 # wheel notch) while keeping trackpad input higher fidelity via fractional accumulation.
 #
-# See `codex-rs/tui2/docs/scroll_input_model.md` for the model and probe data.
+# See `codex-rs/xcodex/tui2/docs/scroll_input_model.md` for the model and probe data.
 
 # Override *wheel* event density (raw events per physical wheel notch). TUI2 only.
 #

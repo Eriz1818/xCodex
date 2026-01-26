@@ -95,8 +95,6 @@ pub enum Feature {
     ShellSnapshot,
     /// Append additional AGENTS.md guidance to user instructions.
     ChildAgentsMd,
-    /// Experimental TUI v2 (viewport) implementation.
-    Tui2,
     /// Enforce UTF8 output in Powershell.
     PowershellUtf8,
     /// Compress request bodies (zstd) when sending streaming requests to codex-backend.
@@ -371,16 +369,6 @@ pub const FEATURES: &[FeatureSpec] = &[
         id: Feature::ChildAgentsMd,
         key: "child_agents_md",
         stage: Stage::Beta,
-        default_enabled: false,
-    },
-    FeatureSpec {
-        id: Feature::Tui2,
-        key: "tui2",
-        stage: Stage::Experimental {
-            name: "TUI v2",
-            menu_description: "Enable the viewport-based TUI2 interface.",
-            announcement: "NEW! Try the viewport-based TUI2 experience. Enable in /experimental!",
-        },
         default_enabled: false,
     },
     FeatureSpec {

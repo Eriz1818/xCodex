@@ -739,7 +739,7 @@ pub struct Tui {
     /// (e.g. 9 events per notch) do not make trackpads feel artificially slow.
     ///
     /// Defaults are derived per terminal from [`crate::terminal::TerminalInfo`] when TUI2 starts.
-    /// See `codex-rs/tui2/docs/scroll_input_model.md` for the probe data and rationale.
+    /// See `codex-rs/xcodex/tui2/docs/scroll_input_model.md` for the probe data and rationale.
     pub scroll_events_per_tick: Option<u16>,
 
     /// Override how many transcript lines one physical *wheel notch* should scroll in TUI2.
@@ -750,7 +750,7 @@ pub struct Tui {
     /// example, in a terminal that emits 9 events per notch, the default `3 / 9` yields 1/3 of a
     /// line per event and totals 3 lines once the full notch burst arrives.
     ///
-    /// See `codex-rs/tui2/docs/scroll_input_model.md` for details on the stream model and the
+    /// See `codex-rs/xcodex/tui2/docs/scroll_input_model.md` for details on the stream model and the
     /// wheel/trackpad heuristic.
     pub scroll_wheel_lines: Option<u16>,
 
