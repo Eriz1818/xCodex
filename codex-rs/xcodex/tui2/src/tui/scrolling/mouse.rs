@@ -15,7 +15,7 @@
 //! "promote" to wheel-like when the first tick-worth of events arrives quickly. A user can always
 //! force wheel/trackpad behavior via config if the heuristic is wrong for their setup.
 //!
-//! See `codex-rs/tui2/docs/scroll_input_model.md` for the data-derived constants and analysis.
+//! See `codex-rs/xcodex/tui2/docs/scroll_input_model.md` for the data-derived constants and analysis.
 
 use codex_core::config::types::ScrollInputMode;
 use codex_core::terminal::TerminalInfo;
@@ -90,7 +90,7 @@ impl ScrollDirection {
 /// - `wheel_lines_per_tick` scales short, discrete streams so a single mouse wheel notch retains
 ///   the classic multi-line feel.
 ///
-/// See `codex-rs/tui2/docs/scroll_input_model.md` for the probe data and rationale.
+/// See `codex-rs/xcodex/tui2/docs/scroll_input_model.md` for the probe data and rationale.
 /// User-facing overrides are exposed via `config.toml` as:
 /// - `tui.scroll_events_per_tick`
 /// - `tui.scroll_wheel_lines`
@@ -310,7 +310,7 @@ pub(crate) struct ScrollUpdate {
 ///
 /// This is the state machine that turns discrete terminal scroll events (`ScrollUp`/`ScrollDown`)
 /// into viewport line deltas. It implements the stream-based model described in
-/// `codex-rs/tui2/docs/scroll_input_model.md`:
+/// `codex-rs/xcodex/tui2/docs/scroll_input_model.md`:
 ///
 /// - **Streams**: a sequence of events is treated as one user gesture until a gap larger than
 ///   [`STREAM_GAP`] or a direction flip closes the stream.
@@ -377,7 +377,7 @@ impl MouseScrollState {
     /// Behavior is identical to [`MouseScrollState::on_scroll_event`], except the caller provides
     /// the timestamp (`now`). In the real app, the timestamp comes from `Instant::now()`.
     ///
-    /// Key details (see `codex-rs/tui2/docs/scroll_input_model.md` for the full model):
+    /// Key details (see `codex-rs/xcodex/tui2/docs/scroll_input_model.md` for the full model):
     ///
     /// - **Stream boundaries**: a gap larger than [`STREAM_GAP`] or a direction flip closes the
     ///   previous stream and starts a new one.
@@ -591,7 +591,7 @@ impl Default for MouseScrollState {
 /// - [`MouseScrollState::on_scroll_event_at`] for new events.
 /// - [`MouseScrollState::on_tick_at`] for idle-gap closure and coalesced flush.
 ///
-/// See `codex-rs/tui2/docs/scroll_input_model.md` for the full rationale and probe-derived
+/// See `codex-rs/xcodex/tui2/docs/scroll_input_model.md` for the full rationale and probe-derived
 /// constants.
 struct ScrollStream {
     start: Instant,

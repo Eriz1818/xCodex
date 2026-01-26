@@ -5,7 +5,7 @@
 //! terminal backend writer.
 //!
 //! Note: the current `tui2` main draw loop does not call `insert_history_lines` (see
-//! `codex-rs/tui2/src/tui.rs`). This module is still used for deterministic ANSI emission via
+//! `codex-rs/xcodex/tui2/src/tui.rs`). This module is still used for deterministic ANSI emission via
 //! `write_spans` (e.g., "print after exit" flows) and for tests.
 //!
 //! ## Why we use crossterm style commands

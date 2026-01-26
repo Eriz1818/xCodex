@@ -192,7 +192,7 @@ fn render_key_hints(area: Rect, buf: &mut Buffer, pairs: &[(&[KeyBinding], &str)
 
 include!(concat!(
     env!("CARGO_MANIFEST_DIR"),
-    "/../theme-ui/src/theme_selector_overlay.rs"
+    "/../../theme-ui/src/theme_selector_overlay.rs"
 ));
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

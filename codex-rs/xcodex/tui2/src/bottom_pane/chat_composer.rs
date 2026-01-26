@@ -35,7 +35,7 @@
 //! machine and treats the key stream as normal typing. When toggling from enabled → disabled, the
 //! composer flushes/clears any in-flight burst state so it cannot leak into subsequent input.
 //!
-//! For the detailed burst state machine, see `codex-rs/tui2/src/bottom_pane/paste_burst.rs`.
+//! For the detailed burst state machine, see `codex-rs/xcodex/tui2/src/bottom_pane/paste_burst.rs`.
 //! For a narrative overview of the combined state machine, see `docs/tui-chat-composer.md`.
 //!
 //! # PasteBurst Integration Points

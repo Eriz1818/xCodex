@@ -5,7 +5,7 @@ This is the single "scrolling doc of record" for TUI2.
 It describes what we implemented, why it works, and what we tried before this approach.
 It also preserves the scroll-probe findings (see Appendix) that motivated the model.
 
-Code reference: `codex-rs/tui2/src/tui/scrolling/mouse.rs`.
+Code reference: `codex-rs/xcodex/tui2/src/tui/scrolling/mouse.rs`.
 
 ## Goals and constraints
 
@@ -415,7 +415,7 @@ Why these values:
 
 ```rust
 // This is intentionally a simplified sketch of the current implementation.
-// For the authoritative behavior, see `codex-rs/tui2/src/tui/scrolling/mouse.rs`.
+// For the authoritative behavior, see `codex-rs/xcodex/tui2/src/tui/scrolling/mouse.rs`.
 
 enum StreamKind {
     Unknown,

@@ -1,7 +1,7 @@
 # TUI2 Viewport, Transcript, and History – Design Notes
 
 This document describes the viewport and history model we are implementing in the new
-`codex-rs/tui2` crate. It builds on lessons from the legacy TUI and explains why we moved away
+`codex-rs/xcodex/tui2` crate. It builds on lessons from the legacy TUI and explains why we moved away
 from directly writing history into terminal scrollback.
 
 The target audience is Codex developers and curious contributors who want to understand or
@@ -203,7 +203,7 @@ to the terminal, we could not reliably line up selections with transcript conten
 accidentally copying gutter/margin characters instead of just the conversation text.
 
 Scroll normalization details and the data behind it live in
-`codex-rs/tui2/docs/scroll_input_model.md`.
+`codex-rs/xcodex/tui2/docs/scroll_input_model.md`.
 
 ---
 
@@ -300,7 +300,7 @@ streaming response as a series of discrete blocks, matching the internal history
 Today, streaming rendering still “bakes in” some width at the time chunks are committed: line breaks
 for the streaming path are computed using the width that was active at the time, and stored in the
 intermediate representation. This is a known limitation and is called out in more detail in
-`codex-rs/tui2/docs/streaming_wrapping_design.md`; a follow‑up change will make streaming behavior
+`codex-rs/xcodex/tui2/docs/streaming_wrapping_design.md`; a follow‑up change will make streaming behavior
 match the rest of the transcript more closely (wrap only at display time, not at commit time).
 
 ### 6.2 Width changes over time
@@ -389,12 +389,12 @@ scrollback.
 
 ## 9. TUI2 Implementation Notes
 
-This section maps the design above onto the `codex-rs/tui2` crate so future viewport work has
+This section maps the design above onto the `codex-rs/xcodex/tui2` crate so future viewport work has
 concrete code pointers.
 
 ### 9.1 Transcript state and layout
 
-The main app struct (`codex-rs/tui2/src/app.rs`) tracks the transcript and viewport state with:
+The main app struct (`codex-rs/xcodex/tui2/src/app.rs`) tracks the transcript and viewport state with:
 
 - `transcript_cells: Vec<Arc<dyn HistoryCell>>` – the logical history.
 - `transcript_scroll: TranscriptScroll` – whether the viewport is pinned to the bottom or
@@ -408,20 +408,20 @@ The main app struct (`codex-rs/tui2/src/app.rs`) tracks the transcript and viewp
 
 `App::render_transcript_cells` defines the transcript region, builds flattened lines via
 `App::build_transcript_lines`, wraps them with `word_wrap_lines_borrowed` from
-`codex-rs/tui2/src/wrapping.rs`, and applies selection via `apply_transcript_selection` before
+`codex-rs/xcodex/tui2/src/wrapping.rs`, and applies selection via `apply_transcript_selection` before
 writing to the frame buffer.
 
-Streaming wrapping details live in `codex-rs/tui2/docs/streaming_wrapping_design.md`.
+Streaming wrapping details live in `codex-rs/xcodex/tui2/docs/streaming_wrapping_design.md`.
 
 ### 9.3 Input, selection, and footer state
 
 Mouse handling lives in `App::handle_mouse_event`, keyboard scrolling in
 `App::handle_key_event`, selection rendering in `App::apply_transcript_selection`, and copy in
-`App::copy_transcript_selection` plus `codex-rs/tui2/src/transcript_selection.rs` and
-`codex-rs/tui2/src/clipboard_copy.rs`. Scroll/selection UI state is forwarded through
+`App::copy_transcript_selection` plus `codex-rs/xcodex/tui2/src/transcript_selection.rs` and
+`codex-rs/xcodex/tui2/src/clipboard_copy.rs`. Scroll/selection UI state is forwarded through
 `ChatWidget::set_transcript_ui_state`,
 `BottomPane::set_transcript_ui_state`, and `ChatComposer::footer_props`, with footer text
-assembled in `codex-rs/tui2/src/bottom_pane/footer.rs`.
+assembled in `codex-rs/xcodex/tui2/src/bottom_pane/footer.rs`.
 
 ### 9.4 Exit transcript output
 
@@ -433,14 +433,14 @@ prints those lines before the token usage and resume hints.
 
 ### 10.1 Current status
 
-This design shipped behind the `tui2` feature flag (as a separate crate, duplicating the legacy
-`tui` crate to enable rollout without breaking existing behavior). The following items from early
+This design ships as a separate crate (duplicating the legacy `tui` crate to avoid breaking
+existing behavior) and is launched via `xcodex tui2`. The following items from early
 feedback are already implemented:
 
 - Bottom pane positioning is pegged high with an empty transcript and moves down as the transcript
   fills (including on resume).
 - Wheel-based transcript scrolling uses the stream-based normalization model derived from scroll
-  probe data (see `codex-rs/tui2/docs/scroll_input_model.md`).
+  probe data (see `codex-rs/xcodex/tui2/docs/scroll_input_model.md`).
 - While a selection is active, streaming stops “follow latest output” so the selection remains
   stable, and follow mode resumes after the selection is cleared.
 - Copy operates on the full selection range (including offscreen lines), using the same wrapping as

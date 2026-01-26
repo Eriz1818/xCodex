@@ -1,6 +1,6 @@
 # Streaming Wrapping Reflow (tui2)
 
-This document describes a correctness bug in `codex-rs/tui2` and the chosen fix:
+This document describes a correctness bug in `codex-rs/xcodex/tui2` and the chosen fix:
 while streaming assistant markdown, soft-wrap decisions were effectively persisted as hard line
 breaks, so resizing the viewport could not reflow prose.
 
@@ -51,7 +51,7 @@ User choice recap:
 We introduce a width-agnostic “logical markdown line” representation that preserves the metadata
 needed to wrap correctly later:
 
-- `codex-rs/tui2/src/markdown_render.rs`
+- `codex-rs/xcodex/tui2/src/markdown_render.rs`
   - `MarkdownLogicalLine { content, initial_indent, subsequent_indent, line_style, is_preformatted }`
   - `render_markdown_logical_lines(input: &str) -> Vec<MarkdownLogicalLine>`
 
@@ -63,15 +63,15 @@ This keeps:
 
 ### Updated streaming pipeline
 
-- `codex-rs/tui2/src/markdown_stream.rs`
+- `codex-rs/xcodex/tui2/src/markdown_stream.rs`
   - `MarkdownStreamCollector` is newline-gated (no change), but now commits
     `Vec<MarkdownLogicalLine>` instead of already-wrapped `Vec<Line>`.
   - Width is removed from the collector; wrapping is not performed during streaming.
 
-- `codex-rs/tui2/src/streaming/controller.rs`
+- `codex-rs/xcodex/tui2/src/streaming/controller.rs`
   - Emits `AgentMessageCell::new_logical(...)` containing logical lines.
 
-- `codex-rs/tui2/src/history_cell.rs`
+- `codex-rs/xcodex/tui2/src/history_cell.rs`
   - `AgentMessageCell` stores `Vec<MarkdownLogicalLine>`.
   - `HistoryCell::transcript_lines_with_joiners(width)` wraps each logical line at the current
     width using `word_wrap_line_with_joiners` and composes indents as:
@@ -94,19 +94,19 @@ User choice recap:
 
 Implementation:
 
-- `codex-rs/tui2/src/app.rs`
+- `codex-rs/xcodex/tui2/src/app.rs`
   - `deferred_history_cells: Vec<Arc<dyn HistoryCell>>` (replaces `deferred_history_lines`).
   - `AppEvent::InsertHistoryCell` pushes cells into the deferral list when `overlay.is_some()`.
 
-- `codex-rs/tui2/src/app_backtrack.rs`
+- `codex-rs/xcodex/tui2/src/app_backtrack.rs`
   - `close_transcript_overlay` renders deferred cells at the *current* width when closing the
     overlay, then queues the resulting lines for the normal terminal buffer.
 
 Note: as of today, `Tui::insert_history_lines` queues lines but `Tui::draw` does not flush them into
-the terminal (see `codex-rs/tui2/src/tui.rs`). This section is therefore best read as “behavior we
+the terminal (see `codex-rs/xcodex/tui2/src/tui.rs`). This section is therefore best read as “behavior we
 want when/if scrollback printing is re-enabled”, not a guarantee that content is printed during the
 main TUI loop. For the current intended behavior around printing, see
-`codex-rs/tui2/docs/tui_viewport_and_history.md`.
+`codex-rs/xcodex/tui2/docs/tui_viewport_and_history.md`.
 
 ## Tests (G2)
 
@@ -116,7 +116,7 @@ User choice recap:
 
 Added coverage:
 
-- `codex-rs/tui2/src/history_cell.rs`
+- `codex-rs/xcodex/tui2/src/history_cell.rs`
   - `agent_message_cell_reflows_streamed_prose_on_resize`
   - `agent_message_cell_reflows_streamed_prose_vt100_snapshot`
 
@@ -129,16 +129,16 @@ This section answers “what else might behave like this?” up front.
 
 ### History cells
 
-- `AgentMessageCell` (`codex-rs/tui2/src/history_cell.rs`): **was affected**; now stores logical
+- `AgentMessageCell` (`codex-rs/xcodex/tui2/src/history_cell.rs`): **was affected**; now stores logical
   markdown lines and wraps at render time.
-- `UserHistoryCell` (`codex-rs/tui2/src/history_cell.rs`): wraps at render time from stored `String`
+- `UserHistoryCell` (`codex-rs/xcodex/tui2/src/history_cell.rs`): wraps at render time from stored `String`
   using `word_wrap_lines_with_joiners` (reflowable).
-- `ReasoningSummaryCell` (`codex-rs/tui2/src/history_cell.rs`): renders from stored `String` on each
+- `ReasoningSummaryCell` (`codex-rs/xcodex/tui2/src/history_cell.rs`): renders from stored `String` on each
   call; it does call `append_markdown(..., Some(width))`, but that wrapping is recomputed per width
   (reflowable).
-- `PrefixedWrappedHistoryCell` (`codex-rs/tui2/src/history_cell.rs`): wraps at render time and
+- `PrefixedWrappedHistoryCell` (`codex-rs/xcodex/tui2/src/history_cell.rs`): wraps at render time and
   returns joiners (reflowable).
-- `PlainHistoryCell` (`codex-rs/tui2/src/history_cell.rs`): stores `Vec<Line>` and returns it
+- `PlainHistoryCell` (`codex-rs/xcodex/tui2/src/history_cell.rs`): stores `Vec<Line>` and returns it
   unchanged (not reflowable by design; used for already-structured/preformatted output).
 
 Rule of thumb: any cell that stores already-wrapped `Vec<Line>` for prose is a candidate for the
@@ -149,13 +149,13 @@ same bug; cells that store source text or logical lines and compute wrapping ins
 
 Even with the streaming fix, some paths are inherently width-baked:
 
-- Printed transcript after exit (`codex-rs/tui2/src/app.rs`): `AppExitInfo.session_lines` is rendered
+- Printed transcript after exit (`codex-rs/xcodex/tui2/src/app.rs`): `AppExitInfo.session_lines` is rendered
   once using the final width and then printed; it cannot reflow afterward.
-- Optional scrollback insertion helper (`codex-rs/tui2/src/insert_history.rs`): once ANSI is written
+- Optional scrollback insertion helper (`codex-rs/xcodex/tui2/src/insert_history.rs`): once ANSI is written
   to the terminal, that output cannot be reflowed later. This helper is currently used for
   deterministic ANSI emission (`write_spans`) and tests; it is not wired into the main TUI draw
   loop.
-- Static overlays (`codex-rs/tui2/src/pager_overlay.rs`): reflow depends on whether callers provided
+- Static overlays (`codex-rs/xcodex/tui2/src/pager_overlay.rs`): reflow depends on whether callers provided
   width-agnostic input; pre-split `Vec<Line>` cannot be “un-split” within the overlay.
 
 ## Deferred / follow-ups

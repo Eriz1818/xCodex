@@ -3651,10 +3651,9 @@ impl ChatWidget {
             && text.lines().count() == 1
             && let Some((name, rest)) = parse_slash_name(text.as_str())
             && name == "worktree"
+            && xcodex_plugins::try_handle_worktree_subcommand(self, rest)
         {
-            if xcodex_plugins::try_handle_worktree_subcommand(self, rest) {
-                return;
-            }
+            return;
         }
 
         for path in image_paths {

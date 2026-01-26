@@ -4,7 +4,7 @@
 //! banners, etc.). Each frame flattens those cells into a sequence of visual lines (after wrapping)
 //! plus a parallel `line_meta` vector that maps each visual line back to its origin
 //! (`TranscriptLineMeta`) (see `App::build_transcript_lines` and the design notes in
-//! `codex-rs/tui2/docs/tui_viewport_and_history.md`).
+//! `codex-rs/xcodex/tui2/docs/tui_viewport_and_history.md`).
 //!
 //! This module defines the scroll state for the inline transcript viewport and helpers to:
 //! - Resolve that state into a concrete top-row offset for the current frame.
