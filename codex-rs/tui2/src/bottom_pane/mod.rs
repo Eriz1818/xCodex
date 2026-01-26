@@ -68,12 +68,14 @@ mod queued_user_messages;
 mod scroll_state;
 mod selection_popup_common;
 mod textarea;
+mod worktree_init_wizard_view;
 mod worktree_link_shared_wizard_view;
 mod worktrees_settings_view;
 pub(crate) use feedback_view::FeedbackNoteView;
 pub(crate) use prompt_args::parse_slash_name;
 pub(crate) use status_menu_view::StatusMenuTab;
 pub(crate) use status_menu_view::StatusMenuView;
+pub(crate) use worktree_init_wizard_view::WorktreeInitWizardView;
 pub(crate) use worktree_link_shared_wizard_view::WorktreeLinkSharedWizardView;
 pub(crate) use worktrees_settings_view::WorktreesSettingsView;
 

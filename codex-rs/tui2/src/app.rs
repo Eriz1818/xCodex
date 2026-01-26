@@ -2245,6 +2245,24 @@ impl App {
                 self.chat_widget.open_worktrees_settings_view();
                 tui.frame_requester().schedule_frame();
             }
+            AppEvent::OpenWorktreeInitWizard {
+                worktree_root,
+                workspace_root,
+                current_branch,
+                shared_dirs,
+                branches,
+            } => {
+                self.chat_widget
+                    .set_slash_completion_branches(branches.clone());
+                self.chat_widget.open_worktree_init_wizard(
+                    worktree_root,
+                    workspace_root,
+                    current_branch,
+                    shared_dirs,
+                    branches,
+                );
+                tui.frame_requester().schedule_frame();
+            }
             AppEvent::OpenRampsSettingsView => {
                 self.chat_widget.open_ramps_settings_view();
                 tui.frame_requester().schedule_frame();

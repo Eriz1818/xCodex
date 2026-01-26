@@ -3027,6 +3027,51 @@ async fn slash_fork_requests_current_fork() {
 }
 
 #[tokio::test]
+async fn slash_theme_opens_selector() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    chat.dispatch_command(SlashCommand::Theme);
+
+    assert_matches!(rx.try_recv(), Ok(AppEvent::OpenThemeSelector));
+}
+
+#[tokio::test]
+async fn slash_theme_help_opens_help_view() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    chat.dispatch_command_with_args(SlashCommand::Theme, "help".to_string());
+
+    assert_matches!(rx.try_recv(), Ok(AppEvent::OpenThemeHelp));
+}
+
+#[tokio::test]
+async fn slash_theme_template_writes_examples() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    let tempdir = tempdir().unwrap();
+    chat.config.codex_home = tempdir.path().to_path_buf();
+
+    chat.dispatch_command_with_args(SlashCommand::Theme, "template".to_string());
+
+    let themes_dir = codex_core::themes::themes_dir(&chat.config.codex_home, &chat.config.themes);
+    assert!(
+        themes_dir.join("example-light.yaml").exists(),
+        "expected light theme template to be written"
+    );
+    assert!(
+        themes_dir.join("example-dark.yaml").exists(),
+        "expected dark theme template to be written"
+    );
+
+    let cells = drain_insert_history(&mut rx);
+    assert_eq!(cells.len(), 1, "expected info message");
+    let rendered = lines_to_single_string(&cells[0]);
+    assert!(
+        rendered.contains("Wrote theme template(s):"),
+        "expected template write message: {rendered}"
+    );
+}
+
+#[tokio::test]
 async fn slash_rollout_displays_current_path() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
     let rollout_path = PathBuf::from("/tmp/codex-test-rollout.jsonl");

@@ -70,6 +70,10 @@ pub(crate) fn try_handle_mcp_subcommand(chat: &mut ChatWidget, args: &[&str]) ->
     mcp::try_handle_subcommand(chat, args)
 }
 
-pub(crate) fn try_handle_theme_subcommand(chat: &mut ChatWidget, args: &str) -> bool {
-    theme::try_handle_subcommand(chat, args)
+pub(crate) fn handle_theme_command(chat: &mut ChatWidget, rest: &str) {
+    theme::handle_theme_command(chat, rest);
+}
+
+pub(crate) fn try_handle_worktree_subcommand(chat: &mut ChatWidget, args: &str) -> bool {
+    worktree::try_handle_subcommand(chat, args)
 }

@@ -162,6 +162,15 @@ pub(crate) enum AppEvent {
     /// Open the worktrees settings editor view.
     OpenWorktreesSettingsView,
 
+    /// Open the `/worktree init` wizard.
+    OpenWorktreeInitWizard {
+        worktree_root: PathBuf,
+        workspace_root: PathBuf,
+        current_branch: Option<String>,
+        shared_dirs: Vec<String>,
+        branches: Vec<String>,
+    },
+
     /// Refresh the git worktree list for the current session `cwd`.
     WorktreeDetect {
         open_picker: bool,

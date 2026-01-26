@@ -23,6 +23,7 @@
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::collections::VecDeque;
+use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
@@ -134,6 +135,7 @@ use crate::bottom_pane::QUIT_SHORTCUT_TIMEOUT;
 use crate::bottom_pane::SelectionAction;
 use crate::bottom_pane::SelectionItem;
 use crate::bottom_pane::SelectionViewParams;
+use crate::bottom_pane::WorktreeLinkSharedWizardView;
 use crate::bottom_pane::custom_prompt_view::CustomPromptView;
 use crate::bottom_pane::parse_slash_name;
 use crate::bottom_pane::popup_consts::standard_popup_hint_line;
@@ -174,8 +176,6 @@ mod session_header;
 use self::session_header::SessionHeader;
 use crate::streaming::controller::StreamController;
 use crate::version::CODEX_CLI_VERSION;
-use std::path::Path;
-
 use chrono::Local;
 use codex_common::approval_presets::ApprovalPreset;
 use codex_common::approval_presets::builtin_approval_presets;
@@ -228,7 +228,7 @@ const NUDGE_MODEL_SLUG: &str = "gpt-5.1-codex-mini";
 const RATE_LIMIT_SWITCH_PROMPT_THRESHOLD: f64 = 90.0;
 const DEFAULT_MODEL_DISPLAY_NAME: &str = "loading";
 
-fn transcript_spacer_line() -> Line<'static> {
+pub(crate) fn transcript_spacer_line() -> Line<'static> {
     Line::from("").style(crate::theme::transcript_style())
 }
 
@@ -2623,8 +2623,7 @@ impl ChatWidget {
                 self.request_redraw();
             }
             SlashCommand::Theme => {
-                self.app_event_tx.send(AppEvent::OpenThemeSelector);
-                self.request_redraw();
+                xcodex_plugins::handle_theme_command(self, "");
             }
             SlashCommand::StatusMenu => {
                 let status_cell = self.status_menu_status_cell();
@@ -2754,10 +2753,7 @@ impl ChatWidget {
                 });
             }
             SlashCommand::Theme => {
-                if xcodex_plugins::try_handle_theme_subcommand(self, trimmed) {
-                    return;
-                }
-                self.dispatch_command(cmd);
+                xcodex_plugins::handle_theme_command(self, trimmed);
             }
             _ => self.dispatch_command(cmd),
         }
@@ -2792,7 +2788,7 @@ impl ChatWidget {
         }
     }
 
-    fn add_to_history(&mut self, cell: impl HistoryCell + 'static) {
+    pub(crate) fn add_to_history(&mut self, cell: impl HistoryCell + 'static) {
         self.add_boxed_history(Box::new(cell));
     }
 
@@ -3656,517 +3652,9 @@ impl ChatWidget {
             && let Some((name, rest)) = parse_slash_name(text.as_str())
             && name == "worktree"
         {
-            let args: Vec<&str> = rest.split_whitespace().collect();
-            match args.as_slice() {
-                [] => {
-                    self.dispatch_command(SlashCommand::Worktree);
-                }
-                ["detect"] | ["refresh"] => {
-                    self.spawn_worktree_detection(true);
-                }
-                ["shared"] | ["shared", "list"] => {
-                    self.add_worktree_shared_dirs_output();
-                }
-                ["shared", "add", dir] => {
-                    fn normalize_shared_dir_arg(raw: &str) -> Result<String, String> {
-                        use std::path::Component;
-                        use std::path::Path;
-
-                        let mut value = raw.trim().trim_end_matches(['/', '\\']).to_string();
-                        while value.starts_with("./") {
-                            value = value.trim_start_matches("./").to_string();
-                        }
-                        if value.is_empty() {
-                            return Err(String::from("shared dir is empty"));
-                        }
-                        if value.starts_with('~') {
-                            return Err(String::from("shared dirs must be repo-relative (no '~')"));
-                        }
-
-                        let path = Path::new(&value);
-                        if path.is_absolute() {
-                            return Err(String::from("shared dirs must be repo-relative"));
-                        }
-
-                        for component in path.components() {
-                            match component {
-                                Component::ParentDir
-                                | Component::RootDir
-                                | Component::Prefix(_) => {
-                                    return Err(String::from(
-                                        "shared dirs must not contain parent/root components",
-                                    ));
-                                }
-                                Component::CurDir => {}
-                                Component::Normal(_) => {}
-                            }
-                        }
-
-                        Ok(value)
-                    }
-
-                    let dir = match normalize_shared_dir_arg(dir) {
-                        Ok(dir) => dir,
-                        Err(err) => {
-                            self.add_error_message(format!("`/worktree shared add` — {err}"));
-                            return;
-                        }
-                    };
-
-                    let mut next = self.config.worktrees_shared_dirs.clone();
-                    if next.contains(&dir) {
-                        self.add_info_message(
-                            format!("Shared dir already configured: `{dir}`"),
-                            Some(String::from("Tip: run `/worktree shared list`")),
-                        );
-                        return;
-                    }
-                    next.push(dir);
-                    self.config.worktrees_shared_dirs = next.clone();
-                    self.app_event_tx.send(AppEvent::UpdateWorktreesSharedDirs {
-                        shared_dirs: next.clone(),
-                    });
-                    self.app_event_tx
-                        .send(AppEvent::PersistWorktreesSharedDirs { shared_dirs: next });
-                    self.add_worktree_shared_dirs_output();
-                }
-                ["shared", "rm", dir] | ["shared", "remove", dir] => {
-                    fn normalize_shared_dir_arg(raw: &str) -> Result<String, String> {
-                        use std::path::Component;
-                        use std::path::Path;
-
-                        let mut value = raw.trim().trim_end_matches(['/', '\\']).to_string();
-                        while value.starts_with("./") {
-                            value = value.trim_start_matches("./").to_string();
-                        }
-                        if value.is_empty() {
-                            return Err(String::from("shared dir is empty"));
-                        }
-                        if value.starts_with('~') {
-                            return Err(String::from("shared dirs must be repo-relative (no '~')"));
-                        }
-
-                        let path = Path::new(&value);
-                        if path.is_absolute() {
-                            return Err(String::from("shared dirs must be repo-relative"));
-                        }
-
-                        for component in path.components() {
-                            match component {
-                                Component::ParentDir
-                                | Component::RootDir
-                                | Component::Prefix(_) => {
-                                    return Err(String::from(
-                                        "shared dirs must not contain parent/root components",
-                                    ));
-                                }
-                                Component::CurDir => {}
-                                Component::Normal(_) => {}
-                            }
-                        }
-
-                        Ok(value)
-                    }
-
-                    let dir = match normalize_shared_dir_arg(dir) {
-                        Ok(dir) => dir,
-                        Err(err) => {
-                            self.add_error_message(format!("`/worktree shared rm` — {err}"));
-                            return;
-                        }
-                    };
-
-                    let mut next: Vec<String> = Vec::new();
-                    let mut removed = 0usize;
-                    for entry in &self.config.worktrees_shared_dirs {
-                        let normalized_entry =
-                            normalize_shared_dir_arg(entry).unwrap_or_else(|_| entry.clone());
-                        if normalized_entry == dir {
-                            removed += 1;
-                            continue;
-                        }
-                        next.push(entry.clone());
-                    }
-                    if removed == 0 {
-                        self.add_error_message(format!(
-                            "`/worktree shared rm` — `{dir}` is not in `worktrees.shared_dirs`"
-                        ));
-                        return;
-                    }
-                    self.config.worktrees_shared_dirs = next.clone();
-                    self.app_event_tx.send(AppEvent::UpdateWorktreesSharedDirs {
-                        shared_dirs: next.clone(),
-                    });
-                    self.app_event_tx
-                        .send(AppEvent::PersistWorktreesSharedDirs { shared_dirs: next });
-                    self.add_worktree_shared_dirs_output();
-                }
-                ["init", name, branch] | ["init", name, branch, ..] => {
-                    let provided_path = args.get(3).copied();
-                    if args.len() > 4 {
-                        self.add_info_message(
-                            "Usage: /worktree init <name> <branch> [<path>]".to_string(),
-                            None,
-                        );
-                        return;
-                    }
-
-                    let cwd = self.config.cwd.clone();
-                    let shared_dirs = self.config.worktrees_shared_dirs.clone();
-                    let tx = self.app_event_tx.clone();
-                    let name = name.to_string();
-                    let branch = branch.to_string();
-                    let path = provided_path.map(PathBuf::from);
-                    tokio::spawn(async move {
-                        let Some(current_root) =
-                            codex_core::git_info::resolve_git_worktree_head(&cwd)
-                                .map(|head| head.worktree_root)
-                        else {
-                            tx.send(AppEvent::InsertHistoryCell(Box::new(
-                                history_cell::new_error_event(String::from(
-                                    "`/worktree init` — not inside a git worktree (start xcodex in a repo/worktree directory, or switch via `/worktree`)",
-                                )),
-                            )));
-                            return;
-                        };
-
-                        let Some(workspace_root) =
-                            codex_core::git_info::resolve_root_git_project_for_trust(&current_root)
-                        else {
-                            tx.send(AppEvent::InsertHistoryCell(Box::new(
-                                history_cell::new_error_event(String::from(
-                                    "`/worktree init` — failed to resolve workspace root (the main worktree root for this repo)",
-                                )),
-                            )));
-                            return;
-                        };
-
-                        let result = codex_core::git_info::init_git_worktree(
-                            &workspace_root,
-                            &name,
-                            &branch,
-                            path.as_deref(),
-                        )
-                        .await;
-
-                        let path = match result {
-                            Ok(path) => path,
-                            Err(err) => {
-                                let resolved_path = if let Some(path) = &path {
-                                    if path.is_absolute() {
-                                        path.clone()
-                                    } else {
-                                        workspace_root.join(path)
-                                    }
-                                } else {
-                                    workspace_root.join(".worktrees").join(&name)
-                                };
-                                let mut lines: Vec<Line<'static>> = Vec::new();
-                                lines.push(Line::from("worktree init"));
-                                lines.push(Line::from(format!("error: {err}")));
-                                lines.push(transcript_spacer_line());
-                                lines.push(Line::from("Try running this outside xcodex:"));
-                                lines.push(Line::from(format!(
-                                    "  git -C {} worktree add -b {} {}",
-                                    workspace_root.display(),
-                                    branch,
-                                    resolved_path.display()
-                                )));
-                                lines.push(Line::from(format!(
-                                    "  git -C {} worktree add {} {}   (if branch already exists)",
-                                    workspace_root.display(),
-                                    resolved_path.display(),
-                                    branch
-                                )));
-                                lines.push(Line::from(format!(
-                                    "  git -C {} worktree list --porcelain",
-                                    workspace_root.display()
-                                )));
-                                tx.send(AppEvent::InsertHistoryCell(Box::new(
-                                    PlainHistoryCell::new(lines),
-                                )));
-                                return;
-                            }
-                        };
-
-                        let mut lines: Vec<Line<'static>> = Vec::new();
-                        lines.push(Line::from("worktree init"));
-                        lines.push(Line::from(format!(
-                            "workspace root: {}",
-                            workspace_root.display()
-                        )));
-                        lines.push(Line::from(format!("created: {}", path.display())));
-
-                        if !shared_dirs.is_empty() {
-                            let actions = codex_core::git_info::link_worktree_shared_dirs(
-                                &path,
-                                &workspace_root,
-                                &shared_dirs,
-                            )
-                            .await;
-
-                            let mut linked_dirs: Vec<(String, PathBuf)> = Vec::new();
-                            for action in actions {
-                                if matches!(
-                                    action.outcome,
-                                    codex_core::git_info::SharedDirLinkOutcome::Linked
-                                        | codex_core::git_info::SharedDirLinkOutcome::AlreadyLinked
-                                ) {
-                                    linked_dirs.push((action.shared_dir, action.target_path));
-                                }
-                            }
-
-                            if !linked_dirs.is_empty() {
-                                lines.push(transcript_spacer_line());
-                                lines.push(Line::from(
-                                    "Shared dirs (writes land in workspace root):",
-                                ));
-                                for (dir, target) in linked_dirs {
-                                    lines.push(Line::from(format!(
-                                        "- {dir} -> {}",
-                                        target.display()
-                                    )));
-                                }
-                            }
-                        }
-
-                        tx.send(AppEvent::InsertHistoryCell(Box::new(
-                            PlainHistoryCell::new(lines),
-                        )));
-
-                        tx.send(AppEvent::WorktreeSwitched(path.clone()));
-                        tx.send(AppEvent::CodexOp(
-                            codex_core::protocol::Op::OverrideTurnContext {
-                                cwd: Some(path.clone()),
-                                approval_policy: None,
-                                sandbox_policy: None,
-                                model: None,
-                                effort: None,
-                                summary: None,
-                                collaboration_mode: None,
-                            },
-                        ));
-                        tx.send(AppEvent::CodexOp(codex_core::protocol::Op::ListSkills {
-                            cwds: vec![path],
-                            force_reload: true,
-                        }));
-                    });
-                }
-                ["doctor"] => {
-                    let cwd = self.config.cwd.clone();
-                    let shared_dirs = self.config.worktrees_shared_dirs.clone();
-                    let tx = self.app_event_tx.clone();
-                    tokio::spawn(async move {
-                        let mut lines =
-                            codex_core::git_info::worktree_doctor_lines(&cwd, &shared_dirs, 5)
-                                .await;
-                        if lines.first().is_some_and(|line| line == "worktree doctor") {
-                            lines.remove(0);
-                        }
-                        while lines.first().is_some_and(|line| line.trim().is_empty()) {
-                            lines.remove(0);
-                        }
-
-                        let lines = lines.into_iter().map(Line::from).collect();
-                        let command = PlainHistoryCell::new(vec![Line::from(vec![
-                            "/worktree doctor".magenta(),
-                        ])]);
-                        tx.send(AppEvent::InsertHistoryCell(Box::new(
-                            CompositeHistoryCell::new(vec![
-                                Box::new(command),
-                                Box::new(PlainHistoryCell::new(lines)),
-                            ]),
-                        )));
-                    });
-                }
-                ["link-shared", "migrate"] | ["link-shared", "--migrate"] => {
-                    if self.config.worktrees_shared_dirs.is_empty() {
-                        self.add_info_message(
-                            "No shared dirs configured. Set `worktrees.shared_dirs` in config first."
-                                .to_string(),
-                            None,
-                        );
-                        return;
-                    }
-
-                    let show_notice = !self.shared_dirs_write_notice_shown;
-                    self.shared_dirs_write_notice_shown = true;
-
-                    let cwd = self.config.cwd.clone();
-                    let Some(worktree_root) = codex_core::git_info::resolve_git_worktree_head(&cwd)
-                        .map(|head| head.worktree_root)
-                    else {
-                        self.add_error_message(String::from(
-                            "`/worktree link-shared` — not inside a git worktree (start xcodex in a repo/worktree directory, or switch via `/worktree`)",
-                        ));
-                        return;
-                    };
-
-                    let Some(workspace_root) =
-                        codex_core::git_info::resolve_root_git_project_for_trust(&worktree_root)
-                    else {
-                        self.add_error_message(String::from(
-                            "`/worktree link-shared` — failed to resolve workspace root (the main worktree root for this repo)",
-                        ));
-                        return;
-                    };
-
-                    if worktree_root == workspace_root {
-                        self.add_to_history(history_cell::new_info_event(
-                            String::from("Already in the workspace root worktree."),
-                            None,
-                        ));
-                        return;
-                    }
-
-                    let view = crate::bottom_pane::WorktreeLinkSharedWizardView::new(
-                        worktree_root,
-                        workspace_root,
-                        self.config.worktrees_shared_dirs.clone(),
-                        true,
-                        show_notice,
-                        String::from("/worktree link-shared --migrate"),
-                        self.app_event_tx.clone(),
-                    );
-                    self.bottom_pane.show_view(Box::new(view));
-                    self.request_redraw();
-                }
-                ["link-shared"] => {
-                    if self.config.worktrees_shared_dirs.is_empty() {
-                        self.add_info_message(
-                            "No shared dirs configured. Set `worktrees.shared_dirs` in config first."
-                                .to_string(),
-                            None,
-                        );
-                        return;
-                    }
-
-                    let show_notice = !self.shared_dirs_write_notice_shown;
-                    self.shared_dirs_write_notice_shown = true;
-
-                    let cwd = self.config.cwd.clone();
-                    let Some(worktree_root) = codex_core::git_info::resolve_git_worktree_head(&cwd)
-                        .map(|head| head.worktree_root)
-                    else {
-                        self.add_error_message(String::from(
-                            "`/worktree link-shared` — not inside a git worktree (start xcodex in a repo/worktree directory, or switch via `/worktree`)",
-                        ));
-                        return;
-                    };
-
-                    let Some(workspace_root) =
-                        codex_core::git_info::resolve_root_git_project_for_trust(&worktree_root)
-                    else {
-                        self.add_error_message(String::from(
-                            "`/worktree link-shared` — failed to resolve workspace root (the main worktree root for this repo)",
-                        ));
-                        return;
-                    };
-
-                    if worktree_root == workspace_root {
-                        self.add_to_history(history_cell::new_info_event(
-                            String::from("Already in the workspace root worktree."),
-                            None,
-                        ));
-                        return;
-                    }
-
-                    let view = crate::bottom_pane::WorktreeLinkSharedWizardView::new(
-                        worktree_root,
-                        workspace_root,
-                        self.config.worktrees_shared_dirs.clone(),
-                        false,
-                        show_notice,
-                        String::from("/worktree link-shared"),
-                        self.app_event_tx.clone(),
-                    );
-                    self.bottom_pane.show_view(Box::new(view));
-                    self.request_redraw();
-                }
-                [target] => {
-                    let matches: Vec<&GitWorktreeEntry> = self
-                        .worktree_list
-                        .iter()
-                        .filter(|entry| {
-                            entry
-                                .path
-                                .file_name()
-                                .and_then(|name| name.to_str())
-                                .is_some_and(|name| name.eq_ignore_ascii_case(target))
-                        })
-                        .collect();
-
-                    let selected_path = if matches.len() == 1 {
-                        Some(matches[0].path.clone())
-                    } else if matches.len() > 1 {
-                        self.add_info_message(
-                            format!(
-                                "Multiple worktrees match `{target}`. Use a full path or run `/worktree` to pick."
-                            ),
-                            None,
-                        );
-                        None
-                    } else {
-                        let candidate = PathBuf::from(target);
-                        let candidate = if candidate.is_absolute() {
-                            candidate
-                        } else {
-                            self.config.cwd.join(candidate)
-                        };
-                        if candidate.is_dir() {
-                            Some(candidate)
-                        } else {
-                            if self.worktree_list.is_empty()
-                                && !self.worktree_list_refresh_in_progress
-                            {
-                                self.spawn_worktree_detection(true);
-                                self.add_info_message(
-                                    format!(
-                                        "Unknown worktree `{target}`. Refreshing worktrees; run `/worktree` to pick."
-                                    ),
-                                    None,
-                                );
-                            } else {
-                                self.add_info_message(
-                                    format!(
-                                        "Unknown worktree `{target}`. Run `/worktree` to pick or `/worktree detect` to refresh."
-                                    ),
-                                    None,
-                                );
-                            }
-                            None
-                        }
-                    };
-
-                    if let Some(path) = selected_path {
-                        self.app_event_tx
-                            .send(AppEvent::WorktreeSwitched(path.clone()));
-                        self.app_event_tx
-                            .send(AppEvent::CodexOp(Op::OverrideTurnContext {
-                                cwd: Some(path.clone()),
-                                approval_policy: None,
-                                sandbox_policy: None,
-                                model: None,
-                                effort: None,
-                                summary: None,
-                                collaboration_mode: None,
-                            }));
-                        self.app_event_tx.send(AppEvent::CodexOp(Op::ListSkills {
-                            cwds: vec![path],
-                            force_reload: true,
-                        }));
-                    }
-                }
-                _ => {
-                    self.add_info_message(
-                        "Usage: /worktree [detect|doctor|shared|init|link-shared [--migrate]|<name|path>]"
-                            .to_string(),
-                        None,
-                    );
-                }
+            if xcodex_plugins::try_handle_worktree_subcommand(self, rest) {
+                return;
             }
-
-            return;
         }
 
         for path in image_paths {
@@ -4479,7 +3967,7 @@ impl ChatWidget {
             .send(AppEvent::Exit(ExitMode::ShutdownFirst));
     }
 
-    fn request_redraw(&mut self) {
+    pub(crate) fn request_redraw(&mut self) {
         self.frame_requester.schedule_frame();
     }
 
@@ -5070,6 +4558,103 @@ impl ChatWidget {
         self.request_redraw();
     }
 
+    pub(crate) fn worktrees_shared_dirs(&self) -> &[String] {
+        &self.config.worktrees_shared_dirs
+    }
+
+    pub(crate) fn update_worktrees_shared_dirs(&mut self, shared_dirs: Vec<String>) {
+        self.config.worktrees_shared_dirs = shared_dirs.clone();
+        self.app_event_tx.send(AppEvent::UpdateWorktreesSharedDirs {
+            shared_dirs: shared_dirs.clone(),
+        });
+        self.app_event_tx
+            .send(AppEvent::PersistWorktreesSharedDirs { shared_dirs });
+        self.request_redraw();
+    }
+
+    pub(crate) fn session_cwd(&self) -> &Path {
+        &self.config.cwd
+    }
+
+    pub(crate) fn worktree_list(&self) -> &[GitWorktreeEntry] {
+        &self.worktree_list
+    }
+
+    pub(crate) fn worktree_list_refresh_in_progress(&self) -> bool {
+        self.worktree_list_refresh_in_progress
+    }
+
+    pub(crate) fn take_shared_dirs_write_notice(&mut self) -> bool {
+        let show_notice = !self.shared_dirs_write_notice_shown;
+        self.shared_dirs_write_notice_shown = true;
+        show_notice
+    }
+
+    pub(crate) fn app_event_sender(&self) -> AppEventSender {
+        self.app_event_tx.clone()
+    }
+
+    pub(crate) fn open_worktree_link_shared_wizard(
+        &mut self,
+        worktree_root: PathBuf,
+        workspace_root: PathBuf,
+        shared_dirs: Vec<String>,
+        prefer_migrate: bool,
+        show_notice: bool,
+        invoked_from: String,
+    ) {
+        let view = WorktreeLinkSharedWizardView::new(
+            worktree_root,
+            workspace_root,
+            shared_dirs,
+            prefer_migrate,
+            show_notice,
+            invoked_from,
+            self.app_event_tx.clone(),
+        );
+        self.bottom_pane.show_view(Box::new(view));
+        self.request_redraw();
+    }
+
+    pub(crate) fn emit_worktree_switch(&self, path: PathBuf) {
+        self.app_event_tx
+            .send(AppEvent::WorktreeSwitched(path.clone()));
+        self.app_event_tx
+            .send(AppEvent::CodexOp(Op::OverrideTurnContext {
+                cwd: Some(path.clone()),
+                approval_policy: None,
+                sandbox_policy: None,
+                model: None,
+                effort: None,
+                summary: None,
+                collaboration_mode: None,
+            }));
+        self.app_event_tx.send(AppEvent::CodexOp(Op::ListSkills {
+            cwds: vec![path],
+            force_reload: true,
+        }));
+    }
+
+    pub(crate) fn open_worktree_init_wizard(
+        &mut self,
+        worktree_root: PathBuf,
+        workspace_root: PathBuf,
+        current_branch: Option<String>,
+        shared_dirs: Vec<String>,
+        branches: Vec<String>,
+    ) {
+        let view = crate::bottom_pane::WorktreeInitWizardView::new(
+            worktree_root,
+            workspace_root,
+            current_branch,
+            shared_dirs,
+            branches,
+            self.app_event_tx.clone(),
+        );
+        self.bottom_pane.show_view(Box::new(view));
+        self.request_redraw();
+    }
+
     pub(crate) fn spawn_worktree_detection(&mut self, open_picker: bool) {
         if self.worktree_list_refresh_in_progress {
             return;
@@ -5536,72 +5121,6 @@ impl ChatWidget {
             }
         };
         self.open_model_popup_with_presets(presets);
-    }
-
-    pub(crate) fn write_theme_templates(&mut self) {
-        use codex_core::themes::ThemeCatalog;
-        use codex_core::themes::ThemeVariant;
-
-        let dir = codex_core::themes::themes_dir(&self.config.codex_home, &self.config.themes);
-        if let Err(err) = std::fs::create_dir_all(&dir) {
-            self.add_error_message(format!(
-                "Failed to create themes directory `{}`: {err}",
-                dir.display()
-            ));
-            return;
-        }
-
-        let templates = [
-            (ThemeVariant::Light, "example-light.yaml"),
-            (ThemeVariant::Dark, "example-dark.yaml"),
-        ];
-
-        let mut created: Vec<String> = Vec::new();
-        let mut skipped: Vec<String> = Vec::new();
-
-        for (variant, filename) in templates {
-            let path = dir.join(filename);
-            if path.exists() {
-                skipped.push(path.display().to_string());
-                continue;
-            }
-            let yaml = ThemeCatalog::example_theme_yaml(variant);
-            if let Err(err) = std::fs::write(&path, yaml) {
-                self.add_error_message(format!("Failed to write `{}`: {err}", path.display()));
-                return;
-            }
-            created.push(path.display().to_string());
-        }
-
-        if created.is_empty() {
-            self.add_info_message(
-                format!("Theme templates already exist in `{}`.", dir.display()),
-                None,
-            );
-            return;
-        }
-
-        let mut message = String::from("Wrote theme template(s):\n");
-        for path in created {
-            message.push_str("- ");
-            message.push_str(&path);
-            message.push('\n');
-        }
-        if !skipped.is_empty() {
-            message.push_str("\nSkipped existing file(s):\n");
-            for path in skipped {
-                message.push_str("- ");
-                message.push_str(&path);
-                message.push('\n');
-            }
-        }
-        message.push_str("\nSelect a theme with `/theme`.");
-
-        self.add_info_message(message, None);
-    }
-
-    pub(crate) fn open_theme_help(&mut self) {
-        self.app_event_tx.send(AppEvent::OpenThemeHelp);
     }
 
     pub(crate) fn open_model_popup_with_presets(&mut self, presets: Vec<ModelPreset>) {
@@ -6867,6 +6386,14 @@ impl ChatWidget {
             .send(AppEvent::UpdateHideAgentReasoning(hide));
         self.app_event_tx
             .send(AppEvent::PersistHideAgentReasoning(hide));
+    }
+
+    pub(crate) fn send_app_event(&self, event: AppEvent) {
+        self.app_event_tx.send(event);
+    }
+
+    pub(crate) fn themes_dir(&self) -> PathBuf {
+        codex_core::themes::themes_dir(&self.config.codex_home, &self.config.themes)
     }
 
     pub(crate) fn add_info_message(&mut self, message: String, hint: Option<String>) {
