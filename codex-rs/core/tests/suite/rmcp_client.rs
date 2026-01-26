@@ -10,6 +10,7 @@ use std::time::UNIX_EPOCH;
 
 use codex_core::config::types::McpServerConfig;
 use codex_core::config::types::McpServerTransportConfig;
+use codex_core::config::types::UnattestedOutputPolicy;
 
 use codex_core::protocol::AskForApproval;
 use codex_core::protocol::EventMsg;
@@ -18,6 +19,7 @@ use codex_core::protocol::McpToolCallBeginEvent;
 use codex_core::protocol::Op;
 use codex_core::protocol::SandboxPolicy;
 use codex_protocol::config_types::ReasoningSummary;
+use codex_protocol::protocol::ReviewDecision;
 use codex_protocol::user_input::UserInput;
 use codex_utils_cargo_bin::cargo_bin;
 use core_test_support::responses;
@@ -172,6 +174,251 @@ async fn stdio_server_round_trip() -> anyhow::Result<()> {
     wait_for_event(&fixture.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 
     server.verify().await;
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+#[serial(mcp_test_value)]
+async fn mcp_unattested_output_confirm_denied_blocks_output() -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = responses::start_mock_server().await;
+
+    let call_id = "call-mcp-unattested-deny";
+    let server_name = "rmcp";
+    let tool_name = format!("mcp__{server_name}__echo");
+
+    mount_sse_once(
+        &server,
+        responses::sse(vec![
+            responses::ev_response_created("resp-1"),
+            responses::ev_function_call(call_id, &tool_name, "{\"message\":\"ping\"}"),
+            responses::ev_completed("resp-1"),
+        ]),
+    )
+    .await;
+    let done_mock = mount_sse_once(
+        &server,
+        responses::sse(vec![
+            responses::ev_assistant_message("msg-1", "done"),
+            responses::ev_completed("resp-2"),
+        ]),
+    )
+    .await;
+
+    let rmcp_test_server_bin = stdio_server_bin()?;
+
+    let fixture = test_codex()
+        .with_config(move |config| {
+            let mut servers = config.mcp_servers.get().clone();
+            servers.insert(
+                server_name.to_string(),
+                McpServerConfig {
+                    transport: McpServerTransportConfig::Stdio {
+                        command: rmcp_test_server_bin,
+                        args: Vec::new(),
+                        env: None,
+                        env_vars: Vec::new(),
+                        cwd: None,
+                    },
+                    enabled: true,
+                    disabled_reason: None,
+                    startup_timeout_sec: Some(Duration::from_secs(10)),
+                    tool_timeout_sec: None,
+                    enabled_tools: None,
+                    disabled_tools: None,
+                },
+            );
+            config
+                .mcp_servers
+                .set(servers)
+                .expect("test mcp servers should accept any configuration");
+            config.unattested_output_policy = UnattestedOutputPolicy::Confirm;
+        })
+        .build(&server)
+        .await?;
+    let session_model = fixture.session_configured.model.clone();
+
+    fixture
+        .codex
+        .submit(Op::UserTurn {
+            items: vec![UserInput::Text {
+                text: "call the rmcp echo tool".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            cwd: fixture.cwd.path().to_path_buf(),
+            approval_policy: AskForApproval::OnRequest,
+            sandbox_policy: SandboxPolicy::ReadOnly,
+            model: session_model,
+            effort: None,
+            summary: ReasoningSummary::Auto,
+            collaboration_mode: None,
+        })
+        .await?;
+
+    let approval_event = wait_for_event(&fixture.codex, |ev| {
+        matches!(ev, EventMsg::ExecApprovalRequest(_))
+    })
+    .await;
+    let EventMsg::ExecApprovalRequest(approval) = approval_event else {
+        unreachable!("event guard ensures ExecApprovalRequest")
+    };
+
+    assert_eq!(
+        approval.command,
+        vec![
+            "send_unattested_output".to_string(),
+            tool_name.clone(),
+            "mcp".to_string(),
+            format!("{server_name}/echo"),
+        ]
+    );
+
+    fixture
+        .codex
+        .submit(Op::ExecApproval {
+            id: approval.turn_id.clone(),
+            decision: ReviewDecision::Denied,
+        })
+        .await?;
+
+    wait_for_event(&fixture.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    let (content, success) = done_mock
+        .single_request()
+        .function_call_output_content_and_success(call_id)
+        .expect("function_call_output present for rmcp call");
+    assert_eq!(
+        content.as_deref(),
+        Some("unattested tool output blocked by policy")
+    );
+    if let Some(success) = success {
+        assert!(!success, "blocked MCP output should not be successful");
+    }
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+#[serial(mcp_test_value)]
+async fn mcp_unattested_output_confirm_approved_passes_output() -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = responses::start_mock_server().await;
+
+    let call_id = "call-mcp-unattested-approve";
+    let server_name = "rmcp";
+    let tool_name = format!("mcp__{server_name}__echo");
+
+    mount_sse_once(
+        &server,
+        responses::sse(vec![
+            responses::ev_response_created("resp-1"),
+            responses::ev_function_call(call_id, &tool_name, "{\"message\":\"ping\"}"),
+            responses::ev_completed("resp-1"),
+        ]),
+    )
+    .await;
+    let done_mock = mount_sse_once(
+        &server,
+        responses::sse(vec![
+            responses::ev_assistant_message("msg-1", "done"),
+            responses::ev_completed("resp-2"),
+        ]),
+    )
+    .await;
+
+    let rmcp_test_server_bin = stdio_server_bin()?;
+
+    let fixture = test_codex()
+        .with_config(move |config| {
+            let mut servers = config.mcp_servers.get().clone();
+            servers.insert(
+                server_name.to_string(),
+                McpServerConfig {
+                    transport: McpServerTransportConfig::Stdio {
+                        command: rmcp_test_server_bin,
+                        args: Vec::new(),
+                        env: None,
+                        env_vars: Vec::new(),
+                        cwd: None,
+                    },
+                    enabled: true,
+                    disabled_reason: None,
+                    startup_timeout_sec: Some(Duration::from_secs(10)),
+                    tool_timeout_sec: None,
+                    enabled_tools: None,
+                    disabled_tools: None,
+                },
+            );
+            config
+                .mcp_servers
+                .set(servers)
+                .expect("test mcp servers should accept any configuration");
+            config.unattested_output_policy = UnattestedOutputPolicy::Confirm;
+        })
+        .build(&server)
+        .await?;
+    let session_model = fixture.session_configured.model.clone();
+
+    fixture
+        .codex
+        .submit(Op::UserTurn {
+            items: vec![UserInput::Text {
+                text: "call the rmcp echo tool".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            cwd: fixture.cwd.path().to_path_buf(),
+            approval_policy: AskForApproval::OnRequest,
+            sandbox_policy: SandboxPolicy::ReadOnly,
+            model: session_model,
+            effort: None,
+            summary: ReasoningSummary::Auto,
+            collaboration_mode: None,
+        })
+        .await?;
+
+    let approval_event = wait_for_event(&fixture.codex, |ev| {
+        matches!(ev, EventMsg::ExecApprovalRequest(_))
+    })
+    .await;
+    let EventMsg::ExecApprovalRequest(approval) = approval_event else {
+        unreachable!("event guard ensures ExecApprovalRequest")
+    };
+
+    assert_eq!(
+        approval.command,
+        vec![
+            "send_unattested_output".to_string(),
+            tool_name.clone(),
+            "mcp".to_string(),
+            format!("{server_name}/echo"),
+        ]
+    );
+
+    fixture
+        .codex
+        .submit(Op::ExecApproval {
+            id: approval.turn_id.clone(),
+            decision: ReviewDecision::Approved,
+        })
+        .await?;
+
+    wait_for_event(&fixture.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    let (content, success) = done_mock
+        .single_request()
+        .function_call_output_content_and_success(call_id)
+        .expect("function_call_output present for rmcp call");
+    let output = content.expect("function_call_output content should be present");
+    let parsed: Value = serde_json::from_str(&output)?;
+    assert_eq!(parsed["echo"], json!("ECHOING: ping"));
+    if let Some(success) = success {
+        assert!(success, "approved MCP output should be successful");
+    }
 
     Ok(())
 }
