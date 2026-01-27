@@ -37,7 +37,6 @@ use codex_core::config::ConstraintResult;
 use codex_core::config::types::Notifications;
 use codex_core::features::FEATURES;
 use codex_core::features::Feature;
-use codex_core::git_info::GitHeadState;
 use codex_core::git_info::GitWorktreeEntry;
 use codex_core::git_info::current_branch_name;
 use codex_core::git_info::local_git_branches;
@@ -114,10 +113,8 @@ use ratatui::layout::Rect;
 use ratatui::style::Color;
 use ratatui::style::Modifier;
 use ratatui::style::Style;
-use ratatui::style::Styled as _;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
-use ratatui::text::Span;
 use ratatui::widgets::Paragraph;
 use ratatui::widgets::Wrap;
 use tokio::sync::mpsc::UnboundedSender;
@@ -161,7 +158,6 @@ use crate::exec_command::strip_bash_lc_and_escape;
 use crate::get_git_diff::get_git_diff;
 use crate::history_cell;
 use crate::history_cell::AgentMessageCell;
-use crate::history_cell::CompositeHistoryCell;
 use crate::history_cell::HistoryCell;
 use crate::history_cell::McpToolCallCell;
 use crate::history_cell::PlainHistoryCell;
@@ -181,7 +177,7 @@ use crate::tui::FrameRequester;
 use crate::xcodex_plugins;
 use crate::xcodex_plugins::HookProcessState;
 use crate::xcodex_plugins::McpStartupState;
-use crate::xcodex_plugins::RampStatusState;
+use crate::xcodex_plugins::RampStatusController;
 use crate::xcodex_plugins::WorktreeListState;
 mod interrupts;
 use self::interrupts::InterruptManager;
@@ -486,8 +482,7 @@ pub(crate) struct ChatWidget {
     // Previous status header to restore after a transient stream retry.
     retry_status_header: Option<String>,
     thread_id: Option<ThreadId>,
-    ramp_turn_index: u64,
-    ramp_state: RampStatusState,
+    ramp_status: RampStatusController,
     last_turn_completion_label: Option<String>,
     forked_from: Option<ThreadId>,
     frame_requester: FrameRequester,
@@ -741,24 +736,17 @@ impl ChatWidget {
     }
 
     fn ramps_status_enabled(&self) -> bool {
-        self.ramp_state.is_enabled()
+        self.ramp_status.is_enabled()
     }
 
     fn ramps_status_active(&self) -> bool {
-        self.ramp_state
+        self.ramp_status
             .is_active(self.bottom_pane.is_task_running())
-    }
-
-    fn sync_ramp_status_header(&mut self) {
-        if !self.ramps_status_active() {
-            return;
-        }
-        self.set_status_header(self.ramp_state.header_string());
     }
 
     fn set_ramp_stage(&mut self, stage: crate::ramps::RampStage) {
         if let Some(header) = self
-            .ramp_state
+            .ramp_status
             .set_stage(self.bottom_pane.is_task_running(), stage)
         {
             self.set_status_header(header);
@@ -767,7 +755,7 @@ impl ChatWidget {
 
     fn set_ramp_context(&mut self, context: Option<String>) {
         if let Some(header) = self
-            .ramp_state
+            .ramp_status
             .set_context(self.bottom_pane.is_task_running(), context)
         {
             self.set_status_header(header);
@@ -941,11 +929,11 @@ impl ChatWidget {
         self.bottom_pane.set_interrupt_hint_visible(true);
         self.turn_summary = history_cell::TurnSummary::default();
         self.last_turn_completion_label = None;
-        if self.ramps_status_enabled() {
-            self.ramp_turn_index = self.ramp_turn_index.saturating_add(1);
-            self.ramp_state
-                .reset_for_turn(&self.config, self.ramp_turn_index);
-            self.sync_ramp_status_header();
+        if let Some(header) = self
+            .ramp_status
+            .start_turn(&self.config, self.bottom_pane.is_task_running())
+        {
+            self.set_status_header(header);
         } else {
             let header = if crate::xtreme::xtreme_ui_enabled(&self.config) {
                 "Charging"
@@ -969,7 +957,7 @@ impl ChatWidget {
         self.flush_answer_stream_with_separator();
         self.flush_active_cell();
         if self.ramps_status_enabled() {
-            self.last_turn_completion_label = Some(self.ramp_state.completion_label());
+            self.last_turn_completion_label = Some(self.ramp_status.completion_label());
         }
         self.flush_unified_exec_wait_streak();
         // Mark task stopped and request redraw now that all content is in history.
@@ -1765,7 +1753,8 @@ impl ChatWidget {
         self.flush_unified_exec_wait_streak();
         self.flush_active_cell();
 
-        if self.ramps_status_active() && self.ramp_state.stage() == crate::ramps::RampStage::Waiting
+        if self.ramps_status_active()
+            && self.ramp_status.stage() == crate::ramps::RampStage::Waiting
         {
             self.set_ramp_stage(crate::ramps::RampStage::Warmup);
         }
@@ -2236,8 +2225,7 @@ impl ChatWidget {
             current_status_header: String::from("Working"),
             retry_status_header: None,
             thread_id: None,
-            ramp_turn_index: 0,
-            ramp_state: RampStatusState::default(),
+            ramp_status: RampStatusController::default(),
             last_turn_completion_label: None,
             forked_from: None,
             queued_user_messages: VecDeque::new(),
@@ -2386,8 +2374,7 @@ impl ChatWidget {
             current_status_header: String::from("Working"),
             retry_status_header: None,
             thread_id: None,
-            ramp_turn_index: 0,
-            ramp_state: RampStatusState::default(),
+            ramp_status: RampStatusController::default(),
             last_turn_completion_label: None,
             forked_from: None,
             queued_user_messages: VecDeque::new(),
@@ -2810,7 +2797,7 @@ impl ChatWidget {
                 self.open_skills_menu();
             }
             SlashCommand::Help => {
-                self.add_help_topics_output();
+                xcodex_plugins::help::add_help_topics_output(self);
             }
             SlashCommand::Status => {
                 self.open_status_menu_view(crate::bottom_pane::StatusMenuTab::Status);
@@ -2832,7 +2819,7 @@ impl ChatWidget {
                 }
             }
             SlashCommand::Hooks => {
-                self.add_hooks_output();
+                xcodex_plugins::hooks::add_hooks_output(self);
             }
             SlashCommand::Ps => {
                 self.add_ps_output();
@@ -3153,7 +3140,8 @@ impl ChatWidget {
 
             let (section, item, action) = match args.as_slice() {
                 [] | ["status-bar"] | ["transcript"] => {
-                    self.add_settings_output_with_values(
+                    xcodex_plugins::settings::add_settings_output_with_values(
+                        self,
                         current_git_branch,
                         current_worktree,
                         current_diff_highlight,
@@ -3298,7 +3286,8 @@ impl ChatWidget {
                 _ => {}
             }
 
-            self.add_settings_output_with_values(
+            xcodex_plugins::settings::add_settings_output_with_values(
+                self,
                 next_git_branch,
                 next_worktree,
                 next_diff_highlight,
@@ -3312,30 +3301,7 @@ impl ChatWidget {
             && let Some((name, rest, _rest_offset)) = parse_slash_name(text.as_str())
             && name == "help"
         {
-            let args: Vec<&str> = rest.split_whitespace().collect();
-            let topic = match args.as_slice() {
-                [] => {
-                    self.add_help_topics_output();
-                    return;
-                }
-                [topic] => topic.to_ascii_lowercase(),
-                _ => {
-                    self.add_info_message("Usage: /help <topic>".to_string(), None);
-                    return;
-                }
-            };
-
-            match topic.as_str() {
-                "xcodex" => {
-                    self.add_help_xcodex_output();
-                }
-                _ => {
-                    self.add_info_message(
-                        format!("Unknown help topic `{topic}`. Try: /help xcodex"),
-                        None,
-                    );
-                }
-            }
+            xcodex_plugins::help::handle_help_command(self, rest);
             return;
         }
 
@@ -3344,395 +3310,7 @@ impl ChatWidget {
             && let Some((name, rest, _rest_offset)) = parse_slash_name(text.as_str())
             && name == "hooks"
         {
-            let args: Vec<&str> = rest.split_whitespace().collect();
-            match args.as_slice() {
-                [] => {
-                    self.dispatch_command(SlashCommand::Hooks);
-                }
-                ["init"] => {
-                    use codex_common::hooks_samples_install::HookSample;
-                    let lines = vec![
-                        vec!["/hooks init".magenta()].into(),
-                        transcript_spacer_line(),
-                        vec!["Choose a hook mode:".magenta().bold()].into(),
-                        vec!["1) ".dim(), HookSample::External.title().into()].into(),
-                        vec!["   ".into(), HookSample::External.description().dim()].into(),
-                        transcript_spacer_line(),
-                        vec!["2) ".dim(), HookSample::PythonHost.title().into()].into(),
-                        vec!["   ".into(), HookSample::PythonHost.description().dim()].into(),
-                        transcript_spacer_line(),
-                        vec!["3) ".dim(), HookSample::Pyo3.title().into()].into(),
-                        vec!["   ".into(), HookSample::Pyo3.description().dim()].into(),
-                        transcript_spacer_line(),
-                        vec!["Run: ".dim(), "/hooks init external".cyan()].into(),
-                        vec!["Run: ".dim(), "/hooks init python-host".cyan()].into(),
-                        vec!["Run: ".dim(), "/hooks init pyo3".cyan()].into(),
-                        transcript_spacer_line(),
-                        vec![
-                            "Note: ".dim(),
-                            "installing writes files; re-run with ".dim(),
-                            "--yes".cyan(),
-                            " to apply.".dim(),
-                        ]
-                        .into(),
-                    ];
-                    self.add_plain_history_lines(lines);
-                }
-                ["init", mode, rest @ ..] => {
-                    let mut force = false;
-                    let mut dry_run = false;
-                    let mut yes = false;
-                    for arg in rest {
-                        match *arg {
-                            "--force" => force = true,
-                            "--dry-run" => dry_run = true,
-                            "--yes" => yes = true,
-                            _ => {
-                                self.add_info_message(
-                                    "Usage: /hooks init <external|python-host|pyo3> [--dry-run] [--force] [--yes]".to_string(),
-                                    None,
-                                );
-                                return;
-                            }
-                        }
-                    }
-
-                    let sample = match mode.to_ascii_lowercase().as_str() {
-                        "1" | "external" => {
-                            codex_common::hooks_samples_install::HookSample::External
-                        }
-                        "2" | "python-host" | "pythonhost" | "python-box" | "py-box" => {
-                            codex_common::hooks_samples_install::HookSample::PythonHost
-                        }
-                        "3" | "pyo3" => codex_common::hooks_samples_install::HookSample::Pyo3,
-                        _ => {
-                            self.add_info_message(
-                                "Unknown hook mode. Try: /hooks init".to_string(),
-                                None,
-                            );
-                            return;
-                        }
-                    };
-
-                    let codex_home = self.config.codex_home.clone();
-                    let plan = codex_common::hooks_samples_install::plan_install_samples(
-                        &codex_home,
-                        sample,
-                        force,
-                    );
-                    let plan = match plan {
-                        Ok(plan) => plan,
-                        Err(err) => {
-                            self.add_error_message(format!("hooks init failed: {err}"));
-                            return;
-                        }
-                    };
-
-                    let text = codex_common::hooks_samples_install::format_sample_install_plan(
-                        &plan, sample,
-                    )
-                    .unwrap_or_else(|_| String::from("failed to format plan"));
-                    self.add_plain_history_lines(
-                        text.lines().map(|l| Line::from(l.to_string())).collect(),
-                    );
-
-                    if dry_run {
-                        return;
-                    }
-                    if !yes {
-                        self.add_info_message(
-                            "Re-run with --yes to apply these changes.".to_string(),
-                            None,
-                        );
-                        return;
-                    }
-
-                    if let Err(err) = codex_common::hooks_samples_install::apply_install_samples(
-                        &codex_home,
-                        sample,
-                        force,
-                    ) {
-                        self.add_error_message(format!("hooks init failed: {err}"));
-                    }
-                }
-                ["install", "sdks", "list"] | ["install", "sdks", "--list"] => {
-                    let mut lines = Vec::new();
-                    lines.push(vec!["/hooks install sdks list".magenta()].into());
-                    lines.push(transcript_spacer_line());
-                    lines.push(vec!["Available SDKs:".magenta().bold()].into());
-                    for sdk in codex_common::hooks_sdk_install::all_hook_sdks() {
-                        lines.push(
-                            vec![
-                                "- ".dim(),
-                                sdk.id().cyan(),
-                                ": ".dim(),
-                                sdk.description().into(),
-                            ]
-                            .into(),
-                        );
-                    }
-                    lines.push(
-                        vec![
-                            "- ".dim(),
-                            "all".cyan(),
-                            ": ".dim(),
-                            "install everything".into(),
-                        ]
-                        .into(),
-                    );
-                    self.add_plain_history_lines(lines);
-                }
-                ["install", "samples", "list"] | ["install", "samples", "--list"] => {
-                    use codex_common::hooks_samples_install::HookSample;
-                    let mut lines = Vec::new();
-                    lines.push(vec!["/hooks install samples list".magenta()].into());
-                    lines.push(transcript_spacer_line());
-                    lines.push(vec!["Available sample sets:".magenta().bold()].into());
-                    for sample in [
-                        HookSample::External,
-                        HookSample::PythonHost,
-                        HookSample::Pyo3,
-                    ] {
-                        lines.push(
-                            vec![
-                                "- ".dim(),
-                                sample.id().cyan(),
-                                ": ".dim(),
-                                sample.description().into(),
-                            ]
-                            .into(),
-                        );
-                    }
-                    lines.push(
-                        vec![
-                            "- ".dim(),
-                            "all".cyan(),
-                            ": ".dim(),
-                            "install everything".into(),
-                        ]
-                        .into(),
-                    );
-                    self.add_plain_history_lines(lines);
-                }
-                ["install", "sdks", ..] => {
-                    let mut force = false;
-                    let mut dry_run = false;
-                    let mut yes = false;
-                    let mut sdk_name: Option<&str> = None;
-                    for arg in &args[2..] {
-                        match *arg {
-                            "--force" => force = true,
-                            "--dry-run" => dry_run = true,
-                            "--yes" => yes = true,
-                            _ if arg.starts_with('-') => {
-                                self.add_info_message(
-                                    "Usage: /hooks install sdks <sdk|all> [--dry-run] [--force] [--yes] | /hooks install sdks list"
-                                        .to_string(),
-                                    None,
-                                );
-                                return;
-                            }
-                            _ => {
-                                if sdk_name.is_some() {
-                                    self.add_info_message(
-                                        "Usage: /hooks install sdks <sdk|all> [--dry-run] [--force] [--yes] | /hooks install sdks list"
-                                            .to_string(),
-                                        None,
-                                    );
-                                    return;
-                                }
-                                sdk_name = Some(*arg);
-                            }
-                        }
-                    }
-
-                    let Some(sdk_name) = sdk_name else {
-                        self.add_info_message(
-                            "Usage: /hooks install sdks <sdk|all> [--dry-run] [--force] [--yes] | /hooks install sdks list"
-                                .to_string(),
-                            None,
-                        );
-                        return;
-                    };
-
-                    let targets = if sdk_name.eq_ignore_ascii_case("all") {
-                        codex_common::hooks_sdk_install::all_hook_sdks()
-                    } else {
-                        match sdk_name.parse::<codex_common::hooks_sdk_install::HookSdk>() {
-                            Ok(sdk) => vec![sdk],
-                            Err(_) => {
-                                self.add_info_message(
-                                    format!(
-                                        "Unknown SDK `{sdk_name}`. Try: /hooks install sdks list"
-                                    ),
-                                    None,
-                                );
-                                return;
-                            }
-                        }
-                    };
-
-                    let codex_home = self.config.codex_home.clone();
-                    let plan = codex_common::hooks_sdk_install::plan_install_hook_sdks(
-                        &codex_home,
-                        &targets,
-                        force,
-                    );
-                    let plan = match plan {
-                        Ok(plan) => plan,
-                        Err(err) => {
-                            self.add_error_message(format!("hooks install failed: {err}"));
-                            return;
-                        }
-                    };
-                    let text = codex_common::hooks_sdk_install::format_install_plan(&plan)
-                        .unwrap_or_else(|_| String::from("failed to format plan"));
-                    self.add_plain_history_lines(
-                        text.lines().map(|l| Line::from(l.to_string())).collect(),
-                    );
-
-                    if dry_run {
-                        return;
-                    }
-                    if !yes {
-                        self.add_info_message(
-                            "Re-run with --yes to apply these changes.".to_string(),
-                            None,
-                        );
-                        return;
-                    }
-
-                    let report = codex_common::hooks_sdk_install::install_hook_sdks(
-                        &codex_home,
-                        &targets,
-                        force,
-                    );
-                    match report {
-                        Ok(report) => {
-                            let text =
-                                codex_common::hooks_sdk_install::format_install_report(&report)
-                                    .unwrap_or_else(|_| String::from("installed hook SDK files"));
-                            self.add_plain_history_lines(
-                                text.lines().map(|l| Line::from(l.to_string())).collect(),
-                            );
-                        }
-                        Err(err) => self.add_error_message(format!("hooks install failed: {err}")),
-                    }
-                }
-                ["install", "samples", ..] => {
-                    let mut force = false;
-                    let mut dry_run = false;
-                    let mut yes = false;
-                    let mut sample_name: Option<&str> = None;
-                    for arg in &args[2..] {
-                        match *arg {
-                            "--force" => force = true,
-                            "--dry-run" => dry_run = true,
-                            "--yes" => yes = true,
-                            _ if arg.starts_with('-') => {
-                                self.add_info_message(
-                                    "Usage: /hooks install samples <external|python-host|pyo3|all> [--dry-run] [--force] [--yes] | /hooks install samples list"
-                                        .to_string(),
-                                    None,
-                                );
-                                return;
-                            }
-                            _ => {
-                                if sample_name.is_some() {
-                                    self.add_info_message(
-                                        "Usage: /hooks install samples <external|python-host|pyo3|all> [--dry-run] [--force] [--yes] | /hooks install samples list"
-                                            .to_string(),
-                                        None,
-                                    );
-                                    return;
-                                }
-                                sample_name = Some(*arg);
-                            }
-                        }
-                    }
-
-                    let Some(sample_name) = sample_name else {
-                        self.add_info_message(
-                            "Usage: /hooks install samples <external|python-host|pyo3|all> [--dry-run] [--force] [--yes] | /hooks install samples list"
-                                .to_string(),
-                            None,
-                        );
-                        return;
-                    };
-
-                    let samples = if sample_name.eq_ignore_ascii_case("all") {
-                        vec![
-                            codex_common::hooks_samples_install::HookSample::External,
-                            codex_common::hooks_samples_install::HookSample::PythonHost,
-                            codex_common::hooks_samples_install::HookSample::Pyo3,
-                        ]
-                    } else {
-                        let sample = match sample_name.to_ascii_lowercase().as_str() {
-                            "external" => codex_common::hooks_samples_install::HookSample::External,
-                            "python-host" | "pythonhost" | "python-box" | "py-box" => {
-                                codex_common::hooks_samples_install::HookSample::PythonHost
-                            }
-                            "pyo3" => codex_common::hooks_samples_install::HookSample::Pyo3,
-                            _ => {
-                                self.add_info_message(
-                                    "Unknown sample. Try: /hooks install samples list".to_string(),
-                                    None,
-                                );
-                                return;
-                            }
-                        };
-                        vec![sample]
-                    };
-
-                    let codex_home = self.config.codex_home.clone();
-                    for sample in samples {
-                        let plan = codex_common::hooks_samples_install::plan_install_samples(
-                            &codex_home,
-                            sample,
-                            force,
-                        );
-                        let plan = match plan {
-                            Ok(plan) => plan,
-                            Err(err) => {
-                                self.add_error_message(format!("hooks install failed: {err}"));
-                                return;
-                            }
-                        };
-                        let text = codex_common::hooks_samples_install::format_sample_install_plan(
-                            &plan, sample,
-                        )
-                        .unwrap_or_else(|_| String::from("failed to format plan"));
-                        self.add_plain_history_lines(
-                            text.lines().map(|l| Line::from(l.to_string())).collect(),
-                        );
-
-                        if dry_run {
-                            continue;
-                        }
-                        if !yes {
-                            self.add_info_message(
-                                "Re-run with --yes to apply these changes.".to_string(),
-                                None,
-                            );
-                            return;
-                        }
-                        if let Err(err) = codex_common::hooks_samples_install::apply_install_samples(
-                            &codex_home,
-                            sample,
-                            force,
-                        ) {
-                            self.add_error_message(format!("hooks install failed: {err}"));
-                        }
-                    }
-                }
-                _ => {
-                    self.add_info_message(
-                        "Usage: /hooks init | /hooks install sdks ... | /hooks install samples ..."
-                            .to_string(),
-                        None,
-                    );
-                }
-            }
+            xcodex_plugins::hooks::handle_hooks_command(self, rest);
             return;
         }
 
@@ -4074,6 +3652,11 @@ impl ChatWidget {
         self.frame_requester.schedule_frame();
     }
 
+    pub(crate) fn show_selection_view(&mut self, params: SelectionViewParams) {
+        self.bottom_pane.show_selection_view(params);
+        self.request_redraw();
+    }
+
     fn bump_active_cell_revision(&mut self) {
         // Wrapping avoids overflow; wraparound would require 2^64 bumps and at
         // worst causes a one-time cache-key collision.
@@ -4180,266 +3763,10 @@ impl ChatWidget {
         self.request_redraw();
     }
 
-    pub(crate) fn add_settings_output_with_values(
-        &mut self,
-        show_git_branch: bool,
-        show_worktree: bool,
-        transcript_diff_highlight: bool,
-        transcript_user_prompt_highlight: bool,
-    ) {
-        let command = PlainHistoryCell::new(vec![Line::from(vec!["/settings".magenta()])]);
-        let card = crate::status::new_settings_card(
-            crate::xtreme::xtreme_ui_enabled(&self.config),
-            show_git_branch,
-            show_worktree,
-            transcript_diff_highlight,
-            transcript_user_prompt_highlight,
-        );
-        self.add_to_history(CompositeHistoryCell::new(vec![Box::new(command), card]));
-    }
-
-    pub(crate) fn add_help_topics_output(&mut self) {
-        let command = PlainHistoryCell::new(vec![Line::from(vec!["/help".magenta()])]);
-        let body = PlainHistoryCell::new(vec![
-            vec![
-                "Topics: ".into(),
-                Span::from("xcodex").set_style(crate::theme::accent_style().bold()),
-            ]
-            .into(),
-            vec![
-                "Try: ".dim(),
-                Span::from("/help xcodex").set_style(crate::theme::accent_style()),
-            ]
-            .into(),
-        ]);
-        self.add_to_history(CompositeHistoryCell::new(vec![
-            Box::new(command),
-            Box::new(body),
-        ]));
-    }
-
     pub(crate) fn add_worktree_shared_dirs_output(&mut self) {
-        let command = PlainHistoryCell::new(vec![Line::from(vec!["/worktree shared".magenta()])]);
-        let mut lines: Vec<Line<'static>> = Vec::new();
-
-        lines.push(
-            vec![
-                "worktrees.shared_dirs".cyan().bold(),
-                " (shared across worktrees)".dim(),
-            ]
-            .into(),
-        );
-
-        if self.config.worktrees_shared_dirs.is_empty() {
-            lines.push(vec!["(none)".dim()].into());
-        } else {
-            for dir in &self.config.worktrees_shared_dirs {
-                lines.push(vec!["- ".dim(), dir.clone().into()].into());
-            }
-        }
-
-        lines.push(transcript_spacer_line());
-        lines.push(vec!["Add: ".dim(), "/worktree shared add <dir>".cyan()].into());
-        lines.push(vec!["Remove: ".dim(), "/worktree shared rm <dir>".cyan()].into());
-        lines.push(
-            vec![
-                "Apply: ".dim(),
-                "/worktree link-shared".cyan(),
-                " ".dim(),
-                "(in current worktree)".dim(),
-            ]
-            .into(),
-        );
-        lines.push(vec!["Docs: ".dim(), "docs/xcodex/worktrees.md".cyan()].into());
-
-        self.add_to_history(CompositeHistoryCell::new(vec![
-            Box::new(command),
-            Box::new(PlainHistoryCell::new(lines)),
-        ]));
+        xcodex_plugins::worktree::add_worktree_shared_dirs_output(self);
     }
 
-    pub(crate) fn add_hooks_output(&mut self) {
-        let command = PlainHistoryCell::new(vec![Line::from(vec!["/hooks".magenta()])]);
-        let codex_home = self.config.codex_home.clone();
-        let logs_dir = codex_home.join("tmp").join("hooks").join("logs");
-        let payloads_dir = codex_home.join("tmp").join("hooks").join("payloads");
-
-        let lines: Vec<Line<'static>> = vec![
-            Line::from(vec![
-                "Automation hooks run external programs on lifecycle events. ".into(),
-                "Treat hook payloads/logs as potentially sensitive.".dim(),
-            ]),
-            transcript_spacer_line(),
-            Line::from(vec!["Quickstart:".magenta().bold()]),
-            Line::from(vec!["  xcodex hooks init".cyan()]),
-            Line::from(vec!["  xcodex hooks install sdks list".cyan()]),
-            Line::from(vec!["  xcodex hooks install sdks python".cyan()]),
-            Line::from(vec!["  xcodex hooks install samples list".cyan()]),
-            Line::from(vec!["  xcodex hooks install samples external".cyan()]),
-            Line::from(vec!["  xcodex hooks help".cyan()]),
-            Line::from(vec![
-                "  xcodex hooks test external --configured-only".cyan(),
-            ]),
-            Line::from(vec!["  xcodex hooks list".cyan()]),
-            Line::from(vec!["  xcodex hooks paths".cyan()]),
-            transcript_spacer_line(),
-            Line::from(vec![
-                "Config: ".dim(),
-                format!("{}/config.toml", codex_home.display()).into(),
-            ]),
-            Line::from(vec![
-                "Logs: ".dim(),
-                format!("{}", logs_dir.display()).into(),
-            ]),
-            Line::from(vec![
-                "Payloads: ".dim(),
-                format!("{}", payloads_dir.display()).into(),
-            ]),
-            transcript_spacer_line(),
-            Line::from(vec![
-                "Docs: ".dim(),
-                "docs/xcodex/hooks.md".cyan(),
-                " and ".dim(),
-                "docs/xcodex/hooks-gallery.md".cyan(),
-                " and ".dim(),
-                "docs/xcodex/hooks-sdks.md".cyan(),
-                " and ".dim(),
-                "docs/xcodex/hooks-python-host.md".cyan(),
-                " and ".dim(),
-                "docs/xcodex/hooks-pyo3.md".cyan(),
-            ]),
-        ];
-
-        self.add_to_history(CompositeHistoryCell::new(vec![
-            Box::new(command),
-            Box::new(PlainHistoryCell::new(lines)),
-        ]));
-    }
-
-    pub(crate) fn add_help_xcodex_output(&mut self) {
-        let command = PlainHistoryCell::new(vec![Line::from(vec!["/help xcodex".magenta()])]);
-        let body = PlainHistoryCell::new(vec![
-            vec![
-                Span::from("xcodex").set_style(crate::theme::accent_style().bold()),
-                " additions in this UI".dim(),
-            ]
-            .into(),
-            vec![
-                "• ".dim(),
-                "/settings".cyan(),
-                " — ".dim(),
-                "status bar items (git branch/worktree)".into(),
-            ]
-            .into(),
-            vec![
-                "  ".into(),
-                "Try: ".dim(),
-                "/settings status-bar git-branch toggle".cyan(),
-            ]
-            .into(),
-            vec!["  ".into(), "Try: ".dim(), "/settings worktrees".cyan()].into(),
-            vec![
-                "• ".dim(),
-                "xcodex config".cyan(),
-                " — ".dim(),
-                "edit or diagnose $CODEX_HOME/config.toml".into(),
-            ]
-            .into(),
-            vec!["  ".into(), "Try: ".dim(), "xcodex config edit".cyan()].into(),
-            vec!["  ".into(), "Try: ".dim(), "xcodex config doctor".cyan()].into(),
-            vec![
-                "• ".dim(),
-                "/worktree".cyan(),
-                " — ".dim(),
-                "switch this session between git worktrees".into(),
-            ]
-            .into(),
-            vec![
-                "  ".into(),
-                "Contract: ".dim(),
-                "tool cwd = active worktree root".into(),
-            ]
-            .into(),
-            vec![
-                "  ".into(),
-                "Shared dirs (opt-in): ".dim(),
-                "linked back to workspace root (writes land there)".into(),
-            ]
-            .into(),
-            vec![
-                "  ".into(),
-                "Pinned paths (opt-in): ".dim(),
-                "worktrees.pinned_paths".cyan(),
-                " ".dim(),
-                "(file tools only)".dim(),
-            ]
-            .into(),
-            vec![
-                "  ".into(),
-                "Docs: ".dim(),
-                "docs/xcodex/worktrees.md".cyan(),
-            ]
-            .into(),
-            vec!["  ".into(), "Try: ".dim(), "/worktree detect".cyan()].into(),
-            vec![
-                "  ".into(),
-                "Try: ".dim(),
-                "/worktree doctor".cyan(),
-                " ".dim(),
-                "(shared dirs / untracked)".dim(),
-            ]
-            .into(),
-            vec![
-                "  ".into(),
-                "Try: ".dim(),
-                "/worktree link-shared".cyan(),
-                " ".dim(),
-                "(apply shared-dir links)".dim(),
-            ]
-            .into(),
-            vec![
-                "  ".into(),
-                "Try: ".dim(),
-                "/worktree link-shared --migrate".cyan(),
-                " ".dim(),
-                "(migrate git-untracked files, then link)".dim(),
-            ]
-            .into(),
-            vec![
-                "  ".into(),
-                "Try: ".dim(),
-                "/worktree shared add docs/impl-plans".cyan(),
-                " ".dim(),
-                "(configure shared dirs)".dim(),
-            ]
-            .into(),
-            vec![
-                "• ".dim(),
-                "/ps".cyan(),
-                " — ".dim(),
-                "list background terminals + hooks".into(),
-            ]
-            .into(),
-            vec![
-                "• ".dim(),
-                "/ps-kill".cyan(),
-                " — ".dim(),
-                "terminate background terminals".into(),
-            ]
-            .into(),
-            vec![
-                "• ".dim(),
-                "/thoughts".cyan(),
-                " — ".dim(),
-                "show/hide agent reasoning".into(),
-            ]
-            .into(),
-        ]);
-        self.add_to_history(CompositeHistoryCell::new(vec![
-            Box::new(command),
-            Box::new(body),
-        ]));
-    }
     pub(crate) fn add_ps_output(&mut self) {
         let processes = self
             .unified_exec_processes
@@ -4713,12 +4040,24 @@ impl ChatWidget {
         &self.config.cwd
     }
 
+    pub(crate) fn app_event_tx(&self) -> AppEventSender {
+        self.app_event_tx.clone()
+    }
+
     pub(crate) fn worktree_list(&self) -> &[GitWorktreeEntry] {
         self.worktree_state.list()
     }
 
     pub(crate) fn worktree_list_refresh_in_progress(&self) -> bool {
         self.worktree_state.refresh_in_progress()
+    }
+
+    pub(crate) fn worktree_list_error(&self) -> Option<&str> {
+        self.worktree_state.error().map(String::as_str)
+    }
+
+    pub(crate) fn worktree_list_is_empty(&self) -> bool {
+        self.worktree_state.is_empty()
     }
 
     pub(crate) fn take_shared_dirs_write_notice(&mut self) -> bool {
@@ -4799,41 +4138,7 @@ impl ChatWidget {
     }
 
     pub(crate) fn spawn_worktree_init_wizard(&mut self) {
-        let cwd = self.session_cwd().to_path_buf();
-        let Some(head) = codex_core::git_info::resolve_git_worktree_head(&cwd) else {
-            self.add_error_message(String::from(
-                "`/worktree init` — not inside a git worktree (start xcodex in a repo/worktree directory, or switch via `/worktree`)",
-            ));
-            return;
-        };
-        let Some(workspace_root) =
-            codex_core::git_info::resolve_root_git_project_for_trust(&head.worktree_root)
-        else {
-            self.add_error_message(String::from(
-                "`/worktree init` — failed to resolve workspace root (the main worktree root for this repo)",
-            ));
-            return;
-        };
-
-        let current_branch = codex_core::git_info::read_git_head_state(&head.head_path).and_then(
-            |state| match state {
-                GitHeadState::Branch(branch) => Some(branch),
-                GitHeadState::Detached => None,
-            },
-        );
-        let shared_dirs = self.worktrees_shared_dirs().to_vec();
-        let tx = self.app_event_tx.clone();
-        let worktree_root = head.worktree_root;
-        tokio::spawn(async move {
-            let branches = codex_core::git_info::local_git_branches(&cwd).await;
-            tx.send(AppEvent::OpenWorktreeInitWizard {
-                worktree_root,
-                workspace_root,
-                current_branch,
-                shared_dirs,
-                branches,
-            });
-        });
+        xcodex_plugins::worktree::spawn_worktree_init_wizard(self);
     }
 
     pub(crate) fn spawn_worktree_init_command(
@@ -4843,166 +4148,11 @@ impl ChatWidget {
         path: Option<PathBuf>,
         invoked: String,
     ) {
-        let cwd = self.session_cwd().to_path_buf();
-        let shared_dirs = self.worktrees_shared_dirs().to_vec();
-        let tx = self.app_event_tx.clone();
-        tokio::spawn(async move {
-            let Some(current_root) = codex_core::git_info::resolve_git_worktree_head(&cwd)
-                .map(|head| head.worktree_root)
-            else {
-                tx.send(AppEvent::InsertHistoryCell(Box::new(
-                    history_cell::new_error_event(String::from(
-                        "`/worktree init` — not inside a git worktree (start xcodex in a repo/worktree directory, or switch via `/worktree`)",
-                    )),
-                )));
-                return;
-            };
-
-            let Some(workspace_root) =
-                codex_core::git_info::resolve_root_git_project_for_trust(&current_root)
-            else {
-                tx.send(AppEvent::InsertHistoryCell(Box::new(
-                    history_cell::new_error_event(String::from(
-                        "`/worktree init` — failed to resolve workspace root (the main worktree root for this repo)",
-                    )),
-                )));
-                return;
-            };
-
-            let result = codex_core::git_info::init_git_worktree(
-                &workspace_root,
-                &name,
-                &branch,
-                path.as_deref(),
-            )
-            .await;
-
-            let path = match result {
-                Ok(path) => path,
-                Err(err) => {
-                    let resolved_path = if let Some(path) = &path {
-                        if path.is_absolute() {
-                            path.clone()
-                        } else {
-                            workspace_root.join(path)
-                        }
-                    } else {
-                        workspace_root.join(".worktrees").join(&name)
-                    };
-                    let mut lines: Vec<Line<'static>> = Vec::new();
-                    lines.push(Line::from(format!("error: {err}")));
-                    lines.push(transcript_spacer_line());
-                    lines.push(Line::from("Try running this outside xcodex:"));
-                    lines.push(Line::from(format!(
-                        "  git -C {} worktree add -b {} {}",
-                        workspace_root.display(),
-                        branch,
-                        resolved_path.display()
-                    )));
-                    lines.push(Line::from(format!(
-                        "  git -C {} worktree add {} {}   (if branch already exists)",
-                        workspace_root.display(),
-                        resolved_path.display(),
-                        branch
-                    )));
-                    lines.push(Line::from(format!(
-                        "  git -C {} worktree list --porcelain",
-                        workspace_root.display()
-                    )));
-                    let command = PlainHistoryCell::new(vec![Line::from(vec![invoked.magenta()])]);
-                    tx.send(AppEvent::InsertHistoryCell(Box::new(
-                        CompositeHistoryCell::new(vec![
-                            Box::new(command),
-                            Box::new(PlainHistoryCell::new(lines)),
-                        ]),
-                    )));
-                    return;
-                }
-            };
-
-            let mut lines: Vec<Line<'static>> = Vec::new();
-            lines.push(Line::from(format!(
-                "workspace root: {}",
-                workspace_root.display()
-            )));
-            lines.push(Line::from(format!("created: {}", path.display())));
-
-            if !shared_dirs.is_empty() {
-                let actions = codex_core::git_info::link_worktree_shared_dirs(
-                    &path,
-                    &workspace_root,
-                    &shared_dirs,
-                )
-                .await;
-
-                let mut linked_dirs: Vec<(String, PathBuf)> = Vec::new();
-                for action in actions {
-                    if matches!(
-                        action.outcome,
-                        codex_core::git_info::SharedDirLinkOutcome::Linked
-                            | codex_core::git_info::SharedDirLinkOutcome::AlreadyLinked
-                    ) {
-                        linked_dirs.push((action.shared_dir, action.target_path));
-                    }
-                }
-
-                if !linked_dirs.is_empty() {
-                    lines.push(transcript_spacer_line());
-                    lines.push(Line::from("Shared dirs (writes land in workspace root):"));
-                    for (dir, target) in linked_dirs {
-                        lines.push(Line::from(format!("- {dir} -> {}", target.display())));
-                    }
-                }
-            }
-
-            let command = PlainHistoryCell::new(vec![Line::from(vec![invoked.magenta()])]);
-            tx.send(AppEvent::InsertHistoryCell(Box::new(
-                CompositeHistoryCell::new(vec![
-                    Box::new(command),
-                    Box::new(PlainHistoryCell::new(lines)),
-                ]),
-            )));
-
-            tx.send(AppEvent::WorktreeSwitched(path.clone()));
-            tx.send(AppEvent::CodexOp(Op::OverrideTurnContext {
-                cwd: Some(path.clone()),
-                approval_policy: None,
-                sandbox_policy: None,
-                model: None,
-                effort: None,
-                summary: None,
-                collaboration_mode: None,
-            }));
-            tx.send(AppEvent::CodexOp(Op::ListSkills {
-                cwds: vec![path],
-                force_reload: true,
-            }));
-        });
+        xcodex_plugins::worktree::spawn_worktree_init_command(self, name, branch, path, invoked);
     }
 
     pub(crate) fn spawn_worktree_doctor(&mut self) {
-        let cwd = self.session_cwd().to_path_buf();
-        let shared_dirs = self.worktrees_shared_dirs().to_vec();
-        let tx = self.app_event_tx.clone();
-        tokio::spawn(async move {
-            let mut lines =
-                codex_core::git_info::worktree_doctor_lines(&cwd, &shared_dirs, 5).await;
-            if lines.first().is_some_and(|line| line == "worktree doctor") {
-                lines.remove(0);
-            }
-            while lines.first().is_some_and(|line| line.trim().is_empty()) {
-                lines.remove(0);
-            }
-            let lines = lines.into_iter().map(Line::from).collect();
-            let command =
-                PlainHistoryCell::new(vec![Line::from(vec!["/worktree doctor".magenta()])]);
-            tx.send(AppEvent::InsertHistoryCell(Box::new(
-                CompositeHistoryCell::new(vec![
-                    Box::new(command),
-                    Box::new(PlainHistoryCell::new(lines)),
-                ]),
-            )));
-        });
+        xcodex_plugins::worktree::spawn_worktree_doctor(self);
     }
 
     pub(crate) fn spawn_worktree_detection(&mut self, open_picker: bool) {
@@ -5073,266 +4223,8 @@ impl ChatWidget {
         self.add_info_message(format!("Session worktree set to {display}."), None);
     }
 
-    fn sort_worktrees_for_picker(
-        worktrees: &mut [GitWorktreeEntry],
-        current_root: Option<&Path>,
-        workspace_root: Option<&Path>,
-    ) {
-        worktrees.sort_by(|a, b| {
-            let a_is_current = current_root.is_some_and(|root| root == a.path.as_path());
-            let b_is_current = current_root.is_some_and(|root| root == b.path.as_path());
-
-            let a_is_workspace_root =
-                !a.is_bare && workspace_root.is_some_and(|root| root == a.path.as_path());
-            let b_is_workspace_root =
-                !b.is_bare && workspace_root.is_some_and(|root| root == b.path.as_path());
-
-            b_is_current
-                .cmp(&a_is_current)
-                .then_with(|| b_is_workspace_root.cmp(&a_is_workspace_root))
-                .then_with(|| a.is_bare.cmp(&b.is_bare))
-                .then_with(|| a.path.cmp(&b.path))
-        });
-    }
-
     fn open_worktree_picker(&mut self) {
-        let mut items: Vec<SelectionItem> = Vec::new();
-
-        items.push(SelectionItem {
-            name: "Refresh worktrees".to_string(),
-            display_shortcut: Some(crate::key_hint::alt(KeyCode::Char('r'))),
-            description: Some("Re-detect worktrees for this session.".to_string()),
-            actions: vec![Box::new(|tx: &AppEventSender| {
-                tx.send(AppEvent::WorktreeDetect { open_picker: true });
-            })],
-            dismiss_on_select: true,
-            ..Default::default()
-        });
-
-        items.push(SelectionItem {
-            name: "Worktrees settings…".to_string(),
-            display_shortcut: Some(crate::key_hint::alt(KeyCode::Char('s'))),
-            description: Some("Edit shared dirs and pinned paths.".to_string()),
-            actions: vec![Box::new(|tx: &AppEventSender| {
-                tx.send(AppEvent::OpenWorktreesSettingsView);
-            })],
-            dismiss_on_select: true,
-            ..Default::default()
-        });
-
-        {
-            let cwd = self.config.cwd.clone();
-            let shared_dirs = self.config.worktrees_shared_dirs.clone();
-            items.push(SelectionItem {
-                name: "Create worktree…".to_string(),
-                display_shortcut: Some(crate::key_hint::alt(KeyCode::Char('i'))),
-                description: Some("Create a new worktree and switch to it.".to_string()),
-                actions: vec![Box::new(move |tx: &AppEventSender| {
-                    let cwd = cwd.clone();
-                    let shared_dirs = shared_dirs.clone();
-                    let tx = tx.clone();
-                    tokio::spawn(async move {
-                        use codex_core::git_info::GitHeadState;
-
-                        let Some(head) = codex_core::git_info::resolve_git_worktree_head(&cwd)
-                        else {
-                            tx.send(AppEvent::InsertHistoryCell(Box::new(
-                                history_cell::new_error_event(String::from(
-                                    "`/worktree init` — not inside a git worktree (start xcodex in a repo/worktree directory, or switch via `/worktree`)",
-                                )),
-                            )));
-                            return;
-                        };
-                        let Some(workspace_root) =
-                            codex_core::git_info::resolve_root_git_project_for_trust(
-                                &head.worktree_root,
-                            )
-                        else {
-                            tx.send(AppEvent::InsertHistoryCell(Box::new(
-                                history_cell::new_error_event(String::from(
-                                    "`/worktree init` — failed to resolve workspace root (the main worktree root for this repo)",
-                                )),
-                            )));
-                            return;
-                        };
-
-                        let current_branch =
-                            codex_core::git_info::read_git_head_state(&head.head_path).and_then(
-                                |state| match state {
-                                    GitHeadState::Branch(branch) => Some(branch),
-                                    GitHeadState::Detached => None,
-                                },
-                            );
-
-                        let worktree_root = head.worktree_root;
-                        let branches = codex_core::git_info::local_git_branches(&cwd).await;
-                        tx.send(AppEvent::OpenWorktreeInitWizard {
-                            worktree_root,
-                            workspace_root,
-                            current_branch,
-                            shared_dirs,
-                            branches,
-                        });
-                    });
-                })],
-                dismiss_on_select: true,
-                ..Default::default()
-            });
-        }
-
-        {
-            let cwd = self.config.cwd.clone();
-            let shared_dirs = self.config.worktrees_shared_dirs.clone();
-            items.push(SelectionItem {
-                name: "Worktree doctor".to_string(),
-                display_shortcut: Some(crate::key_hint::alt(KeyCode::Char('d'))),
-                description: Some(
-                    "Show shared-dir + untracked status for this worktree.".to_string(),
-                ),
-                actions: vec![Box::new(move |tx: &AppEventSender| {
-                    let cwd = cwd.clone();
-                    let shared_dirs = shared_dirs.clone();
-                    let tx = tx.clone();
-                    tokio::spawn(async move {
-                        let lines =
-                            codex_core::git_info::worktree_doctor_lines(&cwd, &shared_dirs, 5)
-                                .await;
-                        let lines = lines.into_iter().map(Line::from).collect();
-                        tx.send(AppEvent::InsertHistoryCell(Box::new(
-                            PlainHistoryCell::new(lines),
-                        )));
-                    });
-                })],
-                dismiss_on_select: true,
-                ..Default::default()
-            });
-        }
-
-        let current_root = codex_core::git_info::resolve_git_worktree_head(&self.config.cwd)
-            .map(|head| head.worktree_root);
-        let workspace_root = current_root
-            .as_ref()
-            .and_then(|root| codex_core::git_info::resolve_root_git_project_for_trust(root));
-
-        let mut worktrees = self.worktree_state.list().to_vec();
-        Self::sort_worktrees_for_picker(
-            &mut worktrees,
-            current_root.as_deref(),
-            workspace_root.as_deref(),
-        );
-        for entry in worktrees {
-            let path = entry.path.clone();
-            let is_current = current_root.as_ref().is_some_and(|root| root == &path);
-            let is_workspace_root =
-                !entry.is_bare && workspace_root.as_ref().is_some_and(|root| root == &path);
-
-            let branch_label = match &entry.head {
-                GitHeadState::Branch(name) => name.clone(),
-                GitHeadState::Detached => String::from("(detached)"),
-            };
-
-            let display = crate::exec_command::relativize_to_home(&path)
-                .map(|path| {
-                    if path.as_os_str().is_empty() {
-                        String::from("~")
-                    } else {
-                        format!("~/{}", path.display())
-                    }
-                })
-                .unwrap_or_else(|| path.display().to_string());
-
-            let mut search = String::new();
-            search.push_str(&branch_label);
-            search.push(' ');
-            search.push_str(&display);
-
-            let mut description = format!("branch: {branch_label}");
-            if entry.is_bare {
-                description.push_str(" (bare repository)");
-            } else if is_workspace_root {
-                description.push_str(" (workspace root)");
-            }
-
-            let mut selected_description = description.clone();
-            if is_current {
-                selected_description.push_str(" (current session)");
-            }
-
-            let disabled_reason = entry.is_bare.then(|| String::from("Bare repository"));
-
-            let actions: Vec<SelectionAction> = if disabled_reason.is_some() {
-                Vec::new()
-            } else {
-                vec![Box::new({
-                    let path = path.clone();
-                    move |tx: &AppEventSender| {
-                        tx.send(AppEvent::WorktreeSwitched(path.clone()));
-                        tx.send(AppEvent::CodexOp(Op::OverrideTurnContext {
-                            cwd: Some(path.clone()),
-                            approval_policy: None,
-                            sandbox_policy: None,
-                            model: None,
-                            effort: None,
-                            summary: None,
-                            collaboration_mode: None,
-                        }));
-                        tx.send(AppEvent::CodexOp(Op::ListSkills {
-                            cwds: vec![path.clone()],
-                            force_reload: true,
-                        }));
-                    }
-                })]
-            };
-
-            items.push(SelectionItem {
-                name: display,
-                description: Some(description),
-                selected_description: Some(selected_description),
-                is_current,
-                actions,
-                dismiss_on_select: true,
-                search_value: Some(search),
-                disabled_reason,
-                ..Default::default()
-            });
-        }
-
-        let subtitle = if let Some(err) = self.worktree_state.error() {
-            Some(format!("Failed to detect worktrees: {err}"))
-        } else if self.worktree_state.is_empty() {
-            Some("No worktrees detected for this session.".to_string())
-        } else {
-            None
-        };
-
-        self.bottom_pane.show_selection_view(SelectionViewParams {
-            title: Some("Select a worktree".to_string()),
-            subtitle,
-            footer_hint: Some(Line::from(vec![
-                crate::key_hint::plain(KeyCode::Up).into(),
-                "/".into(),
-                crate::key_hint::plain(KeyCode::Down).into(),
-                " select  ".dim(),
-                crate::key_hint::plain(KeyCode::Enter).into(),
-                " open  ".dim(),
-                crate::key_hint::alt(KeyCode::Char('r')).into(),
-                " refresh  ".dim(),
-                crate::key_hint::alt(KeyCode::Char('s')).into(),
-                " settings  ".dim(),
-                crate::key_hint::alt(KeyCode::Char('i')).into(),
-                " create  ".dim(),
-                crate::key_hint::alt(KeyCode::Char('d')).into(),
-                " doctor  ".dim(),
-                "type to search  ".dim(),
-                crate::key_hint::plain(KeyCode::Esc).into(),
-                " close".dim(),
-            ])),
-            items,
-            is_searchable: true,
-            search_placeholder: Some("Type to search worktrees".to_string()),
-            ..Default::default()
-        });
-        self.request_redraw();
+        xcodex_plugins::worktree::open_worktree_picker(self);
     }
 
     fn prefetch_rate_limits(&mut self) {
@@ -6887,6 +5779,14 @@ impl ChatWidget {
 
     pub(crate) fn send_app_event(&self, event: AppEvent) {
         self.app_event_tx.send(event);
+    }
+
+    pub(crate) fn codex_home(&self) -> &Path {
+        &self.config.codex_home
+    }
+
+    pub(crate) fn xtreme_ui_enabled(&self) -> bool {
+        crate::xtreme::xtreme_ui_enabled(&self.config)
     }
 
     pub(crate) fn themes_dir(&self) -> PathBuf {

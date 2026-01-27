@@ -857,8 +857,7 @@ async fn make_chatwidget_manual(
         current_status_header: String::from("Working"),
         retry_status_header: None,
         thread_id: None,
-        ramp_turn_index: 0,
-        ramp_state: crate::xcodex_plugins::RampStatusState::default(),
+        ramp_status: crate::xcodex_plugins::RampStatusController::default(),
         last_turn_completion_label: None,
         forked_from: None,
         frame_requester: FrameRequester::test_dummy(),
@@ -1688,7 +1687,7 @@ fn worktree_picker_sort_orders_current_then_workspace_root_then_paths() {
         },
     ];
 
-    super::ChatWidget::sort_worktrees_for_picker(
+    crate::xcodex_plugins::worktree::sort_worktrees_for_picker(
         &mut worktrees,
         Some(current.as_path()),
         Some(workspace.as_path()),
