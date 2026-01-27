@@ -182,6 +182,7 @@ use crate::xcodex_plugins;
 use crate::xcodex_plugins::HookProcessState;
 use crate::xcodex_plugins::McpStartupState;
 use crate::xcodex_plugins::RampStatusState;
+use crate::xcodex_plugins::WorktreeListState;
 mod interrupts;
 use self::interrupts::InterruptManager;
 mod agent;
@@ -450,9 +451,7 @@ pub(crate) struct ChatWidget {
     rate_limit_switch_prompt: RateLimitSwitchPromptState,
     rate_limit_poller: Option<JoinHandle<()>>,
     status_bar_git_poller: Option<JoinHandle<()>>,
-    worktree_list: Vec<GitWorktreeEntry>,
-    worktree_list_error: Option<String>,
-    worktree_list_refresh_in_progress: bool,
+    worktree_state: WorktreeListState,
     shared_dirs_write_notice_shown: bool,
     // Stream lifecycle controller
     stream_controller: Option<StreamController>,
@@ -2219,9 +2218,7 @@ impl ChatWidget {
             rate_limit_switch_prompt: RateLimitSwitchPromptState::default(),
             rate_limit_poller: None,
             status_bar_git_poller: None,
-            worktree_list: Vec::new(),
-            worktree_list_error: None,
-            worktree_list_refresh_in_progress: false,
+            worktree_state: WorktreeListState::default(),
             shared_dirs_write_notice_shown: false,
             stream_controller: None,
             running_commands: HashMap::new(),
@@ -2371,9 +2368,7 @@ impl ChatWidget {
             rate_limit_switch_prompt: RateLimitSwitchPromptState::default(),
             rate_limit_poller: None,
             status_bar_git_poller: None,
-            worktree_list: Vec::new(),
-            worktree_list_error: None,
-            worktree_list_refresh_in_progress: false,
+            worktree_state: WorktreeListState::default(),
             shared_dirs_write_notice_shown: false,
             stream_controller: None,
             running_commands: HashMap::new(),
@@ -2872,7 +2867,7 @@ impl ChatWidget {
                 self.request_redraw();
             }
             SlashCommand::Worktree => {
-                if self.worktree_list.is_empty() && !self.worktree_list_refresh_in_progress {
+                if self.worktree_state.is_empty() && !self.worktree_state.refresh_in_progress() {
                     self.spawn_worktree_detection(true);
                 } else {
                     self.open_worktree_picker();
@@ -4770,11 +4765,11 @@ impl ChatWidget {
     }
 
     pub(crate) fn worktree_list(&self) -> &[GitWorktreeEntry] {
-        &self.worktree_list
+        self.worktree_state.list()
     }
 
     pub(crate) fn worktree_list_refresh_in_progress(&self) -> bool {
-        self.worktree_list_refresh_in_progress
+        self.worktree_state.refresh_in_progress()
     }
 
     pub(crate) fn take_shared_dirs_write_notice(&mut self) -> bool {
@@ -4859,20 +4854,18 @@ impl ChatWidget {
     }
 
     pub(crate) fn spawn_worktree_detection(&mut self, open_picker: bool) {
-        if self.worktree_list_refresh_in_progress {
+        if self.worktree_state.refresh_in_progress() {
             return;
         }
         if codex_core::git_info::resolve_git_worktree_head(&self.config.cwd).is_none() {
-            self.worktree_list = Vec::new();
-            self.worktree_list_error = None;
-            self.worktree_list_refresh_in_progress = false;
+            self.worktree_state.clear_no_repo();
             if open_picker {
                 self.open_worktree_picker();
             }
             return;
         }
 
-        self.worktree_list_refresh_in_progress = true;
+        self.worktree_state.mark_refreshing();
 
         let cwd = self.config.cwd.clone();
         let tx = self.app_event_tx.clone();
@@ -4893,13 +4886,10 @@ impl ChatWidget {
 
     pub(crate) fn set_worktree_list(
         &mut self,
-        mut worktrees: Vec<GitWorktreeEntry>,
+        worktrees: Vec<GitWorktreeEntry>,
         open_picker: bool,
     ) {
-        worktrees.sort_by(|a, b| a.path.cmp(&b.path));
-        self.worktree_list = worktrees;
-        self.worktree_list_error = None;
-        self.worktree_list_refresh_in_progress = false;
+        self.worktree_state.set_list(worktrees);
 
         if open_picker {
             self.open_worktree_picker();
@@ -4907,9 +4897,7 @@ impl ChatWidget {
     }
 
     pub(crate) fn on_worktree_list_update_failed(&mut self, error: String, open_picker: bool) {
-        self.worktree_list = Vec::new();
-        self.worktree_list_error = Some(error);
-        self.worktree_list_refresh_in_progress = false;
+        self.worktree_state.set_error(error);
 
         if open_picker {
             self.open_worktree_picker();
@@ -5074,7 +5062,7 @@ impl ChatWidget {
             .as_ref()
             .and_then(|root| codex_core::git_info::resolve_root_git_project_for_trust(root));
 
-        let mut worktrees = self.worktree_list.clone();
+        let mut worktrees = self.worktree_state.list().to_vec();
         Self::sort_worktrees_for_picker(
             &mut worktrees,
             current_root.as_deref(),
@@ -5157,9 +5145,9 @@ impl ChatWidget {
             });
         }
 
-        let subtitle = if let Some(err) = self.worktree_list_error.as_ref() {
+        let subtitle = if let Some(err) = self.worktree_state.error() {
             Some(format!("Failed to detect worktrees: {err}"))
-        } else if self.worktree_list.is_empty() {
+        } else if self.worktree_state.is_empty() {
             Some("No worktrees detected for this session.".to_string())
         } else {
             None
