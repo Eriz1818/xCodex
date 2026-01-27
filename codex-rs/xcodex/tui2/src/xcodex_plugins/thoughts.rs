@@ -1,3 +1,4 @@
+use crate::app_event::AppEvent;
 use crate::chatwidget::ChatWidget;
 
 pub(crate) fn handle(chat: &mut ChatWidget, rest: &str) -> bool {
@@ -21,7 +22,9 @@ pub(crate) fn handle(chat: &mut ChatWidget, rest: &str) -> bool {
     };
 
     if let Some(hide) = next_hide {
-        chat.apply_hide_agent_reasoning(hide);
+        chat.set_hide_agent_reasoning(hide);
+        chat.send_app_event(AppEvent::UpdateHideAgentReasoning(hide));
+        chat.send_app_event(AppEvent::PersistHideAgentReasoning(hide));
         let status = if hide { "hidden" } else { "shown" };
         chat.add_info_message(format!("Thoughts {status}."), None);
     } else {
