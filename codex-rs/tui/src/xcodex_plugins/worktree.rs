@@ -3,6 +3,9 @@ use crate::app_event_sender::AppEventSender;
 use crate::bottom_pane::SelectionAction;
 use crate::bottom_pane::SelectionItem;
 use crate::bottom_pane::SelectionViewParams;
+use crate::bottom_pane::WorktreeInitWizardView;
+use crate::bottom_pane::WorktreeLinkSharedWizardView;
+use crate::bottom_pane::WorktreesSettingsView;
 use crate::chatwidget::ChatWidget;
 use crate::chatwidget::transcript_spacer_line;
 use crate::history_cell;
@@ -529,6 +532,110 @@ pub(crate) fn add_worktree_shared_dirs_output(chat: &mut ChatWidget) {
         Box::new(command),
         Box::new(PlainHistoryCell::new(lines)),
     ]));
+}
+
+pub(crate) fn open_worktree_link_shared_wizard(
+    chat: &mut ChatWidget,
+    worktree_root: PathBuf,
+    workspace_root: PathBuf,
+    shared_dirs: Vec<String>,
+    prefer_migrate: bool,
+    show_notice: bool,
+    invoked_from: String,
+) {
+    let view = WorktreeLinkSharedWizardView::new(
+        worktree_root,
+        workspace_root,
+        shared_dirs,
+        prefer_migrate,
+        show_notice,
+        invoked_from,
+        chat.app_event_tx(),
+    );
+    chat.show_view(Box::new(view));
+}
+
+pub(crate) fn open_worktrees_settings_view(chat: &mut ChatWidget) {
+    let view = WorktreesSettingsView::new(
+        chat.worktrees_shared_dirs().to_vec(),
+        chat.worktrees_pinned_paths().to_vec(),
+        chat.app_event_tx(),
+    );
+    chat.show_view(Box::new(view));
+}
+
+pub(crate) fn open_worktree_init_wizard(
+    chat: &mut ChatWidget,
+    worktree_root: PathBuf,
+    workspace_root: PathBuf,
+    current_branch: Option<String>,
+    shared_dirs: Vec<String>,
+    branches: Vec<String>,
+) {
+    let view = WorktreeInitWizardView::new(
+        worktree_root,
+        workspace_root,
+        current_branch,
+        shared_dirs,
+        branches,
+        chat.app_event_tx(),
+    );
+    chat.show_view(Box::new(view));
+}
+
+pub(crate) fn spawn_worktree_detection(chat: &mut ChatWidget, open_picker: bool) {
+    if chat.worktree_list_refresh_in_progress() {
+        return;
+    }
+    if codex_core::git_info::resolve_git_worktree_head(chat.session_cwd()).is_none() {
+        chat.worktree_state_clear_no_repo();
+        if open_picker {
+            open_worktree_picker(chat);
+        }
+        return;
+    }
+
+    chat.worktree_state_mark_refreshing();
+
+    let cwd = chat.session_cwd().to_path_buf();
+    let tx = chat.app_event_tx();
+    tokio::spawn(async move {
+        match codex_core::git_info::try_list_git_worktrees(&cwd).await {
+            Ok(worktrees) => {
+                tx.send(AppEvent::WorktreeListUpdated {
+                    worktrees,
+                    open_picker,
+                });
+            }
+            Err(error) => {
+                tx.send(AppEvent::WorktreeListUpdateFailed { error, open_picker });
+            }
+        }
+    });
+}
+
+pub(crate) fn set_worktree_list(
+    chat: &mut ChatWidget,
+    worktrees: Vec<GitWorktreeEntry>,
+    open_picker: bool,
+) {
+    chat.worktree_state_set_list(worktrees);
+
+    if open_picker {
+        open_worktree_picker(chat);
+    }
+}
+
+pub(crate) fn on_worktree_list_update_failed(
+    chat: &mut ChatWidget,
+    error: String,
+    open_picker: bool,
+) {
+    chat.worktree_state_set_error(error);
+
+    if open_picker {
+        open_worktree_picker(chat);
+    }
 }
 
 pub(crate) fn spawn_worktree_init_wizard(chat: &mut ChatWidget) {

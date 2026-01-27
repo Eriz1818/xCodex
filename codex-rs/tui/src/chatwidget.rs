@@ -134,6 +134,7 @@ use crate::bottom_pane::ApprovalRequest;
 use crate::bottom_pane::BetaFeatureItem;
 use crate::bottom_pane::BottomPane;
 use crate::bottom_pane::BottomPaneParams;
+use crate::bottom_pane::BottomPaneView;
 use crate::bottom_pane::CancellationEvent;
 use crate::bottom_pane::DOUBLE_PRESS_QUIT_SHORTCUT_ENABLED;
 use crate::bottom_pane::ExperimentalFeaturesView;
@@ -143,7 +144,6 @@ use crate::bottom_pane::QUIT_SHORTCUT_TIMEOUT;
 use crate::bottom_pane::SelectionAction;
 use crate::bottom_pane::SelectionItem;
 use crate::bottom_pane::SelectionViewParams;
-use crate::bottom_pane::WorktreeLinkSharedWizardView;
 use crate::bottom_pane::custom_prompt_view::CustomPromptView;
 use crate::bottom_pane::parse_slash_name;
 use crate::bottom_pane::popup_consts::standard_popup_hint_line;
@@ -3657,6 +3657,11 @@ impl ChatWidget {
         self.request_redraw();
     }
 
+    pub(crate) fn show_view(&mut self, view: Box<dyn BottomPaneView>) {
+        self.bottom_pane.show_view(view);
+        self.request_redraw();
+    }
+
     fn bump_active_cell_revision(&mut self) {
         // Wrapping avoids overflow; wraparound would require 2^64 bumps and at
         // worst causes a one-time cache-key collision.
@@ -4026,6 +4031,10 @@ impl ChatWidget {
         &self.config.worktrees_shared_dirs
     }
 
+    pub(crate) fn worktrees_pinned_paths(&self) -> &[String] {
+        &self.config.worktrees_pinned_paths
+    }
+
     pub(crate) fn update_worktrees_shared_dirs(&mut self, shared_dirs: Vec<String>) {
         self.config.worktrees_shared_dirs = shared_dirs.clone();
         self.app_event_tx.send(AppEvent::UpdateWorktreesSharedDirs {
@@ -4060,6 +4069,22 @@ impl ChatWidget {
         self.worktree_state.is_empty()
     }
 
+    pub(crate) fn worktree_state_mark_refreshing(&mut self) {
+        self.worktree_state.mark_refreshing();
+    }
+
+    pub(crate) fn worktree_state_clear_no_repo(&mut self) {
+        self.worktree_state.clear_no_repo();
+    }
+
+    pub(crate) fn worktree_state_set_list(&mut self, worktrees: Vec<GitWorktreeEntry>) {
+        self.worktree_state.set_list(worktrees);
+    }
+
+    pub(crate) fn worktree_state_set_error(&mut self, error: String) {
+        self.worktree_state.set_error(error);
+    }
+
     pub(crate) fn take_shared_dirs_write_notice(&mut self) -> bool {
         let show_notice = !self.shared_dirs_write_notice_shown;
         self.shared_dirs_write_notice_shown = true;
@@ -4075,17 +4100,15 @@ impl ChatWidget {
         show_notice: bool,
         invoked_from: String,
     ) {
-        let view = WorktreeLinkSharedWizardView::new(
+        xcodex_plugins::worktree::open_worktree_link_shared_wizard(
+            self,
             worktree_root,
             workspace_root,
             shared_dirs,
             prefer_migrate,
             show_notice,
             invoked_from,
-            self.app_event_tx.clone(),
         );
-        self.bottom_pane.show_view(Box::new(view));
-        self.request_redraw();
     }
 
     pub(crate) fn emit_worktree_switch(&self, path: PathBuf) {
@@ -4108,13 +4131,7 @@ impl ChatWidget {
     }
 
     pub(crate) fn open_worktrees_settings_view(&mut self) {
-        let view = crate::bottom_pane::WorktreesSettingsView::new(
-            self.config.worktrees_shared_dirs.clone(),
-            self.config.worktrees_pinned_paths.clone(),
-            self.app_event_tx.clone(),
-        );
-        self.bottom_pane.show_view(Box::new(view));
-        self.request_redraw();
+        xcodex_plugins::worktree::open_worktrees_settings_view(self);
     }
 
     pub(crate) fn open_worktree_init_wizard(
@@ -4125,16 +4142,14 @@ impl ChatWidget {
         shared_dirs: Vec<String>,
         branches: Vec<String>,
     ) {
-        let view = crate::bottom_pane::WorktreeInitWizardView::new(
+        xcodex_plugins::worktree::open_worktree_init_wizard(
+            self,
             worktree_root,
             workspace_root,
             current_branch,
             shared_dirs,
             branches,
-            self.app_event_tx.clone(),
         );
-        self.bottom_pane.show_view(Box::new(view));
-        self.request_redraw();
     }
 
     pub(crate) fn spawn_worktree_init_wizard(&mut self) {
@@ -4156,34 +4171,7 @@ impl ChatWidget {
     }
 
     pub(crate) fn spawn_worktree_detection(&mut self, open_picker: bool) {
-        if self.worktree_state.refresh_in_progress() {
-            return;
-        }
-        if codex_core::git_info::resolve_git_worktree_head(&self.config.cwd).is_none() {
-            self.worktree_state.clear_no_repo();
-            if open_picker {
-                self.open_worktree_picker();
-            }
-            return;
-        }
-
-        self.worktree_state.mark_refreshing();
-
-        let cwd = self.config.cwd.clone();
-        let tx = self.app_event_tx.clone();
-        tokio::spawn(async move {
-            match codex_core::git_info::try_list_git_worktrees(&cwd).await {
-                Ok(worktrees) => {
-                    tx.send(AppEvent::WorktreeListUpdated {
-                        worktrees,
-                        open_picker,
-                    });
-                }
-                Err(error) => {
-                    tx.send(AppEvent::WorktreeListUpdateFailed { error, open_picker });
-                }
-            }
-        });
+        xcodex_plugins::worktree::spawn_worktree_detection(self, open_picker);
     }
 
     pub(crate) fn set_worktree_list(
@@ -4191,19 +4179,11 @@ impl ChatWidget {
         worktrees: Vec<GitWorktreeEntry>,
         open_picker: bool,
     ) {
-        self.worktree_state.set_list(worktrees);
-
-        if open_picker {
-            self.open_worktree_picker();
-        }
+        xcodex_plugins::worktree::set_worktree_list(self, worktrees, open_picker);
     }
 
     pub(crate) fn on_worktree_list_update_failed(&mut self, error: String, open_picker: bool) {
-        self.worktree_state.set_error(error);
-
-        if open_picker {
-            self.open_worktree_picker();
-        }
+        xcodex_plugins::worktree::on_worktree_list_update_failed(self, error, open_picker);
     }
 
     pub(crate) fn set_session_cwd(&mut self, cwd: PathBuf) {
