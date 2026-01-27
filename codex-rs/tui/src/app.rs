@@ -1172,11 +1172,18 @@ impl App {
                 worktrees,
                 open_picker,
             } => {
-                self.chat_widget.set_worktree_list(worktrees, open_picker);
+                crate::xcodex_plugins::worktree::set_worktree_list(
+                    &mut self.chat_widget,
+                    worktrees,
+                    open_picker,
+                );
                 tui.frame_requester().schedule_frame();
             }
             AppEvent::WorktreeDetect { open_picker } => {
-                self.chat_widget.spawn_worktree_detection(open_picker);
+                crate::xcodex_plugins::worktree::spawn_worktree_detection(
+                    &mut self.chat_widget,
+                    open_picker,
+                );
                 tui.frame_requester().schedule_frame();
             }
             AppEvent::OpenWorktreeCommandMenu => {
@@ -1207,7 +1214,9 @@ impl App {
                 tui.frame_requester().schedule_frame();
             }
             AppEvent::OpenWorktreesSettingsView => {
-                self.chat_widget.open_worktrees_settings_view();
+                crate::xcodex_plugins::worktree::open_worktrees_settings_view(
+                    &mut self.chat_widget,
+                );
                 tui.frame_requester().schedule_frame();
             }
             AppEvent::OpenWorktreeInitWizard {
@@ -1219,7 +1228,8 @@ impl App {
             } => {
                 self.chat_widget
                     .set_slash_completion_branches(branches.clone());
-                self.chat_widget.open_worktree_init_wizard(
+                crate::xcodex_plugins::worktree::open_worktree_init_wizard(
+                    &mut self.chat_widget,
                     worktree_root,
                     workspace_root,
                     current_branch,
@@ -1233,8 +1243,11 @@ impl App {
                 tui.frame_requester().schedule_frame();
             }
             AppEvent::WorktreeListUpdateFailed { error, open_picker } => {
-                self.chat_widget
-                    .on_worktree_list_update_failed(error, open_picker);
+                crate::xcodex_plugins::worktree::on_worktree_list_update_failed(
+                    &mut self.chat_widget,
+                    error,
+                    open_picker,
+                );
                 tui.frame_requester().schedule_frame();
             }
             AppEvent::WorktreeSwitched(cwd) => {

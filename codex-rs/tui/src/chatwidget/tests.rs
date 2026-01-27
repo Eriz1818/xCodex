@@ -1722,7 +1722,7 @@ async fn worktree_picker_popup_snapshot() {
         },
     ]);
 
-    chat.open_worktree_picker();
+    xcodex_plugins::worktree::open_worktree_picker(&mut chat);
 
     let popup = render_bottom_popup(&chat, 80);
     assert_snapshot!("worktree_picker_popup", popup);
