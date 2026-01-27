@@ -1,0 +1,17 @@
+---
+source: xcodex/tui2/src/chatwidget/tests.rs
+expression: popup
+---
+  Select a worktree
+
+  Type to search worktrees
+› Refresh worktrees (⌥ + r)    Re-detect worktrees for this session.
+  Worktrees settings… (⌥ + s)  Edit shared dirs and pinned paths.
+  Create worktree… (⌥ + i)     Insert `/worktree init` into the composer.
+  Worktree doctor (⌥ + d)      Show shared-dir + untracked status for this
+                       worktree.
+  worktrees/main       branch: main
+  worktrees/notes      branch: notes
+  worktrees/bare       branch: (detached) (bare repository)
+
+  ↑/↓ select  enter open  ⌥ + r refresh  ⌥ + s settings  ⌥ + i create  ⌥ + d doc
