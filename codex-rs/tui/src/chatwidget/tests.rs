@@ -1699,6 +1699,37 @@ fn worktree_picker_sort_orders_current_then_workspace_root_then_paths() {
 }
 
 #[tokio::test]
+async fn worktree_picker_popup_snapshot() {
+    use codex_core::git_info::GitHeadState;
+    use codex_core::git_info::GitWorktreeEntry;
+    use std::path::PathBuf;
+
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.worktree_state.set_list(vec![
+        GitWorktreeEntry {
+            path: PathBuf::from("worktrees/main"),
+            head: GitHeadState::Branch(String::from("main")),
+            is_bare: false,
+        },
+        GitWorktreeEntry {
+            path: PathBuf::from("worktrees/notes"),
+            head: GitHeadState::Branch(String::from("notes")),
+            is_bare: false,
+        },
+        GitWorktreeEntry {
+            path: PathBuf::from("worktrees/bare"),
+            head: GitHeadState::Detached,
+            is_bare: true,
+        },
+    ]);
+
+    chat.open_worktree_picker();
+
+    let popup = render_bottom_popup(&chat, 80);
+    assert_snapshot!("worktree_picker_popup", popup);
+}
+
+#[tokio::test]
 async fn test_rate_limit_warnings_monthly() {
     let mut state = RateLimitWarningState::default();
     let mut warnings: Vec<String> = Vec::new();
