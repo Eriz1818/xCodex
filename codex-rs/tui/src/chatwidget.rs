@@ -2813,58 +2813,16 @@ impl ChatWidget {
                 self.add_help_topics_output();
             }
             SlashCommand::Status => {
-                let status_cell = self.status_menu_status_cell();
-                let view = crate::bottom_pane::StatusMenuView::new(
-                    crate::bottom_pane::StatusMenuTab::Status,
-                    self.app_event_tx.clone(),
-                    status_cell,
-                    self.config.tui_status_bar_show_git_branch,
-                    self.config.tui_status_bar_show_worktree,
-                    self.config.tui_transcript_diff_highlight,
-                    self.config.tui_transcript_user_prompt_highlight,
-                    self.config.tui_minimal_composer,
-                    self.config.tui_xtreme_mode,
-                    self.config.tui_verbose_tool_output,
-                );
-                self.bottom_pane.show_view(Box::new(view));
-                self.request_redraw();
+                self.open_status_menu_view(crate::bottom_pane::StatusMenuTab::Status);
             }
             SlashCommand::Settings => {
-                let status_cell = self.status_menu_status_cell();
-                let view = crate::bottom_pane::StatusMenuView::new(
-                    crate::bottom_pane::StatusMenuTab::Settings,
-                    self.app_event_tx.clone(),
-                    status_cell,
-                    self.config.tui_status_bar_show_git_branch,
-                    self.config.tui_status_bar_show_worktree,
-                    self.config.tui_transcript_diff_highlight,
-                    self.config.tui_transcript_user_prompt_highlight,
-                    self.config.tui_minimal_composer,
-                    self.config.tui_xtreme_mode,
-                    self.config.tui_verbose_tool_output,
-                );
-                self.bottom_pane.show_view(Box::new(view));
-                self.request_redraw();
+                self.open_status_menu_view(crate::bottom_pane::StatusMenuTab::Settings);
             }
             SlashCommand::Theme => {
                 xcodex_plugins::handle_theme_command(self, "");
             }
             SlashCommand::StatusMenu => {
-                let status_cell = self.status_menu_status_cell();
-                let view = crate::bottom_pane::StatusMenuView::new(
-                    crate::bottom_pane::StatusMenuTab::Status,
-                    self.app_event_tx.clone(),
-                    status_cell,
-                    self.config.tui_status_bar_show_git_branch,
-                    self.config.tui_status_bar_show_worktree,
-                    self.config.tui_transcript_diff_highlight,
-                    self.config.tui_transcript_user_prompt_highlight,
-                    self.config.tui_minimal_composer,
-                    self.config.tui_xtreme_mode,
-                    self.config.tui_verbose_tool_output,
-                );
-                self.bottom_pane.show_view(Box::new(view));
-                self.request_redraw();
+                self.open_status_menu_view(crate::bottom_pane::StatusMenuTab::Status);
             }
             SlashCommand::Worktree => {
                 if self.worktree_state.is_empty() && !self.worktree_state.refresh_in_progress() {
@@ -4204,10 +4162,10 @@ impl ChatWidget {
         )
     }
 
-    pub(crate) fn open_tools_panel(&mut self) {
+    pub(crate) fn open_status_menu_view(&mut self, tab: crate::bottom_pane::StatusMenuTab) {
         let status_cell = self.status_menu_status_cell();
         let view = crate::bottom_pane::StatusMenuView::new(
-            crate::bottom_pane::StatusMenuTab::Tools,
+            tab,
             self.app_event_tx.clone(),
             status_cell,
             self.config.tui_status_bar_show_git_branch,
@@ -6925,14 +6883,6 @@ impl ChatWidget {
 
     pub(crate) fn hide_agent_reasoning(&self) -> bool {
         self.config.hide_agent_reasoning
-    }
-
-    pub(crate) fn apply_hide_agent_reasoning(&mut self, hide: bool) {
-        self.set_hide_agent_reasoning(hide);
-        self.app_event_tx
-            .send(AppEvent::UpdateHideAgentReasoning(hide));
-        self.app_event_tx
-            .send(AppEvent::PersistHideAgentReasoning(hide));
     }
 
     pub(crate) fn send_app_event(&self, event: AppEvent) {
