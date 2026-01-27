@@ -6,7 +6,7 @@ mod mcp_startup_state;
 mod ramp_status_state;
 pub(crate) mod theme;
 mod thoughts;
-mod worktree;
+pub(crate) mod worktree;
 mod worktree_list_state;
 mod xtreme;
 
