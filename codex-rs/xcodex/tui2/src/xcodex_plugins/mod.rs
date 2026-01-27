@@ -1,4 +1,5 @@
 mod mcp;
+mod mcp_startup_state;
 pub(crate) mod theme;
 mod thoughts;
 mod worktree;
@@ -6,6 +7,7 @@ mod xtreme;
 
 use crate::chatwidget::ChatWidget;
 use crate::slash_command::SlashCommand;
+pub(crate) use mcp_startup_state::McpStartupState;
 
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct PluginSlashCommand {

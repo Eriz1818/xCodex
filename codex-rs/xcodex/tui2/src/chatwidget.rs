@@ -18,7 +18,7 @@
 //! The bottom pane exposes a single "task running" indicator that drives the spinner and interrupt
 //! hints. This module treats that indicator as derived UI-busy state: it is set while an agent turn
 //! is in progress and while MCP server startup is in progress. Those lifecycles are tracked
-//! independently (`agent_turn_running` and `mcp_startup_status`) and synchronized via
+//! independently (`agent_turn_running` and `mcp_startup_state`) and synchronized via
 //! `update_task_running_state`.
 use std::collections::HashMap;
 use std::collections::HashSet;
@@ -66,7 +66,6 @@ use codex_core::protocol::ListCustomPromptsResponseEvent;
 use codex_core::protocol::ListSkillsResponseEvent;
 use codex_core::protocol::McpListToolsResponseEvent;
 use codex_core::protocol::McpStartupCompleteEvent;
-use codex_core::protocol::McpStartupStatus;
 use codex_core::protocol::McpStartupUpdateEvent;
 use codex_core::protocol::McpToolCallBeginEvent;
 use codex_core::protocol::McpToolCallEndEvent;
@@ -167,6 +166,7 @@ use crate::status::RateLimitSnapshotDisplay;
 use crate::text_formatting::truncate_text;
 use crate::tui::FrameRequester;
 use crate::xcodex_plugins;
+use crate::xcodex_plugins::McpStartupState;
 mod interrupts;
 use self::interrupts::InterruptManager;
 mod agent;
@@ -403,7 +403,7 @@ pub(crate) struct ChatWidget {
     hook_processes: Vec<HookProcessSummary>,
     /// Tracks whether codex-core currently considers an agent turn to be in progress.
     ///
-    /// This is kept separate from `mcp_startup_status` so that MCP startup progress (or completion)
+    /// This is kept separate from `mcp_startup_state` so that MCP startup progress (or completion)
     /// can update the status header without accidentally clearing the spinner for an active turn.
     agent_turn_running: bool,
     /// Tracks per-server MCP startup state while startup is in progress.
@@ -411,12 +411,7 @@ pub(crate) struct ChatWidget {
     /// The map is `Some(_)` from the first `McpStartupUpdate` until `McpStartupComplete`, and the
     /// bottom pane is treated as "running" while this is populated, even if no agent turn is
     /// currently executing.
-    mcp_startup_status: Option<HashMap<String, McpStartupStatus>>,
-    mcp_failed_servers: Vec<String>,
-    mcp_startup_started_at: Option<Instant>,
-    mcp_startup_duration: Option<Duration>,
-    mcp_server_start_times: HashMap<String, Instant>,
-    mcp_startup_durations: HashMap<String, Duration>,
+    mcp_startup_state: McpStartupState,
     // Queue of interruptive UI events deferred during an active write cycle
     interrupts: InterruptManager,
     // Accumulates the current reasoning block text to extract a header
@@ -534,7 +529,7 @@ impl ChatWidget {
     /// both the agent turn lifecycle and MCP startup lifecycle.
     fn update_task_running_state(&mut self) {
         self.bottom_pane
-            .set_task_running(self.agent_turn_running || self.mcp_startup_status.is_some());
+            .set_task_running(self.agent_turn_running || self.mcp_startup_state.status().is_some());
     }
     fn flush_answer_stream_with_separator(&mut self) {
         if let Some(mut controller) = self.stream_controller.take()
@@ -611,13 +606,8 @@ impl ChatWidget {
 
     // --- Small event handlers ---
     fn on_session_configured(&mut self, event: codex_core::protocol::SessionConfiguredEvent) {
-        self.mcp_startup_started_at = Some(Instant::now());
-        self.mcp_startup_duration = None;
-        self.mcp_startup_status = None;
-        self.mcp_failed_servers.clear();
+        self.mcp_startup_state.reset_for_session();
         self.set_mcp_startup_banner(None);
-        self.mcp_server_start_times.clear();
-        self.mcp_startup_durations.clear();
         self.bottom_pane
             .set_history_metadata(event.history_log_id, event.history_entry_count);
         self.set_skills(None);
@@ -1094,7 +1084,7 @@ impl ChatWidget {
     }
 
     pub(crate) fn mcp_failed_servers(&self) -> &[String] {
-        &self.mcp_failed_servers
+        self.mcp_startup_state.failed_servers()
     }
 
     pub(crate) fn persist_mcp_startup_timeout(&self, server: String, startup_timeout_sec: u64) {
@@ -1108,200 +1098,34 @@ impl ChatWidget {
         self.bottom_pane.set_exclusion_summary_banner(message);
     }
 
-    fn parse_timeout_seconds(error: &str) -> Option<u64> {
-        let lower = error.to_ascii_lowercase();
-        if !lower.contains("timed out") {
-            return None;
-        }
-
-        let after_idx = lower.rfind("after ")?;
-        let mut digits = String::new();
-        for ch in lower[after_idx + "after ".len()..].chars() {
-            if ch.is_ascii_digit() {
-                digits.push(ch);
-            } else if !digits.is_empty() {
-                break;
-            }
-        }
-        if digits.is_empty() {
-            return None;
-        }
-        digits.parse().ok()
-    }
-
-    fn timeout_tip_for_failure(server: &str, error: &str) -> Option<String> {
-        let secs = Self::parse_timeout_seconds(error);
-        if secs.is_none() && !error.to_ascii_lowercase().contains("timed out") {
-            return None;
-        }
-
-        let suggested = secs.map_or(30, |secs| std::cmp::max(30, secs.saturating_mul(3)));
-        Some(format!(
-            "Tip: increase startup timeout: `/mcp timeout {server} {suggested}`."
-        ))
-    }
-
-    fn timeout_tip_for_failures(
-        failures: &[codex_core::protocol::McpStartupFailure],
-    ) -> Option<String> {
-        failures
-            .iter()
-            .find_map(|failure| Self::timeout_tip_for_failure(&failure.server, &failure.error))
-    }
-
     fn on_mcp_startup_update(&mut self, ev: McpStartupUpdateEvent) {
-        let mut status = self.mcp_startup_status.take().unwrap_or_default();
-        let now = Instant::now();
-        match &ev.status {
-            McpStartupStatus::Starting => {
-                self.mcp_server_start_times.insert(ev.server.clone(), now);
-                self.mcp_startup_durations.remove(&ev.server);
-            }
-            McpStartupStatus::Ready
-            | McpStartupStatus::Cancelled
-            | McpStartupStatus::Failed { .. } => {
-                if let Some(started_at) = self.mcp_server_start_times.remove(&ev.server) {
-                    self.mcp_startup_durations
-                        .insert(ev.server.clone(), now.saturating_duration_since(started_at));
-                }
-            }
-        }
-        status.insert(ev.server, ev.status);
-        self.mcp_startup_status = Some(status);
+        let header = self.mcp_startup_state.on_update(ev);
         self.update_task_running_state();
-        if let Some(current) = &self.mcp_startup_status {
-            let total = current.len();
-            let mut starting: Vec<_> = current
-                .iter()
-                .filter_map(|(name, state)| {
-                    if matches!(state, McpStartupStatus::Starting) {
-                        Some(name)
-                    } else {
-                        None
-                    }
-                })
-                .collect();
-            starting.sort();
-            if let Some(first) = starting.first() {
-                let completed = total.saturating_sub(starting.len());
-                let max_to_show = 3;
-                let mut to_show: Vec<String> = starting
-                    .iter()
-                    .take(max_to_show)
-                    .map(ToString::to_string)
-                    .collect();
-                if starting.len() > max_to_show {
-                    to_show.push("…".to_string());
-                }
-                let header = if total > 1 {
-                    format!(
-                        "Starting MCP servers ({completed}/{total}): {}",
-                        to_show.join(", ")
-                    )
-                } else {
-                    format!("Booting MCP server: {first}")
-                };
-                self.set_status_header(header);
-            }
+        if let Some(header) = header {
+            self.set_status_header(header);
         }
         self.request_redraw();
     }
 
     fn on_mcp_startup_complete(&mut self, ev: McpStartupCompleteEvent) {
-        let now = Instant::now();
-        if let Some(started_at) = self.mcp_startup_started_at {
-            self.mcp_startup_duration = Some(now.saturating_duration_since(started_at));
-        }
+        let work_active = self.agent_turn_running
+            || self.is_review_mode
+            || (self.bottom_pane.is_task_running() && self.mcp_startup_state.status().is_none());
+        let can_retry_in_place = !work_active
+            && self.queued_user_messages.is_empty()
+            && self.composer_is_empty()
+            && self.is_normal_backtrack_mode();
 
-        let mut retryable: std::collections::BTreeSet<String> =
-            self.mcp_failed_servers.drain(..).collect();
-        for server in &ev.ready {
-            retryable.remove(server);
-        }
-        for failure in &ev.failed {
-            retryable.insert(failure.server.clone());
-        }
-        for server in &ev.cancelled {
-            retryable.insert(server.clone());
-        }
-        self.mcp_failed_servers = retryable.into_iter().collect();
-
-        if self.mcp_failed_servers.is_empty() {
+        let outcome = self.mcp_startup_state.on_complete(ev, can_retry_in_place);
+        if let Some(banner) = outcome.banner {
+            self.set_mcp_startup_banner(Some(banner));
+        } else if let Some(warning) = outcome.warning {
             self.set_mcp_startup_banner(None);
+            self.on_warning(warning);
         } else {
-            let mut parts = Vec::new();
-            if !ev.failed.is_empty() {
-                let failed_servers: Vec<_> = ev.failed.iter().map(|f| f.server.as_str()).collect();
-                let failed = failed_servers.join(", ");
-                parts.push(format!("failed: {failed}"));
-            }
-            if !ev.cancelled.is_empty() {
-                let cancelled = ev.cancelled.join(", ");
-                parts.push(format!("not initialized: {cancelled}"));
-            }
-            let mut message = if parts.is_empty() {
-                "MCP startup incomplete.".to_string()
-            } else {
-                let summary = parts.join("; ");
-                format!("MCP startup incomplete ({summary}).")
-            };
-            let work_active = self.agent_turn_running
-                || self.is_review_mode
-                || (self.bottom_pane.is_task_running() && self.mcp_startup_status.is_none());
-            let can_retry_in_place = !work_active
-                && self.queued_user_messages.is_empty()
-                && self.composer_is_empty()
-                && self.is_normal_backtrack_mode();
-            if can_retry_in_place {
-                message.push_str(" Press `r` or run `/mcp retry failed` to retry.");
-            } else {
-                message.push_str(" Press `r` or run `/mcp retry failed` to retry.");
-            }
-            if let Some(tip) = Self::timeout_tip_for_failures(&ev.failed) {
-                message.push(' ');
-                message.push_str(&tip);
-            }
-            message.push_str(" Run `/mcp` for details.");
-
-            // Only pin the banner when retry is directly actionable from the main view
-            // (composer empty, no queued messages, and not currently "Working"). Otherwise
-            // log a one-time warning and avoid sticking the banner above the composer.
-            if can_retry_in_place {
-                self.set_mcp_startup_banner(Some(message));
-            } else {
-                self.set_mcp_startup_banner(None);
-                self.on_warning(message);
-            }
+            self.set_mcp_startup_banner(None);
         }
 
-        for server in &ev.ready {
-            if !self.mcp_startup_durations.contains_key(server)
-                && let Some(started_at) = self.mcp_server_start_times.remove(server)
-            {
-                self.mcp_startup_durations
-                    .insert(server.clone(), now.saturating_duration_since(started_at));
-            }
-        }
-        for failure in &ev.failed {
-            if !self.mcp_startup_durations.contains_key(&failure.server)
-                && let Some(started_at) = self.mcp_server_start_times.remove(&failure.server)
-            {
-                self.mcp_startup_durations.insert(
-                    failure.server.clone(),
-                    now.saturating_duration_since(started_at),
-                );
-            }
-        }
-        for server in &ev.cancelled {
-            if !self.mcp_startup_durations.contains_key(server)
-                && let Some(started_at) = self.mcp_server_start_times.remove(server)
-            {
-                self.mcp_startup_durations
-                    .insert(server.clone(), now.saturating_duration_since(started_at));
-            }
-        }
-
-        self.mcp_startup_status = None;
         self.update_task_running_state();
         self.maybe_send_next_queued_input();
         self.request_redraw();
@@ -2086,12 +1910,7 @@ impl ChatWidget {
             unified_exec_sessions: Vec::new(),
             hook_processes: Vec::new(),
             agent_turn_running: false,
-            mcp_startup_status: None,
-            mcp_failed_servers: Vec::new(),
-            mcp_startup_started_at: None,
-            mcp_startup_duration: None,
-            mcp_server_start_times: HashMap::new(),
-            mcp_startup_durations: HashMap::new(),
+            mcp_startup_state: McpStartupState::default(),
             interrupts: InterruptManager::new(),
             reasoning_buffer: String::new(),
             full_reasoning_buffer: String::new(),
@@ -2222,12 +2041,7 @@ impl ChatWidget {
             unified_exec_sessions: Vec::new(),
             hook_processes: Vec::new(),
             agent_turn_running: false,
-            mcp_startup_status: None,
-            mcp_failed_servers: Vec::new(),
-            mcp_startup_started_at: None,
-            mcp_startup_duration: None,
-            mcp_server_start_times: HashMap::new(),
-            mcp_startup_durations: HashMap::new(),
+            mcp_startup_state: McpStartupState::default(),
             interrupts: InterruptManager::new(),
             reasoning_buffer: String::new(),
             full_reasoning_buffer: String::new(),
@@ -2338,12 +2152,12 @@ impl ChatWidget {
                 kind: KeyEventKind::Press,
                 ..
             }
-        ) && !self.mcp_failed_servers.is_empty()
+        ) && !self.mcp_startup_state.failed_servers().is_empty()
             && self.queued_user_messages.is_empty()
             && self.composer_is_empty()
             && self.is_normal_backtrack_mode()
         {
-            let servers = std::mem::take(&mut self.mcp_failed_servers);
+            let servers = self.mcp_startup_state.take_failed_servers();
             self.set_mcp_startup_banner(None);
             self.add_info_message("Retrying failed MCP servers…".to_string(), None);
             self.submit_op(Op::McpRetry { servers });
@@ -6639,8 +6453,8 @@ impl ChatWidget {
     }
 
     fn on_list_mcp_tools(&mut self, ev: McpListToolsResponseEvent) {
-        let startup_durations =
-            (!self.mcp_startup_durations.is_empty()).then_some(&self.mcp_startup_durations);
+        let startup_durations = (!self.mcp_startup_state.startup_durations().is_empty())
+            .then_some(self.mcp_startup_state.startup_durations());
         self.add_to_history(history_cell::new_mcp_tools_output(
             &self.config,
             ev.tools,
@@ -6648,9 +6462,9 @@ impl ChatWidget {
             ev.resource_templates,
             &ev.auth_statuses,
             history_cell::McpStartupRenderInfo {
-                statuses: self.mcp_startup_status.as_ref(),
+                statuses: self.mcp_startup_state.status(),
                 durations: startup_durations,
-                ready_duration: self.mcp_startup_duration,
+                ready_duration: self.mcp_startup_state.ready_duration(),
             },
         ));
     }

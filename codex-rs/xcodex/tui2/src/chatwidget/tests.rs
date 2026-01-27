@@ -438,12 +438,7 @@ async fn make_chatwidget_manual(
         unified_exec_sessions: Vec::new(),
         hook_processes: Vec::new(),
         agent_turn_running: false,
-        mcp_startup_status: None,
-        mcp_failed_servers: Vec::new(),
-        mcp_startup_started_at: None,
-        mcp_startup_duration: None,
-        mcp_server_start_times: HashMap::new(),
-        mcp_startup_durations: HashMap::new(),
+        mcp_startup_state: crate::xcodex_plugins::McpStartupState::default(),
         interrupts: InterruptManager::new(),
         reasoning_buffer: String::new(),
         full_reasoning_buffer: String::new(),
@@ -799,7 +794,7 @@ async fn mcp_slash_command_retry_failed_servers_submits_retry_op() {
     });
 
     assert!(
-        !chat.mcp_failed_servers.is_empty(),
+        !chat.mcp_failed_servers().is_empty(),
         "expected failed servers"
     );
     assert!(drain_insert_history(&mut rx).is_empty());
@@ -887,7 +882,7 @@ async fn mcp_tools_output_renders_startup_status_and_retry_hints() {
         ("gamma".to_string(), gamma_cfg),
     ]));
 
-    chat.mcp_startup_status = Some(HashMap::from([
+    chat.mcp_startup_state.set_status(HashMap::from([
         ("alpha".to_string(), McpStartupStatus::Starting),
         (
             "beta".to_string(),
@@ -896,8 +891,13 @@ async fn mcp_tools_output_renders_startup_status_and_retry_hints() {
             },
         ),
     ]));
-    chat.mcp_startup_durations = HashMap::from([("beta".to_string(), Duration::from_millis(1200))]);
-    chat.mcp_startup_duration = Some(Duration::from_secs_f64(2.5));
+    chat.mcp_startup_state
+        .set_startup_durations(HashMap::from([(
+            "beta".to_string(),
+            Duration::from_millis(1200),
+        )]));
+    chat.mcp_startup_state
+        .set_ready_duration(Some(Duration::from_secs_f64(2.5)));
 
     chat.handle_codex_event(Event {
         id: "mcp-tools".into(),
@@ -952,7 +952,7 @@ async fn mcp_tools_output_renders_tools_resources_and_templates() {
     chat.config.mcp_servers =
         Constrained::allow_any(HashMap::from([("alpha".to_string(), alpha_cfg)]));
 
-    chat.mcp_startup_status = Some(HashMap::from([(
+    chat.mcp_startup_state.set_status(HashMap::from([(
         "alpha".to_string(),
         McpStartupStatus::Ready,
     )]));
