@@ -2812,11 +2812,7 @@ impl ChatWidget {
                 self.open_status_menu_view(crate::bottom_pane::StatusMenuTab::Status);
             }
             SlashCommand::Worktree => {
-                if self.worktree_state.is_empty() && !self.worktree_state.refresh_in_progress() {
-                    xcodex_plugins::worktree::spawn_worktree_detection(self, true);
-                } else {
-                    xcodex_plugins::worktree::open_worktree_picker(self);
-                }
+                xcodex_plugins::worktree::handle_root_command(self);
             }
             SlashCommand::Hooks => {
                 xcodex_plugins::hooks::add_hooks_output(self);
@@ -3766,10 +3762,6 @@ impl ChatWidget {
         );
         self.bottom_pane.show_view(Box::new(view));
         self.request_redraw();
-    }
-
-    pub(crate) fn add_worktree_shared_dirs_output(&mut self) {
-        xcodex_plugins::worktree::add_worktree_shared_dirs_output(self);
     }
 
     pub(crate) fn add_ps_output(&mut self) {

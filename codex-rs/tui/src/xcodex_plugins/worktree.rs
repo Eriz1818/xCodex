@@ -135,6 +135,14 @@ pub(crate) const WORKTREE_SUBCOMMAND_ROOT: PluginSubcommandRoot = PluginSubcomma
     list_hint_order: Some(WORKTREE_HINT_ORDER),
 };
 
+pub(crate) fn handle_root_command(chat: &mut ChatWidget) {
+    if chat.worktree_list_is_empty() && !chat.worktree_list_refresh_in_progress() {
+        spawn_worktree_detection(chat, true);
+    } else {
+        open_worktree_picker(chat);
+    }
+}
+
 pub(crate) fn try_handle_subcommand(chat: &mut ChatWidget, args: &str) -> bool {
     handle_worktree_command(chat, args);
     true
@@ -150,7 +158,7 @@ pub(crate) fn handle_worktree_command(chat: &mut ChatWidget, rest: &str) {
             spawn_worktree_detection(chat, true);
         }
         ["shared"] | ["shared", "list"] => {
-            chat.add_worktree_shared_dirs_output();
+            add_worktree_shared_dirs_output(chat);
         }
         ["shared", "add", dir] => {
             fn normalize_shared_dir_arg(raw: &str) -> Result<String, String> {
@@ -206,7 +214,7 @@ pub(crate) fn handle_worktree_command(chat: &mut ChatWidget, rest: &str) {
             }
             next.push(dir);
             chat.update_worktrees_shared_dirs(next);
-            chat.add_worktree_shared_dirs_output();
+            add_worktree_shared_dirs_output(chat);
         }
         ["shared", "rm", dir] | ["shared", "remove", dir] => {
             fn normalize_shared_dir_arg(raw: &str) -> Result<String, String> {
@@ -270,7 +278,7 @@ pub(crate) fn handle_worktree_command(chat: &mut ChatWidget, rest: &str) {
                 return;
             }
             chat.update_worktrees_shared_dirs(next);
-            chat.add_worktree_shared_dirs_output();
+            add_worktree_shared_dirs_output(chat);
         }
         ["init"] => {
             spawn_worktree_init_wizard(chat);
