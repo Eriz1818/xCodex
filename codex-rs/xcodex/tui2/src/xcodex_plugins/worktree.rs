@@ -147,7 +147,7 @@ pub(crate) fn handle_worktree_command(chat: &mut ChatWidget, rest: &str) {
             chat.dispatch_slash_command(SlashCommand::Worktree);
         }
         ["detect"] | ["refresh"] => {
-            chat.spawn_worktree_detection(true);
+            spawn_worktree_detection(chat, true);
         }
         ["shared"] | ["shared", "list"] => {
             chat.add_worktree_shared_dirs_output();
@@ -273,7 +273,7 @@ pub(crate) fn handle_worktree_command(chat: &mut ChatWidget, rest: &str) {
             chat.add_worktree_shared_dirs_output();
         }
         ["init"] => {
-            chat.spawn_worktree_init_wizard();
+            spawn_worktree_init_wizard(chat);
         }
         ["init", name, branch] | ["init", name, branch, ..] => {
             let provided_path = args.get(3).copied();
@@ -293,10 +293,10 @@ pub(crate) fn handle_worktree_command(chat: &mut ChatWidget, rest: &str) {
             } else {
                 format!("/worktree init {name} {branch}")
             };
-            chat.spawn_worktree_init_command(name, branch, path, invoked);
+            spawn_worktree_init_command(chat, name, branch, path, invoked);
         }
         ["doctor"] => {
-            chat.spawn_worktree_doctor();
+            spawn_worktree_doctor(chat);
         }
         ["link-shared", "migrate"] | ["link-shared", "--migrate"] => {
             if chat.worktrees_shared_dirs().is_empty() {
@@ -350,7 +350,8 @@ pub(crate) fn handle_worktree_command(chat: &mut ChatWidget, rest: &str) {
                 return;
             }
 
-            chat.open_worktree_link_shared_wizard(
+            open_worktree_link_shared_wizard(
+                chat,
                 worktree_root,
                 workspace_root,
                 chat.worktrees_shared_dirs().to_vec(),
@@ -416,7 +417,8 @@ pub(crate) fn handle_worktree_command(chat: &mut ChatWidget, rest: &str) {
                 return;
             }
 
-            chat.open_worktree_link_shared_wizard(
+            open_worktree_link_shared_wizard(
+                chat,
                 worktree_root,
                 workspace_root,
                 chat.worktrees_shared_dirs().to_vec(),
@@ -460,7 +462,7 @@ pub(crate) fn handle_worktree_command(chat: &mut ChatWidget, rest: &str) {
                 } else {
                     if chat.worktree_list().is_empty() && !chat.worktree_list_refresh_in_progress()
                     {
-                        chat.spawn_worktree_detection(true);
+                        spawn_worktree_detection(chat, true);
                         chat.add_info_message(
                             format!(
                                 "Unknown worktree `{target}`. Refreshing worktrees; run `/worktree` to pick."

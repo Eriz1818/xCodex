@@ -1903,7 +1903,7 @@ impl ChatWidget {
             widget.config.tui_status_bar_show_worktree,
         );
         widget.refresh_status_bar_git_poller();
-        widget.spawn_worktree_detection(false);
+        xcodex_plugins::worktree::spawn_worktree_detection(&mut widget, false);
 
         widget.prefetch_rate_limits();
         widget
@@ -2029,7 +2029,7 @@ impl ChatWidget {
             widget.config.tui_status_bar_show_worktree,
         );
         widget.refresh_status_bar_git_poller();
-        widget.spawn_worktree_detection(false);
+        xcodex_plugins::worktree::spawn_worktree_detection(&mut widget, false);
 
         widget.prefetch_rate_limits();
         widget
@@ -2370,9 +2370,9 @@ impl ChatWidget {
             }
             SlashCommand::Worktree => {
                 if self.worktree_state.is_empty() && !self.worktree_state.refresh_in_progress() {
-                    self.spawn_worktree_detection(true);
+                    xcodex_plugins::worktree::spawn_worktree_detection(self, true);
                 } else {
-                    self.open_worktree_picker();
+                    xcodex_plugins::worktree::open_worktree_picker(self);
                 }
             }
             SlashCommand::Hooks => {
@@ -2853,7 +2853,7 @@ impl ChatWidget {
                         });
                     self.add_info_message("Status bar settings updated.".to_string(), None);
                 }
-                ["worktrees"] => self.open_worktrees_settings_view(),
+                ["worktrees"] => xcodex_plugins::worktree::open_worktrees_settings_view(self),
                 ["transcript"] => self.dispatch_command(SlashCommand::Settings),
                 ["transcript", "diff-highlight"] | ["transcript", "diff-highlight", "toggle"] => {
                     let next = !self.config.tui_transcript_diff_highlight;
@@ -3644,10 +3644,6 @@ impl ChatWidget {
         self.request_redraw();
     }
 
-    pub(crate) fn open_worktrees_settings_view(&mut self) {
-        xcodex_plugins::worktree::open_worktrees_settings_view(self);
-    }
-
     pub(crate) fn worktrees_shared_dirs(&self) -> &[String] {
         &self.config.worktrees_shared_dirs
     }
@@ -3712,26 +3708,6 @@ impl ChatWidget {
         show_notice
     }
 
-    pub(crate) fn open_worktree_link_shared_wizard(
-        &mut self,
-        worktree_root: PathBuf,
-        workspace_root: PathBuf,
-        shared_dirs: Vec<String>,
-        prefer_migrate: bool,
-        show_notice: bool,
-        invoked_from: String,
-    ) {
-        xcodex_plugins::worktree::open_worktree_link_shared_wizard(
-            self,
-            worktree_root,
-            workspace_root,
-            shared_dirs,
-            prefer_migrate,
-            show_notice,
-            invoked_from,
-        );
-    }
-
     pub(crate) fn emit_worktree_switch(&self, path: PathBuf) {
         self.app_event_tx
             .send(AppEvent::WorktreeSwitched(path.clone()));
@@ -3751,62 +3727,10 @@ impl ChatWidget {
         }));
     }
 
-    pub(crate) fn open_worktree_init_wizard(
-        &mut self,
-        worktree_root: PathBuf,
-        workspace_root: PathBuf,
-        current_branch: Option<String>,
-        shared_dirs: Vec<String>,
-        branches: Vec<String>,
-    ) {
-        xcodex_plugins::worktree::open_worktree_init_wizard(
-            self,
-            worktree_root,
-            workspace_root,
-            current_branch,
-            shared_dirs,
-            branches,
-        );
-    }
-
-    pub(crate) fn spawn_worktree_init_wizard(&mut self) {
-        xcodex_plugins::worktree::spawn_worktree_init_wizard(self);
-    }
-
-    pub(crate) fn spawn_worktree_init_command(
-        &mut self,
-        name: String,
-        branch: String,
-        path: Option<PathBuf>,
-        invoked: String,
-    ) {
-        xcodex_plugins::worktree::spawn_worktree_init_command(self, name, branch, path, invoked);
-    }
-
-    pub(crate) fn spawn_worktree_doctor(&mut self) {
-        xcodex_plugins::worktree::spawn_worktree_doctor(self);
-    }
-
-    pub(crate) fn spawn_worktree_detection(&mut self, open_picker: bool) {
-        xcodex_plugins::worktree::spawn_worktree_detection(self, open_picker);
-    }
-
-    pub(crate) fn set_worktree_list(
-        &mut self,
-        worktrees: Vec<GitWorktreeEntry>,
-        open_picker: bool,
-    ) {
-        xcodex_plugins::worktree::set_worktree_list(self, worktrees, open_picker);
-    }
-
-    pub(crate) fn on_worktree_list_update_failed(&mut self, error: String, open_picker: bool) {
-        xcodex_plugins::worktree::on_worktree_list_update_failed(self, error, open_picker);
-    }
-
     pub(crate) fn set_session_cwd(&mut self, cwd: PathBuf) {
         self.config.cwd = cwd.clone();
         self.refresh_status_bar_git_poller();
-        self.spawn_worktree_detection(false);
+        xcodex_plugins::worktree::spawn_worktree_detection(self, false);
 
         let display = crate::exec_command::relativize_to_home(&cwd)
             .map(|path| {
@@ -3818,10 +3742,6 @@ impl ChatWidget {
             })
             .unwrap_or_else(|| cwd.display().to_string());
         self.add_info_message(format!("Session worktree set to {display}."), None);
-    }
-
-    fn open_worktree_picker(&mut self) {
-        xcodex_plugins::worktree::open_worktree_picker(self);
     }
 
     fn prefetch_rate_limits(&mut self) {
