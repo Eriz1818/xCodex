@@ -5,6 +5,7 @@ mod ramp_status_state;
 pub(crate) mod theme;
 mod thoughts;
 mod worktree;
+mod worktree_list_state;
 mod xtreme;
 
 use crate::chatwidget::ChatWidget;
@@ -12,6 +13,7 @@ use crate::slash_command::SlashCommand;
 pub(crate) use hook_process_state::HookProcessState;
 pub(crate) use mcp_startup_state::McpStartupState;
 pub(crate) use ramp_status_state::RampStatusState;
+pub(crate) use worktree_list_state::WorktreeListState;
 
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct PluginSlashCommand {
