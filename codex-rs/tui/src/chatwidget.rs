@@ -181,6 +181,7 @@ use crate::tui::FrameRequester;
 use crate::xcodex_plugins;
 use crate::xcodex_plugins::HookProcessState;
 use crate::xcodex_plugins::McpStartupState;
+use crate::xcodex_plugins::RampStatusState;
 mod interrupts;
 use self::interrupts::InterruptManager;
 mod agent;
@@ -487,9 +488,7 @@ pub(crate) struct ChatWidget {
     retry_status_header: Option<String>,
     thread_id: Option<ThreadId>,
     ramp_turn_index: u64,
-    ramp_selected: crate::ramps::RampId,
-    ramp_stage: crate::ramps::RampStage,
-    ramp_context: Option<String>,
+    ramp_state: RampStatusState,
     last_turn_completion_label: Option<String>,
     forked_from: Option<ThreadId>,
     frame_requester: FrameRequester,
@@ -743,48 +742,37 @@ impl ChatWidget {
     }
 
     fn ramps_status_enabled(&self) -> bool {
-        crate::ramps::ramps_enabled()
+        self.ramp_state.is_enabled()
     }
 
     fn ramps_status_active(&self) -> bool {
-        self.ramps_status_enabled() && self.bottom_pane.is_task_running()
-    }
-
-    fn ramp_header_string(&self) -> String {
-        let stage = crate::ramps::stage_label(self.ramp_selected, self.ramp_stage);
-        if let Some(context) = self.ramp_context.as_deref()
-            && !context.is_empty()
-        {
-            format!("{stage} · {context}")
-        } else {
-            stage.to_string()
-        }
+        self.ramp_state
+            .is_active(self.bottom_pane.is_task_running())
     }
 
     fn sync_ramp_status_header(&mut self) {
         if !self.ramps_status_active() {
             return;
         }
-        self.set_status_header(self.ramp_header_string());
+        self.set_status_header(self.ramp_state.header_string());
     }
 
     fn set_ramp_stage(&mut self, stage: crate::ramps::RampStage) {
-        if !self.ramps_status_active() || self.ramp_stage == stage {
-            return;
+        if let Some(header) = self
+            .ramp_state
+            .set_stage(self.bottom_pane.is_task_running(), stage)
+        {
+            self.set_status_header(header);
         }
-        self.ramp_stage = stage;
-        self.sync_ramp_status_header();
     }
 
     fn set_ramp_context(&mut self, context: Option<String>) {
-        if !self.ramps_status_active() && context.is_some() {
-            return;
+        if let Some(header) = self
+            .ramp_state
+            .set_context(self.bottom_pane.is_task_running(), context)
+        {
+            self.set_status_header(header);
         }
-        if self.ramp_context == context {
-            return;
-        }
-        self.ramp_context = context;
-        self.sync_ramp_status_header();
     }
 
     fn restore_retry_status_header_if_present(&mut self) {
@@ -956,9 +944,8 @@ impl ChatWidget {
         self.last_turn_completion_label = None;
         if self.ramps_status_enabled() {
             self.ramp_turn_index = self.ramp_turn_index.saturating_add(1);
-            self.ramp_selected = crate::ramps::select_ramp(&self.config, self.ramp_turn_index);
-            self.ramp_stage = crate::ramps::RampStage::Waiting;
-            self.ramp_context = None;
+            self.ramp_state
+                .reset_for_turn(&self.config, self.ramp_turn_index);
             self.sync_ramp_status_header();
         } else {
             let header = if crate::xtreme::xtreme_ui_enabled(&self.config) {
@@ -983,8 +970,7 @@ impl ChatWidget {
         self.flush_answer_stream_with_separator();
         self.flush_active_cell();
         if self.ramps_status_enabled() {
-            self.last_turn_completion_label =
-                Some(crate::ramps::completion_label(self.ramp_selected).to_string());
+            self.last_turn_completion_label = Some(self.ramp_state.completion_label());
         }
         self.flush_unified_exec_wait_streak();
         // Mark task stopped and request redraw now that all content is in history.
@@ -1780,7 +1766,8 @@ impl ChatWidget {
         self.flush_unified_exec_wait_streak();
         self.flush_active_cell();
 
-        if self.ramps_status_active() && self.ramp_stage == crate::ramps::RampStage::Waiting {
+        if self.ramps_status_active() && self.ramp_state.stage() == crate::ramps::RampStage::Waiting
+        {
             self.set_ramp_stage(crate::ramps::RampStage::Warmup);
         }
 
@@ -2253,9 +2240,7 @@ impl ChatWidget {
             retry_status_header: None,
             thread_id: None,
             ramp_turn_index: 0,
-            ramp_selected: crate::ramps::baseline_ramp(),
-            ramp_stage: crate::ramps::RampStage::Waiting,
-            ramp_context: None,
+            ramp_state: RampStatusState::default(),
             last_turn_completion_label: None,
             forked_from: None,
             queued_user_messages: VecDeque::new(),
@@ -2407,9 +2392,7 @@ impl ChatWidget {
             retry_status_header: None,
             thread_id: None,
             ramp_turn_index: 0,
-            ramp_selected: crate::ramps::baseline_ramp(),
-            ramp_stage: crate::ramps::RampStage::Waiting,
-            ramp_context: None,
+            ramp_state: RampStatusState::default(),
             last_turn_completion_label: None,
             forked_from: None,
             queued_user_messages: VecDeque::new(),
