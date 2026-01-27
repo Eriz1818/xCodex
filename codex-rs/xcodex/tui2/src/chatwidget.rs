@@ -2642,23 +2642,6 @@ impl ChatWidget {
                 self.bottom_pane.show_view(Box::new(view));
                 self.request_redraw();
             }
-            SlashCommand::Xtreme => {
-                let status_cell = self.status_menu_status_cell();
-                let view = crate::bottom_pane::StatusMenuView::new(
-                    crate::bottom_pane::StatusMenuTab::Tools,
-                    self.app_event_tx.clone(),
-                    status_cell,
-                    self.config.tui_status_bar_show_git_branch,
-                    self.config.tui_status_bar_show_worktree,
-                    self.config.tui_transcript_diff_highlight,
-                    self.config.tui_transcript_user_prompt_highlight,
-                    self.config.tui_minimal_composer,
-                    self.config.tui_xtreme_mode,
-                    self.config.tui_verbose_tool_output,
-                );
-                self.bottom_pane.show_view(Box::new(view));
-                self.request_redraw();
-            }
             SlashCommand::Worktree => {
                 if self.worktree_list.is_empty() && !self.worktree_list_refresh_in_progress {
                     self.spawn_worktree_detection(true);
@@ -4054,6 +4037,24 @@ impl ChatWidget {
             Local::now(),
             self.model_display_name(),
         )
+    }
+
+    pub(crate) fn open_tools_panel(&mut self) {
+        let status_cell = self.status_menu_status_cell();
+        let view = crate::bottom_pane::StatusMenuView::new(
+            crate::bottom_pane::StatusMenuTab::Tools,
+            self.app_event_tx.clone(),
+            status_cell,
+            self.config.tui_status_bar_show_git_branch,
+            self.config.tui_status_bar_show_worktree,
+            self.config.tui_transcript_diff_highlight,
+            self.config.tui_transcript_user_prompt_highlight,
+            self.config.tui_minimal_composer,
+            self.config.tui_xtreme_mode,
+            self.config.tui_verbose_tool_output,
+        );
+        self.bottom_pane.show_view(Box::new(view));
+        self.request_redraw();
     }
 
     pub(crate) fn add_help_topics_output(&mut self) {

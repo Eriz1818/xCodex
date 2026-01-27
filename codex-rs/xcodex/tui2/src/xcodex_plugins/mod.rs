@@ -2,6 +2,7 @@ mod mcp;
 pub(crate) mod theme;
 mod thoughts;
 mod worktree;
+mod xtreme;
 
 use crate::chatwidget::ChatWidget;
 use crate::slash_command::SlashCommand;
@@ -14,12 +15,20 @@ pub(crate) struct PluginSlashCommand {
     pub(crate) insert_trailing_space: bool,
 }
 
-const PLUGIN_COMMANDS: [PluginSlashCommand; 1] = [PluginSlashCommand {
-    name: "thoughts",
-    description: "toggle showing agent thoughts/reasoning (persists)",
-    run_on_enter: true,
-    insert_trailing_space: false,
-}];
+const PLUGIN_COMMANDS: [PluginSlashCommand; 2] = [
+    PluginSlashCommand {
+        name: "thoughts",
+        description: "toggle showing agent thoughts/reasoning (persists)",
+        run_on_enter: true,
+        insert_trailing_space: false,
+    },
+    PluginSlashCommand {
+        name: "xtreme",
+        description: "open the ⚡Tools control panel",
+        run_on_enter: true,
+        insert_trailing_space: false,
+    },
+];
 
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct PluginSubcommandNode {
@@ -62,6 +71,7 @@ pub(crate) fn plugin_subcommand_roots() -> &'static [PluginSubcommandRoot] {
 pub(crate) fn try_handle_slash_command(chat: &mut ChatWidget, name: &str, rest: &str) -> bool {
     match name {
         "thoughts" => thoughts::handle(chat, rest),
+        "xtreme" => xtreme::handle(chat, rest),
         _ => false,
     }
 }
