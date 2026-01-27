@@ -1,10 +1,13 @@
+pub(crate) mod help;
 mod hook_process_state;
+pub(crate) mod hooks;
 mod mcp;
 mod mcp_startup_state;
 mod ramp_status_state;
+pub(crate) mod settings;
 pub(crate) mod theme;
 mod thoughts;
-mod worktree;
+pub(crate) mod worktree;
 mod worktree_list_state;
 mod xtreme;
 
@@ -12,7 +15,7 @@ use crate::chatwidget::ChatWidget;
 use crate::slash_command::SlashCommand;
 pub(crate) use hook_process_state::HookProcessState;
 pub(crate) use mcp_startup_state::McpStartupState;
-pub(crate) use ramp_status_state::RampStatusState;
+pub(crate) use ramp_status_state::RampStatusController;
 pub(crate) use worktree_list_state::WorktreeListState;
 
 #[derive(Clone, Copy, Debug)]
