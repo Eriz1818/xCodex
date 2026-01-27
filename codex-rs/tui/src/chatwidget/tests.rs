@@ -850,7 +850,7 @@ async fn make_chatwidget_manual(
         unified_exec_wait_streak: None,
         task_complete_pending: false,
         unified_exec_processes: Vec::new(),
-        hook_processes: Vec::new(),
+        hook_processes: crate::xcodex_plugins::HookProcessState::default(),
         agent_turn_running: false,
         mcp_startup_state: crate::xcodex_plugins::McpStartupState::default(),
         interrupts: InterruptManager::new(),
