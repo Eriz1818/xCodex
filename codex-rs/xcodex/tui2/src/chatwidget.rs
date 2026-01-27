@@ -166,6 +166,7 @@ use crate::status::RateLimitSnapshotDisplay;
 use crate::text_formatting::truncate_text;
 use crate::tui::FrameRequester;
 use crate::xcodex_plugins;
+use crate::xcodex_plugins::HookProcessState;
 use crate::xcodex_plugins::McpStartupState;
 mod interrupts;
 use self::interrupts::InterruptManager;
@@ -200,11 +201,6 @@ struct RunningCommand {
 }
 
 struct UnifiedExecSessionSummary {
-    key: String,
-    command_display: String,
-}
-
-struct HookProcessSummary {
     key: String,
     command_display: String,
 }
@@ -400,7 +396,7 @@ pub(crate) struct ChatWidget {
     last_unified_wait: Option<UnifiedExecWaitState>,
     task_complete_pending: bool,
     unified_exec_sessions: Vec<UnifiedExecSessionSummary>,
-    hook_processes: Vec<HookProcessSummary>,
+    hook_processes: HookProcessState,
     /// Tracks whether codex-core currently considers an agent turn to be in progress.
     ///
     /// This is kept separate from `mcp_startup_state` so that MCP startup progress (or completion)
@@ -1239,19 +1235,12 @@ impl ChatWidget {
         let key = ev.hook_id.to_string();
         let command_display = strip_bash_lc_and_escape(&ev.command);
         let command_display = format!("{} · {command_display}", ev.event_type);
-        if let Some(existing) = self.hook_processes.iter_mut().find(|hook| hook.key == key) {
-            existing.command_display = command_display;
-        } else {
-            self.hook_processes.push(HookProcessSummary {
-                key,
-                command_display,
-            });
-        }
+        self.hook_processes.begin(key, command_display);
     }
 
     fn on_hook_process_end(&mut self, ev: HookProcessEndEvent) {
         let key = ev.hook_id.to_string();
-        self.hook_processes.retain(|hook| hook.key != key);
+        self.hook_processes.end(&key);
     }
 
     fn on_patch_apply_begin(&mut self, event: PatchApplyBeginEvent) {
@@ -1908,7 +1897,7 @@ impl ChatWidget {
             last_unified_wait: None,
             task_complete_pending: false,
             unified_exec_sessions: Vec::new(),
-            hook_processes: Vec::new(),
+            hook_processes: HookProcessState::default(),
             agent_turn_running: false,
             mcp_startup_state: McpStartupState::default(),
             interrupts: InterruptManager::new(),
@@ -2039,7 +2028,7 @@ impl ChatWidget {
             last_unified_wait: None,
             task_complete_pending: false,
             unified_exec_sessions: Vec::new(),
-            hook_processes: Vec::new(),
+            hook_processes: HookProcessState::default(),
             agent_turn_running: false,
             mcp_startup_state: McpStartupState::default(),
             interrupts: InterruptManager::new(),
@@ -4109,16 +4098,7 @@ impl ChatWidget {
                 )
             })
             .collect();
-        let hooks = self
-            .hook_processes
-            .iter()
-            .map(|hook| {
-                history_cell::BackgroundActivityEntry::new(
-                    hook.key.clone(),
-                    hook.command_display.clone(),
-                )
-            })
-            .collect();
+        let hooks = self.hook_processes.entries();
         self.add_to_history(history_cell::new_unified_exec_sessions_output(
             sessions, hooks,
         ));

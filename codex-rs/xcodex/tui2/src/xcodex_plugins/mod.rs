@@ -1,3 +1,4 @@
+mod hook_process_state;
 mod mcp;
 mod mcp_startup_state;
 pub(crate) mod theme;
@@ -7,6 +8,7 @@ mod xtreme;
 
 use crate::chatwidget::ChatWidget;
 use crate::slash_command::SlashCommand;
+pub(crate) use hook_process_state::HookProcessState;
 pub(crate) use mcp_startup_state::McpStartupState;
 
 #[derive(Clone, Copy, Debug)]
