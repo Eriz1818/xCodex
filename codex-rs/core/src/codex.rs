@@ -267,18 +267,37 @@ impl Codex {
             .map_err(|err| CodexErr::Fatal(format!("failed to load rules: {err}")))?;
 
         let config = Arc::new(config);
-        let _ = models_manager
-            .list_models(
-                &config,
-                crate::models_manager::manager::RefreshStrategy::OnlineIfUncached,
-            )
-            .await;
+        // Refreshing remote model metadata can be slow and is not required to
+        // start a session (especially on resume). Kick it off in the
+        // background and let the TUI update model lists later.
+        {
+            let models_manager = Arc::clone(&models_manager);
+            let config = Arc::clone(&config);
+            tokio::spawn(async move {
+                tracing::info!(
+                    target: "codex_core::startup_timeline",
+                    stage = "models_list_begin",
+                );
+                let _ = models_manager
+                    .list_models(
+                        &config,
+                        crate::models_manager::manager::RefreshStrategy::OnlineIfUncached,
+                    )
+                    .await;
+                tracing::info!(
+                    target: "codex_core::startup_timeline",
+                    stage = "models_list_end",
+                );
+            });
+        }
+        let refresh_strategy = match &conversation_history {
+            InitialHistory::Resumed(_) => crate::models_manager::manager::RefreshStrategy::Offline,
+            InitialHistory::New | InitialHistory::Forked(_) => {
+                crate::models_manager::manager::RefreshStrategy::OnlineIfUncached
+            }
+        };
         let model = models_manager
-            .get_default_model(
-                &config.model,
-                &config,
-                crate::models_manager::manager::RefreshStrategy::OnlineIfUncached,
-            )
+            .get_default_model(&config.model, &config, refresh_strategy)
             .await;
 
         // Resolve base instructions for the session. Priority order:
@@ -1024,7 +1043,6 @@ impl Session {
                     .await;
                 // Flush after seeding history and any persisted rollout copy.
                 self.flush_rollout().await;
-                self.recompute_token_usage(&turn_context).await;
             }
         }
     }
