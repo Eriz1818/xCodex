@@ -286,6 +286,7 @@ pub struct McpServerConfig {
     /// Optional OAuth scopes to request during MCP login.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub scopes: Option<Vec<String>>,
+
     /// Override startup behavior for this MCP server.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub startup_mode: Option<McpStartupMode>,
