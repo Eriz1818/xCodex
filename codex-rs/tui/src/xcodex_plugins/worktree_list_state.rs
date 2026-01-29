@@ -5,6 +5,7 @@ pub(crate) struct WorktreeListState {
     list: Vec<GitWorktreeEntry>,
     error: Option<String>,
     refresh_in_progress: bool,
+    shared_dirs_write_notice_shown: bool,
 }
 
 impl WorktreeListState {
@@ -45,5 +46,11 @@ impl WorktreeListState {
         self.list.clear();
         self.error = Some(error);
         self.refresh_in_progress = false;
+    }
+
+    pub(crate) fn take_shared_dirs_write_notice(&mut self) -> bool {
+        let show_notice = !self.shared_dirs_write_notice_shown;
+        self.shared_dirs_write_notice_shown = true;
+        show_notice
     }
 }

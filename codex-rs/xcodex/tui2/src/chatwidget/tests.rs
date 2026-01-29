@@ -427,7 +427,6 @@ async fn make_chatwidget_manual(
         rate_limit_poller: None,
         status_bar_git_poller: None,
         worktree_state: crate::xcodex_plugins::WorktreeListState::default(),
-        shared_dirs_write_notice_shown: false,
         stream_controller: None,
         running_commands: HashMap::new(),
         suppressed_exec_calls: HashSet::new(),

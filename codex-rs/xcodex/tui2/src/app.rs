@@ -2821,11 +2821,17 @@ impl App {
             }
             AppEvent::UpdateWorktreesSharedDirs { shared_dirs } => {
                 self.config.worktrees_shared_dirs = shared_dirs.clone();
-                self.chat_widget.set_worktrees_shared_dirs(shared_dirs);
+                crate::xcodex_plugins::worktree::set_worktrees_shared_dirs(
+                    &mut self.chat_widget,
+                    shared_dirs,
+                );
             }
             AppEvent::UpdateWorktreesPinnedPaths { pinned_paths } => {
                 self.config.worktrees_pinned_paths = pinned_paths.clone();
-                self.chat_widget.set_worktrees_pinned_paths(pinned_paths);
+                crate::xcodex_plugins::worktree::set_worktrees_pinned_paths(
+                    &mut self.chat_widget,
+                    pinned_paths,
+                );
             }
             AppEvent::PersistWorktreesSharedDirs { shared_dirs } => {
                 let mut shared_dirs_array = toml_edit::Array::new();

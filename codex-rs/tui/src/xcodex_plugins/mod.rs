@@ -1,10 +1,15 @@
+pub(crate) mod app;
+mod app_state;
 pub(crate) mod help;
+pub(crate) mod history_cell;
 mod hook_process_state;
 pub(crate) mod hooks;
 mod mcp;
 mod mcp_startup_state;
 mod ramp_status_state;
+pub(crate) mod ramps;
 pub(crate) mod settings;
+pub(crate) mod status;
 pub(crate) mod theme;
 mod thoughts;
 pub(crate) mod worktree;
@@ -13,9 +18,12 @@ mod xtreme;
 
 use crate::chatwidget::ChatWidget;
 use crate::slash_command::SlashCommand;
+pub(crate) use app_state::XcodexAppState;
+use codex_core::config;
 pub(crate) use hook_process_state::HookProcessState;
 pub(crate) use mcp_startup_state::McpStartupState;
 pub(crate) use ramp_status_state::RampStatusController;
+use rand::Rng;
 pub(crate) use worktree_list_state::WorktreeListState;
 
 #[derive(Clone, Copy, Debug)]
@@ -83,6 +91,15 @@ pub(crate) fn try_handle_slash_command(chat: &mut ChatWidget, name: &str, rest: 
     match name {
         "thoughts" => thoughts::handle(chat, rest),
         "xtreme" => xtreme::handle(chat, rest),
+        "settings" => settings::handle_settings_command(chat, rest),
+        "help" => {
+            help::handle_help_command(chat, rest);
+            true
+        }
+        "hooks" => {
+            hooks::handle_hooks_command(chat, rest);
+            true
+        }
         _ => false,
     }
 }
@@ -97,4 +114,39 @@ pub(crate) fn handle_theme_command(chat: &mut ChatWidget, rest: &str) {
 
 pub(crate) fn try_handle_worktree_subcommand(chat: &mut ChatWidget, args: &str) -> bool {
     worktree::try_handle_subcommand(chat, args)
+}
+
+#[allow(dead_code)]
+pub(crate) fn placeholder_text<R: Rng + ?Sized>(rng: &mut R, placeholders: &[&str]) -> String {
+    maybe_override_placeholder_text(
+        placeholders[rng.random_range(0..placeholders.len())].to_string(),
+    )
+}
+
+pub(crate) fn maybe_override_placeholder_text(text: String) -> String {
+    if config::is_xcodex_invocation() {
+        "Ask xcodex to do anything".to_string()
+    } else {
+        text
+    }
+}
+
+pub(crate) fn full_access_warning_prefix() -> &'static str {
+    "When xcodex runs with full access, it can edit any file on your computer and run commands with network, without your approval. "
+}
+
+pub(crate) fn ramps_unavailable_message() -> &'static str {
+    "Ramps are only available in xcodex."
+}
+
+pub(crate) fn ramps_rotation_description() -> &'static str {
+    "When enabled, xcodex picks one eligible ramp per turn. The chosen ramp stays stable for the entire turn."
+}
+
+pub(crate) fn ramps_rotation_hint() -> &'static str {
+    "Pick which ramp flows xcodex can rotate through."
+}
+
+pub(crate) fn format_edit_approval_message(target: String) -> String {
+    format!("xcodex wants to edit {target}")
 }

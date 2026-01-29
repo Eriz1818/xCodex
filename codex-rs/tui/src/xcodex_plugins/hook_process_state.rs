@@ -1,4 +1,4 @@
-use crate::history_cell::BackgroundActivityEntry;
+use crate::xcodex_plugins::history_cell::BackgroundActivityEntry;
 
 #[derive(Debug, Default)]
 pub(crate) struct HookProcessState {

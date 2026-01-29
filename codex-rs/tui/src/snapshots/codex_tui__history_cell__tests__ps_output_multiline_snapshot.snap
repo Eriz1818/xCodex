@@ -6,8 +6,8 @@ expression: rendered
 
 Background terminals (2)
 
-  • proc-1 echo hello [...]
-  • proc-2 rg "foo" src
+  • exec-0 echo hello [...]
+  • exec-1 rg "foo" src
 
 Hooks (0)
 

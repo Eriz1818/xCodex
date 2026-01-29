@@ -1,3 +1,4 @@
+use super::HookProcessState;
 use crate::chatwidget::ChatWidget;
 use crate::chatwidget::transcript_spacer_line;
 use crate::history_cell::CompositeHistoryCell;
@@ -5,6 +6,27 @@ use crate::history_cell::PlainHistoryCell;
 use crate::slash_command::SlashCommand;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
+
+pub(crate) enum HookQuitAction {
+    ArmShortcut,
+    Confirmed,
+}
+
+pub(crate) fn hook_quit_action(
+    confirm_exit_with_running_hooks: bool,
+    hook_processes: &HookProcessState,
+    shortcut_active: bool,
+) -> Option<HookQuitAction> {
+    if !confirm_exit_with_running_hooks || hook_processes.is_empty() {
+        return None;
+    }
+
+    if shortcut_active {
+        Some(HookQuitAction::Confirmed)
+    } else {
+        Some(HookQuitAction::ArmShortcut)
+    }
+}
 
 pub(crate) fn handle_hooks_command(chat: &mut ChatWidget, rest: &str) {
     let args: Vec<&str> = rest.split_whitespace().collect();

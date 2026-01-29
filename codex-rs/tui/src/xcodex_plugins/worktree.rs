@@ -136,7 +136,7 @@ pub(crate) const WORKTREE_SUBCOMMAND_ROOT: PluginSubcommandRoot = PluginSubcomma
 };
 
 pub(crate) fn handle_root_command(chat: &mut ChatWidget) {
-    if chat.worktree_list_is_empty() && !chat.worktree_list_refresh_in_progress() {
+    if chat.worktree_state().is_empty() && !chat.worktree_state().refresh_in_progress() {
         spawn_worktree_detection(chat, true);
     } else {
         open_worktree_picker(chat);
@@ -213,7 +213,7 @@ pub(crate) fn handle_worktree_command(chat: &mut ChatWidget, rest: &str) {
                 return;
             }
             next.push(dir);
-            chat.update_worktrees_shared_dirs(next);
+            update_worktrees_shared_dirs(chat, next);
             add_worktree_shared_dirs_output(chat);
         }
         ["shared", "rm", dir] | ["shared", "remove", dir] => {
@@ -277,7 +277,7 @@ pub(crate) fn handle_worktree_command(chat: &mut ChatWidget, rest: &str) {
                 ));
                 return;
             }
-            chat.update_worktrees_shared_dirs(next);
+            update_worktrees_shared_dirs(chat, next);
             add_worktree_shared_dirs_output(chat);
         }
         ["init"] => {
@@ -437,7 +437,8 @@ pub(crate) fn handle_worktree_command(chat: &mut ChatWidget, rest: &str) {
         }
         [target] => {
             let matches: Vec<&GitWorktreeEntry> = chat
-                .worktree_list()
+                .worktree_state()
+                .list()
                 .iter()
                 .filter(|entry| {
                     entry
@@ -468,7 +469,8 @@ pub(crate) fn handle_worktree_command(chat: &mut ChatWidget, rest: &str) {
                 if candidate.is_dir() {
                     Some(candidate)
                 } else {
-                    if chat.worktree_list().is_empty() && !chat.worktree_list_refresh_in_progress()
+                    if chat.worktree_state().is_empty()
+                        && !chat.worktree_state().refresh_in_progress()
                     {
                         spawn_worktree_detection(chat, true);
                         chat.add_info_message(
@@ -490,7 +492,7 @@ pub(crate) fn handle_worktree_command(chat: &mut ChatWidget, rest: &str) {
             };
 
             if let Some(path) = selected_path {
-                chat.emit_worktree_switch(path);
+                emit_worktree_switch(chat, path);
             }
         }
         _ => {
@@ -594,18 +596,18 @@ pub(crate) fn open_worktree_init_wizard(
 }
 
 pub(crate) fn spawn_worktree_detection(chat: &mut ChatWidget, open_picker: bool) {
-    if chat.worktree_list_refresh_in_progress() {
+    if chat.worktree_state().refresh_in_progress() {
         return;
     }
     if codex_core::git_info::resolve_git_worktree_head(chat.session_cwd()).is_none() {
-        chat.worktree_state_clear_no_repo();
+        chat.worktree_state_mut().clear_no_repo();
         if open_picker {
             open_worktree_picker(chat);
         }
         return;
     }
 
-    chat.worktree_state_mark_refreshing();
+    chat.worktree_state_mut().mark_refreshing();
 
     let cwd = chat.session_cwd().to_path_buf();
     let tx = chat.app_event_tx();
@@ -629,7 +631,7 @@ pub(crate) fn set_worktree_list(
     worktrees: Vec<GitWorktreeEntry>,
     open_picker: bool,
 ) {
-    chat.worktree_state_set_list(worktrees);
+    chat.worktree_state_mut().set_list(worktrees);
 
     if open_picker {
         open_worktree_picker(chat);
@@ -641,11 +643,27 @@ pub(crate) fn on_worktree_list_update_failed(
     error: String,
     open_picker: bool,
 ) {
-    chat.worktree_state_set_error(error);
+    chat.worktree_state_mut().set_error(error);
 
     if open_picker {
         open_worktree_picker(chat);
     }
+}
+
+pub(crate) fn set_worktrees_shared_dirs(chat: &mut ChatWidget, shared_dirs: Vec<String>) {
+    chat.set_worktrees_shared_dirs(shared_dirs);
+}
+
+pub(crate) fn set_worktrees_pinned_paths(chat: &mut ChatWidget, pinned_paths: Vec<String>) {
+    chat.set_worktrees_pinned_paths(pinned_paths);
+}
+
+pub(crate) fn update_worktrees_shared_dirs(chat: &mut ChatWidget, shared_dirs: Vec<String>) {
+    chat.update_worktrees_shared_dirs(shared_dirs);
+}
+
+pub(crate) fn emit_worktree_switch(chat: &ChatWidget, path: PathBuf) {
+    chat.emit_worktree_switch(path);
 }
 
 pub(crate) fn spawn_worktree_init_wizard(chat: &mut ChatWidget) {
@@ -965,7 +983,7 @@ pub(crate) fn open_worktree_picker(chat: &mut ChatWidget) {
         .as_ref()
         .and_then(|root| codex_core::git_info::resolve_root_git_project_for_trust(root));
 
-    let mut worktrees = chat.worktree_list().to_vec();
+    let mut worktrees = chat.worktree_state().list().to_vec();
     sort_worktrees_for_picker(
         &mut worktrees,
         current_root.as_deref(),
@@ -1048,9 +1066,9 @@ pub(crate) fn open_worktree_picker(chat: &mut ChatWidget) {
         });
     }
 
-    let subtitle = if let Some(err) = chat.worktree_list_error() {
+    let subtitle = if let Some(err) = chat.worktree_state().error().map(String::as_str) {
         Some(format!("Failed to detect worktrees: {err}"))
-    } else if chat.worktree_list_is_empty() {
+    } else if chat.worktree_state().is_empty() {
         Some("No worktrees detected for this session.".to_string())
     } else {
         None

@@ -37,7 +37,6 @@ use codex_core::config::ConstraintResult;
 use codex_core::config::types::Notifications;
 use codex_core::features::FEATURES;
 use codex_core::features::Feature;
-use codex_core::git_info::GitWorktreeEntry;
 use codex_core::git_info::current_branch_name;
 use codex_core::git_info::local_git_branches;
 use codex_core::models_manager::manager::ModelsManager;
@@ -179,6 +178,8 @@ use crate::xcodex_plugins::HookProcessState;
 use crate::xcodex_plugins::McpStartupState;
 use crate::xcodex_plugins::RampStatusController;
 use crate::xcodex_plugins::WorktreeListState;
+use crate::xcodex_plugins::hooks::HookQuitAction;
+use crate::xcodex_plugins::hooks::hook_quit_action;
 mod interrupts;
 use self::interrupts::InterruptManager;
 mod agent;
@@ -448,7 +449,6 @@ pub(crate) struct ChatWidget {
     rate_limit_poller: Option<JoinHandle<()>>,
     status_bar_git_poller: Option<JoinHandle<()>>,
     worktree_state: WorktreeListState,
-    shared_dirs_write_notice_shown: bool,
     // Stream lifecycle controller
     stream_controller: Option<StreamController>,
     running_commands: HashMap<String, RunningCommand>,
@@ -513,7 +513,7 @@ pub(crate) struct ChatWidget {
     // The separator itself is only rendered if the turn recorded "work" activity (see
     // `turn_summary`).
     needs_final_message_separator: bool,
-    turn_summary: history_cell::TurnSummary,
+    turn_summary: xcodex_plugins::history_cell::TurnSummary,
     session_stats: crate::status::SessionStats,
     // Whether the current turn performed "work" (exec commands, MCP tool calls, patch applications).
     //
@@ -735,33 +735,6 @@ impl ChatWidget {
         self.set_status(header, None);
     }
 
-    fn ramps_status_enabled(&self) -> bool {
-        self.ramp_status.is_enabled()
-    }
-
-    fn ramps_status_active(&self) -> bool {
-        self.ramp_status
-            .is_active(self.bottom_pane.is_task_running())
-    }
-
-    fn set_ramp_stage(&mut self, stage: crate::ramps::RampStage) {
-        if let Some(header) = self
-            .ramp_status
-            .set_stage(self.bottom_pane.is_task_running(), stage)
-        {
-            self.set_status_header(header);
-        }
-    }
-
-    fn set_ramp_context(&mut self, context: Option<String>) {
-        if let Some(header) = self
-            .ramp_status
-            .set_context(self.bottom_pane.is_task_running(), context)
-        {
-            self.set_status_header(header);
-        }
-    }
-
     fn restore_retry_status_header_if_present(&mut self) {
         if let Some(header) = self.retry_status_header.take() {
             self.set_status_header(header);
@@ -791,7 +764,7 @@ impl ChatWidget {
                 None,
             );
         }
-        let session_info_cell = history_cell::new_session_info(
+        let session_info_cell = crate::xcodex_plugins::history_cell::new_session_info(
             &self.config,
             &model_for_header,
             event,
@@ -886,9 +859,11 @@ impl ChatWidget {
             && let Some(header) = extract_first_bold(&self.reasoning_buffer)
         {
             // Update the shimmer header to the extracted reasoning chunk header.
-            if self.ramps_status_active() {
-                self.set_ramp_context(Some(header));
-            } else {
+            if let Some(header) = xcodex_plugins::ramps::apply_status_header(
+                &mut self.ramp_status,
+                self.bottom_pane.is_task_running(),
+                xcodex_plugins::ramps::RampStatusUpdate::Context(header),
+            ) {
                 self.set_status_header(header);
             }
             self.request_redraw();
@@ -927,21 +902,14 @@ impl ChatWidget {
         self.update_task_running_state();
         self.retry_status_header = None;
         self.bottom_pane.set_interrupt_hint_visible(true);
-        self.turn_summary = history_cell::TurnSummary::default();
+        self.turn_summary = xcodex_plugins::history_cell::TurnSummary::default();
         self.last_turn_completion_label = None;
-        if let Some(header) = self
-            .ramp_status
-            .start_turn(&self.config, self.bottom_pane.is_task_running())
-        {
-            self.set_status_header(header);
-        } else {
-            let header = if crate::xtreme::xtreme_ui_enabled(&self.config) {
-                "Charging"
-            } else {
-                "Working"
-            };
-            self.set_status_header(header.to_string());
-        }
+        let header = xcodex_plugins::ramps::task_start_header(
+            &mut self.ramp_status,
+            &self.config,
+            self.bottom_pane.is_task_running(),
+        );
+        self.set_status_header(header);
         self.footer_token_info_at_task_start = self
             .footer_token_info
             .as_ref()
@@ -956,9 +924,8 @@ impl ChatWidget {
         // If a stream is currently active, finalize it.
         self.flush_answer_stream_with_separator();
         self.flush_active_cell();
-        if self.ramps_status_enabled() {
-            self.last_turn_completion_label = Some(self.ramp_status.completion_label());
-        }
+        self.last_turn_completion_label =
+            xcodex_plugins::ramps::completion_label(&self.ramp_status);
         self.flush_unified_exec_wait_streak();
         // Mark task stopped and request redraw now that all content is in history.
         self.agent_turn_running = false;
@@ -1493,8 +1460,12 @@ impl ChatWidget {
     }
 
     fn on_patch_apply_begin(&mut self, event: PatchApplyBeginEvent) {
-        if self.ramps_status_active() {
-            self.set_ramp_stage(crate::ramps::RampStage::Stabilizing);
+        if let Some(header) = xcodex_plugins::ramps::apply_status_header(
+            &mut self.ramp_status,
+            self.bottom_pane.is_task_running(),
+            xcodex_plugins::ramps::RampStatusUpdate::Stage(crate::ramps::RampStage::Stabilizing),
+        ) {
+            self.set_status_header(header);
         }
         self.add_to_history(history_cell::new_patch_event(
             event.changes,
@@ -1661,10 +1632,12 @@ impl ChatWidget {
         debug!("BackgroundEvent: {message}");
         self.bottom_pane.ensure_status_indicator();
         self.bottom_pane.set_interrupt_hint_visible(true);
-        if self.ramps_status_active() {
-            self.set_ramp_context(Some(message));
-        } else {
-            self.set_status_header(message);
+        if let Some(header) = xcodex_plugins::ramps::apply_status_header(
+            &mut self.ramp_status,
+            self.bottom_pane.is_task_running(),
+            xcodex_plugins::ramps::RampStatusUpdate::Context(message),
+        ) {
+            self.set_status_header(header);
         }
     }
 
@@ -1753,10 +1726,14 @@ impl ChatWidget {
         self.flush_unified_exec_wait_streak();
         self.flush_active_cell();
 
-        if self.ramps_status_active()
-            && self.ramp_status.stage() == crate::ramps::RampStage::Waiting
+        if self.ramp_status.stage() == crate::ramps::RampStage::Waiting
+            && let Some(header) = xcodex_plugins::ramps::apply_status_header(
+                &mut self.ramp_status,
+                self.bottom_pane.is_task_running(),
+                xcodex_plugins::ramps::RampStatusUpdate::Stage(crate::ramps::RampStage::Warmup),
+            )
         {
-            self.set_ramp_stage(crate::ramps::RampStage::Warmup);
+            self.set_status_header(header);
         }
 
         if self.stream_controller.is_none() {
@@ -1786,19 +1763,21 @@ impl ChatWidget {
                 .status_widget()
                 .map(super::status_indicator_widget::StatusIndicatorWidget::elapsed_seconds)
                 .map(|current| self.worked_elapsed_from(current));
-            let show_ramp_separator = self.ramps_status_enabled();
+            let show_ramp_separator = xcodex_plugins::ramps::show_separator(&self.ramp_status);
             let xtreme_ui_enabled = crate::xtreme::xtreme_ui_enabled(&self.config);
             let completion_label = self.last_turn_completion_label.take();
             let turn_summary = Some(self.turn_summary.clone());
-            self.add_to_history(history_cell::FinalMessageSeparator::new(
-                elapsed_seconds,
-                show_ramp_separator,
-                xtreme_ui_enabled,
-                completion_label,
-                turn_summary,
-            ));
+            self.add_to_history(
+                xcodex_plugins::history_cell::XcodexFinalMessageSeparator::new(
+                    elapsed_seconds,
+                    show_ramp_separator,
+                    xtreme_ui_enabled,
+                    completion_label,
+                    turn_summary,
+                ),
+            );
             self.needs_final_message_separator = false;
-            self.turn_summary = history_cell::TurnSummary::default();
+            self.turn_summary = xcodex_plugins::history_cell::TurnSummary::default();
         } else if self.needs_final_message_separator {
             // Reset the flag even if we don't show separator (no work was done)
             self.needs_final_message_separator = false;
@@ -1818,10 +1797,21 @@ impl ChatWidget {
 
     pub(crate) fn handle_exec_end_now(&mut self, ev: ExecCommandEndEvent) {
         let running = self.running_commands.remove(&ev.call_id);
-        let should_stabilize = self.ramps_status_active() && self.running_commands.is_empty();
+        let should_stabilize = xcodex_plugins::ramps::status_active(
+            &self.ramp_status,
+            self.bottom_pane.is_task_running(),
+        ) && self.running_commands.is_empty();
         if self.suppressed_exec_calls.remove(&ev.call_id) {
-            if should_stabilize {
-                self.set_ramp_stage(crate::ramps::RampStage::Stabilizing);
+            if should_stabilize
+                && let Some(header) = xcodex_plugins::ramps::apply_status_header(
+                    &mut self.ramp_status,
+                    self.bottom_pane.is_task_running(),
+                    xcodex_plugins::ramps::RampStatusUpdate::Stage(
+                        crate::ramps::RampStage::Stabilizing,
+                    ),
+                )
+            {
+                self.set_status_header(header);
             }
             return;
         }
@@ -1886,8 +1876,16 @@ impl ChatWidget {
                 self.request_redraw();
             }
         }
-        if should_stabilize {
-            self.set_ramp_stage(crate::ramps::RampStage::Stabilizing);
+        if should_stabilize
+            && let Some(header) = xcodex_plugins::ramps::apply_status_header(
+                &mut self.ramp_status,
+                self.bottom_pane.is_task_running(),
+                xcodex_plugins::ramps::RampStatusUpdate::Stage(
+                    crate::ramps::RampStage::Stabilizing,
+                ),
+            )
+        {
+            self.set_status_header(header);
         }
     }
 
@@ -2018,8 +2016,12 @@ impl ChatWidget {
         if crate::exec_command::strip_bash_lc_and_escape(&ev.command).starts_with("cargo test") {
             self.session_stats.tests_run = self.session_stats.tests_run.saturating_add(1);
         }
-        if self.ramps_status_active() {
-            self.set_ramp_stage(crate::ramps::RampStage::Active);
+        if let Some(header) = xcodex_plugins::ramps::apply_status_header(
+            &mut self.ramp_status,
+            self.bottom_pane.is_task_running(),
+            xcodex_plugins::ramps::RampStatusUpdate::Stage(crate::ramps::RampStage::Active),
+        ) {
+            self.set_status_header(header);
         } else if crate::xtreme::xtreme_ui_enabled(&self.config)
             && self.current_status_header == "Charging"
         {
@@ -2063,8 +2065,12 @@ impl ChatWidget {
         self.flush_active_cell();
         self.turn_summary.mcp_calls = self.turn_summary.mcp_calls.saturating_add(1);
         self.session_stats.mcp_calls = self.session_stats.mcp_calls.saturating_add(1);
-        if self.ramps_status_active() {
-            self.set_ramp_stage(crate::ramps::RampStage::Active);
+        if let Some(header) = xcodex_plugins::ramps::apply_status_header(
+            &mut self.ramp_status,
+            self.bottom_pane.is_task_running(),
+            xcodex_plugins::ramps::RampStatusUpdate::Stage(crate::ramps::RampStage::Active),
+        ) {
+            self.set_status_header(header);
         } else if crate::xtreme::xtreme_ui_enabled(&self.config)
             && self.current_status_header == "Charging"
         {
@@ -2111,8 +2117,16 @@ impl ChatWidget {
         if let Some(extra) = extra_cell {
             self.add_boxed_history(extra);
         }
-        if self.ramps_status_active() && self.running_commands.is_empty() {
-            self.set_ramp_stage(crate::ramps::RampStage::Stabilizing);
+        if self.running_commands.is_empty()
+            && let Some(header) = xcodex_plugins::ramps::apply_status_header(
+                &mut self.ramp_status,
+                self.bottom_pane.is_task_running(),
+                xcodex_plugins::ramps::RampStatusUpdate::Stage(
+                    crate::ramps::RampStage::Stabilizing,
+                ),
+            )
+        {
+            self.set_status_header(header);
         }
     }
 
@@ -2135,11 +2149,7 @@ impl ChatWidget {
         config.model = model.clone();
         let xtreme_ui_enabled = crate::xtreme::xtreme_ui_enabled(&config);
         let mut rng = rand::rng();
-        let placeholder = if codex_core::config::is_xcodex_invocation() {
-            "Ask xcodex to do anything".to_string()
-        } else {
-            PLACEHOLDERS[rng.random_range(0..PLACEHOLDERS.len())].to_string()
-        };
+        let placeholder = PLACEHOLDERS[rng.random_range(0..PLACEHOLDERS.len())].to_string();
         let codex_op_tx = spawn_agent(config.clone(), app_event_tx.clone(), thread_manager);
         let auto_compact_enabled =
             codex_core::prefs::load_blocking(&config.codex_home).auto_compact_enabled;
@@ -2160,11 +2170,7 @@ impl ChatWidget {
             CollaborationMode::Custom(fallback_custom)
         };
 
-        let active_cell = Some(Self::placeholder_session_header_cell(
-            &config,
-            config.features.enabled(Feature::CollaborationModes),
-            stored_collaboration_mode.clone(),
-        ));
+        let active_cell = Some(Self::placeholder_session_header_cell(&config));
 
         let mut widget = Self {
             app_event_tx: app_event_tx.clone(),
@@ -2175,7 +2181,7 @@ impl ChatWidget {
                 app_event_tx,
                 has_input_focus: true,
                 enhanced_keys_supported,
-                placeholder_text: placeholder,
+                placeholder_text: xcodex_plugins::maybe_override_placeholder_text(placeholder),
                 disable_paste_burst: config.disable_paste_burst,
                 minimal_composer_borders: config.tui_minimal_composer,
                 xtreme_ui_enabled,
@@ -2208,7 +2214,6 @@ impl ChatWidget {
             rate_limit_poller: None,
             status_bar_git_poller: None,
             worktree_state: WorktreeListState::default(),
-            shared_dirs_write_notice_shown: false,
             stream_controller: None,
             running_commands: HashMap::new(),
             suppressed_exec_calls: HashSet::new(),
@@ -2237,7 +2242,7 @@ impl ChatWidget {
             is_review_mode: false,
             pre_review_token_info: None,
             needs_final_message_separator: false,
-            turn_summary: history_cell::TurnSummary::default(),
+            turn_summary: xcodex_plugins::history_cell::TurnSummary::default(),
             session_stats: crate::status::SessionStats::default(),
             had_work_activity: false,
             last_separator_elapsed_secs: None,
@@ -2289,11 +2294,7 @@ impl ChatWidget {
         config.model = Some(header_model.clone());
         let xtreme_ui_enabled = crate::xtreme::xtreme_ui_enabled(&config);
         let mut rng = rand::rng();
-        let placeholder = if codex_core::config::is_xcodex_invocation() {
-            "Ask xcodex to do anything".to_string()
-        } else {
-            PLACEHOLDERS[rng.random_range(0..PLACEHOLDERS.len())].to_string()
-        };
+        let placeholder = PLACEHOLDERS[rng.random_range(0..PLACEHOLDERS.len())].to_string();
 
         let codex_op_tx =
             spawn_agent_from_existing(conversation, session_configured, app_event_tx.clone());
@@ -2324,7 +2325,7 @@ impl ChatWidget {
                 app_event_tx,
                 has_input_focus: true,
                 enhanced_keys_supported,
-                placeholder_text: placeholder,
+                placeholder_text: xcodex_plugins::maybe_override_placeholder_text(placeholder),
                 disable_paste_burst: config.disable_paste_burst,
                 minimal_composer_borders: config.tui_minimal_composer,
                 xtreme_ui_enabled,
@@ -2357,7 +2358,6 @@ impl ChatWidget {
             rate_limit_poller: None,
             status_bar_git_poller: None,
             worktree_state: WorktreeListState::default(),
-            shared_dirs_write_notice_shown: false,
             stream_controller: None,
             running_commands: HashMap::new(),
             suppressed_exec_calls: HashSet::new(),
@@ -2386,7 +2386,7 @@ impl ChatWidget {
             is_review_mode: false,
             pre_review_token_info: None,
             needs_final_message_separator: false,
-            turn_summary: history_cell::TurnSummary::default(),
+            turn_summary: xcodex_plugins::history_cell::TurnSummary::default(),
             session_stats: crate::status::SessionStats::default(),
             had_work_activity: false,
             last_separator_elapsed_secs: None,
@@ -2953,10 +2953,11 @@ impl ChatWidget {
         // Keep the placeholder session header as the active cell until real session info arrives,
         // so we can merge headers instead of committing a duplicate box to history.
         let keep_placeholder_header_active = !self.is_session_configured()
-            && self
-                .active_cell
-                .as_ref()
-                .is_some_and(|c| c.as_any().is::<history_cell::SessionHeaderHistoryCell>());
+            && self.active_cell.as_ref().is_some_and(|c| {
+                c.as_any()
+                    .is::<crate::xcodex_plugins::history_cell::XcodexSessionHeaderHistoryCell>()
+                    || c.as_any().is::<history_cell::SessionHeaderHistoryCell>()
+            });
 
         if !keep_placeholder_header_active && !cell.display_lines(u16::MAX).is_empty() {
             // Only break exec grouping if the cell renders visible lines.
@@ -3126,193 +3127,6 @@ impl ChatWidget {
         if local_images.is_empty()
             && text.lines().count() == 1
             && let Some((name, rest, _rest_offset)) = parse_slash_name(text.as_str())
-            && name == "settings"
-        {
-            let args: Vec<&str> = rest.split_whitespace().collect();
-            let current_git_branch = self.config.tui_status_bar_show_git_branch;
-            let current_worktree = self.config.tui_status_bar_show_worktree;
-            let current_diff_highlight = self.config.tui_transcript_diff_highlight;
-            let current_user_prompt_highlight = self.config.tui_transcript_user_prompt_highlight;
-
-            let (section, item, action) = match args.as_slice() {
-                [] | ["status-bar"] | ["transcript"] => {
-                    xcodex_plugins::settings::add_settings_output_with_values(
-                        self,
-                        current_git_branch,
-                        current_worktree,
-                        current_diff_highlight,
-                        current_user_prompt_highlight,
-                    );
-                    return;
-                }
-                ["worktrees"] => {
-                    xcodex_plugins::worktree::open_worktrees_settings_view(self);
-                    return;
-                }
-                ["status-bar", item] => ("status-bar", *item, None),
-                ["status-bar", item, action] => ("status-bar", *item, Some(*action)),
-                ["transcript", item] => ("transcript", *item, None),
-                ["transcript", item, action] => ("transcript", *item, Some(*action)),
-                _ => {
-                    self.add_info_message(
-                        "Usage: /settings [status-bar|transcript|worktrees]".to_string(),
-                        None,
-                    );
-                    return;
-                }
-            };
-
-            let mut next_git_branch = current_git_branch;
-            let mut next_worktree = current_worktree;
-            let mut next_diff_highlight = current_diff_highlight;
-            let mut next_user_prompt_highlight = current_user_prompt_highlight;
-
-            let item = item.to_ascii_lowercase();
-            let action = action.map(str::to_ascii_lowercase);
-
-            enum SettingsAction {
-                Toggle,
-                Set(bool),
-                Status,
-            }
-
-            let action = match action.as_deref() {
-                None | Some("toggle") => SettingsAction::Toggle,
-                Some("on") | Some("enable") | Some("true") => SettingsAction::Set(true),
-                Some("off") | Some("disable") | Some("false") => SettingsAction::Set(false),
-                Some("status") | Some("show") => SettingsAction::Status,
-                Some(_) => {
-                    match section {
-                        "status-bar" => self.add_info_message(
-                            "Usage: /settings status-bar <git-branch|worktree> [on|off|toggle|status]"
-                                .to_string(),
-                            None,
-                        ),
-                        "transcript" => self.add_info_message(
-                            "Usage: /settings transcript <diff-highlight|highlight-past-prompts> [on|off|toggle|status]"
-                                .to_string(),
-                            None,
-                        ),
-                        _ => {}
-                    }
-                    return;
-                }
-            };
-
-            match section {
-                "status-bar" => {
-                    let selected = match item.as_str() {
-                        "git-branch" | "branch" => Some((&mut next_git_branch, current_git_branch)),
-                        "worktree" | "worktree-path" => {
-                            Some((&mut next_worktree, current_worktree))
-                        }
-                        _ => None,
-                    };
-                    let Some((selected, current)) = selected else {
-                        self.add_info_message(
-                            "Unknown setting. Use: git-branch | worktree".to_string(),
-                            None,
-                        );
-                        return;
-                    };
-
-                    let next = match action {
-                        SettingsAction::Toggle => Some(!current),
-                        SettingsAction::Set(value) => Some(value),
-                        SettingsAction::Status => None,
-                    };
-                    if let Some(value) = next {
-                        *selected = value;
-                        self.app_event_tx.send(AppEvent::UpdateStatusBarGitOptions {
-                            show_git_branch: next_git_branch,
-                            show_worktree: next_worktree,
-                        });
-                        self.app_event_tx
-                            .send(AppEvent::PersistStatusBarGitOptions {
-                                show_git_branch: next_git_branch,
-                                show_worktree: next_worktree,
-                            });
-                    }
-                }
-                "transcript" => {
-                    if item.as_str() != "diff-highlight"
-                        && item.as_str() != "highlight-past-prompts"
-                    {
-                        self.add_info_message(
-                            "Unknown setting. Use: diff-highlight | highlight-past-prompts"
-                                .to_string(),
-                            None,
-                        );
-                        return;
-                    }
-                    if item.as_str() == "diff-highlight" {
-                        let next = match action {
-                            SettingsAction::Toggle => Some(!current_diff_highlight),
-                            SettingsAction::Set(value) => Some(value),
-                            SettingsAction::Status => None,
-                        };
-                        if let Some(value) = next {
-                            next_diff_highlight = value;
-                            self.app_event_tx
-                                .send(AppEvent::UpdateTranscriptDiffHighlight(next_diff_highlight));
-                            self.app_event_tx
-                                .send(AppEvent::PersistTranscriptDiffHighlight(
-                                    next_diff_highlight,
-                                ));
-                        }
-                    } else {
-                        let next = match action {
-                            SettingsAction::Toggle => Some(!current_user_prompt_highlight),
-                            SettingsAction::Set(value) => Some(value),
-                            SettingsAction::Status => None,
-                        };
-                        if let Some(value) = next {
-                            next_user_prompt_highlight = value;
-                            self.app_event_tx
-                                .send(AppEvent::UpdateTranscriptUserPromptHighlight(
-                                    next_user_prompt_highlight,
-                                ));
-                            self.app_event_tx
-                                .send(AppEvent::PersistTranscriptUserPromptHighlight(
-                                    next_user_prompt_highlight,
-                                ));
-                        }
-                    }
-                }
-                _ => {}
-            }
-
-            xcodex_plugins::settings::add_settings_output_with_values(
-                self,
-                next_git_branch,
-                next_worktree,
-                next_diff_highlight,
-                next_user_prompt_highlight,
-            );
-            return;
-        }
-
-        if local_images.is_empty()
-            && text.lines().count() == 1
-            && let Some((name, rest, _rest_offset)) = parse_slash_name(text.as_str())
-            && name == "help"
-        {
-            xcodex_plugins::help::handle_help_command(self, rest);
-            return;
-        }
-
-        if local_images.is_empty()
-            && text.lines().count() == 1
-            && let Some((name, rest, _rest_offset)) = parse_slash_name(text.as_str())
-            && name == "hooks"
-        {
-            xcodex_plugins::hooks::handle_hooks_command(self, rest);
-            return;
-        }
-
-        if local_images.is_empty()
-            && text.lines().count() == 1
-            && let Some((name, rest, _rest_offset)) = parse_slash_name(text.as_str())
             && name == "worktree"
             && xcodex_plugins::try_handle_worktree_subcommand(self, rest)
         {
@@ -3342,18 +3156,22 @@ impl ChatWidget {
             }
         }
 
+        let effective_mode = self.effective_collaboration_mode();
+        let collaboration_mode = if self.collaboration_modes_enabled() {
+            Some(effective_mode.clone())
+        } else {
+            None
+        };
         let op = Op::UserTurn {
             items,
             cwd: self.config.cwd.clone(),
             approval_policy: self.config.approval_policy.value(),
             sandbox_policy: self.config.sandbox_policy.get().clone(),
-            model: self.stored_collaboration_mode.model().to_string(),
-            effort: self.stored_collaboration_mode.reasoning_effort(),
+            model: effective_mode.model().to_string(),
+            effort: effective_mode.reasoning_effort(),
             summary: self.config.model_reasoning_summary,
             final_output_json_schema: None,
-            collaboration_mode: self
-                .collaboration_modes_enabled()
-                .then(|| self.stored_collaboration_mode.clone()),
+            collaboration_mode,
         };
 
         self.codex_op_tx.send(op).unwrap_or_else(|e| {
@@ -3721,29 +3539,7 @@ impl ChatWidget {
         self.request_redraw();
     }
     pub(crate) fn status_menu_status_cell(&self) -> Box<dyn HistoryCell> {
-        let default_usage = TokenUsage::default();
-        let token_info = self.token_info.as_ref();
-        let total_usage = token_info
-            .map(|ti| &ti.total_token_usage)
-            .unwrap_or(&default_usage);
-        let session_stats = (!self.session_stats.is_empty()).then_some(&self.session_stats);
-        let collaboration_mode = self.collaboration_mode_label();
-        let reasoning_effort_override = Some(self.stored_collaboration_mode.reasoning_effort());
-        crate::status::new_status_menu_summary_card_with_session_stats(
-            &self.config,
-            self.auth_manager.as_ref(),
-            token_info,
-            total_usage,
-            &self.thread_id,
-            session_stats,
-            self.forked_from,
-            self.rate_limit_snapshot.as_ref(),
-            self.plan_type,
-            Local::now(),
-            self.model_display_name(),
-            collaboration_mode,
-            reasoning_effort_override,
-        )
+        xcodex_plugins::status::status_menu_status_cell(self)
     }
 
     pub(crate) fn open_status_menu_view(&mut self, tab: crate::bottom_pane::StatusMenuTab) {
@@ -3769,16 +3565,16 @@ impl ChatWidget {
             .unified_exec_processes
             .iter()
             .map(|process| {
-                history_cell::BackgroundActivityEntry::new(
+                xcodex_plugins::history_cell::BackgroundActivityEntry::new(
                     process.key.clone(),
                     process.command_display.clone(),
                 )
             })
             .collect();
         let hooks = self.hook_processes.entries();
-        self.add_to_history(history_cell::new_unified_exec_processes_output(
-            processes, hooks,
-        ));
+        self.add_to_history(
+            xcodex_plugins::history_cell::new_unified_exec_processes_output(processes, hooks),
+        );
     }
 
     fn open_kill_popup(&mut self) {
@@ -4045,42 +3841,40 @@ impl ChatWidget {
         self.app_event_tx.clone()
     }
 
-    pub(crate) fn worktree_list(&self) -> &[GitWorktreeEntry] {
-        self.worktree_state.list()
+    pub(crate) fn worktree_state(&self) -> &WorktreeListState {
+        &self.worktree_state
     }
 
-    pub(crate) fn worktree_list_refresh_in_progress(&self) -> bool {
-        self.worktree_state.refresh_in_progress()
+    pub(crate) fn worktree_state_mut(&mut self) -> &mut WorktreeListState {
+        &mut self.worktree_state
     }
 
-    pub(crate) fn worktree_list_error(&self) -> Option<&str> {
-        self.worktree_state.error().map(String::as_str)
+    pub(crate) fn auth_manager(&self) -> &AuthManager {
+        self.auth_manager.as_ref()
     }
 
-    pub(crate) fn worktree_list_is_empty(&self) -> bool {
-        self.worktree_state.is_empty()
+    pub(crate) fn token_info(&self) -> Option<&TokenUsageInfo> {
+        self.token_info.as_ref()
     }
 
-    pub(crate) fn worktree_state_mark_refreshing(&mut self) {
-        self.worktree_state.mark_refreshing();
+    pub(crate) fn session_stats(&self) -> &crate::status::SessionStats {
+        &self.session_stats
     }
 
-    pub(crate) fn worktree_state_clear_no_repo(&mut self) {
-        self.worktree_state.clear_no_repo();
+    pub(crate) fn forked_from(&self) -> Option<ThreadId> {
+        self.forked_from
     }
 
-    pub(crate) fn worktree_state_set_list(&mut self, worktrees: Vec<GitWorktreeEntry>) {
-        self.worktree_state.set_list(worktrees);
+    pub(crate) fn rate_limit_snapshot(&self) -> Option<&RateLimitSnapshotDisplay> {
+        self.rate_limit_snapshot.as_ref()
     }
 
-    pub(crate) fn worktree_state_set_error(&mut self, error: String) {
-        self.worktree_state.set_error(error);
+    pub(crate) fn plan_type(&self) -> Option<PlanType> {
+        self.plan_type
     }
 
     pub(crate) fn take_shared_dirs_write_notice(&mut self) -> bool {
-        let show_notice = !self.shared_dirs_write_notice_shown;
-        self.shared_dirs_write_notice_shown = true;
-        show_notice
+        self.worktree_state.take_shared_dirs_write_notice()
     }
 
     pub(crate) fn emit_worktree_switch(&self, path: PathBuf) {
@@ -4939,8 +4733,7 @@ impl ChatWidget {
         let mut header_children: Vec<Box<dyn Renderable>> = Vec::new();
         let title_line = Line::from("Enable full access?").bold();
         let info_line = Line::from(vec![
-            "When xcodex runs with full access, it can edit any file on your computer and run commands with network, without your approval. "
-                .into(),
+            xcodex_plugins::full_access_warning_prefix().into(),
             "Exercise caution when enabling full access. This significantly increases the risk of data loss, leaks, or unexpected behavior."
                 .fg(Color::Red),
         ]);
@@ -5542,123 +5335,20 @@ impl ChatWidget {
         self.request_redraw();
     }
 
+    pub(crate) fn ramps_config(&self) -> (bool, bool, bool) {
+        (
+            self.config.tui_ramps_rotate,
+            self.config.tui_ramps_build,
+            self.config.tui_ramps_devops,
+        )
+    }
+
+    pub(crate) fn ramp_status_enabled(&self) -> bool {
+        xcodex_plugins::ramps::status_enabled(&self.ramp_status)
+    }
+
     pub(crate) fn open_ramps_settings_view(&mut self) {
-        if !self.ramps_status_enabled() {
-            self.add_info_message("Ramps are only available in xcodex.".to_string(), None);
-            return;
-        }
-
-        let rotate = self.config.tui_ramps_rotate;
-        let build = self.config.tui_ramps_build;
-        let devops = self.config.tui_ramps_devops;
-
-        let mut items: Vec<SelectionItem> = Vec::new();
-
-        {
-            let next_rotate = !rotate;
-            let actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
-                tx.send(AppEvent::UpdateRampsConfig {
-                    rotate: next_rotate,
-                    build,
-                    devops,
-                });
-                tx.send(AppEvent::PersistRampsConfig {
-                    rotate: next_rotate,
-                    build,
-                    devops,
-                });
-                tx.send(AppEvent::OpenRampsSettingsView);
-            })];
-
-            items.push(SelectionItem {
-                name: format!(
-                    "[{}] Rotate ramps (random per turn)",
-                    if rotate { "x" } else { " " }
-                ),
-                selected_description: Some(
-                    "When enabled, xcodex picks one eligible ramp per turn. The chosen ramp stays stable for the entire turn.".to_string(),
-                ),
-                actions,
-                dismiss_on_select: true,
-                ..Default::default()
-            });
-        }
-
-        items.push(SelectionItem {
-            name: "Hardware ramp (baseline)".to_string(),
-            selected_description: Some(
-                crate::ramps::preview_flow(crate::ramps::RampId::Hardware).to_string(),
-            ),
-            ..Default::default()
-        });
-
-        {
-            let next_build = !build;
-            let actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
-                tx.send(AppEvent::UpdateRampsConfig {
-                    rotate,
-                    build: next_build,
-                    devops,
-                });
-                tx.send(AppEvent::PersistRampsConfig {
-                    rotate,
-                    build: next_build,
-                    devops,
-                });
-                tx.send(AppEvent::OpenRampsSettingsView);
-            })];
-
-            items.push(SelectionItem {
-                name: format!("[{}] Build ramp", if build { "x" } else { " " }),
-                selected_description: Some(
-                    crate::ramps::preview_flow(crate::ramps::RampId::Build).to_string(),
-                ),
-                actions,
-                dismiss_on_select: true,
-                ..Default::default()
-            });
-        }
-
-        {
-            let next_devops = !devops;
-            let actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
-                tx.send(AppEvent::UpdateRampsConfig {
-                    rotate,
-                    build,
-                    devops: next_devops,
-                });
-                tx.send(AppEvent::PersistRampsConfig {
-                    rotate,
-                    build,
-                    devops: next_devops,
-                });
-                tx.send(AppEvent::OpenRampsSettingsView);
-            })];
-
-            items.push(SelectionItem {
-                name: format!("[{}] DevOps ramp", if devops { "x" } else { " " }),
-                selected_description: Some(
-                    crate::ramps::preview_flow(crate::ramps::RampId::DevOps).to_string(),
-                ),
-                actions,
-                dismiss_on_select: true,
-                ..Default::default()
-            });
-        }
-
-        let mut header = ColumnRenderable::new();
-        header.push(Line::from("Ramps".bold()));
-        header.push(Line::from(
-            "Pick which ramp flows xcodex can rotate through.".dim(),
-        ));
-
-        self.bottom_pane.show_selection_view(SelectionViewParams {
-            header: Box::new(header),
-            footer_hint: Some(standard_popup_hint_line()),
-            items,
-            initial_selected_idx: Some(0),
-            ..Default::default()
-        });
+        xcodex_plugins::ramps::open_settings_view(self);
     }
 
     pub(crate) fn set_hide_agent_reasoning(&mut self, hide: bool) {
@@ -5704,7 +5394,7 @@ impl ChatWidget {
 
     #[cfg(test)]
     pub(crate) fn current_reasoning_effort(&self) -> Option<ReasoningEffortConfig> {
-        self.stored_collaboration_mode.reasoning_effort()
+        self.effective_reasoning_effort()
     }
 
     fn is_session_configured(&self) -> bool {
@@ -5715,7 +5405,15 @@ impl ChatWidget {
         self.config.features.enabled(Feature::CollaborationModes)
     }
 
-    fn model_display_name(&self) -> &str {
+    pub(crate) fn effective_reasoning_effort(&self) -> Option<ReasoningEffortConfig> {
+        self.stored_collaboration_mode.reasoning_effort()
+    }
+
+    fn effective_collaboration_mode(&self) -> CollaborationMode {
+        self.stored_collaboration_mode.clone()
+    }
+
+    pub(crate) fn model_display_name(&self) -> &str {
         let model = self.current_model();
         if model.is_empty() {
             DEFAULT_MODEL_DISPLAY_NAME
@@ -5725,7 +5423,7 @@ impl ChatWidget {
     }
 
     /// Get the label for the current collaboration mode.
-    fn collaboration_mode_label(&self) -> Option<&'static str> {
+    pub(crate) fn collaboration_mode_label(&self) -> Option<&'static str> {
         if !self.collaboration_modes_enabled() {
             return None;
         }
@@ -5777,24 +5475,14 @@ impl ChatWidget {
     }
 
     /// Build a placeholder header cell while the session is configuring.
-    fn placeholder_session_header_cell(
-        config: &Config,
-        is_collaboration: bool,
-        collaboration_mode: CollaborationMode,
-    ) -> Box<dyn HistoryCell> {
+    fn placeholder_session_header_cell(config: &Config) -> Box<dyn HistoryCell> {
         let placeholder_style = Style::default().add_modifier(Modifier::DIM | Modifier::ITALIC);
-        Box::new(history_cell::SessionHeaderHistoryCell::new_with_style(
-            DEFAULT_MODEL_DISPLAY_NAME.to_string(),
+        crate::xcodex_plugins::history_cell::placeholder_session_header_cell(
+            config,
             placeholder_style,
-            None,
-            config.cwd.clone(),
+            DEFAULT_MODEL_DISPLAY_NAME,
             CODEX_CLI_VERSION,
-            config.approval_policy.value(),
-            config.sandbox_policy.get().clone(),
-            crate::xtreme::xtreme_ui_enabled(config),
-            is_collaboration,
-            collaboration_mode,
-        ))
+        )
     }
 
     /// Merge the real session info cell with any placeholder header to avoid double boxes.
@@ -5803,7 +5491,10 @@ impl ChatWidget {
         let merged_header = if let Some(active) = self.active_cell.take() {
             if active
                 .as_any()
-                .is::<history_cell::SessionHeaderHistoryCell>()
+                .is::<crate::xcodex_plugins::history_cell::XcodexSessionHeaderHistoryCell>()
+                || active
+                    .as_any()
+                    .is::<history_cell::SessionHeaderHistoryCell>()
             {
                 // Reuse the existing placeholder header to avoid rendering two boxes.
                 if let Some(cell) = session_info_cell.take() {
@@ -5878,21 +5569,22 @@ impl ChatWidget {
         if !DOUBLE_PRESS_QUIT_SHORTCUT_ENABLED {
             if self.is_cancellable_work_active() {
                 self.submit_op(Op::Interrupt);
-            } else {
-                if self.config.tui_confirm_exit_with_running_hooks
-                    && !self.hook_processes.is_empty()
-                {
-                    if self.quit_shortcut_active_for(key) {
+            } else if let Some(action) = hook_quit_action(
+                self.config.tui_confirm_exit_with_running_hooks,
+                &self.hook_processes,
+                self.quit_shortcut_active_for(key),
+            ) {
+                match action {
+                    HookQuitAction::Confirmed => {
                         self.quit_shortcut_expires_at = None;
                         self.quit_shortcut_key = None;
                         self.bottom_pane.clear_quit_shortcut_hint();
                         self.submit_op(Op::Shutdown);
-                        return;
                     }
-
-                    self.arm_quit_shortcut(key);
-                    return;
+                    HookQuitAction::ArmShortcut => self.arm_quit_shortcut(key),
                 }
+                return;
+            } else {
                 self.request_quit_without_confirmation();
             }
             return;
@@ -5901,12 +5593,17 @@ impl ChatWidget {
         if self.quit_shortcut_active_for(key) {
             self.quit_shortcut_expires_at = None;
             self.quit_shortcut_key = None;
-            if self.config.tui_confirm_exit_with_running_hooks && !self.hook_processes.is_empty() {
+            if let Some(action) = hook_quit_action(
+                self.config.tui_confirm_exit_with_running_hooks,
+                &self.hook_processes,
+                true,
+            ) && matches!(action, HookQuitAction::Confirmed)
+            {
                 self.bottom_pane.clear_quit_shortcut_hint();
                 self.submit_op(Op::Shutdown);
-            } else {
-                self.request_quit_without_confirmation();
+                return;
             }
+            self.request_quit_without_confirmation();
             return;
         }
 
@@ -5929,16 +5626,20 @@ impl ChatWidget {
                 return false;
             }
 
-            if self.config.tui_confirm_exit_with_running_hooks && !self.hook_processes.is_empty() {
-                if self.quit_shortcut_active_for(key) {
-                    self.quit_shortcut_expires_at = None;
-                    self.quit_shortcut_key = None;
-                    self.bottom_pane.clear_quit_shortcut_hint();
-                    self.request_quit_without_confirmation();
-                    return true;
+            if let Some(action) = hook_quit_action(
+                self.config.tui_confirm_exit_with_running_hooks,
+                &self.hook_processes,
+                self.quit_shortcut_active_for(key),
+            ) {
+                match action {
+                    HookQuitAction::Confirmed => {
+                        self.quit_shortcut_expires_at = None;
+                        self.quit_shortcut_key = None;
+                        self.bottom_pane.clear_quit_shortcut_hint();
+                        self.request_quit_without_confirmation();
+                    }
+                    HookQuitAction::ArmShortcut => self.arm_quit_shortcut(key),
                 }
-
-                self.arm_quit_shortcut(key);
                 return true;
             }
 
@@ -6036,13 +5737,13 @@ impl ChatWidget {
     fn on_list_mcp_tools(&mut self, ev: McpListToolsResponseEvent) {
         let startup_durations = (!self.mcp_startup_state.startup_durations().is_empty())
             .then_some(self.mcp_startup_state.startup_durations());
-        self.add_to_history(history_cell::new_mcp_tools_output(
+        self.add_to_history(xcodex_plugins::history_cell::new_mcp_tools_output(
             &self.config,
             ev.tools,
             ev.resources,
             ev.resource_templates,
             &ev.auth_statuses,
-            history_cell::McpStartupRenderInfo {
+            xcodex_plugins::history_cell::McpStartupRenderInfo {
                 statuses: self.mcp_startup_state.status(),
                 durations: startup_durations,
                 ready_duration: self.mcp_startup_state.ready_duration(),
@@ -6338,15 +6039,13 @@ impl Notification {
                 format!("Approval requested: {}", truncate_text(command, 30))
             }
             Notification::EditApprovalRequested { cwd, changes } => {
-                format!(
-                    "xcodex wants to edit {}",
-                    if changes.len() == 1 {
-                        #[allow(clippy::unwrap_used)]
-                        display_path_for(changes.first().unwrap(), cwd)
-                    } else {
-                        format!("{} files", changes.len())
-                    }
-                )
+                let target = if changes.len() == 1 {
+                    #[allow(clippy::unwrap_used)]
+                    display_path_for(changes.first().unwrap(), cwd)
+                } else {
+                    format!("{} files", changes.len())
+                };
+                xcodex_plugins::format_edit_approval_message(target)
             }
             Notification::ElicitationRequested { server_name } => {
                 format!("Approval requested by {server_name}")

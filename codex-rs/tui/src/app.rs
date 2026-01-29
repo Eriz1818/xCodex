@@ -62,8 +62,6 @@ use ratatui::text::Span;
 use ratatui::widgets::Paragraph;
 use ratatui::widgets::Wrap;
 use std::collections::BTreeMap;
-use std::collections::HashMap;
-use std::collections::VecDeque;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -77,9 +75,9 @@ use tokio::sync::broadcast;
 use tokio::sync::mpsc::unbounded_channel;
 
 #[cfg(not(debug_assertions))]
-use crate::history_cell::UpdateAvailableHistoryCell;
+use crate::xcodex_plugins::history_cell::new_update_available_history_cell;
 #[cfg(not(debug_assertions))]
-use crate::history_cell::WhatsNewHistoryCell;
+use crate::xcodex_plugins::history_cell::new_whats_new_history_cell;
 const EXTERNAL_EDITOR_HINT: &str = "Save and close external editor to continue.";
 
 #[derive(Debug, Clone)]
@@ -119,7 +117,7 @@ fn session_summary(token_usage: TokenUsage, thread_id: Option<ThreadId>) -> Opti
     }
 
     let usage_line = FinalOutput::from(token_usage).to_string();
-    let resume_command = thread_id.map(|thread_id| format!("xcodex resume {thread_id}"));
+    let resume_command = thread_id.map(crate::xcodex_plugins::app::resume_command);
     Some(SessionSummary {
         usage_line,
         resume_command,
@@ -370,15 +368,7 @@ pub(crate) struct App {
     suppress_shutdown_complete: bool,
 
     windows_sandbox: WindowsSandboxState,
-
-    shared_dirs_write_notice_shown: bool,
-
-    // TODO(jif) drop once new UX is here.
-    // Track external agent approvals spawned via AgentControl.
-    /// Map routed approval IDs to their originating external threads and original IDs.
-    external_approval_routes: HashMap<String, (ThreadId, String)>,
-    /// Buffered Codex events while external approvals are pending.
-    paused_codex_events: VecDeque<Event>,
+    pub(crate) xcodex_state: crate::xcodex_plugins::XcodexAppState,
 }
 
 #[derive(Default)]
@@ -599,10 +589,8 @@ impl App {
             feedback: feedback.clone(),
             pending_update_action: None,
             suppress_shutdown_complete: false,
-            shared_dirs_write_notice_shown: false,
             windows_sandbox: WindowsSandboxState::default(),
-            external_approval_routes: HashMap::new(),
-            paused_codex_events: VecDeque::new(),
+            xcodex_state: crate::xcodex_plugins::XcodexAppState::default(),
         };
 
         // On startup, if Agent mode (workspace-write) or ReadOnly is active, warn about world-writable dirs on Windows.
@@ -634,10 +622,10 @@ impl App {
             let control = app
                 .handle_event(
                     tui,
-                    AppEvent::InsertHistoryCell(Box::new(UpdateAvailableHistoryCell::new(
+                    AppEvent::InsertHistoryCell(new_update_available_history_cell(
                         latest_version,
                         crate::update_action::get_update_action(),
-                    ))),
+                    )),
                 )
                 .await?;
             if let AppRunControl::Exit(exit_reason) = control {
@@ -654,10 +642,10 @@ impl App {
         if let Some(whats_new) = whats_new {
             app.handle_event(
                 tui,
-                AppEvent::InsertHistoryCell(Box::new(WhatsNewHistoryCell::new(
+                AppEvent::InsertHistoryCell(new_whats_new_history_cell(
                     whats_new.version,
                     whats_new.bullets,
-                ))),
+                )),
             )
             .await?;
         }
@@ -762,6 +750,10 @@ impl App {
     }
 
     async fn handle_event(&mut self, tui: &mut tui::Tui, event: AppEvent) -> Result<AppRunControl> {
+        let event = match crate::xcodex_plugins::app::try_handle_event(self, tui, event).await? {
+            Some(event) => event,
+            None => return Ok(AppRunControl::Continue),
+        };
         match event {
             AppEvent::NewSession => {
                 let model = self.chat_widget.current_model().to_string();
@@ -989,18 +981,10 @@ impl App {
                 self.chat_widget.on_commit_tick();
             }
             AppEvent::CodexEvent(event) => {
-                if !self.external_approval_routes.is_empty() {
-                    // Store the events while the approval is pending.
-                    self.paused_codex_events.push_back(event);
-                    return Ok(AppRunControl::Continue);
-                }
                 self.handle_codex_event_now(event);
                 if self.backtrack_render_pending {
                     tui.frame_requester().schedule_frame();
                 }
-            }
-            AppEvent::ExternalApprovalRequest { thread_id, event } => {
-                self.handle_external_approval_request(thread_id, event);
             }
             AppEvent::Exit(mode) => match mode {
                 ExitMode::ShutdownFirst => self.chat_widget.submit_op(Op::Shutdown),
@@ -1011,72 +995,6 @@ impl App {
             AppEvent::FatalExitRequest(message) => {
                 return Ok(AppRunControl::Exit(ExitReason::Fatal(message)));
             }
-            AppEvent::CodexOp(op) => match op {
-                // Catch potential approvals coming from an external thread and treat them
-                // directly. This support both command and patch approval. In such case
-                // the approval get transferred to the corresponding thread and the external
-                // approval map (`external_approval_routes`) is updated.
-                Op::ExecApproval { id, decision } => {
-                    if let Some((thread_id, original_id)) =
-                        self.external_approval_routes.remove(&id)
-                    {
-                        // Approval of a sub-agent.
-                        self.forward_external_op(
-                            thread_id,
-                            Op::ExecApproval {
-                                id: original_id,
-                                decision,
-                            },
-                        )
-                        .await;
-                        self.finish_external_approval();
-                    } else {
-                        // This is an approval but not external.
-                        self.chat_widget
-                            .submit_op(Op::ExecApproval { id, decision });
-                    }
-                }
-                Op::PatchApproval { id, decision } => {
-                    if let Some((thread_id, original_id)) =
-                        self.external_approval_routes.remove(&id)
-                    {
-                        // Approval of a sub-agent.
-                        self.forward_external_op(
-                            thread_id,
-                            Op::PatchApproval {
-                                id: original_id,
-                                decision,
-                            },
-                        )
-                        .await;
-                        self.finish_external_approval();
-                    } else {
-                        // This is an approval but not external.
-                        self.chat_widget
-                            .submit_op(Op::PatchApproval { id, decision });
-                    }
-                }
-                Op::UserInputAnswer { id, response } => {
-                    if let Some((thread_id, original_id)) =
-                        self.external_approval_routes.remove(&id)
-                    {
-                        self.forward_external_op(
-                            thread_id,
-                            Op::UserInputAnswer {
-                                id: original_id,
-                                response,
-                            },
-                        )
-                        .await;
-                        self.finish_external_approval();
-                    } else {
-                        self.chat_widget
-                            .submit_op(Op::UserInputAnswer { id, response });
-                    }
-                }
-                // Standard path where this is not an external approval response.
-                _ => self.chat_widget.submit_op(op),
-            },
             AppEvent::DiffResult(text) => {
                 // Clear the in-progress state in the bottom pane
                 self.chat_widget.on_diff_complete();
@@ -1134,270 +1052,6 @@ impl App {
                 self.config.tui_transcript_user_prompt_highlight = enabled;
                 self.chat_widget
                     .set_transcript_user_prompt_highlight(enabled);
-                tui.frame_requester().schedule_frame();
-            }
-            AppEvent::UpdateXtremeMode(mode) => {
-                self.config.tui_xtreme_mode = mode;
-                self.chat_widget.set_xtreme_mode(mode);
-                tui.frame_requester().schedule_frame();
-            }
-            AppEvent::PreviewTheme { theme } => {
-                crate::xcodex_plugins::theme::preview_theme(self, tui, &theme);
-            }
-            AppEvent::CancelThemePreview => {
-                crate::xcodex_plugins::theme::cancel_theme_preview(self, tui);
-            }
-            AppEvent::PersistThemeSelection { variant, theme } => {
-                crate::xcodex_plugins::theme::persist_theme_selection(self, tui, variant, theme)
-                    .await;
-            }
-            AppEvent::OpenThemeSelector => {
-                crate::xcodex_plugins::theme::open_theme_selector(self, tui);
-            }
-            AppEvent::OpenThemeHelp => {
-                crate::xcodex_plugins::theme::open_theme_help(self, tui);
-            }
-            AppEvent::UpdateRampsConfig {
-                rotate,
-                build,
-                devops,
-            } => {
-                self.config.tui_ramps_rotate = rotate;
-                self.config.tui_ramps_build = build;
-                self.config.tui_ramps_devops = devops;
-                self.chat_widget.set_ramps_config(rotate, build, devops);
-                tui.frame_requester().schedule_frame();
-            }
-            AppEvent::WorktreeListUpdated {
-                worktrees,
-                open_picker,
-            } => {
-                crate::xcodex_plugins::worktree::set_worktree_list(
-                    &mut self.chat_widget,
-                    worktrees,
-                    open_picker,
-                );
-                tui.frame_requester().schedule_frame();
-            }
-            AppEvent::WorktreeDetect { open_picker } => {
-                crate::xcodex_plugins::worktree::spawn_worktree_detection(
-                    &mut self.chat_widget,
-                    open_picker,
-                );
-                tui.frame_requester().schedule_frame();
-            }
-            AppEvent::OpenWorktreeCommandMenu => {
-                if self.chat_widget.composer_is_empty() {
-                    self.chat_widget.set_composer_text(
-                        "/worktree ".to_string(),
-                        Vec::new(),
-                        Vec::new(),
-                    );
-                } else {
-                    self.chat_widget.add_info_message(
-                        "Clear the composer to open the /worktree menu.".to_string(),
-                        None,
-                    );
-                }
-                tui.frame_requester().schedule_frame();
-            }
-            AppEvent::OpenToolsCommand { command } => {
-                if self.chat_widget.composer_is_empty() {
-                    self.chat_widget
-                        .set_composer_text(command, Vec::new(), Vec::new());
-                } else {
-                    self.chat_widget.add_info_message(
-                        "Clear the composer to open tools commands.".to_string(),
-                        None,
-                    );
-                }
-                tui.frame_requester().schedule_frame();
-            }
-            AppEvent::OpenWorktreesSettingsView => {
-                crate::xcodex_plugins::worktree::open_worktrees_settings_view(
-                    &mut self.chat_widget,
-                );
-                tui.frame_requester().schedule_frame();
-            }
-            AppEvent::OpenWorktreeInitWizard {
-                worktree_root,
-                workspace_root,
-                current_branch,
-                shared_dirs,
-                branches,
-            } => {
-                self.chat_widget
-                    .set_slash_completion_branches(branches.clone());
-                crate::xcodex_plugins::worktree::open_worktree_init_wizard(
-                    &mut self.chat_widget,
-                    worktree_root,
-                    workspace_root,
-                    current_branch,
-                    shared_dirs,
-                    branches,
-                );
-                tui.frame_requester().schedule_frame();
-            }
-            AppEvent::OpenRampsSettingsView => {
-                self.chat_widget.open_ramps_settings_view();
-                tui.frame_requester().schedule_frame();
-            }
-            AppEvent::WorktreeListUpdateFailed { error, open_picker } => {
-                crate::xcodex_plugins::worktree::on_worktree_list_update_failed(
-                    &mut self.chat_widget,
-                    error,
-                    open_picker,
-                );
-                tui.frame_requester().schedule_frame();
-            }
-            AppEvent::WorktreeSwitched(cwd) => {
-                let previous_cwd = self.config.cwd.clone();
-                self.config.cwd = cwd.clone();
-                self.chat_widget.set_session_cwd(cwd);
-                tui.frame_requester().schedule_frame();
-
-                let tx = self.app_event_tx.clone();
-                let branch_cwd = self.config.cwd.clone();
-                tokio::spawn(async move {
-                    let branches = codex_core::git_info::local_git_branches(&branch_cwd).await;
-                    tx.send(AppEvent::UpdateSlashCompletionBranches { branches });
-                });
-
-                let next_root = codex_core::git_info::resolve_git_worktree_head(&self.config.cwd)
-                    .map(|head| head.worktree_root);
-
-                let auto_link = self.config.worktrees_auto_link_shared_dirs
-                    && !self.config.worktrees_shared_dirs.is_empty();
-                if auto_link
-                    && let Some(next_root) = next_root.clone()
-                    && let Some(workspace_root) =
-                        codex_core::git_info::resolve_root_git_project_for_trust(&next_root)
-                    && next_root != workspace_root
-                {
-                    let show_notice = !self.shared_dirs_write_notice_shown;
-                    self.shared_dirs_write_notice_shown = true;
-                    let shared_dirs = self.config.worktrees_shared_dirs.clone();
-                    let tx = self.app_event_tx.clone();
-                    tokio::spawn(async move {
-                        let actions = codex_core::git_info::link_worktree_shared_dirs(
-                            &next_root,
-                            &workspace_root,
-                            &shared_dirs,
-                        )
-                        .await;
-
-                        let mut linked = 0usize;
-                        let mut skipped = 0usize;
-                        let mut failed = 0usize;
-                        for action in &actions {
-                            match action.outcome {
-                                codex_core::git_info::SharedDirLinkOutcome::Linked => linked += 1,
-                                codex_core::git_info::SharedDirLinkOutcome::AlreadyLinked => {}
-                                codex_core::git_info::SharedDirLinkOutcome::Skipped(_) => {
-                                    skipped += 1;
-                                }
-                                codex_core::git_info::SharedDirLinkOutcome::Failed(_) => {
-                                    failed += 1;
-                                }
-                            }
-                        }
-
-                        if linked == 0 && skipped == 0 && failed == 0 {
-                            return;
-                        }
-
-                        let summary = format!(
-                            "Auto-linked shared dirs after worktree switch: linked={linked}, skipped={skipped}, failed={failed}."
-                        );
-                        let hint = if show_notice {
-                            Some(String::from(
-                                "Note: shared dirs are linked into the workspace root; writes under them persist across worktrees. Tip: run `/worktree doctor` for details.",
-                            ))
-                        } else {
-                            Some(String::from("Tip: run `/worktree doctor` for details."))
-                        };
-                        tx.send(AppEvent::InsertHistoryCell(Box::new(
-                            crate::history_cell::new_info_event(summary, hint),
-                        )));
-                    });
-                }
-
-                let previous_root = codex_core::git_info::resolve_git_worktree_head(&previous_cwd)
-                    .map(|head| head.worktree_root);
-
-                let Some(previous_root) = previous_root else {
-                    return Ok(AppRunControl::Continue);
-                };
-                let Some(next_root) = next_root else {
-                    return Ok(AppRunControl::Continue);
-                };
-
-                if previous_root == next_root {
-                    return Ok(AppRunControl::Continue);
-                }
-
-                if codex_core::git_info::resolve_root_git_project_for_trust(&previous_root)
-                    .is_some_and(|root| root == previous_root)
-                {
-                    return Ok(AppRunControl::Continue);
-                }
-
-                let tx = self.app_event_tx.clone();
-                tokio::spawn(async move {
-                    let Ok(summary) =
-                        codex_core::git_info::summarize_git_untracked_files(&previous_root, 5)
-                            .await
-                    else {
-                        return;
-                    };
-                    if summary.total == 0 {
-                        return;
-                    }
-
-                    tx.send(AppEvent::WorktreeUntrackedFilesDetected {
-                        previous_worktree_root: previous_root,
-                        total: summary.total,
-                        sample: summary.sample,
-                    });
-                });
-            }
-            AppEvent::WorktreeUntrackedFilesDetected {
-                previous_worktree_root,
-                total,
-                sample,
-            } => {
-                let display = crate::exec_command::relativize_to_home(&previous_worktree_root)
-                    .map(|path| {
-                        if path.as_os_str().is_empty() {
-                            String::from("~")
-                        } else {
-                            format!("~/{}", path.display())
-                        }
-                    })
-                    .unwrap_or_else(|| previous_worktree_root.display().to_string());
-
-                let sample_preview = if sample.is_empty() {
-                    String::new()
-                } else {
-                    let preview: String = sample
-                        .iter()
-                        .take(3)
-                        .map(|path| format!("\n  - {path}"))
-                        .collect();
-                    let remainder = total.saturating_sub(sample.len());
-                    if remainder > 0 {
-                        format!("{preview}\n  - … +{remainder} more")
-                    } else {
-                        preview
-                    }
-                };
-
-                self.chat_widget.add_info_message(
-                    format!(
-                        "Untracked files detected in the previous worktree ({display}). Deleting that worktree may lose them.{sample_preview}"
-                    ),
-                    Some(String::from("Tip: git stash push -u -m \"worktree scratch\"")),
-                );
                 tui.frame_requester().schedule_frame();
             }
             AppEvent::StartFileSearch(query) => {
@@ -1864,165 +1518,6 @@ impl App {
                     }
                 }
             }
-            AppEvent::PersistXtremeMode(mode) => {
-                let profile = self.active_profile.as_deref();
-                let mode_value = match mode {
-                    codex_core::config::types::XtremeMode::Auto => "auto",
-                    codex_core::config::types::XtremeMode::On => "on",
-                    codex_core::config::types::XtremeMode::Off => "off",
-                };
-                match ConfigEditsBuilder::new(&self.config.codex_home)
-                    .with_profile(profile)
-                    .with_edits([ConfigEdit::SetPath {
-                        segments: vec!["tui".to_string(), "xtreme_mode".to_string()],
-                        value: toml_edit::value(mode_value),
-                    }])
-                    .apply()
-                    .await
-                {
-                    Ok(()) => {}
-                    Err(err) => {
-                        tracing::error!(error = %err, "failed to persist xtreme mode");
-                        if let Some(profile) = profile {
-                            self.chat_widget.add_error_message(format!(
-                                "Failed to save xtreme mode for profile `{profile}`: {err}"
-                            ));
-                        } else {
-                            self.chat_widget
-                                .add_error_message(format!("Failed to save xtreme mode: {err}"));
-                        }
-                    }
-                }
-            }
-            AppEvent::PersistRampsConfig {
-                rotate,
-                build,
-                devops,
-            } => {
-                let profile = self.active_profile.as_deref();
-                match ConfigEditsBuilder::new(&self.config.codex_home)
-                    .with_profile(profile)
-                    .with_edits([
-                        ConfigEdit::SetPath {
-                            segments: vec!["tui".to_string(), "ramps_rotate".to_string()],
-                            value: toml_edit::value(rotate),
-                        },
-                        ConfigEdit::SetPath {
-                            segments: vec!["tui".to_string(), "ramps_build".to_string()],
-                            value: toml_edit::value(build),
-                        },
-                        ConfigEdit::SetPath {
-                            segments: vec!["tui".to_string(), "ramps_devops".to_string()],
-                            value: toml_edit::value(devops),
-                        },
-                    ])
-                    .apply()
-                    .await
-                {
-                    Ok(()) => {}
-                    Err(err) => {
-                        tracing::error!(error = %err, "failed to persist xcodex ramps config");
-                        if let Some(profile) = profile {
-                            self.chat_widget.add_error_message(format!(
-                                "Failed to save ramps config for profile `{profile}`: {err}"
-                            ));
-                        } else {
-                            self.chat_widget
-                                .add_error_message(format!("Failed to save ramps config: {err}"));
-                        }
-                    }
-                }
-            }
-            AppEvent::UpdateWorktreesSharedDirs { shared_dirs } => {
-                self.config.worktrees_shared_dirs = shared_dirs.clone();
-                self.chat_widget.set_worktrees_shared_dirs(shared_dirs);
-            }
-            AppEvent::UpdateWorktreesPinnedPaths { pinned_paths } => {
-                self.config.worktrees_pinned_paths = pinned_paths.clone();
-                self.chat_widget.set_worktrees_pinned_paths(pinned_paths);
-            }
-            AppEvent::PersistWorktreesSharedDirs { shared_dirs } => {
-                let mut shared_dirs_array = toml_edit::Array::new();
-                for dir in &shared_dirs {
-                    shared_dirs_array.push(dir.clone());
-                }
-                match ConfigEditsBuilder::new(&self.config.codex_home)
-                    .with_edits([ConfigEdit::SetPath {
-                        segments: vec!["worktrees".to_string(), "shared_dirs".to_string()],
-                        value: toml_edit::value(shared_dirs_array),
-                    }])
-                    .apply()
-                    .await
-                {
-                    Ok(()) => {}
-                    Err(err) => {
-                        tracing::error!(error = %err, "failed to persist worktree shared dirs");
-                        self.chat_widget.add_error_message(format!(
-                            "Failed to save worktree shared dirs: {err}"
-                        ));
-                    }
-                }
-            }
-            AppEvent::PersistWorktreesPinnedPaths { pinned_paths } => {
-                let mut pinned_paths_array = toml_edit::Array::new();
-                for path in &pinned_paths {
-                    pinned_paths_array.push(path.clone());
-                }
-                match ConfigEditsBuilder::new(&self.config.codex_home)
-                    .with_edits([ConfigEdit::SetPath {
-                        segments: vec!["worktrees".to_string(), "pinned_paths".to_string()],
-                        value: toml_edit::value(pinned_paths_array),
-                    }])
-                    .apply()
-                    .await
-                {
-                    Ok(()) => {}
-                    Err(err) => {
-                        tracing::error!(error = %err, "failed to persist worktree pinned paths");
-                        self.chat_widget.add_error_message(format!(
-                            "Failed to save worktree pinned paths: {err}"
-                        ));
-                    }
-                }
-            }
-            AppEvent::PersistMcpStartupTimeout {
-                server,
-                startup_timeout_sec,
-            } => {
-                let profile = self.active_profile.as_deref();
-                match ConfigEditsBuilder::new(&self.config.codex_home)
-                    .with_profile(profile)
-                    .with_edits([ConfigEdit::SetPath {
-                        segments: vec![
-                            "mcp_servers".to_string(),
-                            server.clone(),
-                            "startup_timeout_sec".to_string(),
-                        ],
-                        value: toml_edit::value(
-                            i64::try_from(startup_timeout_sec).unwrap_or(i64::MAX),
-                        ),
-                    }])
-                    .apply()
-                    .await
-                {
-                    Ok(()) => {
-                        let mut mcp_servers = self.config.mcp_servers.get().clone();
-                        if let Some(cfg) = mcp_servers.get_mut(&server) {
-                            cfg.startup_timeout_sec =
-                                Some(std::time::Duration::from_secs(startup_timeout_sec));
-                            if let Err(err) = self.config.mcp_servers.set(mcp_servers) {
-                                tracing::warn!(%err, "failed to update MCP startup timeout in app config");
-                            }
-                        }
-                    }
-                    Err(err) => {
-                        tracing::error!(error = %err, "failed to persist MCP startup timeout");
-                        self.chat_widget.add_error_message(format!(
-                            "Failed to save MCP startup timeout for `{server}`: {err}"
-                        ));
-                    }
-                }
-            }
             AppEvent::UpdateAskForApprovalPolicy(policy) => {
                 self.chat_widget.set_approval_policy(policy);
             }
@@ -2275,11 +1770,14 @@ impl App {
                     ));
                 }
             },
+            other => {
+                tracing::warn!(event = ?other, "unhandled app event");
+            }
         }
         Ok(AppRunControl::Continue)
     }
 
-    fn handle_codex_event_now(&mut self, event: Event) {
+    pub(crate) fn handle_codex_event_now(&mut self, event: Event) {
         if self.suppress_shutdown_complete && matches!(event.msg, EventMsg::ShutdownComplete) {
             self.suppress_shutdown_complete = false;
             return;
@@ -2291,55 +1789,6 @@ impl App {
         }
         self.handle_backtrack_event(&event.msg);
         self.chat_widget.handle_codex_event(event);
-    }
-
-    /// Routes external approval request events through the chat widget by
-    /// rewriting the event id to include the originating thread.
-    ///
-    /// `thread_id` is the external thread that issued the approval request.
-    /// `event` is the approval request event whose id is rewritten so replies
-    /// can be routed back to the correct thread.
-    fn handle_external_approval_request(&mut self, thread_id: ThreadId, mut event: Event) {
-        match &mut event.msg {
-            EventMsg::RequestUserInput(ev) => {
-                let original_id = ev.turn_id.clone();
-                let routing_id = format!("{thread_id}:{original_id}");
-                self.external_approval_routes
-                    .insert(routing_id.clone(), (thread_id, original_id));
-                ev.turn_id = routing_id.clone();
-                event.id = routing_id;
-            }
-            EventMsg::ExecApprovalRequest(_) | EventMsg::ApplyPatchApprovalRequest(_) => {
-                let original_id = event.id.clone();
-                let routing_id = format!("{thread_id}:{original_id}");
-                self.external_approval_routes
-                    .insert(routing_id.clone(), (thread_id, original_id));
-                event.id = routing_id;
-            }
-            _ => return,
-        }
-        self.chat_widget.handle_codex_event(event);
-    }
-
-    async fn forward_external_op(&self, thread_id: ThreadId, op: Op) {
-        let thread = match self.server.get_thread(thread_id).await {
-            Ok(thread) => thread,
-            Err(err) => {
-                tracing::warn!("failed to find thread {thread_id} for approval response: {err}");
-                return;
-            }
-        };
-        if let Err(err) = thread.submit(op).await {
-            tracing::warn!("failed to submit approval response to thread {thread_id}: {err}");
-        }
-    }
-
-    fn finish_external_approval(&mut self) {
-        if self.external_approval_routes.is_empty() {
-            while let Some(event) = self.paused_codex_events.pop_front() {
-                self.handle_codex_event_now(event);
-            }
-        }
     }
 
     async fn handle_thread_created(&mut self, thread_id: ThreadId) -> Result<()> {
@@ -2579,7 +2028,7 @@ mod tests {
     use crate::history_cell::AgentMessageCell;
     use crate::history_cell::HistoryCell;
     use crate::history_cell::UserHistoryCell;
-    use crate::history_cell::new_session_info;
+    use crate::xcodex_plugins::history_cell::new_session_info;
     use codex_core::AuthManager;
     use codex_core::CodexAuth;
     use codex_core::ThreadManager;
@@ -2638,10 +2087,8 @@ mod tests {
             feedback: codex_feedback::CodexFeedback::new(),
             pending_update_action: None,
             suppress_shutdown_complete: false,
-            shared_dirs_write_notice_shown: false,
             windows_sandbox: WindowsSandboxState::default(),
-            external_approval_routes: HashMap::new(),
-            paused_codex_events: VecDeque::new(),
+            xcodex_state: crate::xcodex_plugins::XcodexAppState::default(),
         }
     }
 
@@ -2687,10 +2134,8 @@ mod tests {
                 feedback: codex_feedback::CodexFeedback::new(),
                 pending_update_action: None,
                 suppress_shutdown_complete: false,
-                shared_dirs_write_notice_shown: false,
                 windows_sandbox: WindowsSandboxState::default(),
-                external_approval_routes: HashMap::new(),
-                paused_codex_events: VecDeque::new(),
+                xcodex_state: crate::xcodex_plugins::XcodexAppState::default(),
             },
             rx,
             op_rx,
