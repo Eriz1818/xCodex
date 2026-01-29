@@ -44,6 +44,7 @@ use codex_core::protocol::AskForApproval;
 use codex_core::protocol::FileChange;
 use codex_core::protocol::McpAuthStatus;
 use codex_core::protocol::McpInvocation;
+use codex_core::protocol::McpServerSnapshotState;
 use codex_core::protocol::McpStartupStatus;
 use codex_core::protocol::SandboxPolicy;
 use codex_core::protocol::SessionConfiguredEvent;
@@ -79,6 +80,7 @@ pub(crate) struct McpStartupRenderInfo<'a> {
     pub(crate) statuses: Option<&'a HashMap<String, McpStartupStatus>>,
     pub(crate) durations: Option<&'a HashMap<String, Duration>>,
     pub(crate) ready_duration: Option<Duration>,
+    pub(crate) server_states: Option<&'a HashMap<String, McpServerSnapshotState>>,
 }
 
 fn transcript_spacer_line() -> Line<'static> {
@@ -2227,8 +2229,11 @@ pub(crate) fn new_mcp_tools_output(
         let startup_status = startup
             .statuses
             .and_then(|statuses| statuses.get(server.as_str()))
-            .cloned()
-            .or_else(|| (!names.is_empty()).then_some(McpStartupStatus::Ready));
+            .cloned();
+        let server_state = startup
+            .server_states
+            .and_then(|states| states.get(server.as_str()))
+            .copied();
         let mut startup_spans: Vec<Span<'static>> = vec!["    • Startup: ".into()];
         let startup_duration = startup
             .durations
@@ -2252,9 +2257,17 @@ pub(crate) fn new_mcp_tools_output(
                 startup_spans.push("Cancelled".dim());
                 retryable = true;
             }
-            None => {
-                startup_spans.push("Unknown".dim());
-            }
+            None => match server_state {
+                Some(McpServerSnapshotState::Ready) => {
+                    startup_spans.push("Ready".green());
+                }
+                Some(McpServerSnapshotState::Cached) => {
+                    startup_spans.push("Cached".yellow());
+                }
+                None => {
+                    startup_spans.push("Unknown".dim());
+                }
+            },
         }
         if let Some(duration) = startup_duration {
             let duration_display = format_duration(duration);
@@ -2936,6 +2949,7 @@ mod tests {
             enabled_tools: None,
             disabled_tools: None,
             scopes: None,
+            startup_mode: None,
         };
         let mut servers = config.mcp_servers.get().clone();
         servers.insert("docs".to_string(), stdio_config);
@@ -2958,8 +2972,26 @@ mod tests {
             enabled_tools: None,
             disabled_tools: None,
             scopes: None,
+            startup_mode: None,
         };
         servers.insert("http".to_string(), http_config);
+        let cache_config = McpServerConfig {
+            transport: McpServerTransportConfig::Stdio {
+                command: "cache-server".to_string(),
+                args: vec![],
+                env: None,
+                env_vars: vec![],
+                cwd: None,
+            },
+            enabled: true,
+            disabled_reason: None,
+            startup_timeout_sec: None,
+            tool_timeout_sec: None,
+            enabled_tools: None,
+            disabled_tools: None,
+            startup_mode: None,
+        };
+        servers.insert("cache".to_string(), cache_config);
         config
             .mcp_servers
             .set(servers)
@@ -2996,6 +3028,21 @@ mod tests {
                 title: None,
             },
         );
+        tools.insert(
+            "mcp__cache__lookup".to_string(),
+            Tool {
+                annotations: None,
+                description: None,
+                input_schema: ToolInputSchema {
+                    properties: None,
+                    required: None,
+                    r#type: "object".to_string(),
+                },
+                name: "lookup".to_string(),
+                output_schema: None,
+                title: None,
+            },
+        );
 
         let auth_statuses: HashMap<String, McpAuthStatus> = HashMap::new();
         let mut startup_statuses: HashMap<String, McpStartupStatus> = HashMap::new();
@@ -3009,6 +3056,8 @@ mod tests {
         let mut startup_durations: HashMap<String, Duration> = HashMap::new();
         startup_durations.insert("docs".to_string(), Duration::from_millis(420));
         startup_durations.insert("http".to_string(), Duration::from_secs(3));
+        let mut server_states: HashMap<String, McpServerSnapshotState> = HashMap::new();
+        server_states.insert("cache".to_string(), McpServerSnapshotState::Cached);
         let cell = new_mcp_tools_output(
             &config,
             tools,
@@ -3019,6 +3068,7 @@ mod tests {
                 statuses: Some(&startup_statuses),
                 durations: Some(&startup_durations),
                 ready_duration: Some(Duration::from_secs(3)),
+                server_states: Some(&server_states),
             },
         );
         let rendered = render_lines(&cell.display_lines(120)).join("\n");

@@ -85,11 +85,134 @@ const SETTINGS_SUBCOMMANDS: &[SubcommandNode] = &[
     },
 ];
 
-const SUBCOMMAND_ROOTS: &[SubcommandRoot] = &[SubcommandRoot {
-    root: "settings",
-    anchor: SlashCommand::Settings,
-    children: SETTINGS_SUBCOMMANDS,
+const THEME_SUBCOMMANDS: &[SubcommandNode] = &[
+    SubcommandNode {
+        token: "help",
+        full_name: "theme help",
+        description: "show theme role mapping and format details",
+        run_on_enter: true,
+        insert_trailing_space: false,
+        children: &[],
+    },
+    SubcommandNode {
+        token: "template",
+        full_name: "theme template",
+        description: "write example theme YAML files to themes.dir",
+        run_on_enter: true,
+        insert_trailing_space: false,
+        children: &[],
+    },
+];
+
+const MCP_RETRY_CHILDREN: &[SubcommandNode] = &[SubcommandNode {
+    token: "failed",
+    full_name: "mcp retry failed",
+    description: "retry failed MCP servers",
+    run_on_enter: true,
+    insert_trailing_space: false,
+    children: &[],
 }];
+
+const MCP_SUBCOMMANDS: &[SubcommandNode] = &[
+    SubcommandNode {
+        token: "list",
+        full_name: "mcp list",
+        description: "list configured MCP tools",
+        run_on_enter: true,
+        insert_trailing_space: false,
+        children: &[],
+    },
+    SubcommandNode {
+        token: "load",
+        full_name: "mcp load",
+        description: "start an MCP server on demand",
+        run_on_enter: false,
+        insert_trailing_space: true,
+        children: &[],
+    },
+    SubcommandNode {
+        token: "retry",
+        full_name: "mcp retry",
+        description: "retry MCP server startup",
+        run_on_enter: false,
+        insert_trailing_space: true,
+        children: MCP_RETRY_CHILDREN,
+    },
+    SubcommandNode {
+        token: "timeout",
+        full_name: "mcp timeout",
+        description: "set MCP startup timeout (seconds)",
+        run_on_enter: false,
+        insert_trailing_space: true,
+        children: &[],
+    },
+];
+
+const WORKTREE_SUBCOMMANDS: &[SubcommandNode] = &[
+    SubcommandNode {
+        token: "detect",
+        full_name: "worktree detect",
+        description: "refresh git worktree list and open picker",
+        run_on_enter: true,
+        insert_trailing_space: false,
+        children: &[],
+    },
+    SubcommandNode {
+        token: "doctor",
+        full_name: "worktree doctor",
+        description: "show shared-dir + untracked status for this worktree",
+        run_on_enter: true,
+        insert_trailing_space: false,
+        children: &[],
+    },
+    SubcommandNode {
+        token: "link-shared",
+        full_name: "worktree link-shared",
+        description: "apply shared-dir links for this worktree",
+        run_on_enter: true,
+        insert_trailing_space: false,
+        children: WORKTREE_LINK_SHARED_CHILDREN,
+    },
+    SubcommandNode {
+        token: "init",
+        full_name: "worktree init",
+        description: "create a new worktree and switch to it",
+        run_on_enter: false,
+        insert_trailing_space: true,
+        children: &[],
+    },
+    SubcommandNode {
+        token: "shared",
+        full_name: "worktree shared",
+        description: "manage `worktrees.shared_dirs` from the TUI",
+        run_on_enter: false,
+        insert_trailing_space: true,
+        children: WORKTREE_SHARED_CHILDREN,
+    },
+];
+
+const SUBCOMMAND_ROOTS: &[SubcommandRoot] = &[
+    SubcommandRoot {
+        root: "mcp",
+        anchor: SlashCommand::Mcp,
+        children: MCP_SUBCOMMANDS,
+    },
+    SubcommandRoot {
+        root: "worktree",
+        anchor: SlashCommand::Worktree,
+        children: WORKTREE_SUBCOMMANDS,
+    },
+    SubcommandRoot {
+        root: "settings",
+        anchor: SlashCommand::Settings,
+        children: SETTINGS_SUBCOMMANDS,
+    },
+    SubcommandRoot {
+        root: "theme",
+        anchor: SlashCommand::Theme,
+        children: THEME_SUBCOMMANDS,
+    },
+];
 
 pub(crate) fn slash_command_supports_subcommands(name: &str) -> bool {
     SUBCOMMAND_ROOTS.iter().any(|root| root.root == name)

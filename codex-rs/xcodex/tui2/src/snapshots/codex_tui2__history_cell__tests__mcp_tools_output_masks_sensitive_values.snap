@@ -8,6 +8,15 @@ expression: rendered
 
   • MCP ready: (3.0s)
 
+  • cache
+    • Status: enabled
+    • Startup: Cached
+    • Auth: Unsupported
+    • Command: cache-server
+    • Tools: lookup
+    • Resources: (none)
+    • Resource templates: (none)
+
   • docs
     • Status: enabled
     • Startup: Ready (420ms)

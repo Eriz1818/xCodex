@@ -3599,9 +3599,55 @@ impl ChatWidget {
                 [] | ["list"] => {
                     self.dispatch_command(SlashCommand::Mcp);
                 }
+                ["retry"] | ["retry", "failed"] => {
+                    if self.mcp_failed_servers.is_empty() {
+                        self.add_info_message("No failed MCP servers to retry.".to_string(), None);
+                    } else {
+                        let servers = self.mcp_failed_servers.clone();
+                        self.set_mcp_startup_banner(None);
+                        self.submit_op(Op::McpRetry { servers });
+                    }
+                }
+                ["retry", server] => {
+                    self.set_mcp_startup_banner(None);
+                    self.submit_op(Op::McpRetry {
+                        servers: vec![(*server).to_string()],
+                    });
+                }
+                ["load", server] => {
+                    self.set_mcp_startup_banner(None);
+                    self.submit_op(Op::McpLoad {
+                        servers: vec![(*server).to_string()],
+                    });
+                }
+                ["timeout", server, seconds] => {
+                    let secs: u64 = match seconds.parse() {
+                        Ok(secs) => secs,
+                        Err(_) => {
+                            self.add_info_message(
+                                "Usage: /mcp timeout <name> <seconds>".to_string(),
+                                None,
+                            );
+                            return;
+                        }
+                    };
+                    let server = (*server).to_string();
+                    self.set_mcp_startup_banner(None);
+                    self.app_event_tx.send(AppEvent::PersistMcpStartupTimeout {
+                        server: server.clone(),
+                        startup_timeout_sec: secs,
+                    });
+                    self.submit_op(Op::McpSetStartupTimeout {
+                        server: server.clone(),
+                        startup_timeout_sec: secs,
+                    });
+                    self.submit_op(Op::McpRetry {
+                        servers: vec![server],
+                    });
+                }
                 _ => {
                     self.add_info_message(
-                        "Usage: /mcp [list] | /mcp retry [failed|<name>] | /mcp timeout <name> <seconds>".to_string(),
+                        "Usage: /mcp [list] | /mcp load <name> | /mcp retry [failed|<name>] | /mcp timeout <name> <seconds>".to_string(),
                         None,
                     );
                 }
@@ -6801,6 +6847,7 @@ impl ChatWidget {
                 statuses: self.mcp_startup_state.status(),
                 durations: startup_durations,
                 ready_duration: self.mcp_startup_state.ready_duration(),
+                server_states: Some(&ev.server_states),
             },
         ));
     }

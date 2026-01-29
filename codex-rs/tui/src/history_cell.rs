@@ -38,6 +38,9 @@ use base64::Engine;
 use codex_core::config::Config;
 use codex_core::protocol::FileChange;
 use codex_core::protocol::McpInvocation;
+use codex_core::protocol::McpServerSnapshotState;
+use codex_core::protocol::McpStartupStatus;
+use codex_core::protocol::SandboxPolicy;
 use codex_core::protocol::SessionConfiguredEvent;
 use codex_core::web_search::web_search_detail;
 use codex_protocol::models::WebSearchAction;
@@ -69,6 +72,13 @@ use tracing::error;
 use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 
+#[derive(Clone, Copy, Default)]
+pub(crate) struct McpStartupRenderInfo<'a> {
+    pub(crate) statuses: Option<&'a HashMap<String, McpStartupStatus>>,
+    pub(crate) durations: Option<&'a HashMap<String, Duration>>,
+    pub(crate) ready_duration: Option<Duration>,
+    pub(crate) server_states: Option<&'a HashMap<String, McpServerSnapshotState>>,
+}
 fn transcript_spacer_line() -> Line<'static> {
     Line::from("").style(crate::theme::transcript_style())
 }
@@ -1783,6 +1793,291 @@ pub(crate) fn empty_mcp_output() -> PlainHistoryCell {
     PlainHistoryCell { lines }
 }
 
+/// Render MCP tools grouped by connection using the fully-qualified tool names.
+pub(crate) fn new_mcp_tools_output(
+    config: &Config,
+    tools: HashMap<String, mcp_types::Tool>,
+    resources: HashMap<String, Vec<Resource>>,
+    resource_templates: HashMap<String, Vec<ResourceTemplate>>,
+    auth_statuses: &HashMap<String, McpAuthStatus>,
+    startup: McpStartupRenderInfo<'_>,
+) -> PlainHistoryCell {
+    fn format_duration(duration: Duration) -> String {
+        let ms = duration.as_millis();
+        if ms < 1_000 {
+            format!("{ms}ms")
+        } else {
+            let secs = duration.as_secs_f64();
+            format!("{secs:.1}s")
+        }
+    }
+
+    let mut lines: Vec<Line<'static>> = vec![
+        "/mcp".magenta().into(),
+        transcript_spacer_line(),
+        vec!["🔌  ".into(), "MCP Tools".bold()].into(),
+        transcript_spacer_line(),
+    ];
+
+    if let Some(duration) = startup.ready_duration
+        && startup
+            .statuses
+            .is_some_and(|statuses| !statuses.is_empty())
+    {
+        let duration_display = format_duration(duration);
+        lines.push(
+            vec![
+                "  • MCP ready: ".into(),
+                format!("({duration_display})").dim(),
+            ]
+            .into(),
+        );
+        lines.push(transcript_spacer_line());
+    }
+
+    if tools.is_empty() {
+        let still_starting = match startup.statuses {
+            Some(statuses) => statuses
+                .values()
+                .any(|status| matches!(status, McpStartupStatus::Starting)),
+            None => false,
+        };
+        if still_starting {
+            lines.push(
+                "  • No MCP tools available yet (servers still starting)."
+                    .italic()
+                    .into(),
+            );
+        } else {
+            lines.push("  • No MCP tools available.".italic().into());
+        }
+        lines.push(transcript_spacer_line());
+    }
+
+    let mut servers: Vec<_> = config.mcp_servers.iter().collect();
+    servers.sort_by(|(a, _), (b, _)| a.cmp(b));
+
+    let mut retryable_servers: Vec<String> = Vec::new();
+
+    for (server, cfg) in servers {
+        let prefix = format!("mcp__{server}__");
+        let mut names: Vec<String> = tools
+            .keys()
+            .filter(|k| k.starts_with(&prefix))
+            .map(|k| k[prefix.len()..].to_string())
+            .collect();
+        names.sort();
+
+        let auth_status = auth_statuses
+            .get(server.as_str())
+            .copied()
+            .unwrap_or(McpAuthStatus::Unsupported);
+        let mut header: Vec<Span<'static>> = vec!["  • ".into(), server.clone().into()];
+        if !cfg.enabled {
+            header.push(" ".into());
+            header.push("(disabled)".red());
+            lines.push(header.into());
+            if let Some(reason) = cfg.disabled_reason.as_ref().map(ToString::to_string) {
+                lines.push(vec!["    • Reason: ".into(), reason.dim()].into());
+            }
+            lines.push(transcript_spacer_line());
+            continue;
+        }
+        lines.push(header.into());
+        lines.push(vec!["    • Status: ".into(), "enabled".green()].into());
+
+        let startup_status = startup
+            .statuses
+            .and_then(|statuses| statuses.get(server.as_str()))
+            .cloned();
+        let server_state = startup
+            .server_states
+            .and_then(|states| states.get(server.as_str()))
+            .copied();
+        let mut startup_spans: Vec<Span<'static>> = vec!["    • Startup: ".into()];
+        let startup_duration = startup
+            .durations
+            .and_then(|durations| durations.get(server.as_str()))
+            .copied();
+        let mut startup_error: Option<String> = None;
+        let mut retryable = false;
+        match startup_status {
+            Some(McpStartupStatus::Starting) => {
+                startup_spans.push("Starting".cyan());
+            }
+            Some(McpStartupStatus::Ready) => {
+                startup_spans.push("Ready".green());
+            }
+            Some(McpStartupStatus::Failed { error }) => {
+                startup_spans.push("Failed".red());
+                startup_error = Some(error);
+                retryable = true;
+            }
+            Some(McpStartupStatus::Cancelled) => {
+                startup_spans.push("Cancelled".dim());
+                retryable = true;
+            }
+            None => match server_state {
+                Some(McpServerSnapshotState::Ready) => {
+                    startup_spans.push("Ready".green());
+                }
+                Some(McpServerSnapshotState::Cached) => {
+                    startup_spans.push("Cached".yellow());
+                }
+                None => {
+                    startup_spans.push("Unknown".dim());
+                }
+            },
+        }
+        if let Some(duration) = startup_duration {
+            let duration_display = format_duration(duration);
+            startup_spans.push(" ".into());
+            startup_spans.push(format!("({duration_display})").dim());
+        }
+        lines.push(startup_spans.into());
+        lines.push(vec!["    • Auth: ".into(), auth_status.to_string().into()].into());
+        if let Some(error) = startup_error.as_ref() {
+            lines.push(vec!["    • Error: ".into(), error.clone().red()].into());
+        }
+        if retryable {
+            retryable_servers.push(server.clone());
+            lines.push(
+                vec![
+                    "    • Retry: ".into(),
+                    format!("/mcp retry {server}").magenta(),
+                ]
+                .into(),
+            );
+        }
+
+        match &cfg.transport {
+            McpServerTransportConfig::Stdio {
+                command,
+                args,
+                env,
+                env_vars,
+                cwd,
+            } => {
+                let args_suffix = if args.is_empty() {
+                    String::new()
+                } else {
+                    format!(" {}", args.join(" "))
+                };
+                let cmd_display = format!("{command}{args_suffix}");
+                lines.push(vec!["    • Command: ".into(), cmd_display.into()].into());
+
+                if let Some(cwd) = cwd.as_ref() {
+                    lines.push(vec!["    • Cwd: ".into(), cwd.display().to_string().into()].into());
+                }
+
+                let env_display = format_env_display(env.as_ref(), env_vars);
+                if env_display != "-" {
+                    lines.push(vec!["    • Env: ".into(), env_display.into()].into());
+                }
+            }
+            McpServerTransportConfig::StreamableHttp {
+                url,
+                http_headers,
+                env_http_headers,
+                ..
+            } => {
+                lines.push(vec!["    • URL: ".into(), url.clone().into()].into());
+                if let Some(headers) = http_headers.as_ref()
+                    && !headers.is_empty()
+                {
+                    let mut pairs: Vec<_> = headers.iter().collect();
+                    pairs.sort_by(|(a, _), (b, _)| a.cmp(b));
+                    let display = pairs
+                        .into_iter()
+                        .map(|(name, _)| format!("{name}=*****"))
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    lines.push(vec!["    • HTTP headers: ".into(), display.into()].into());
+                }
+                if let Some(headers) = env_http_headers.as_ref()
+                    && !headers.is_empty()
+                {
+                    let mut pairs: Vec<_> = headers.iter().collect();
+                    pairs.sort_by(|(a, _), (b, _)| a.cmp(b));
+                    let display = pairs
+                        .into_iter()
+                        .map(|(name, var)| format!("{name}={var}"))
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    lines.push(vec!["    • Env HTTP headers: ".into(), display.into()].into());
+                }
+            }
+        }
+
+        if names.is_empty() {
+            lines.push("    • Tools: (none)".into());
+        } else {
+            lines.push(vec!["    • Tools: ".into(), names.join(", ").into()].into());
+        }
+
+        let server_resources: Vec<Resource> =
+            resources.get(server.as_str()).cloned().unwrap_or_default();
+        if server_resources.is_empty() {
+            lines.push("    • Resources: (none)".into());
+        } else {
+            let mut spans: Vec<Span<'static>> = vec!["    • Resources: ".into()];
+
+            for (idx, resource) in server_resources.iter().enumerate() {
+                if idx > 0 {
+                    spans.push(", ".into());
+                }
+
+                let label = resource.title.as_ref().unwrap_or(&resource.name);
+                spans.push(label.clone().into());
+                spans.push(" ".into());
+                spans.push(format!("({})", resource.uri).dim());
+            }
+
+            lines.push(spans.into());
+        }
+
+        let server_templates: Vec<ResourceTemplate> = resource_templates
+            .get(server.as_str())
+            .cloned()
+            .unwrap_or_default();
+        if server_templates.is_empty() {
+            lines.push("    • Resource templates: (none)".into());
+        } else {
+            let mut spans: Vec<Span<'static>> = vec!["    • Resource templates: ".into()];
+
+            for (idx, template) in server_templates.iter().enumerate() {
+                if idx > 0 {
+                    spans.push(", ".into());
+                }
+
+                let label = template.title.as_ref().unwrap_or(&template.name);
+                spans.push(label.clone().into());
+                spans.push(" ".into());
+                spans.push(format!("({})", template.uri_template).dim());
+            }
+
+            lines.push(spans.into());
+        }
+
+        lines.push(transcript_spacer_line());
+    }
+
+    if !retryable_servers.is_empty() {
+        retryable_servers.sort();
+        retryable_servers.dedup();
+        lines.push(
+            vec![
+                "  • Retry failed: ".into(),
+                "/mcp retry failed".magenta(),
+                " (or a specific server above)".dim(),
+            ]
+            .into(),
+        );
+        lines.push(transcript_spacer_line());
+    }
+
+    PlainHistoryCell { lines }
+}
 pub(crate) fn new_info_event(message: String, hint: Option<String>) -> PlainHistoryCell {
     let mut line = vec!["• ".dim(), message.into()];
     if let Some(hint) = hint {
@@ -1993,7 +2288,6 @@ mod tests {
     use crate::exec_cell::ExecCell;
     use crate::xcodex_plugins::history_cell::BackgroundActivityEntry;
     use crate::xcodex_plugins::history_cell::McpStartupRenderInfo;
-    use crate::xcodex_plugins::history_cell::new_mcp_tools_output as xcodex_new_mcp_tools_output;
     use crate::xcodex_plugins::history_cell::new_unified_exec_processes_output as xcodex_new_unified_exec_processes_output;
     use codex_core::config::Config;
     use codex_core::config::ConfigBuilder;
@@ -2169,7 +2463,9 @@ mod tests {
             tool_timeout_sec: None,
             enabled_tools: None,
             disabled_tools: None,
+            startup_mode: None,
             scopes: None,
+            startup_mode: None,
         };
         let mut servers = config.mcp_servers.get().clone();
         servers.insert("docs".to_string(), stdio_config);
@@ -2191,9 +2487,28 @@ mod tests {
             tool_timeout_sec: None,
             enabled_tools: None,
             disabled_tools: None,
+            startup_mode: None,
             scopes: None,
+            startup_mode: None,
         };
         servers.insert("http".to_string(), http_config);
+        let cache_config = McpServerConfig {
+            transport: McpServerTransportConfig::Stdio {
+                command: "cache-server".to_string(),
+                args: vec![],
+                env: None,
+                env_vars: vec![],
+                cwd: None,
+            },
+            enabled: true,
+            disabled_reason: None,
+            startup_timeout_sec: None,
+            tool_timeout_sec: None,
+            enabled_tools: None,
+            disabled_tools: None,
+            startup_mode: None,
+        };
+        servers.insert("cache".to_string(), cache_config);
         config
             .mcp_servers
             .set(servers)
@@ -2230,15 +2545,48 @@ mod tests {
                 title: None,
             },
         );
+        tools.insert(
+            "mcp__cache__lookup".to_string(),
+            Tool {
+                annotations: None,
+                description: None,
+                input_schema: ToolInputSchema {
+                    properties: None,
+                    required: None,
+                    r#type: "object".to_string(),
+                },
+                name: "lookup".to_string(),
+                output_schema: None,
+                title: None,
+            },
+        );
 
         let auth_statuses: HashMap<String, McpAuthStatus> = HashMap::new();
-        let cell = xcodex_new_mcp_tools_output(
+        let mut startup_statuses: HashMap<String, McpStartupStatus> = HashMap::new();
+        startup_statuses.insert("docs".to_string(), McpStartupStatus::Ready);
+        startup_statuses.insert(
+            "http".to_string(),
+            McpStartupStatus::Failed {
+                error: "handshake failed".to_string(),
+            },
+        );
+        let mut startup_durations: HashMap<String, Duration> = HashMap::new();
+        startup_durations.insert("docs".to_string(), Duration::from_millis(420));
+        startup_durations.insert("http".to_string(), Duration::from_secs(3));
+        let mut server_states: HashMap<String, McpServerSnapshotState> = HashMap::new();
+        server_states.insert("cache".to_string(), McpServerSnapshotState::Cached);
+        let cell = new_mcp_tools_output(
             &config,
             tools,
             HashMap::new(),
             HashMap::new(),
             &auth_statuses,
-            McpStartupRenderInfo::default(),
+            McpStartupRenderInfo {
+                statuses: Some(&startup_statuses),
+                durations: Some(&startup_durations),
+                ready_duration: Some(Duration::from_secs(3)),
+                server_states: Some(&server_states),
+            },
         );
         let rendered = render_lines(&cell.display_lines(120)).join("\n");
 
