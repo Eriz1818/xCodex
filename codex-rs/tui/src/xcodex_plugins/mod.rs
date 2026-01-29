@@ -1,5 +1,6 @@
 pub(crate) mod app;
 mod app_state;
+pub(crate) mod command_popup;
 pub(crate) mod help;
 pub(crate) mod history_cell;
 mod hook_process_state;

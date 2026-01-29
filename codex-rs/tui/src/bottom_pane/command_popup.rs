@@ -14,11 +14,9 @@ use crate::render::RectExt;
 use crate::slash_command::SlashCommand;
 use crate::slash_command::built_in_slash_commands;
 use crate::xcodex_plugins::PluginSlashCommand;
-use crate::xcodex_plugins::plugin_slash_commands;
-use codex_common::fuzzy_match::fuzzy_match;
+use crate::xcodex_plugins::command_popup as xcodex_command_popup;
 use codex_protocol::custom_prompts::CustomPrompt;
 use codex_protocol::custom_prompts::PROMPTS_CMD_PREFIX;
-use std::collections::HashSet;
 
 pub(crate) const DEFAULT_SLASH_POPUP_ROWS: usize = 8;
 
@@ -91,19 +89,10 @@ impl CommandPopup {
             .filter(|(_, cmd)| allow_elevate_sandbox || *cmd != SlashCommand::ElevateSandbox)
             .filter(|(_, cmd)| flags.collaboration_modes_enabled || *cmd != SlashCommand::Collab)
             .collect();
-        let plugin_commands: Vec<PluginSlashCommand> = plugin_slash_commands().to_vec();
-        // Exclude prompts that collide with builtin command names and sort by name.
-        let exclude: HashSet<String> = builtins
-            .iter()
-            .map(|(n, _)| (*n).to_string())
-            .chain(
-                plugin_commands
-                    .iter()
-                    .map(|command| command.name.to_string()),
-            )
-            .collect();
-        prompts.retain(|p| !exclude.contains(&p.name));
-        prompts.sort_by(|a, b| a.name.cmp(&b.name));
+        let plugin_commands: Vec<PluginSlashCommand> =
+            xcodex_command_popup::popup_plugin_commands();
+        // Exclude prompts that collide with builtin or plugin command names.
+        xcodex_command_popup::filter_prompts_for_popup(&mut prompts, &builtins, &plugin_commands);
         Self {
             command_filter: String::new(),
             command_line: String::new(),
@@ -119,18 +108,11 @@ impl CommandPopup {
     }
 
     pub(crate) fn set_prompts(&mut self, mut prompts: Vec<CustomPrompt>) {
-        let exclude: HashSet<String> = self
-            .builtins
-            .iter()
-            .map(|(n, _)| (*n).to_string())
-            .chain(
-                self.plugin_commands
-                    .iter()
-                    .map(|command| command.name.to_string()),
-            )
-            .collect();
-        prompts.retain(|p| !exclude.contains(&p.name));
-        prompts.sort_by(|a, b| a.name.cmp(&b.name));
+        xcodex_command_popup::filter_prompts_for_popup(
+            &mut prompts,
+            &self.builtins,
+            &self.plugin_commands,
+        );
         self.prompts = prompts;
     }
 
@@ -415,115 +397,24 @@ impl CommandPopup {
     }
 
     fn arg_value_completions(&self) -> Vec<(CommandItem, Option<Vec<usize>>)> {
-        let tokens: Vec<&str> = self.command_line.split_whitespace().collect();
-        if tokens.get(0..2) != Some(["worktree", "init"].as_slice()) {
-            return Vec::new();
-        }
-
-        let has_trailing_space = self.command_line.ends_with(char::is_whitespace);
-        let args = tokens.get(2..).unwrap_or_default();
-
-        let (arg_index, partial) = match (args.len(), has_trailing_space) {
-            (1, true) => (1, ""),
-            (2, false) => (1, args[1]),
-            (2, true) => (2, ""),
-            (3, false) => (2, args[2]),
-            _ => return Vec::new(),
-        };
-
-        match arg_index {
-            1 => self.worktree_init_branch_completions(partial),
-            2 => self.worktree_init_path_completions(args[0], partial),
-            _ => Vec::new(),
-        }
-    }
-
-    fn worktree_init_branch_completions(
-        &self,
-        partial: &str,
-    ) -> Vec<(CommandItem, Option<Vec<usize>>)> {
-        let mut candidates: Vec<String> = Vec::new();
-        if let Some(branch) = self.current_git_branch.as_deref()
-            && !branch.is_empty()
-            && branch != "(detached)"
-        {
-            candidates.push(branch.to_string());
-        }
-
-        if let Some(base) = self.slash_completion_branches.first() {
-            candidates.push(base.clone());
-        }
-
-        candidates.extend(self.slash_completion_branches.iter().take(12).cloned());
-        candidates.push(String::from("main"));
-        candidates.push(String::from("master"));
-
-        let mut seen: HashSet<String> = HashSet::new();
-        candidates.retain(|c| seen.insert(c.clone()));
-
-        let mut matches: Vec<(String, Option<Vec<usize>>, i32)> = Vec::new();
-        for candidate in candidates {
-            if partial.is_empty() {
-                matches.push((candidate, None, 0));
-            } else if let Some((indices, score)) = fuzzy_match(&candidate, partial) {
-                matches.push((candidate, Some(indices), score));
-            }
-        }
-
-        matches.sort_by(|a, b| a.2.cmp(&b.2).then_with(|| a.0.cmp(&b.0)));
-        matches
-            .into_iter()
-            .take(5)
-            .map(|(candidate, indices, _score)| {
-                (
-                    CommandItem::ArgValue {
-                        display: candidate.clone(),
-                        insert: candidate,
-                        description: Some(String::from("insert branch")),
-                        insert_trailing_space: true,
-                    },
-                    indices,
-                )
-            })
-            .collect()
-    }
-
-    fn worktree_init_path_completions(
-        &self,
-        name: &str,
-        partial: &str,
-    ) -> Vec<(CommandItem, Option<Vec<usize>>)> {
-        let slug = sanitize_worktree_path_slug(name);
-        let candidate = format!(
-            ".worktrees/{}",
-            if slug.is_empty() { "worktree" } else { &slug }
-        );
-
-        if partial.is_empty() {
-            return vec![(
+        xcodex_command_popup::worktree_init_completions(
+            &self.command_line,
+            self.current_git_branch.as_deref(),
+            &self.slash_completion_branches,
+        )
+        .into_iter()
+        .map(|completion| {
+            (
                 CommandItem::ArgValue {
-                    display: candidate.clone(),
-                    insert: candidate,
-                    description: Some(String::from("default path")),
-                    insert_trailing_space: false,
+                    display: completion.display,
+                    insert: completion.insert,
+                    description: completion.description,
+                    insert_trailing_space: completion.insert_trailing_space,
                 },
-                None,
-            )];
-        }
-
-        fuzzy_match(&candidate, partial)
-            .map(|(indices, _score)| {
-                vec![(
-                    CommandItem::ArgValue {
-                        display: candidate.clone(),
-                        insert: candidate,
-                        description: Some(String::from("default path")),
-                        insert_trailing_space: false,
-                    },
-                    Some(indices),
-                )]
-            })
-            .unwrap_or_default()
+                completion.indices,
+            )
+        })
+        .collect()
     }
 
     /// Move the selection cursor one step up.
@@ -550,21 +441,6 @@ impl CommandPopup {
             .selected_idx
             .and_then(|idx| matches.get(idx).cloned())
     }
-}
-
-fn sanitize_worktree_path_slug(name: &str) -> String {
-    let mut out = String::new();
-    for ch in name.trim().chars() {
-        match ch {
-            '/' | '\\' => out.push('-'),
-            ' ' | '\t' | '\n' | '\r' => out.push('-'),
-            other => out.push(other),
-        }
-    }
-    while out.contains("--") {
-        out = out.replace("--", "-");
-    }
-    out.trim_matches('-').to_string()
 }
 
 impl WidgetRef for CommandPopup {
