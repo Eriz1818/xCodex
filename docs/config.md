@@ -557,6 +557,21 @@ Set `project_root_markers = []` to skip searching parent directories and treat t
 
 ## MCP integration
 
+### mcp_startup_mode
+
+Set the default MCP startup policy for all servers:
+
+- `eager` (default): start all enabled servers at session start.
+- `lazy`: start servers only when a tool/resource is used.
+- `manual`: never auto-start servers (use explicit load/refresh paths).
+
+You can override this per run with `xcodex --mcp-startup-mode <eager|lazy|manual>`.
+
+Individual servers can override this with `mcp_servers.<id>.startup_mode`.
+
+When running in `manual` mode, MCP servers only start after an explicit load
+action (for example, `/mcp load <server>` in the TUI).
+
 ### mcp_servers
 
 You can configure Codex to use [MCP servers](https://modelcontextprotocol.io/about) to give Codex access to external applications, resources, or services.
@@ -612,6 +627,8 @@ Streamable HTTP connections always use the Rust MCP client under the hood. Run `
 startup_timeout_sec = 20
 # Optional: override the default 60s per-tool timeout
 tool_timeout_sec = 30
+# Optional: override the default MCP startup policy for this server
+startup_mode = "lazy"
 # Optional: disable a server without removing it
 enabled = false
 # Optional: only expose a subset of tools from this server
@@ -1342,6 +1359,7 @@ Valid values:
 | `ghost_snapshot.disable_warnings`                | boolean                                                           | Disable every warnings around ghost snapshot (large files, directory, ...)                                                      |
 | `ghost_snapshot.ignore_large_untracked_files`    | number                                                            | Exclude untracked files larger than this many bytes from ghost snapshots (default: 10 MiB). Set to `0` to disable.              |
 | `ghost_snapshot.ignore_large_untracked_dirs`     | number                                                            | Ignore untracked directories with at least this many files (default: 200). Set to `0` to disable.                               |
+| `mcp_startup_mode`                               | `eager` \| `lazy` \| `manual`                                      | Default MCP startup policy (default: `eager`).                                                                                 |
 | `mcp_servers.<id>.command`                       | string                                                            | MCP server launcher command (stdio servers only).                                                                               |
 | `mcp_servers.<id>.args`                          | array<string>                                                     | MCP server args (stdio servers only).                                                                                           |
 | `mcp_servers.<id>.env`                           | map<string,string>                                                | MCP server env vars (stdio servers only).                                                                                       |
@@ -1350,6 +1368,7 @@ Valid values:
 | `mcp_servers.<id>.enabled`                       | boolean                                                           | When false, Codex skips starting the server (default: true).                                                                    |
 | `mcp_servers.<id>.startup_timeout_sec`           | number                                                            | Startup timeout in seconds (default: 10). Timeout is applied both for initializing MCP server and initially listing tools.      |
 | `mcp_servers.<id>.tool_timeout_sec`              | number                                                            | Per-tool timeout in seconds (default: 60). Accepts fractional values; omit to use the default.                                  |
+| `mcp_servers.<id>.startup_mode`                  | `eager` \| `lazy` \| `manual`                                      | Override the global MCP startup policy for this server.                                                                         |
 | `mcp_servers.<id>.enabled_tools`                 | array<string>                                                     | Restrict the server to the listed tool names.                                                                                   |
 | `mcp_servers.<id>.disabled_tools`                | array<string>                                                     | Remove the listed tool names after applying `enabled_tools`, if any.                                                            |
 | `model_providers.<id>.name`                      | string                                                            | Display name.                                                                                                                   |

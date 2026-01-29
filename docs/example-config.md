@@ -198,6 +198,9 @@ chatgpt_base_url = "https://chatgpt.com/backend-api/"
 # Preferred store for MCP OAuth credentials: auto (default) | file | keyring
 mcp_oauth_credentials_store = "auto"
 
+# Default MCP startup policy: eager (default) | lazy | manual
+mcp_startup_mode = "eager"
+
 ################################################################################
 # Project Documentation Controls
 ################################################################################
@@ -255,6 +258,7 @@ experimental_use_freeform_apply_patch = false
 # startup_timeout_sec = 10.0               # optional; default 10.0 seconds
 # # startup_timeout_ms = 10000              # optional alias for startup timeout (milliseconds)
 # tool_timeout_sec = 60.0                  # optional; default 60.0 seconds
+# startup_mode = "lazy"                    # optional; per-server startup policy
 # enabled_tools = ["search", "summarize"]  # optional allow-list
 # disabled_tools = ["slow-tool"]           # optional deny-list (applied after allow-list)
 
@@ -266,6 +270,7 @@ experimental_use_freeform_apply_patch = false
 # env_http_headers = { "X-Auth" = "AUTH_ENV" } # optional headers populated from env vars
 # startup_timeout_sec = 10.0                   # optional
 # tool_timeout_sec = 60.0                      # optional
+# startup_mode = "lazy"                         # optional; per-server startup policy
 # enabled_tools = ["list_issues"]             # optional allow-list
 
 ################################################################################
