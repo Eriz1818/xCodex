@@ -520,15 +520,27 @@ impl ThemeSelectorOverlay {
                 .into(),
             Line::from(""),
         ];
-        let mut command_lines = crate::history_cell::session_first_event_command_lines();
+        let mut command_lines =
+            crate::xcodex_plugins::history_cell::session_first_event_command_lines(
+                crate::theme::transcript_style(),
+            );
         command_lines.truncate(2);
         session_help_lines.extend(command_lines);
 
-        let session_info = crate::history_cell::new_session_info_with_help_lines(
+        let collaboration_mode = codex_protocol::config_types::CollaborationMode::Custom(
+            codex_protocol::config_types::Settings {
+                model: "gpt-5.2 medium".to_string(),
+                reasoning_effort: None,
+                developer_instructions: None,
+            },
+        );
+        let session_info = crate::xcodex_plugins::history_cell::new_session_info_with_help_lines(
             &preview_config,
             "gpt-5.2 medium",
             session_event,
             session_help_lines,
+            false,
+            collaboration_mode,
         );
 
         let mut lines: Vec<Line<'static>> = Vec::new();
@@ -649,18 +661,18 @@ impl ThemeSelectorOverlay {
             lines.extend(interaction.display_lines(area.width));
             lines.push(Line::from(""));
 
-            let processes = crate::history_cell::new_unified_exec_processes_output(
+            let processes = crate::xcodex_plugins::history_cell::new_unified_exec_processes_output(
                 vec![
-                    crate::history_cell::BackgroundActivityEntry::new(
+                    crate::xcodex_plugins::history_cell::BackgroundActivityEntry::new(
                         "term-17".to_string(),
                         "python3 -i\n>>>".to_string(),
                     ),
-                    crate::history_cell::BackgroundActivityEntry::new(
+                    crate::xcodex_plugins::history_cell::BackgroundActivityEntry::new(
                         "term-23".to_string(),
                         "rg -n \"HistoryCell\" -S codex-rs/tui/src/history_cell.rs".to_string(),
                     ),
                 ],
-                vec![crate::history_cell::BackgroundActivityEntry::new(
+                vec![crate::xcodex_plugins::history_cell::BackgroundActivityEntry::new(
                     "hook-1".to_string(),
                     "pre-commit: cargo fmt && cargo test -p codex-tui".to_string(),
                 )],
@@ -780,7 +792,7 @@ impl ThemeSelectorOverlay {
 
         // (5) Final separator + summary header.
         lines.extend(
-            FinalMessageSeparator::new(
+            crate::xcodex_plugins::history_cell::XcodexFinalMessageSeparator::new(
                 Some(12),
                 true,
                 crate::xtreme::xtreme_ui_enabled(&self.config),

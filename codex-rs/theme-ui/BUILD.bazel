@@ -13,9 +13,3 @@ codex_rust_crate(
         allow_empty = True,
     ),
 )
-
-filegroup(
-    name = "theme_selector_overlay_rs",
-    srcs = ["src/theme_selector_overlay.rs"],
-    visibility = ["//visibility:public"],
-)

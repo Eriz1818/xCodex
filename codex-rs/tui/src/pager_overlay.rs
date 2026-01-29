@@ -27,7 +27,6 @@ use crate::bottom_pane::BottomPane;
 use crate::bottom_pane::BottomPaneParams;
 use crate::chatwidget::ActiveCellTranscriptKey;
 use crate::history_cell::AgentMessageCell;
-use crate::history_cell::FinalMessageSeparator;
 use crate::history_cell::HistoryCell;
 use crate::history_cell::UserHistoryCell;
 use crate::key_hint;
@@ -180,7 +179,7 @@ fn render_key_hints(area: Rect, buf: &mut Buffer, pairs: &[(&[KeyBinding], &str)
 
 include!(concat!(
     env!("CARGO_MANIFEST_DIR"),
-    "/../theme-ui/src/theme_selector_overlay.rs"
+    "/../xcodex/theme-ui/src/theme_selector_overlay.rs"
 ));
 
 /// Generic widget for rendering a pager view.
