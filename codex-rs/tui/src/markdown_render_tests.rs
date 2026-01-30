@@ -656,8 +656,8 @@ fn link() {
 
 #[test]
 fn code_block_unhighlighted() {
-    let text = render_markdown_text("```rust\nfn main() {}\n```\n");
-    let expected = Text::from_iter([Line::from_iter(["", "fn main() {}"])]);
+    let text = render_markdown_text("```\nfn main() {}\n```\n");
+    let expected = Text::from_iter([Line::from_iter(["", "fn main() {}"]).cyan()]);
     assert_eq!(text, expected);
 }
 
@@ -666,8 +666,8 @@ fn code_block_multiple_lines_root() {
     let md = "```\nfirst\nsecond\n```\n";
     let text = render_markdown_text(md);
     let expected = Text::from_iter([
-        Line::from_iter(["", "first"]),
-        Line::from_iter(["", "second"]),
+        Line::from_iter(["", "first"]).cyan(),
+        Line::from_iter(["", "second"]).cyan(),
     ]);
     assert_eq!(text, expected);
 }
@@ -677,11 +677,32 @@ fn code_block_indented() {
     let md = "    function greet() {\n      console.log(\"Hi\");\n    }\n";
     let text = render_markdown_text(md);
     let expected = Text::from_iter([
-        Line::from_iter(["    ", "function greet() {"]),
-        Line::from_iter(["    ", "  console.log(\"Hi\");"]),
-        Line::from_iter(["    ", "}"]),
+        Line::from_iter(["    ", "function greet() {"]).cyan(),
+        Line::from_iter(["    ", "  console.log(\"Hi\");"]).cyan(),
+        Line::from_iter(["    ", "}"]).cyan(),
     ]);
     assert_eq!(text, expected);
+}
+
+#[test]
+fn code_block_bash_is_syntax_highlighted() {
+    let text = render_markdown_text("```bash\necho \"hi\" > out.txt\n```\n");
+    assert_eq!(text.lines.len(), 1);
+
+    let mut string_fg = None;
+    let mut operator_fg = None;
+
+    for span in &text.lines[0].spans {
+        if span.content.as_ref() == "\"hi\"" {
+            string_fg = span.style.fg;
+        }
+        if span.content.as_ref() == ">" {
+            operator_fg = span.style.fg;
+        }
+    }
+
+    assert_eq!(string_fg, crate::theme::code_string_style().fg);
+    assert_eq!(operator_fg, crate::theme::code_operator_style().fg);
 }
 
 #[test]

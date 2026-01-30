@@ -209,6 +209,9 @@ where
     pending_marker_line: bool,
     in_paragraph: bool,
     in_code_block: bool,
+    code_block_language: Option<String>,
+    code_block_buffer: String,
+    code_block_highlighting: bool,
     wrap_width: Option<usize>,
     current_line_content: Option<Line<'static>>,
     current_initial_indent: Vec<Span<'static>>,
@@ -239,6 +242,9 @@ where
             pending_marker_line: false,
             in_paragraph: false,
             in_code_block: false,
+            code_block_language: None,
+            code_block_buffer: String::new(),
+            code_block_highlighting: false,
             wrap_width,
             current_line_content: None,
             current_initial_indent: Vec::new(),
@@ -292,7 +298,10 @@ where
                     CodeBlockKind::Indented => Some(Span::from(" ".repeat(4))),
                 };
                 let lang = match kind {
-                    CodeBlockKind::Fenced(lang) => Some(lang.to_string()),
+                    CodeBlockKind::Fenced(lang) => {
+                        let lang = lang.to_string();
+                        (!lang.is_empty()).then_some(lang)
+                    }
                     CodeBlockKind::Indented => None,
                 };
                 self.start_codeblock(lang, indent)
@@ -392,6 +401,12 @@ where
     }
 
     fn text(&mut self, text: CowStr<'a>) {
+        if self.in_code_block {
+            self.pending_marker_line = false;
+            self.code_block_buffer.push_str(text.as_ref());
+            self.needs_newline = false;
+            return;
+        }
         if self.pending_marker_line {
             self.push_line(Line::default());
         }
@@ -512,12 +527,19 @@ where
         self.needs_newline = false;
     }
 
-    fn start_codeblock(&mut self, _lang: Option<String>, indent: Option<Span<'static>>) {
+    fn start_codeblock(&mut self, lang: Option<String>, indent: Option<Span<'static>>) {
         self.flush_current_line();
         if self.has_output_lines {
             self.push_blank_line();
         }
         self.in_code_block = true;
+        self.code_block_language = lang;
+        self.code_block_buffer.clear();
+        self.code_block_highlighting = self
+            .code_block_language
+            .as_deref()
+            .is_some_and(crate::render::highlight::supports_highlighting)
+            && crate::render::highlight::syntax_highlighting_enabled();
         self.indent_stack.push(IndentContext::new(
             vec![indent.unwrap_or_default()],
             None,
@@ -527,9 +549,32 @@ where
     }
 
     fn end_codeblock(&mut self) {
+        self.flush_buffered_codeblock();
         self.needs_newline = true;
         self.in_code_block = false;
+        self.code_block_highlighting = false;
         self.indent_stack.pop();
+    }
+
+    fn flush_buffered_codeblock(&mut self) {
+        let code = std::mem::take(&mut self.code_block_buffer);
+        let code = code.strip_suffix('\n').unwrap_or(&code);
+
+        let lang = self.code_block_language.take();
+        let lines = if self.code_block_highlighting {
+            crate::render::highlight::highlight_code_block_to_lines(lang.as_deref(), code)
+        } else if code.is_empty() {
+            vec![Line::from("")]
+        } else {
+            code.lines().map(|line| line.to_string().into()).collect()
+        };
+
+        for line in lines {
+            self.push_line(Line::default());
+            for span in line.spans {
+                self.push_span(span);
+            }
+        }
     }
 
     fn push_inline_style(&mut self, style: Style) {
@@ -636,7 +681,13 @@ where
         // This matters for copy fidelity: downstream copy logic uses code styling as a cue to
         // preserve indentation and to fence code runs with Markdown markers.
         if self.in_code_block {
-            style = style.patch(self.styles.code);
+            if self.code_block_highlighting {
+                let mut code_style = self.styles.code;
+                code_style.fg = None;
+                style = style.patch(code_style);
+            } else {
+                style = style.patch(self.styles.code);
+            }
         }
         let was_pending = self.pending_marker_line;
 

@@ -33,6 +33,23 @@ pub(crate) struct ThemeStyles {
     warning: Style,
     error: Style,
     link: Style,
+    code_keyword: Style,
+    code_operator: Style,
+    code_comment: Style,
+    code_string: Style,
+    code_number: Style,
+    code_type: Style,
+    code_function: Style,
+    code_constant: Style,
+    code_macro: Style,
+    code_punctuation: Style,
+    code_variable: Style,
+    code_property: Style,
+    code_attribute: Style,
+    code_module: Style,
+    code_label: Style,
+    code_tag: Style,
+    code_embedded: Style,
     diff_add: Style,
     diff_del: Style,
     diff_hunk: Style,
@@ -199,6 +216,74 @@ pub(crate) fn error_style() -> Style {
 
 pub(crate) fn link_style() -> Style {
     get_styles().link
+}
+
+pub(crate) fn code_keyword_style() -> Style {
+    get_styles().code_keyword
+}
+
+pub(crate) fn code_operator_style() -> Style {
+    get_styles().code_operator
+}
+
+pub(crate) fn code_comment_style() -> Style {
+    get_styles().code_comment
+}
+
+pub(crate) fn code_string_style() -> Style {
+    get_styles().code_string
+}
+
+pub(crate) fn code_number_style() -> Style {
+    get_styles().code_number
+}
+
+pub(crate) fn code_type_style() -> Style {
+    get_styles().code_type
+}
+
+pub(crate) fn code_function_style() -> Style {
+    get_styles().code_function
+}
+
+pub(crate) fn code_constant_style() -> Style {
+    get_styles().code_constant
+}
+
+pub(crate) fn code_macro_style() -> Style {
+    get_styles().code_macro
+}
+
+pub(crate) fn code_punctuation_style() -> Style {
+    get_styles().code_punctuation
+}
+
+pub(crate) fn code_variable_style() -> Style {
+    get_styles().code_variable
+}
+
+pub(crate) fn code_property_style() -> Style {
+    get_styles().code_property
+}
+
+pub(crate) fn code_attribute_style() -> Style {
+    get_styles().code_attribute
+}
+
+pub(crate) fn code_module_style() -> Style {
+    get_styles().code_module
+}
+
+pub(crate) fn code_label_style() -> Style {
+    get_styles().code_label
+}
+
+pub(crate) fn code_tag_style() -> Style {
+    get_styles().code_tag
+}
+
+pub(crate) fn code_embedded_style() -> Style {
+    get_styles().code_embedded
 }
 
 #[allow(dead_code)]
@@ -776,6 +861,46 @@ fn styles_for(
         None => accent,
     };
 
+    let code_keyword_fg = resolve_color(theme, "roles.code_keyword", &theme.roles.code_keyword);
+    let code_keyword = style_from_roles(code_keyword_fg, None, Style::default().magenta());
+    let code_operator_fg = resolve_color(theme, "roles.code_operator", &theme.roles.code_operator);
+    let code_operator = style_from_roles(code_operator_fg, None, Style::default().magenta().dim());
+    let code_comment_fg = resolve_color(theme, "roles.code_comment", &theme.roles.code_comment);
+    let code_comment = style_from_roles(code_comment_fg, None, Style::default().dim());
+    let code_string_fg = resolve_color(theme, "roles.code_string", &theme.roles.code_string);
+    let code_string = style_from_roles(code_string_fg, None, Style::default().green());
+    let code_number_fg = resolve_color(theme, "roles.code_number", &theme.roles.code_number);
+    let code_number = style_from_roles(code_number_fg, None, Style::default().blue());
+    let code_type_fg = resolve_color(theme, "roles.code_type", &theme.roles.code_type);
+    let code_type = style_from_roles(code_type_fg, None, Style::default().cyan());
+    let code_function_fg = resolve_color(theme, "roles.code_function", &theme.roles.code_function);
+    let code_function = style_from_roles(code_function_fg, None, Style::default().green());
+    let code_constant_fg = resolve_color(theme, "roles.code_constant", &theme.roles.code_constant);
+    let code_constant = style_from_roles(code_constant_fg, None, Style::default().cyan());
+    let code_macro_fg = resolve_color(theme, "roles.code_macro", &theme.roles.code_macro);
+    let code_macro = style_from_roles(code_macro_fg, None, Style::default().magenta());
+    let code_punctuation_fg = resolve_color(
+        theme,
+        "roles.code_punctuation",
+        &theme.roles.code_punctuation,
+    );
+    let code_punctuation = style_from_roles(code_punctuation_fg, None, Style::default());
+    let code_variable_fg = resolve_color(theme, "roles.code_variable", &theme.roles.code_variable);
+    let code_variable = style_from_roles(code_variable_fg, None, Style::default());
+    let code_property_fg = resolve_color(theme, "roles.code_property", &theme.roles.code_property);
+    let code_property = style_from_roles(code_property_fg, None, Style::default());
+    let code_attribute_fg =
+        resolve_color(theme, "roles.code_attribute", &theme.roles.code_attribute);
+    let code_attribute = style_from_roles(code_attribute_fg, None, Style::default().yellow());
+    let code_module_fg = resolve_color(theme, "roles.code_module", &theme.roles.code_module);
+    let code_module = style_from_roles(code_module_fg, None, Style::default().cyan());
+    let code_label_fg = resolve_color(theme, "roles.code_label", &theme.roles.code_label);
+    let code_label = style_from_roles(code_label_fg, None, Style::default().yellow());
+    let code_tag_fg = resolve_color(theme, "roles.code_tag", &theme.roles.code_tag);
+    let code_tag = style_from_roles(code_tag_fg, None, Style::default().magenta());
+    let code_embedded_fg = resolve_color(theme, "roles.code_embedded", &theme.roles.code_embedded);
+    let code_embedded = style_from_roles(code_embedded_fg, None, Style::default().red());
+
     let diff_add_fg = resolve_color(theme, "roles.diff_add_fg", &theme.roles.diff_add_fg);
     let diff_add_bg = resolve_color(theme, "roles.diff_add_bg", &theme.roles.diff_add_bg);
     let diff_add = style_from_roles(diff_add_fg, diff_add_bg, Style::default().green());
@@ -836,6 +961,23 @@ fn styles_for(
         warning,
         error,
         link,
+        code_keyword,
+        code_operator,
+        code_comment,
+        code_string,
+        code_number,
+        code_type,
+        code_function,
+        code_constant,
+        code_macro,
+        code_punctuation,
+        code_variable,
+        code_property,
+        code_attribute,
+        code_module,
+        code_label,
+        code_tag,
+        code_embedded,
         diff_add,
         diff_del,
         diff_hunk,
@@ -867,6 +1009,23 @@ fn fallback_styles() -> ThemeStyles {
         warning: Style::default().yellow(),
         error: Style::default().red(),
         link: Style::default().cyan(),
+        code_keyword: Style::default().magenta(),
+        code_operator: Style::default().magenta().dim(),
+        code_comment: Style::default().dim(),
+        code_string: Style::default().green(),
+        code_number: Style::default().blue(),
+        code_type: Style::default().cyan(),
+        code_function: Style::default().green(),
+        code_constant: Style::default().cyan(),
+        code_macro: Style::default().magenta(),
+        code_punctuation: Style::default(),
+        code_variable: Style::default(),
+        code_property: Style::default(),
+        code_attribute: Style::default().yellow(),
+        code_module: Style::default().cyan(),
+        code_label: Style::default().yellow(),
+        code_tag: Style::default().magenta(),
+        code_embedded: Style::default().red(),
         diff_add: Style::default().green(),
         diff_del: Style::default().red(),
         diff_hunk: Style::default().cyan(),
