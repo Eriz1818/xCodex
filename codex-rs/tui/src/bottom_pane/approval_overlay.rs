@@ -16,6 +16,7 @@ use crate::history_cell;
 use crate::key_hint;
 use crate::key_hint::KeyBinding;
 use crate::render::highlight::highlight_bash_with_heredoc_overrides;
+use crate::render::highlight::syntax_highlighting_enabled;
 use crate::render::renderable::ColumnRenderable;
 use crate::render::renderable::Renderable;
 use codex_core::features::Feature;
@@ -385,13 +386,28 @@ impl From<ApprovalRequest> for ApprovalRequestState {
                 reason,
                 proposed_execpolicy_amendment,
             } => {
+                fn plain_lines(command: &str) -> Vec<Line<'static>> {
+                    if command.is_empty() {
+                        vec![Line::from("")]
+                    } else {
+                        command
+                            .lines()
+                            .map(|line| Line::from(line.to_string()))
+                            .collect()
+                    }
+                }
+
                 let mut header: Vec<Line<'static>> = Vec::new();
                 if let Some(reason) = reason {
                     header.push(Line::from(vec!["Reason: ".into(), reason.italic()]));
                     header.push(Line::from(""));
                 }
                 let full_cmd = strip_bash_lc_and_escape(&command);
-                let mut full_cmd_lines = highlight_bash_with_heredoc_overrides(&full_cmd);
+                let mut full_cmd_lines = if syntax_highlighting_enabled() {
+                    highlight_bash_with_heredoc_overrides(&full_cmd)
+                } else {
+                    plain_lines(&full_cmd)
+                };
                 if let Some(first) = full_cmd_lines.first_mut() {
                     first.spans.insert(0, Span::from("$ "));
                 }
