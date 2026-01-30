@@ -21,7 +21,6 @@ use crate::config::types::Tui;
 use crate::config::types::UnattestedOutputPolicy;
 use crate::config::types::UriBasedFileOpener;
 use crate::config::types::Worktrees;
-use crate::config::types::XtremeMode;
 use crate::config_loader::ConfigLayerStack;
 use crate::config_loader::ConfigRequirements;
 use crate::config_loader::LoaderOverrides;
@@ -65,7 +64,6 @@ use serde::Serialize;
 use similar::DiffableStr;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
-use std::ffi::OsStr;
 use std::io::ErrorKind;
 use std::path::Path;
 use std::path::PathBuf;
@@ -174,38 +172,6 @@ pub struct Config {
     /// Compact prompt override.
     pub compact_prompt: Option<String>,
 
-    /// Optional external notifier command. When set, Codex will spawn this
-    /// program after each completed *turn* (i.e. when the agent finishes
-    /// processing a user submission). The value must be the full command
-    /// broken into argv tokens **without** the trailing JSON argument - Codex
-    /// appends one extra argument containing a JSON payload describing the
-    /// event.
-    ///
-    /// Example `~/.codex/config.toml` snippet:
-    ///
-    /// ```toml
-    /// notify = ["notify-send", "Codex"]
-    /// ```
-    ///
-    /// which will be invoked as:
-    ///
-    /// ```shell
-    /// notify-send Codex '{"type":"agent-turn-complete","turn-id":"12345"}'
-    /// ```
-    ///
-    /// Deprecated (xcodex): use `hooks.agent_turn_complete` instead.
-    ///
-    /// If unset the feature is disabled.
-    pub notify: Option<Vec<String>>,
-
-    /// Optional external hook commands to spawn on specific lifecycle events.
-    ///
-    /// Hooks are fire-and-forget: failures are logged and do not affect the
-    /// session. Hook commands receive event JSON on stdin. For large payloads,
-    /// stdin contains a small JSON envelope including `payload_path` pointing
-    /// at the full payload under CODEX_HOME.
-    pub hooks: HooksConfig,
-
     /// TUI notifications preference. When set, the TUI will send OSC 9 notifications on approvals
     /// and turn completions when not focused.
     pub tui_notifications: Notifications,
@@ -216,23 +182,8 @@ pub struct Config {
     /// Show startup tooltips in the TUI welcome screen.
     pub show_tooltips: bool,
 
-    /// How the TUI should render xcodex "xtreme mode" styling.
-    pub tui_xtreme_mode: XtremeMode,
-
-    /// Xcodex-only: rotate between multiple "ramp" status label flows across turns.
-    pub tui_ramps_rotate: bool,
-
-    /// Xcodex-only: enable the Build ramp for per-turn rotation.
-    pub tui_ramps_build: bool,
-
-    /// Xcodex-only: enable the DevOps ramp for per-turn rotation.
-    pub tui_ramps_devops: bool,
-
-    /// When true, the TUI asks for confirmation before exiting if external hooks are still running.
-    pub tui_confirm_exit_with_running_hooks: bool,
-
-    /// Theme configuration for xcodex (theme selection + theme directory).
-    pub themes: crate::config::types::Themes,
+    /// Xcodex-specific runtime settings extracted from config.toml.
+    pub xcodex: crate::xcodex::config::XcodexRuntimeConfig,
 
     /// Override the events-per-wheel-tick factor for TUI2 scroll normalization.
     ///
@@ -348,12 +299,6 @@ pub struct Config {
     ///
     /// This is the same `worktrees.pinned_paths` value from `config.toml` (see [`Worktrees`]).
     pub worktrees_pinned_paths: Vec<String>,
-
-    /// Whether xcodex should automatically link shared dirs when switching worktrees.
-    ///
-    /// This is the same `worktrees.auto_link_shared_dirs` value from `config.toml` (see
-    /// [`Worktrees`]).
-    pub worktrees_auto_link_shared_dirs: bool,
 
     /// Preferred store for CLI auth credentials.
     /// file (default): Use a file in the Codex home directory.
@@ -1965,18 +1910,11 @@ impl Config {
                 .as_ref()
                 .map(|w| w.pinned_paths.clone())
                 .unwrap_or_default(),
-            worktrees_auto_link_shared_dirs: cfg
-                .worktrees
-                .as_ref()
-                .map(|w| w.auto_link_shared_dirs)
-                .unwrap_or(false),
             approval_policy: constrained_approval_policy,
             sandbox_policy: constrained_sandbox_policy,
             did_user_set_custom_approval_policy_or_sandbox_mode,
             forced_auto_mode_downgraded_on_windows,
             shell_environment_policy,
-            notify: cfg.notify,
-            hooks: cfg.hooks,
             user_instructions,
             base_instructions,
             model_personality: config_profile.model_personality.or(cfg.model_personality),
@@ -2063,16 +2001,13 @@ impl Config {
                 .unwrap_or_default(),
             animations: cfg.tui.as_ref().map(|t| t.animations).unwrap_or(true),
             show_tooltips: cfg.tui.as_ref().map(|t| t.show_tooltips).unwrap_or(true),
-            tui_xtreme_mode: cfg.tui.as_ref().map(|t| t.xtreme_mode).unwrap_or_default(),
-            tui_ramps_rotate: cfg.tui.as_ref().map(|t| t.ramps_rotate).unwrap_or(true),
-            tui_ramps_build: cfg.tui.as_ref().map(|t| t.ramps_build).unwrap_or(true),
-            tui_ramps_devops: cfg.tui.as_ref().map(|t| t.ramps_devops).unwrap_or(true),
-            tui_confirm_exit_with_running_hooks: cfg
-                .tui
-                .as_ref()
-                .map(|t| t.confirm_exit_with_running_hooks)
-                .unwrap_or(true),
-            themes: cfg.themes.unwrap_or_default(),
+            xcodex: crate::xcodex::config::XcodexRuntimeConfig::from_toml(
+                cfg.notify,
+                cfg.hooks,
+                cfg.tui.as_ref(),
+                cfg.themes,
+                cfg.worktrees.as_ref(),
+            ),
             tui_scroll_events_per_tick: cfg.tui.as_ref().and_then(|t| t.scroll_events_per_tick),
             tui_scroll_wheel_lines: cfg.tui.as_ref().and_then(|t| t.scroll_wheel_lines),
             tui_scroll_trackpad_lines: cfg.tui.as_ref().and_then(|t| t.scroll_trackpad_lines),
@@ -2216,15 +2151,6 @@ impl Config {
 }
 
 const CODEX_DEFAULT_HOME_DIRNAME: &str = ".codex";
-const XCODEX_DEFAULT_HOME_DIRNAME: &str = ".xcodex";
-const XCODEX_EXE_STEM: &str = "xcodex";
-
-fn is_xcodex_exe_name(name: &OsStr) -> bool {
-    let Some(stem) = Path::new(name).file_stem().and_then(OsStr::to_str) else {
-        return false;
-    };
-    stem == XCODEX_EXE_STEM || stem.starts_with("xcodex-")
-}
 
 /// Returns `true` when this process appears to have been invoked via the
 /// `xcodex` binary name (e.g. installed as `~/.local/bin/xcodex`).
@@ -2232,55 +2158,23 @@ fn is_xcodex_exe_name(name: &OsStr) -> bool {
 /// This is used only for selecting a *default* home directory when `CODEX_HOME`
 /// is unset; if `CODEX_HOME` is set it always takes precedence.
 pub fn is_xcodex_invocation() -> bool {
-    if let Some(argv0) = std::env::args_os().next()
-        && is_xcodex_exe_name(&argv0)
-    {
-        return true;
-    }
-
-    if let Ok(exe) = std::env::current_exe()
-        && is_xcodex_exe_name(exe.as_os_str())
-    {
-        return true;
-    }
-
-    false
+    crate::xcodex::config::is_xcodex_invocation()
 }
 
-fn default_home_dirname_impl(is_xcodex: bool) -> &'static str {
-    if is_xcodex {
-        XCODEX_DEFAULT_HOME_DIRNAME
+fn default_home_dirname() -> &'static str {
+    if is_xcodex_invocation() {
+        crate::xcodex::config::xcodex_default_home_dirname()
     } else {
         CODEX_DEFAULT_HOME_DIRNAME
     }
 }
 
-fn default_home_dirname() -> &'static str {
-    default_home_dirname_impl(is_xcodex_invocation())
-}
-
 pub fn xcodex_first_run_wizard_marker_path(codex_home: &Path) -> PathBuf {
-    codex_home.join(".xcodex-first-run-wizard.complete")
-}
-
-fn should_run_xcodex_first_run_wizard_impl(
-    codex_home: &Path,
-    is_xcodex: bool,
-) -> std::io::Result<bool> {
-    if !is_xcodex {
-        return Ok(false);
-    }
-
-    let config_toml = codex_home.join(CONFIG_TOML_FILE);
-    if config_toml.exists() {
-        return Ok(false);
-    }
-
-    Ok(!xcodex_first_run_wizard_marker_path(codex_home).exists())
+    crate::xcodex::config::xcodex_first_run_wizard_marker_path(codex_home)
 }
 
 pub fn should_run_xcodex_first_run_wizard(codex_home: &Path) -> std::io::Result<bool> {
-    should_run_xcodex_first_run_wizard_impl(codex_home, is_xcodex_invocation())
+    crate::xcodex::config::should_run_xcodex_first_run_wizard(codex_home)
 }
 pub(crate) fn uses_deprecated_instructions_file(config_layer_stack: &ConfigLayerStack) -> bool {
     config_layer_stack
@@ -2347,7 +2241,7 @@ fn derive_exclusion_config(user: Option<ExclusionConfig>, _features: &Features) 
 }
 
 fn normalize_exclusion_files(files: Vec<String>) -> Vec<String> {
-    let mut out = vec![".aiexclude".to_string(), ".xcodexignore".to_string()];
+    let mut out = crate::xcodex::config::default_exclusion_files();
 
     for raw in files {
         let name = raw.trim();
@@ -2374,7 +2268,9 @@ mod tests {
     use crate::config::types::FeedbackConfigToml;
     use crate::config::types::HistoryPersistence;
     use crate::config::types::McpServerTransportConfig;
+    use crate::config::types::NotificationMethod;
     use crate::config::types::Notifications;
+    use crate::config::types::XtremeMode;
     use crate::config_loader::RequirementSource;
     use crate::features::Feature;
 
@@ -2386,52 +2282,19 @@ mod tests {
     use std::collections::HashMap;
     use std::time::Duration;
     use tempfile::TempDir;
-    use tempfile::tempdir;
 
-    #[test]
-    fn default_home_dirname_switches_for_xcodex_invocation() {
-        assert_eq!(CODEX_DEFAULT_HOME_DIRNAME, default_home_dirname_impl(false));
-        assert_eq!(XCODEX_DEFAULT_HOME_DIRNAME, default_home_dirname_impl(true));
-    }
-
-    #[test]
-    fn xcodex_exe_name_matches_prefixed_names() {
-        assert_eq!(true, is_xcodex_exe_name(OsStr::new("xcodex")));
-        assert_eq!(
-            true,
-            is_xcodex_exe_name(OsStr::new("xcodex-x86_64-unknown-linux-musl"))
-        );
-        assert_eq!(false, is_xcodex_exe_name(OsStr::new("codex")));
-    }
-
-    #[test]
-    fn xcodex_first_run_wizard_requires_missing_config_and_marker() -> std::io::Result<()> {
-        let dir = tempdir()?;
-        let codex_home = dir.path();
-
-        assert_eq!(
-            false,
-            should_run_xcodex_first_run_wizard_impl(codex_home, false)?
-        );
-        assert_eq!(
-            true,
-            should_run_xcodex_first_run_wizard_impl(codex_home, true)?
-        );
-
-        std::fs::write(codex_home.join(CONFIG_TOML_FILE), "")?;
-        assert_eq!(
-            false,
-            should_run_xcodex_first_run_wizard_impl(codex_home, true)?
-        );
-
-        std::fs::remove_file(codex_home.join(CONFIG_TOML_FILE))?;
-        std::fs::write(xcodex_first_run_wizard_marker_path(codex_home), "")?;
-        assert_eq!(
-            false,
-            should_run_xcodex_first_run_wizard_impl(codex_home, true)?
-        );
-
-        Ok(())
+    fn expected_xcodex_defaults() -> crate::xcodex::config::XcodexRuntimeConfig {
+        crate::xcodex::config::XcodexRuntimeConfig {
+            notify: None,
+            hooks: HooksConfig::default(),
+            tui_xtreme_mode: XtremeMode::On,
+            tui_ramps_rotate: true,
+            tui_ramps_build: true,
+            tui_ramps_devops: true,
+            tui_confirm_exit_with_running_hooks: true,
+            themes: crate::config::types::Themes::default(),
+            worktrees_auto_link_shared_dirs: false,
+        }
     }
 
     fn stdio_mcp(command: &str) -> McpServerConfig {
@@ -2449,6 +2312,7 @@ mod tests {
             tool_timeout_sec: None,
             enabled_tools: None,
             disabled_tools: None,
+            scopes: None,
         }
     }
 
@@ -2466,6 +2330,7 @@ mod tests {
             tool_timeout_sec: None,
             enabled_tools: None,
             disabled_tools: None,
+            scopes: None,
         }
     }
 
@@ -2515,6 +2380,7 @@ persistence = "none"
             tui,
             Tui {
                 notifications: Notifications::Enabled(true),
+                notification_method: NotificationMethod::Auto,
                 animations: true,
                 show_tooltips: true,
                 xtreme_mode: XtremeMode::On,
@@ -3312,6 +3178,7 @@ profile = "project"
                 tool_timeout_sec: Some(Duration::from_secs(5)),
                 enabled_tools: None,
                 disabled_tools: None,
+                scopes: None,
             },
         );
 
@@ -3466,6 +3333,7 @@ bearer_token = "secret"
                 tool_timeout_sec: None,
                 enabled_tools: None,
                 disabled_tools: None,
+                scopes: None,
             },
         )]);
 
@@ -3535,6 +3403,7 @@ ZIG_VAR = "3"
                 tool_timeout_sec: None,
                 enabled_tools: None,
                 disabled_tools: None,
+                scopes: None,
             },
         )]);
 
@@ -3584,6 +3453,7 @@ ZIG_VAR = "3"
                 tool_timeout_sec: None,
                 enabled_tools: None,
                 disabled_tools: None,
+                scopes: None,
             },
         )]);
 
@@ -3631,6 +3501,7 @@ ZIG_VAR = "3"
                 tool_timeout_sec: None,
                 enabled_tools: None,
                 disabled_tools: None,
+                scopes: None,
             },
         )]);
 
@@ -3694,6 +3565,7 @@ startup_timeout_sec = 2.0
                 tool_timeout_sec: None,
                 enabled_tools: None,
                 disabled_tools: None,
+                scopes: None,
             },
         )]);
         apply_blocking(
@@ -3769,6 +3641,7 @@ X-Auth = "DOCS_AUTH"
                 tool_timeout_sec: None,
                 enabled_tools: None,
                 disabled_tools: None,
+                scopes: None,
             },
         )]);
 
@@ -3797,6 +3670,7 @@ X-Auth = "DOCS_AUTH"
                 tool_timeout_sec: None,
                 enabled_tools: None,
                 disabled_tools: None,
+                scopes: None,
             },
         );
         apply_blocking(
@@ -3863,6 +3737,7 @@ url = "https://example.com/mcp"
                     tool_timeout_sec: None,
                     enabled_tools: None,
                     disabled_tools: None,
+                    scopes: None,
                 },
             ),
             (
@@ -3881,6 +3756,7 @@ url = "https://example.com/mcp"
                     tool_timeout_sec: None,
                     enabled_tools: None,
                     disabled_tools: None,
+                    scopes: None,
                 },
             ),
         ]);
@@ -3962,6 +3838,7 @@ url = "https://example.com/mcp"
                 tool_timeout_sec: None,
                 enabled_tools: None,
                 disabled_tools: None,
+                scopes: None,
             },
         )]);
 
@@ -4005,6 +3882,7 @@ url = "https://example.com/mcp"
                 tool_timeout_sec: None,
                 enabled_tools: Some(vec!["allowed".to_string()]),
                 disabled_tools: Some(vec!["blocked".to_string()]),
+                scopes: None,
             },
         )]);
 
@@ -4381,12 +4259,9 @@ model_verbosity = "high"
                 forced_auto_mode_downgraded_on_windows: false,
                 shell_environment_policy: ShellEnvironmentPolicy::default(),
                 user_instructions: None,
-                notify: None,
-                hooks: HooksConfig::default(),
                 cwd: fixture.cwd(),
                 worktrees_shared_dirs: Vec::new(),
                 worktrees_pinned_paths: Vec::new(),
-                worktrees_auto_link_shared_dirs: false,
                 cli_auth_credentials_store_mode: Default::default(),
                 mcp_servers: Constrained::allow_any(HashMap::new()),
                 mcp_oauth_credentials_store_mode: Default::default(),
@@ -4430,12 +4305,7 @@ model_verbosity = "high"
                 tui_notifications: Default::default(),
                 animations: true,
                 show_tooltips: true,
-                tui_xtreme_mode: XtremeMode::On,
-                tui_ramps_rotate: true,
-                tui_ramps_build: true,
-                tui_ramps_devops: true,
-                tui_confirm_exit_with_running_hooks: true,
-                themes: crate::config::types::Themes::default(),
+                xcodex: expected_xcodex_defaults(),
                 analytics_enabled: Some(true),
                 feedback_enabled: true,
                 tui_scroll_events_per_tick: None,
@@ -4490,12 +4360,9 @@ model_verbosity = "high"
             forced_auto_mode_downgraded_on_windows: false,
             shell_environment_policy: ShellEnvironmentPolicy::default(),
             user_instructions: None,
-            notify: None,
-            hooks: HooksConfig::default(),
             cwd: fixture.cwd(),
             worktrees_shared_dirs: Vec::new(),
             worktrees_pinned_paths: Vec::new(),
-            worktrees_auto_link_shared_dirs: false,
             cli_auth_credentials_store_mode: Default::default(),
             mcp_servers: Constrained::allow_any(HashMap::new()),
             mcp_oauth_credentials_store_mode: Default::default(),
@@ -4539,12 +4406,7 @@ model_verbosity = "high"
             tui_notifications: Default::default(),
             animations: true,
             show_tooltips: true,
-            tui_xtreme_mode: XtremeMode::On,
-            tui_ramps_rotate: true,
-            tui_ramps_build: true,
-            tui_ramps_devops: true,
-            tui_confirm_exit_with_running_hooks: true,
-            themes: crate::config::types::Themes::default(),
+            xcodex: expected_xcodex_defaults(),
             analytics_enabled: Some(true),
             feedback_enabled: true,
             tui_scroll_events_per_tick: None,
@@ -4614,12 +4476,9 @@ model_verbosity = "high"
             forced_auto_mode_downgraded_on_windows: false,
             shell_environment_policy: ShellEnvironmentPolicy::default(),
             user_instructions: None,
-            notify: None,
-            hooks: HooksConfig::default(),
             cwd: fixture.cwd(),
             worktrees_shared_dirs: Vec::new(),
             worktrees_pinned_paths: Vec::new(),
-            worktrees_auto_link_shared_dirs: false,
             cli_auth_credentials_store_mode: Default::default(),
             mcp_servers: Constrained::allow_any(HashMap::new()),
             mcp_oauth_credentials_store_mode: Default::default(),
@@ -4663,12 +4522,7 @@ model_verbosity = "high"
             tui_notifications: Default::default(),
             animations: true,
             show_tooltips: true,
-            tui_xtreme_mode: XtremeMode::On,
-            tui_ramps_rotate: true,
-            tui_ramps_build: true,
-            tui_ramps_devops: true,
-            tui_confirm_exit_with_running_hooks: true,
-            themes: crate::config::types::Themes::default(),
+            xcodex: expected_xcodex_defaults(),
             analytics_enabled: Some(false),
             feedback_enabled: true,
             tui_scroll_events_per_tick: None,
@@ -4724,12 +4578,9 @@ model_verbosity = "high"
             forced_auto_mode_downgraded_on_windows: false,
             shell_environment_policy: ShellEnvironmentPolicy::default(),
             user_instructions: None,
-            notify: None,
-            hooks: HooksConfig::default(),
             cwd: fixture.cwd(),
             worktrees_shared_dirs: Vec::new(),
             worktrees_pinned_paths: Vec::new(),
-            worktrees_auto_link_shared_dirs: false,
             cli_auth_credentials_store_mode: Default::default(),
             mcp_servers: Constrained::allow_any(HashMap::new()),
             mcp_oauth_credentials_store_mode: Default::default(),
@@ -4773,12 +4624,7 @@ model_verbosity = "high"
             tui_notifications: Default::default(),
             animations: true,
             show_tooltips: true,
-            tui_xtreme_mode: XtremeMode::On,
-            tui_ramps_rotate: true,
-            tui_ramps_build: true,
-            tui_ramps_devops: true,
-            tui_confirm_exit_with_running_hooks: true,
-            themes: crate::config::types::Themes::default(),
+            xcodex: expected_xcodex_defaults(),
             analytics_enabled: Some(true),
             feedback_enabled: true,
             tui_scroll_events_per_tick: None,

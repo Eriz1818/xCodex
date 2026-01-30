@@ -2149,7 +2149,7 @@ impl ChatWidget {
                 self.config.tui_transcript_diff_highlight,
                 self.config.tui_transcript_user_prompt_highlight,
                 self.config.tui_minimal_composer,
-                self.config.tui_xtreme_mode,
+                self.config.xcodex.tui_xtreme_mode,
                 self.config.tui_verbose_tool_output,
             );
             self.bottom_pane.show_view(Box::new(view));
@@ -3383,7 +3383,7 @@ impl ChatWidget {
             self.config.tui_transcript_diff_highlight,
             self.config.tui_transcript_user_prompt_highlight,
             self.config.tui_minimal_composer,
-            self.config.tui_xtreme_mode,
+            self.config.xcodex.tui_xtreme_mode,
             self.config.tui_verbose_tool_output,
         );
         self.bottom_pane.show_view(Box::new(view));
@@ -4926,29 +4926,29 @@ impl ChatWidget {
     }
 
     pub(crate) fn set_xtreme_mode(&mut self, mode: codex_core::config::types::XtremeMode) {
-        self.config.tui_xtreme_mode = mode;
+        self.config.xcodex.tui_xtreme_mode = mode;
         self.bottom_pane
             .set_xtreme_ui_enabled(crate::xtreme::xtreme_ui_enabled(&self.config));
         self.request_redraw();
     }
 
     pub(crate) fn set_themes_config(&mut self, themes: codex_core::config::types::Themes) {
-        self.config.themes = themes;
+        self.config.xcodex.themes = themes;
         self.request_redraw();
     }
 
     pub(crate) fn set_ramps_config(&mut self, rotate: bool, build: bool, devops: bool) {
-        self.config.tui_ramps_rotate = rotate;
-        self.config.tui_ramps_build = build;
-        self.config.tui_ramps_devops = devops;
+        self.config.xcodex.tui_ramps_rotate = rotate;
+        self.config.xcodex.tui_ramps_build = build;
+        self.config.xcodex.tui_ramps_devops = devops;
         self.request_redraw();
     }
 
     pub(crate) fn ramps_config(&self) -> (bool, bool, bool) {
         (
-            self.config.tui_ramps_rotate,
-            self.config.tui_ramps_build,
-            self.config.tui_ramps_devops,
+            self.config.xcodex.tui_ramps_rotate,
+            self.config.xcodex.tui_ramps_build,
+            self.config.xcodex.tui_ramps_devops,
         )
     }
 
@@ -5037,7 +5037,7 @@ impl ChatWidget {
     }
 
     pub(crate) fn themes_dir(&self) -> PathBuf {
-        codex_core::themes::themes_dir(&self.config.codex_home, &self.config.themes)
+        codex_core::themes::themes_dir(&self.config.codex_home, &self.config.xcodex.themes)
     }
 
     pub(crate) fn add_info_message(&mut self, message: String, hint: Option<String>) {
@@ -5094,7 +5094,7 @@ impl ChatWidget {
             if self.is_cancellable_work_active() {
                 self.submit_op(Op::Interrupt);
             } else if let Some(action) = hook_quit_action(
-                self.config.tui_confirm_exit_with_running_hooks,
+                self.config.xcodex.tui_confirm_exit_with_running_hooks,
                 &self.hook_processes,
                 self.quit_shortcut_active_for(key),
             ) {
@@ -5118,7 +5118,7 @@ impl ChatWidget {
             self.quit_shortcut_expires_at = None;
             self.quit_shortcut_key = None;
             if let Some(action) = hook_quit_action(
-                self.config.tui_confirm_exit_with_running_hooks,
+                self.config.xcodex.tui_confirm_exit_with_running_hooks,
                 &self.hook_processes,
                 true,
             ) && matches!(action, HookQuitAction::Confirmed)
@@ -5151,7 +5151,7 @@ impl ChatWidget {
             }
 
             if let Some(action) = hook_quit_action(
-                self.config.tui_confirm_exit_with_running_hooks,
+                self.config.xcodex.tui_confirm_exit_with_running_hooks,
                 &self.hook_processes,
                 self.quit_shortcut_active_for(key),
             ) {
@@ -5176,7 +5176,7 @@ impl ChatWidget {
             self.quit_shortcut_key = None;
             self.bottom_pane.clear_quit_shortcut_hint();
             if let Some(action) = hook_quit_action(
-                self.config.tui_confirm_exit_with_running_hooks,
+                self.config.xcodex.tui_confirm_exit_with_running_hooks,
                 &self.hook_processes,
                 true,
             ) && matches!(action, HookQuitAction::Confirmed)

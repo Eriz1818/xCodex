@@ -726,7 +726,7 @@ impl Session {
             });
         }
         maybe_push_chat_wire_api_deprecation(&config, &mut post_session_configured_events);
-        if matches!(config.notify.as_ref(), Some(notify) if !notify.is_empty()) {
+        if matches!(config.xcodex.notify.as_ref(), Some(notify) if !notify.is_empty()) {
             post_session_configured_events.push(Event {
                 id: INITIAL_SUBMIT_ID.to_owned(),
                 msg: EventMsg::DeprecationNotice(DeprecationNoticeEvent {
@@ -802,13 +802,13 @@ impl Session {
             mcp_startup_cancellation_token: Mutex::new(CancellationToken::new()),
             user_hooks: UserHooks::new(
                 config.codex_home.clone(),
-                config.hooks.clone(),
+                config.xcodex.hooks.clone(),
                 Some(tx_event.clone()),
                 config.sandbox_policy.get().clone(),
                 config.codex_linux_sandbox_exe.clone(),
             ),
             unified_exec_manager: UnifiedExecProcessManager::default(),
-            notifier: UserNotifier::new(config.notify.clone()),
+            notifier: UserNotifier::new(config.xcodex.notify.clone()),
             rollout: Mutex::new(Some(rollout_recorder)),
             user_shell: Arc::new(default_shell),
             show_raw_agent_reasoning: config.show_raw_agent_reasoning,

@@ -638,6 +638,7 @@ async fn mcp_slash_command_requests_tool_list_when_servers_exist() {
         tool_timeout_sec: None,
         enabled_tools: None,
         disabled_tools: None,
+        scopes: None,
     };
     chat.config.mcp_servers = Constrained::allow_any(std::collections::HashMap::from([(
         "dummy".to_string(),
@@ -836,6 +837,7 @@ async fn mcp_tools_output_renders_startup_status_and_retry_hints() {
         tool_timeout_sec: None,
         enabled_tools: None,
         disabled_tools: None,
+        scopes: None,
     };
 
     let beta_cfg = McpServerConfig {
@@ -852,6 +854,7 @@ async fn mcp_tools_output_renders_startup_status_and_retry_hints() {
         tool_timeout_sec: None,
         enabled_tools: None,
         disabled_tools: None,
+        scopes: None,
     };
 
     let gamma_cfg = McpServerConfig {
@@ -868,6 +871,7 @@ async fn mcp_tools_output_renders_startup_status_and_retry_hints() {
         tool_timeout_sec: None,
         enabled_tools: None,
         disabled_tools: None,
+        scopes: None,
     };
 
     chat.config.mcp_servers = Constrained::allow_any(HashMap::from([
@@ -941,6 +945,7 @@ async fn mcp_tools_output_renders_tools_resources_and_templates() {
         tool_timeout_sec: None,
         enabled_tools: None,
         disabled_tools: None,
+        scopes: None,
     };
 
     chat.config.mcp_servers =
@@ -1824,7 +1829,7 @@ async fn ctrl_c_shutdown_requires_confirmation_when_hooks_running() {
     let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(None).await;
     assert_matches!(op_rx.try_recv(), Err(TryRecvError::Empty));
 
-    chat.config.tui_confirm_exit_with_running_hooks = true;
+    chat.config.xcodex.tui_confirm_exit_with_running_hooks = true;
     chat.on_hook_process_begin(HookProcessBeginEvent {
         hook_id: uuid::Uuid::nil(),
         payload_event_id: uuid::Uuid::nil(),
@@ -2121,7 +2126,8 @@ async fn slash_theme_template_writes_examples() {
 
     chat.dispatch_command_with_args(SlashCommand::Theme, "template".to_string());
 
-    let themes_dir = codex_core::themes::themes_dir(&chat.config.codex_home, &chat.config.themes);
+    let themes_dir =
+        codex_core::themes::themes_dir(&chat.config.codex_home, &chat.config.xcodex.themes);
     assert!(
         themes_dir.join("example-light.yaml").exists(),
         "expected light theme template to be written"

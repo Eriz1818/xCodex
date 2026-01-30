@@ -65,8 +65,8 @@ impl ThemeSelectorOverlay {
 
         let edit_variant = crate::theme::active_variant(&config, terminal_bg);
         let current_theme = match edit_variant {
-            ThemeVariant::Light => config.themes.light.as_deref(),
-            ThemeVariant::Dark => config.themes.dark.as_deref(),
+            ThemeVariant::Light => config.xcodex.themes.light.as_deref(),
+            ThemeVariant::Dark => config.xcodex.themes.dark.as_deref(),
         }
         .unwrap_or("default")
         .to_string();
@@ -234,8 +234,8 @@ impl ThemeSelectorOverlay {
 
         self.edit_variant = variant;
         let desired_theme = match variant {
-            ThemeVariant::Light => self.config.themes.light.as_deref(),
-            ThemeVariant::Dark => self.config.themes.dark.as_deref(),
+            ThemeVariant::Light => self.config.xcodex.themes.light.as_deref(),
+            ThemeVariant::Dark => self.config.xcodex.themes.dark.as_deref(),
         }
         .unwrap_or("default");
 
@@ -2748,7 +2748,7 @@ impl ThemeInlineEditor {
             return;
         }
 
-        let dir = codex_core::themes::themes_dir(&config.codex_home, &config.themes);
+        let dir = codex_core::themes::themes_dir(&config.codex_home, &config.xcodex.themes);
         if let Err(err) = std::fs::create_dir_all(&dir) {
             save.error = Some(format!(
                 "Failed to create themes directory `{}`: {err}",

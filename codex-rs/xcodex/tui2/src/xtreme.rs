@@ -6,7 +6,7 @@ use ratatui::prelude::*;
 use ratatui::style::Stylize;
 
 pub(crate) fn xtreme_ui_enabled(config: &Config) -> bool {
-    match config.tui_xtreme_mode {
+    match config.xcodex.tui_xtreme_mode {
         XtremeMode::Auto => codex_core::config::is_xcodex_invocation(),
         XtremeMode::On => true,
         XtremeMode::Off => false,

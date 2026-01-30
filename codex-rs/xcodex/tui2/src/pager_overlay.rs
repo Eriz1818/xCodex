@@ -1126,7 +1126,7 @@ impl ThemePreviewOverlay {
         };
 
         let active = catalog.resolve_active(
-            &self.preview.config.themes,
+            &self.preview.config.xcodex.themes,
             Some(variant),
             terminal_background_is_light,
         );
@@ -1426,7 +1426,7 @@ impl ThemePreviewOverlay {
 
         let dir = codex_core::themes::themes_dir(
             &self.preview.config.codex_home,
-            &self.preview.config.themes,
+            &self.preview.config.xcodex.themes,
         );
         if let Err(err) = std::fs::create_dir_all(&dir) {
             save.error = Some(format!(

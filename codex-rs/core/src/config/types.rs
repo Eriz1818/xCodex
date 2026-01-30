@@ -4,6 +4,8 @@
 // definitions that do not contain business logic.
 
 use crate::config_loader::RequirementSource;
+pub use crate::xcodex::config::ScrollInputMode;
+pub use crate::xcodex::config::XtremeMode;
 pub use codex_protocol::config_types::AltScreenMode;
 pub use codex_protocol::config_types::ModeKind;
 pub use codex_protocol::config_types::Personality;
@@ -246,6 +248,10 @@ pub struct McpServerConfig {
     /// Explicit deny-list of tools. These tools will be removed after applying `enabled_tools`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub disabled_tools: Option<Vec<String>>,
+
+    /// Optional OAuth scopes to request during MCP login.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scopes: Option<Vec<String>>,
 }
 
 // Raw MCP config shape used for deserialization and JSON Schema generation.
@@ -286,6 +292,8 @@ pub(crate) struct RawMcpServerConfig {
     pub enabled_tools: Option<Vec<String>>,
     #[serde(default)]
     pub disabled_tools: Option<Vec<String>>,
+    #[serde(default)]
+    pub scopes: Option<Vec<String>>,
 }
 
 impl<'de> Deserialize<'de> for McpServerConfig {
@@ -307,6 +315,7 @@ impl<'de> Deserialize<'de> for McpServerConfig {
         let enabled = raw.enabled.unwrap_or_else(default_enabled);
         let enabled_tools = raw.enabled_tools.clone();
         let disabled_tools = raw.disabled_tools.clone();
+        let scopes = raw.scopes.clone();
 
         fn throw_if_set<E, T>(transport: &str, field: &str, value: Option<&T>) -> Result<(), E>
         where
@@ -361,6 +370,7 @@ impl<'de> Deserialize<'de> for McpServerConfig {
             disabled_reason: None,
             enabled_tools,
             disabled_tools,
+            scopes,
         })
     }
 }
@@ -599,28 +609,22 @@ impl Default for Notifications {
 /// button events, without a magnitude. This setting controls whether Codex uses a heuristic to
 /// infer wheel vs trackpad per stream, or forces a specific behavior.
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, Default)]
-#[serde(rename_all = "snake_case")]
-pub enum ScrollInputMode {
-    /// Infer wheel vs trackpad behavior per scroll stream.
+#[serde(rename_all = "lowercase")]
+pub enum NotificationMethod {
     #[default]
     Auto,
-    /// Always treat scroll events as mouse-wheel input (fixed lines per tick).
-    Wheel,
-    /// Always treat scroll events as trackpad input (fractional accumulation).
-    Trackpad,
+    Osc9,
+    Bel,
 }
 
-/// How the TUI should render xcodex "xtreme mode" styling.
-#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, Default)]
-#[serde(rename_all = "snake_case")]
-pub enum XtremeMode {
-    /// Enable xtreme styling when invoked as `xcodex`.
-    Auto,
-    /// Always enable xtreme styling.
-    #[default]
-    On,
-    /// Disable xtreme styling (prefer upstream-like visuals).
-    Off,
+impl fmt::Display for NotificationMethod {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            NotificationMethod::Auto => write!(f, "auto"),
+            NotificationMethod::Osc9 => write!(f, "osc9"),
+            NotificationMethod::Bel => write!(f, "bel"),
+        }
+    }
 }
 /// Collection of settings that are specific to the TUI.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema)]
@@ -630,6 +634,11 @@ pub struct Tui {
     /// Defaults to `true`.
     #[serde(default)]
     pub notifications: Notifications,
+
+    /// Notification method to use for unfocused terminal notifications.
+    /// Defaults to `auto`.
+    #[serde(default)]
+    pub notification_method: NotificationMethod,
 
     /// Enable animations (welcome screen, shimmer effects, spinners).
     /// Defaults to `true`.

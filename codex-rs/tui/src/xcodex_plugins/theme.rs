@@ -105,13 +105,14 @@ pub(crate) async fn persist_theme_selection(
         Ok(()) => {
             match variant {
                 ThemeVariant::Light => {
-                    app.config.themes.light = (theme != "default").then(|| theme.clone());
+                    app.config.xcodex.themes.light = (theme != "default").then(|| theme.clone());
                 }
                 ThemeVariant::Dark => {
-                    app.config.themes.dark = (theme != "default").then(|| theme.clone());
+                    app.config.xcodex.themes.dark = (theme != "default").then(|| theme.clone());
                 }
             }
-            app.chat_widget.set_themes_config(app.config.themes.clone());
+            app.chat_widget
+                .set_themes_config(app.config.xcodex.themes.clone());
             crate::theme::apply_from_config(&app.config, terminal_palette::default_bg());
 
             let mut message = format!("Theme changed to `{theme}` for {label} mode.");

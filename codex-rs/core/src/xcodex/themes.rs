@@ -862,7 +862,7 @@ impl ThemeCatalog {
             by_name.insert(theme.name.clone(), theme);
         }
 
-        let themes_cfg = config.themes.clone();
+        let themes_cfg = config.xcodex.themes.clone();
         let dir = themes_dir(&config.codex_home, &themes_cfg);
         if dir.exists() {
             let entries = match fs::read_dir(&dir) {

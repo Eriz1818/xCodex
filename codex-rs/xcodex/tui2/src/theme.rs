@@ -58,8 +58,11 @@ pub(crate) fn apply_from_config(config: &Config, terminal_bg: Option<(u8, u8, u8
 
     let styles = match ThemeCatalog::load(config) {
         Ok(catalog) => {
-            let theme =
-                catalog.resolve_active(&config.themes, auto_variant, terminal_background_is_light);
+            let theme = catalog.resolve_active(
+                &config.xcodex.themes,
+                auto_variant,
+                terminal_background_is_light,
+            );
             styles_for(theme, terminal_fg, terminal_bg)
         }
         Err(_err) => fallback_styles(),
@@ -76,7 +79,11 @@ pub(crate) fn preview(config: &Config, terminal_bg: Option<(u8, u8, u8)>, theme_
     let styles = match ThemeCatalog::load(config) {
         Ok(catalog) => {
             let theme = catalog.get(theme_name).unwrap_or_else(|| {
-                catalog.resolve_active(&config.themes, auto_variant, terminal_background_is_light)
+                catalog.resolve_active(
+                    &config.xcodex.themes,
+                    auto_variant,
+                    terminal_background_is_light,
+                )
             });
             styles_for(theme, terminal_fg, terminal_bg)
         }
@@ -93,7 +100,7 @@ pub(crate) fn preview_definition(theme: &codex_core::themes::ThemeDefinition) {
 pub(crate) fn active_variant(config: &Config, terminal_bg: Option<(u8, u8, u8)>) -> ThemeVariant {
     let terminal_background_is_light = terminal_bg.is_some_and(is_light);
     let auto_variant = os_theme_variant();
-    match config.themes.theme_mode {
+    match config.xcodex.themes.theme_mode {
         codex_core::config::types::ThemeMode::Light => ThemeVariant::Light,
         codex_core::config::types::ThemeMode::Dark => ThemeVariant::Dark,
         codex_core::config::types::ThemeMode::Auto => auto_variant.unwrap_or({
@@ -256,7 +263,11 @@ pub(crate) fn preview_lines(
             ];
         }
     };
-    let theme = catalog.resolve_active(&config.themes, auto_variant, terminal_background_is_light);
+    let theme = catalog.resolve_active(
+        &config.xcodex.themes,
+        auto_variant,
+        terminal_background_is_light,
+    );
 
     fn color_span(label: &str, resolved: ThemeColorResolved) -> Span<'static> {
         match resolved {
@@ -317,11 +328,11 @@ pub(crate) fn preview_lines(
     )));
     lines.push(Line::from(format!(
         "dir: {}",
-        codex_core::themes::themes_dir(&config.codex_home, &config.themes).display()
+        codex_core::themes::themes_dir(&config.codex_home, &config.xcodex.themes).display()
     )));
     lines.push(Line::from(format!(
         "mode: {:?} (effective: {:?})",
-        config.themes.theme_mode,
+        config.xcodex.themes.theme_mode,
         active_variant(config, terminal_bg)
     )));
     if !catalog.load_warnings().is_empty() {

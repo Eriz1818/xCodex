@@ -2071,7 +2071,7 @@ impl App {
                 tui.frame_requester().schedule_frame();
             }
             AppEvent::UpdateXtremeMode(mode) => {
-                self.config.tui_xtreme_mode = mode;
+                self.config.xcodex.tui_xtreme_mode = mode;
                 self.chat_widget.set_xtreme_mode(mode);
                 tui.frame_requester().schedule_frame();
             }
@@ -2096,9 +2096,9 @@ impl App {
                 build,
                 devops,
             } => {
-                self.config.tui_ramps_rotate = rotate;
-                self.config.tui_ramps_build = build;
-                self.config.tui_ramps_devops = devops;
+                self.config.xcodex.tui_ramps_rotate = rotate;
+                self.config.xcodex.tui_ramps_build = build;
+                self.config.xcodex.tui_ramps_devops = devops;
                 self.chat_widget.set_ramps_config(rotate, build, devops);
                 tui.frame_requester().schedule_frame();
             }
@@ -2195,7 +2195,7 @@ impl App {
                 let next_root = codex_core::git_info::resolve_git_worktree_head(&self.config.cwd)
                     .map(|head| head.worktree_root);
 
-                let auto_link = self.config.worktrees_auto_link_shared_dirs
+                let auto_link = self.config.xcodex.worktrees_auto_link_shared_dirs
                     && !self.config.worktrees_shared_dirs.is_empty();
                 if auto_link
                     && let Some(next_root) = next_root.clone()

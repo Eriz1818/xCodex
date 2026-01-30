@@ -32,7 +32,7 @@ pub(crate) async fn try_handle_event(
             Ok(None)
         }
         AppEvent::UpdateXtremeMode(mode) => {
-            app.config.tui_xtreme_mode = mode;
+            app.config.xcodex.tui_xtreme_mode = mode;
             app.chat_widget.set_xtreme_mode(mode);
             tui.frame_requester().schedule_frame();
             Ok(None)
@@ -62,9 +62,9 @@ pub(crate) async fn try_handle_event(
             build,
             devops,
         } => {
-            app.config.tui_ramps_rotate = rotate;
-            app.config.tui_ramps_build = build;
-            app.config.tui_ramps_devops = devops;
+            app.config.xcodex.tui_ramps_rotate = rotate;
+            app.config.xcodex.tui_ramps_build = build;
+            app.config.xcodex.tui_ramps_devops = devops;
             app.chat_widget.set_ramps_config(rotate, build, devops);
             tui.frame_requester().schedule_frame();
             Ok(None)
@@ -170,7 +170,7 @@ pub(crate) async fn try_handle_event(
             let next_root = codex_core::git_info::resolve_git_worktree_head(&app.config.cwd)
                 .map(|head| head.worktree_root);
 
-            let auto_link = app.config.worktrees_auto_link_shared_dirs
+            let auto_link = app.config.xcodex.worktrees_auto_link_shared_dirs
                 && !app.config.worktrees_shared_dirs.is_empty();
             if auto_link
                 && let Some(next_root) = next_root.clone()

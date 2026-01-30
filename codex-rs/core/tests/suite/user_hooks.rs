@@ -81,7 +81,7 @@ async fn hooks_agent_turn_complete_invoked() -> Result<()> {
 
     let TestCodex { codex, .. } = test_codex()
         .with_config(move |cfg| {
-            cfg.hooks.agent_turn_complete = vec![vec![hook_script]];
+            cfg.xcodex.hooks.agent_turn_complete = vec![vec![hook_script]];
         })
         .build(&server)
         .await?;
@@ -141,7 +141,7 @@ async fn hooks_approval_requested_invoked_for_exec() -> Result<()> {
 
     let TestCodex { codex, .. } = test_codex()
         .with_config(move |cfg| {
-            cfg.hooks.approval_requested = vec![vec![hook_script]];
+            cfg.xcodex.hooks.approval_requested = vec![vec![hook_script]];
             cfg.approval_policy = Constrained::allow_any(AskForApproval::UnlessTrusted);
         })
         .build(&server)
@@ -192,7 +192,7 @@ async fn hooks_session_start_invoked() -> Result<()> {
 
     let _codex = test_codex()
         .with_config(move |cfg| {
-            cfg.hooks.session_start = vec![vec![hook_script]];
+            cfg.xcodex.hooks.session_start = vec![vec![hook_script]];
         })
         .build(&server)
         .await?;
@@ -226,7 +226,7 @@ async fn hooks_model_request_started_invoked() -> Result<()> {
 
     let TestCodex { codex, .. } = test_codex()
         .with_config(move |cfg| {
-            cfg.hooks.model_request_started = vec![vec![hook_script]];
+            cfg.xcodex.hooks.model_request_started = vec![vec![hook_script]];
         })
         .build(&server)
         .await?;
@@ -273,7 +273,7 @@ async fn hooks_model_response_completed_invoked() -> Result<()> {
 
     let TestCodex { codex, .. } = test_codex()
         .with_config(move |cfg| {
-            cfg.hooks.model_response_completed = vec![vec![hook_script]];
+            cfg.xcodex.hooks.model_response_completed = vec![vec![hook_script]];
         })
         .build(&server)
         .await?;
@@ -345,8 +345,8 @@ async fn hooks_tool_call_started_and_finished_invoked() -> Result<()> {
 
     let TestCodex { codex, .. } = test_codex()
         .with_config(move |cfg| {
-            cfg.hooks.tool_call_started = vec![vec![started_hook_script]];
-            cfg.hooks.tool_call_finished = vec![vec![finished_hook_script]];
+            cfg.xcodex.hooks.tool_call_started = vec![vec![started_hook_script]];
+            cfg.xcodex.hooks.tool_call_finished = vec![vec![finished_hook_script]];
             cfg.approval_policy = Constrained::allow_any(AskForApproval::Never);
         })
         .build(&server)
@@ -407,7 +407,7 @@ async fn hooks_session_end_invoked() -> Result<()> {
 
     let TestCodex { codex, .. } = test_codex()
         .with_config(move |cfg| {
-            cfg.hooks.session_end = vec![vec![hook_script]];
+            cfg.xcodex.hooks.session_end = vec![vec![hook_script]];
         })
         .build(&server)
         .await?;
@@ -459,7 +459,7 @@ async fn hooks_tool_call_finished_emits_hook_process_events() -> Result<()> {
 
     let TestCodex { codex, .. } = test_codex()
         .with_config(move |cfg| {
-            cfg.hooks.tool_call_finished = vec![vec![hook_script]];
+            cfg.xcodex.hooks.tool_call_finished = vec![vec![hook_script]];
             cfg.approval_policy = Constrained::allow_any(AskForApproval::Never);
         })
         .build(&server)

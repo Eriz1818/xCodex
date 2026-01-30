@@ -26,14 +26,14 @@ pub(crate) fn baseline_ramp() -> RampId {
 pub(crate) fn select_ramp(config: &Config, turn_index: u64) -> RampId {
     let mut eligible = Vec::with_capacity(3);
     eligible.push(RampId::Hardware);
-    if config.tui_ramps_build {
+    if config.xcodex.tui_ramps_build {
         eligible.push(RampId::Build);
     }
-    if config.tui_ramps_devops {
+    if config.xcodex.tui_ramps_devops {
         eligible.push(RampId::DevOps);
     }
 
-    if !config.tui_ramps_rotate || eligible.len() == 1 {
+    if !config.xcodex.tui_ramps_rotate || eligible.len() == 1 {
         return RampId::Hardware;
     }
 
