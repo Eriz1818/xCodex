@@ -309,6 +309,11 @@ pub struct Config {
     /// [`Tui`]).
     pub tui_transcript_user_prompt_highlight: bool,
 
+    /// When true, render fenced code blocks with syntax highlighting (when supported).
+    ///
+    /// This is the same `tui.transcript_syntax_highlight` value from `config.toml` (see [`Tui`]).
+    pub tui_transcript_syntax_highlight: bool,
+
     /// Enable application mouse capture in TUI2.
     ///
     /// This is the same `tui.mouse_capture` value from `config.toml` (see [`Tui`]).
@@ -2177,6 +2182,11 @@ impl Config {
                 .as_ref()
                 .map(|t| t.transcript_user_prompt_highlight)
                 .unwrap_or(false),
+            tui_transcript_syntax_highlight: cfg
+                .tui
+                .as_ref()
+                .map(|t| t.transcript_syntax_highlight)
+                .unwrap_or(true),
             tui_mouse_capture: cfg.tui.as_ref().map(|t| t.mouse_capture).unwrap_or(true),
             otel: {
                 let t: OtelConfigToml = cfg.otel.unwrap_or_default();
@@ -4489,6 +4499,7 @@ model_verbosity = "high"
                 tui_verbose_tool_output: false,
                 tui_transcript_diff_highlight: false,
                 tui_transcript_user_prompt_highlight: false,
+                tui_transcript_syntax_highlight: true,
                 tui_mouse_capture: true,
                 otel: OtelConfig::default(),
             },
@@ -4595,6 +4606,7 @@ model_verbosity = "high"
             tui_verbose_tool_output: false,
             tui_transcript_diff_highlight: false,
             tui_transcript_user_prompt_highlight: false,
+            tui_transcript_syntax_highlight: true,
             tui_mouse_capture: true,
             otel: OtelConfig::default(),
         };
@@ -4716,6 +4728,7 @@ model_verbosity = "high"
             tui_verbose_tool_output: false,
             tui_transcript_diff_highlight: false,
             tui_transcript_user_prompt_highlight: false,
+            tui_transcript_syntax_highlight: true,
             tui_mouse_capture: true,
             otel: OtelConfig::default(),
         };
@@ -4823,6 +4836,7 @@ model_verbosity = "high"
             tui_verbose_tool_output: false,
             tui_transcript_diff_highlight: false,
             tui_transcript_user_prompt_highlight: false,
+            tui_transcript_syntax_highlight: true,
             tui_mouse_capture: true,
             otel: OtelConfig::default(),
         };

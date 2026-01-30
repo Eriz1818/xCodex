@@ -38,6 +38,7 @@ pub(crate) struct StatusMenuView {
     complete: bool,
     status_bar_show_git_branch: bool,
     status_bar_show_worktree: bool,
+    transcript_syntax_highlight: bool,
     transcript_diff_highlight: bool,
     transcript_user_prompt_highlight: bool,
     minimal_composer: bool,
@@ -58,6 +59,7 @@ impl StatusMenuView {
         status_cell: Box<dyn HistoryCell>,
         status_bar_show_git_branch: bool,
         status_bar_show_worktree: bool,
+        transcript_syntax_highlight: bool,
         transcript_diff_highlight: bool,
         transcript_user_prompt_highlight: bool,
         minimal_composer: bool,
@@ -74,6 +76,7 @@ impl StatusMenuView {
             complete: false,
             status_bar_show_git_branch,
             status_bar_show_worktree,
+            transcript_syntax_highlight,
             transcript_diff_highlight,
             transcript_user_prompt_highlight,
             minimal_composer,
@@ -142,7 +145,7 @@ impl StatusMenuView {
     }
 
     fn settings_row_count(&self) -> usize {
-        6
+        7
     }
 
     fn tools_row_count(&self) -> usize {
@@ -267,9 +270,22 @@ impl StatusMenuView {
             );
         }
 
-        // Row 2: transcript diff highlight.
+        // Row 2: transcript syntax highlighting.
         {
             let selected = self.selected_settings_row == 2;
+            lines.push(
+                vec![
+                    selected_prefix(selected),
+                    checkbox(self.transcript_syntax_highlight),
+                    "Transcript: syntax highlight".into(),
+                ]
+                .into(),
+            );
+        }
+
+        // Row 3: transcript diff highlight.
+        {
+            let selected = self.selected_settings_row == 3;
             lines.push(
                 vec![
                     selected_prefix(selected),
@@ -280,9 +296,9 @@ impl StatusMenuView {
             );
         }
 
-        // Row 3: transcript user prompt highlight.
+        // Row 4: transcript user prompt highlight.
         {
-            let selected = self.selected_settings_row == 3;
+            let selected = self.selected_settings_row == 4;
             lines.push(
                 vec![
                     selected_prefix(selected),
@@ -293,9 +309,9 @@ impl StatusMenuView {
             );
         }
 
-        // Row 4: minimal composer borders.
+        // Row 5: minimal composer borders.
         {
-            let selected = self.selected_settings_row == 4;
+            let selected = self.selected_settings_row == 5;
             lines.push(
                 vec![
                     selected_prefix(selected),
@@ -306,9 +322,9 @@ impl StatusMenuView {
             );
         }
 
-        // Row 5: Worktrees settings editor.
+        // Row 6: Worktrees settings editor.
         {
-            let selected = self.selected_settings_row == 5;
+            let selected = self.selected_settings_row == 6;
             lines.push(vec![selected_prefix(selected), "Worktrees…".into()].into());
         }
 
@@ -501,6 +517,17 @@ impl StatusMenuView {
                         });
                 }
                 2 => {
+                    self.transcript_syntax_highlight = !self.transcript_syntax_highlight;
+                    self.app_event_tx
+                        .send(AppEvent::UpdateTranscriptSyntaxHighlight(
+                            self.transcript_syntax_highlight,
+                        ));
+                    self.app_event_tx
+                        .send(AppEvent::PersistTranscriptSyntaxHighlight(
+                            self.transcript_syntax_highlight,
+                        ));
+                }
+                3 => {
                     self.transcript_diff_highlight = !self.transcript_diff_highlight;
                     self.app_event_tx
                         .send(AppEvent::UpdateTranscriptDiffHighlight(
@@ -511,7 +538,7 @@ impl StatusMenuView {
                             self.transcript_diff_highlight,
                         ));
                 }
-                3 => {
+                4 => {
                     self.transcript_user_prompt_highlight = !self.transcript_user_prompt_highlight;
                     self.app_event_tx
                         .send(AppEvent::UpdateTranscriptUserPromptHighlight(
@@ -522,14 +549,14 @@ impl StatusMenuView {
                             self.transcript_user_prompt_highlight,
                         ));
                 }
-                4 => {
+                5 => {
                     self.minimal_composer = !self.minimal_composer;
                     self.app_event_tx
                         .send(AppEvent::UpdateMinimalComposer(self.minimal_composer));
                     self.app_event_tx
                         .send(AppEvent::PersistMinimalComposer(self.minimal_composer));
                 }
-                5 => {
+                6 => {
                     self.app_event_tx.send(AppEvent::OpenWorktreesSettingsView);
                     self.complete = true;
                 }
@@ -806,6 +833,7 @@ mod tests {
             status_cell,
             true,
             false,
+            true,
             false,
             false,
             false,
@@ -829,6 +857,7 @@ mod tests {
             status_cell,
             true,
             false,
+            true,
             false,
             false,
             false,
@@ -855,6 +884,7 @@ mod tests {
             status_cell,
             true,
             false,
+            true,
             false,
             false,
             false,
@@ -878,6 +908,7 @@ mod tests {
             status_cell,
             true,
             false,
+            true,
             false,
             false,
             false,

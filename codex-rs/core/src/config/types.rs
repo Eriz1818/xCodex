@@ -746,6 +746,12 @@ pub struct Tui {
     #[serde(default)]
     pub transcript_user_prompt_highlight: bool,
 
+    /// When true, render fenced code blocks with syntax highlighting (when supported).
+    ///
+    /// Defaults to `true`.
+    #[serde(default = "default_true")]
+    pub transcript_syntax_highlight: bool,
+
     /// Show the current git branch in the bottom status bar.
     /// Defaults to `false`.
     #[serde(default)]

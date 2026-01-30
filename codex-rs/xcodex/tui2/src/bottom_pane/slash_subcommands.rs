@@ -49,14 +49,32 @@ const SETTINGS_STATUS_BAR_CHILDREN: &[SubcommandNode] = &[
     },
 ];
 
-const SETTINGS_TRANSCRIPT_CHILDREN: &[SubcommandNode] = &[SubcommandNode {
-    token: "diff-highlight",
-    full_name: "settings transcript diff-highlight",
-    description: "toggle/show diff highlight for transcript diffs",
-    run_on_enter: false,
-    insert_trailing_space: true,
-    children: &[],
-}];
+const SETTINGS_TRANSCRIPT_CHILDREN: &[SubcommandNode] = &[
+    SubcommandNode {
+        token: "diff-highlight",
+        full_name: "settings transcript diff-highlight",
+        description: "toggle/show diff highlight for transcript diffs",
+        run_on_enter: false,
+        insert_trailing_space: true,
+        children: &[],
+    },
+    SubcommandNode {
+        token: "highlight-past-prompts",
+        full_name: "settings transcript highlight-past-prompts",
+        description: "toggle/show past prompt highlights in transcript",
+        run_on_enter: false,
+        insert_trailing_space: true,
+        children: &[],
+    },
+    SubcommandNode {
+        token: "syntax-highlight",
+        full_name: "settings transcript syntax-highlight",
+        description: "toggle/show syntax highlighting for fenced code blocks",
+        run_on_enter: false,
+        insert_trailing_space: true,
+        children: &[],
+    },
+];
 
 const SETTINGS_SUBCOMMANDS: &[SubcommandNode] = &[
     SubcommandNode {

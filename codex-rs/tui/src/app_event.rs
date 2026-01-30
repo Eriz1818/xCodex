@@ -134,6 +134,9 @@ pub(crate) enum AppEvent {
     /// Update whether transcript diffs use background highlight (runtime).
     UpdateTranscriptDiffHighlight(bool),
 
+    /// Update whether fenced code blocks render with syntax highlighting (runtime).
+    UpdateTranscriptSyntaxHighlight(bool),
+
     /// Update whether the active composer uses minimal borders (runtime).
     UpdateMinimalComposer(bool),
 
@@ -264,6 +267,9 @@ pub(crate) enum AppEvent {
 
     /// Persist whether transcript diffs use background highlight.
     PersistTranscriptDiffHighlight(bool),
+
+    /// Persist whether fenced code blocks render with syntax highlighting.
+    PersistTranscriptSyntaxHighlight(bool),
 
     /// Persist whether the active composer uses minimal borders.
     PersistMinimalComposer(bool),

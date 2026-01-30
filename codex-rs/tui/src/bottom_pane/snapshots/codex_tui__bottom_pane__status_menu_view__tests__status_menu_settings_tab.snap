@@ -10,6 +10,7 @@ expression: "render_lines(&view, 60)"
                                                             
     [x] Status bar: git branch                              
   › [x] Status bar: worktree path                           
+    [x] Transcript: syntax highlight                        
     [ ] Transcript: diff highlight                          
     [ ] Transcript: highlight past prompts                  
     [ ] Composer: minimal borders                           

@@ -2151,6 +2151,7 @@ impl ChatWidget {
                 status_cell,
                 self.config.tui_status_bar_show_git_branch,
                 self.config.tui_status_bar_show_worktree,
+                self.config.tui_transcript_syntax_highlight,
                 self.config.tui_transcript_diff_highlight,
                 self.config.tui_transcript_user_prompt_highlight,
                 self.config.tui_minimal_composer,
@@ -2382,6 +2383,10 @@ impl ChatWidget {
             SlashCommand::StatusMenu => {
                 self.open_status_menu_view(crate::bottom_pane::StatusMenuTab::Status);
             }
+            SlashCommand::Xtreme => {
+                self.open_status_menu_view(crate::bottom_pane::StatusMenuTab::Tools);
+            }
+            SlashCommand::Worktree => {
             SlashCommand::Worktree => {
                 xcodex_plugins::worktree::handle_root_command(self);
             }
@@ -2924,6 +2929,16 @@ impl ChatWidget {
                     self.app_event_tx
                         .send(AppEvent::PersistTranscriptDiffHighlight(next));
                 }
+                ["transcript", "syntax-highlight"]
+                | ["transcript", "syntax-highlight", "toggle"] => {
+                    let next = !self.config.tui_transcript_syntax_highlight;
+                    let status = if next { "enabled" } else { "disabled" };
+                    self.add_info_message(format!("Syntax highlight {status}."), None);
+                    self.app_event_tx
+                        .send(AppEvent::UpdateTranscriptSyntaxHighlight(next));
+                    self.app_event_tx
+                        .send(AppEvent::PersistTranscriptSyntaxHighlight(next));
+                }
                 ["transcript", "highlight-past-prompts"]
                 | ["transcript", "highlight-past-prompts", "toggle"] => {
                     let next = !self.config.tui_transcript_user_prompt_highlight;
@@ -2962,6 +2977,38 @@ impl ChatWidget {
                         let status = if current { "enabled" } else { "disabled" };
                         self.add_info_message(
                             format!("Diff highlight is currently {status}."),
+                            None,
+                        );
+                    }
+                }
+                ["transcript", "syntax-highlight", action] => {
+                    let current = self.config.tui_transcript_syntax_highlight;
+                    let next = match action.to_ascii_lowercase().as_str() {
+                        "on" | "enable" | "true" => Some(true),
+                        "off" | "disable" | "false" => Some(false),
+                        "toggle" => Some(!current),
+                        "status" | "show" => None,
+                        _ => {
+                            self.add_info_message(
+                                "Usage: /settings transcript syntax-highlight [on|off|toggle|status]"
+                                    .to_string(),
+                                None,
+                            );
+                            return;
+                        }
+                    };
+
+                    if let Some(next) = next {
+                        let status = if next { "enabled" } else { "disabled" };
+                        self.add_info_message(format!("Syntax highlight {status}."), None);
+                        self.app_event_tx
+                            .send(AppEvent::UpdateTranscriptSyntaxHighlight(next));
+                        self.app_event_tx
+                            .send(AppEvent::PersistTranscriptSyntaxHighlight(next));
+                    } else {
+                        let status = if current { "enabled" } else { "disabled" };
+                        self.add_info_message(
+                            format!("Syntax highlight is currently {status}."),
                             None,
                         );
                     }
@@ -3437,6 +3484,7 @@ impl ChatWidget {
             status_cell,
             self.config.tui_status_bar_show_git_branch,
             self.config.tui_status_bar_show_worktree,
+            self.config.tui_transcript_syntax_highlight,
             self.config.tui_transcript_diff_highlight,
             self.config.tui_transcript_user_prompt_highlight,
             self.config.tui_minimal_composer,
@@ -4988,6 +5036,10 @@ impl ChatWidget {
 
     pub(crate) fn set_verbose_tool_output(&mut self, verbose: bool) {
         self.config.tui_verbose_tool_output = verbose;
+    }
+
+    pub(crate) fn set_transcript_syntax_highlight(&mut self, enabled: bool) {
+        self.config.tui_transcript_syntax_highlight = enabled;
     }
 
     pub(crate) fn set_minimal_composer(&mut self, enabled: bool) {

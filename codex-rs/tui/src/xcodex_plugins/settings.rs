@@ -10,6 +10,7 @@ pub(crate) fn add_settings_output_with_values(
     show_worktree: bool,
     transcript_diff_highlight: bool,
     transcript_user_prompt_highlight: bool,
+    transcript_syntax_highlight: bool,
 ) {
     let command = PlainHistoryCell::new(vec![Line::from(vec!["/settings".magenta()])]);
     let card = crate::status::new_settings_card(
@@ -18,6 +19,7 @@ pub(crate) fn add_settings_output_with_values(
         show_worktree,
         transcript_diff_highlight,
         transcript_user_prompt_highlight,
+        transcript_syntax_highlight,
     );
     chat.add_to_history(CompositeHistoryCell::new(vec![Box::new(command), card]));
 }
@@ -28,6 +30,7 @@ pub(crate) fn handle_settings_command(chat: &mut ChatWidget, rest: &str) -> bool
     let current_worktree = chat.config_ref().tui_status_bar_show_worktree;
     let current_diff_highlight = chat.config_ref().tui_transcript_diff_highlight;
     let current_user_prompt_highlight = chat.config_ref().tui_transcript_user_prompt_highlight;
+    let current_syntax_highlight = chat.config_ref().tui_transcript_syntax_highlight;
 
     let (section, item, action) = match args.as_slice() {
         [] | ["status-bar"] | ["transcript"] => {
@@ -37,6 +40,7 @@ pub(crate) fn handle_settings_command(chat: &mut ChatWidget, rest: &str) -> bool
                 current_worktree,
                 current_diff_highlight,
                 current_user_prompt_highlight,
+                current_syntax_highlight,
             );
             return true;
         }
@@ -61,6 +65,7 @@ pub(crate) fn handle_settings_command(chat: &mut ChatWidget, rest: &str) -> bool
     let mut next_worktree = current_worktree;
     let mut next_diff_highlight = current_diff_highlight;
     let mut next_user_prompt_highlight = current_user_prompt_highlight;
+    let mut next_syntax_highlight = current_syntax_highlight;
 
     let item = item.to_ascii_lowercase();
     let action = action.map(str::to_ascii_lowercase);
@@ -84,7 +89,7 @@ pub(crate) fn handle_settings_command(chat: &mut ChatWidget, rest: &str) -> bool
                     None,
                 ),
                 "transcript" => chat.add_info_message(
-                    "Usage: /settings transcript <diff-highlight|highlight-past-prompts> [on|off|toggle|status]"
+                    "Usage: /settings transcript <diff-highlight|highlight-past-prompts|syntax-highlight> [on|off|toggle|status]"
                         .to_string(),
                     None,
                 ),
@@ -129,9 +134,13 @@ pub(crate) fn handle_settings_command(chat: &mut ChatWidget, rest: &str) -> bool
             }
         }
         "transcript" => {
-            if item.as_str() != "diff-highlight" && item.as_str() != "highlight-past-prompts" {
+            if item.as_str() != "diff-highlight"
+                && item.as_str() != "highlight-past-prompts"
+                && item.as_str() != "syntax-highlight"
+            {
                 chat.add_info_message(
-                    "Unknown setting. Use: diff-highlight | highlight-past-prompts".to_string(),
+                    "Unknown setting. Use: diff-highlight | highlight-past-prompts | syntax-highlight"
+                        .to_string(),
                     None,
                 );
                 return true;
@@ -155,7 +164,7 @@ pub(crate) fn handle_settings_command(chat: &mut ChatWidget, rest: &str) -> bool
                         ),
                     );
                 }
-            } else {
+            } else if item.as_str() == "highlight-past-prompts" {
                 let next = match action {
                     SettingsAction::Toggle => Some(!current_user_prompt_highlight),
                     SettingsAction::Set(value) => Some(value),
@@ -174,6 +183,25 @@ pub(crate) fn handle_settings_command(chat: &mut ChatWidget, rest: &str) -> bool
                         ),
                     );
                 }
+            } else {
+                let next = match action {
+                    SettingsAction::Toggle => Some(!current_syntax_highlight),
+                    SettingsAction::Set(value) => Some(value),
+                    SettingsAction::Status => None,
+                };
+                if let Some(value) = next {
+                    next_syntax_highlight = value;
+                    chat.app_event_tx().send(
+                        crate::app_event::AppEvent::UpdateTranscriptSyntaxHighlight(
+                            next_syntax_highlight,
+                        ),
+                    );
+                    chat.app_event_tx().send(
+                        crate::app_event::AppEvent::PersistTranscriptSyntaxHighlight(
+                            next_syntax_highlight,
+                        ),
+                    );
+                }
             }
         }
         _ => {}
@@ -185,6 +213,7 @@ pub(crate) fn handle_settings_command(chat: &mut ChatWidget, rest: &str) -> bool
         next_worktree,
         next_diff_highlight,
         next_user_prompt_highlight,
+        next_syntax_highlight,
     );
     true
 }

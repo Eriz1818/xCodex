@@ -292,6 +292,7 @@ pub(crate) fn new_settings_card(
     show_worktree: bool,
     transcript_diff_highlight: bool,
     transcript_user_prompt_highlight: bool,
+    transcript_syntax_highlight: bool,
 ) -> Box<dyn HistoryCell> {
     Box::new(SettingsHistoryCell {
         xtreme_ui_enabled,
@@ -299,6 +300,7 @@ pub(crate) fn new_settings_card(
         show_worktree,
         transcript_diff_highlight,
         transcript_user_prompt_highlight,
+        transcript_syntax_highlight,
     })
 }
 
@@ -309,6 +311,7 @@ struct SettingsHistoryCell {
     show_worktree: bool,
     transcript_diff_highlight: bool,
     transcript_user_prompt_highlight: bool,
+    transcript_syntax_highlight: bool,
 }
 
 impl HistoryCell for SettingsHistoryCell {
@@ -356,6 +359,14 @@ impl HistoryCell for SettingsHistoryCell {
             };
             lines.push(Line::from(format!("  {checkbox} Highlight past prompts")));
         }
+        {
+            let checkbox = if self.transcript_syntax_highlight {
+                "[x]"
+            } else {
+                "[ ]"
+            };
+            lines.push(Line::from(format!("  {checkbox} Syntax highlight code")));
+        }
 
         lines.push(Line::from(Vec::<Span<'static>>::new()));
         lines.push(
@@ -368,7 +379,7 @@ impl HistoryCell for SettingsHistoryCell {
         lines.push(
             vec![
                 "Usage: ".dim(),
-                "/settings transcript <diff-highlight|highlight-past-prompts> [on|off|toggle|status]"
+                "/settings transcript <diff-highlight|highlight-past-prompts|syntax-highlight> [on|off|toggle|status]"
                     .cyan(),
             ]
             .into(),

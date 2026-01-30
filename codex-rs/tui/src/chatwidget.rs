@@ -2989,6 +2989,7 @@ impl ChatWidget {
                 status_cell,
                 self.config.tui_status_bar_show_git_branch,
                 self.config.tui_status_bar_show_worktree,
+                self.config.tui_transcript_syntax_highlight,
                 self.config.tui_transcript_diff_highlight,
                 self.config.tui_transcript_user_prompt_highlight,
                 self.config.tui_minimal_composer,
@@ -3319,6 +3320,9 @@ impl ChatWidget {
             }
             SlashCommand::StatusMenu => {
                 self.open_status_menu_view(crate::bottom_pane::StatusMenuTab::Status);
+            }
+            SlashCommand::Xtreme => {
+                self.open_status_menu_view(crate::bottom_pane::StatusMenuTab::Tools);
             }
             SlashCommand::Worktree => {
                 xcodex_plugins::worktree::handle_root_command(self);
@@ -4212,6 +4216,7 @@ impl ChatWidget {
             status_cell,
             self.config.tui_status_bar_show_git_branch,
             self.config.tui_status_bar_show_worktree,
+            self.config.tui_transcript_syntax_highlight,
             self.config.tui_transcript_diff_highlight,
             self.config.tui_transcript_user_prompt_highlight,
             self.config.tui_minimal_composer,
@@ -6116,6 +6121,11 @@ impl ChatWidget {
 
     pub(crate) fn set_verbose_tool_output(&mut self, verbose: bool) {
         self.config.tui_verbose_tool_output = verbose;
+        self.request_redraw();
+    }
+
+    pub(crate) fn set_transcript_syntax_highlight(&mut self, enabled: bool) {
+        self.config.tui_transcript_syntax_highlight = enabled;
         self.request_redraw();
     }
 

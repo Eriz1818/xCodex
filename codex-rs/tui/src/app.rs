@@ -995,6 +995,9 @@ impl App {
             SessionSource::Cli,
         );
         crate::theme::init(&config, crate::terminal_palette::default_bg());
+        crate::render::highlight::set_syntax_highlighting_enabled(
+            config.tui_transcript_syntax_highlight,
+        );
 
         let enhanced_keys_supported = tui.enhanced_keys_supported();
         let mut chat_widget = match session_selection {
@@ -1646,6 +1649,12 @@ impl App {
                 self.chat_widget.set_transcript_diff_highlight(enabled);
                 tui.frame_requester().schedule_frame();
             }
+            AppEvent::UpdateTranscriptSyntaxHighlight(enabled) => {
+                self.config.tui_transcript_syntax_highlight = enabled;
+                crate::render::highlight::set_syntax_highlighting_enabled(enabled);
+                self.chat_widget.set_transcript_syntax_highlight(enabled);
+                tui.frame_requester().schedule_frame();
+            }
             AppEvent::UpdateMinimalComposer(enabled) => {
                 self.config.tui_minimal_composer = enabled;
                 self.chat_widget.set_minimal_composer(enabled);
@@ -2112,6 +2121,35 @@ impl App {
                         } else {
                             self.chat_widget.add_error_message(format!(
                                 "Failed to save diff highlight setting: {err}"
+                            ));
+                        }
+                    }
+                }
+            }
+            AppEvent::PersistTranscriptSyntaxHighlight(enabled) => {
+                let profile = self.active_profile.as_deref();
+                match ConfigEditsBuilder::new(&self.config.codex_home)
+                    .with_profile(profile)
+                    .with_edits([ConfigEdit::SetPath {
+                        segments: vec![
+                            "tui".to_string(),
+                            "transcript_syntax_highlight".to_string(),
+                        ],
+                        value: toml_edit::value(enabled),
+                    }])
+                    .apply()
+                    .await
+                {
+                    Ok(()) => {}
+                    Err(err) => {
+                        tracing::error!(error = %err, "failed to persist syntax highlight toggle");
+                        if let Some(profile) = profile {
+                            self.chat_widget.add_error_message(format!(
+                                "Failed to save syntax highlight setting for profile `{profile}`: {err}"
+                            ));
+                        } else {
+                            self.chat_widget.add_error_message(format!(
+                                "Failed to save syntax highlight setting: {err}"
                             ));
                         }
                     }
