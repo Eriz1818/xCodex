@@ -106,6 +106,7 @@ use super::footer::toggle_shortcut_mode;
 use super::paste_burst::CharDecision;
 use super::paste_burst::PasteBurst;
 use super::skill_popup::SkillPopup;
+use super::slash_commands;
 use crate::bottom_pane::paste_burst::FlushResult;
 use crate::bottom_pane::prompt_args::expand_custom_prompt;
 use crate::bottom_pane::prompt_args::expand_if_numeric_with_positional_args;
@@ -117,7 +118,6 @@ use crate::render::Insets;
 use crate::render::RectExt;
 use crate::render::renderable::Renderable;
 use crate::slash_command::SlashCommand;
-use crate::slash_command::built_in_slash_commands;
 use crate::style::user_message_style;
 use codex_common::fuzzy_match::fuzzy_match;
 use codex_protocol::custom_prompts::CustomPrompt;
@@ -1128,9 +1128,13 @@ impl ChatComposer {
                                 self.textarea.set_text_clearing_elements("");
                                 let text = text.trim_end().to_string();
                                 if let Some((name, rest, _rest_offset)) = parse_slash_name(&text)
-                                    && let Some((_n, cmd)) = built_in_slash_commands()
-                                        .into_iter()
-                                        .find(|(command_name, _)| *command_name == name)
+                                    && let Some(cmd) = slash_commands::find_builtin_command(
+                                        name,
+                                        self.collaboration_modes_enabled,
+                                        false,
+                                        true,
+                                        windows_degraded_sandbox_active(),
+                                    )
                                 {
                                     if rest.is_empty() {
                                         return (InputResult::Command(cmd), true);
@@ -2595,10 +2599,16 @@ impl ChatComposer {
             _ => {
                 if is_editing_slash_command_name {
                     let collaboration_modes_enabled = self.collaboration_modes_enabled;
+                    let connectors_enabled = false;
+                    let personality_command_enabled = true;
+                    let windows_degraded_sandbox_active = windows_degraded_sandbox_active();
                     let mut command_popup = CommandPopup::new(
                         self.custom_prompts.clone(),
                         CommandPopupFlags {
                             collaboration_modes_enabled,
+                            connectors_enabled,
+                            personality_command_enabled,
+                            windows_degraded_sandbox_active,
                         },
                         self.slash_popup_max_rows,
                     );
@@ -2616,10 +2626,13 @@ impl ChatComposer {
         collaboration_modes_enabled: bool,
     ) -> impl Iterator<Item = (&'static str, SlashCommand)> {
         let allow_elevate_sandbox = windows_degraded_sandbox_active();
-        built_in_slash_commands()
-            .into_iter()
-            .filter(move |(_, cmd)| allow_elevate_sandbox || *cmd != SlashCommand::ElevateSandbox)
-            .filter(move |(_, cmd)| collaboration_modes_enabled || *cmd != SlashCommand::Collab)
+        slash_commands::builtins_for_input(
+            collaboration_modes_enabled,
+            false,
+            true,
+            allow_elevate_sandbox,
+        )
+        .into_iter()
     }
 
     pub(crate) fn set_custom_prompts(&mut self, prompts: Vec<CustomPrompt>) {

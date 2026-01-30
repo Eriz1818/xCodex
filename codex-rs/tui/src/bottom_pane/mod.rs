@@ -56,6 +56,8 @@ pub(crate) struct LocalImageAttachment {
 mod chat_composer;
 mod chat_composer_history;
 mod command_popup;
+#[cfg(test)]
+mod command_popup_xcodex_tests;
 pub mod custom_prompt_view;
 mod experimental_features_view;
 mod file_search_popup;
@@ -65,6 +67,7 @@ mod prompt_args;
 mod skill_popup;
 mod skills_toggle_view;
 mod slash_arg_hints;
+mod slash_commands;
 mod slash_subcommands;
 mod status_menu_view;
 pub(crate) use list_selection_view::SelectionViewParams;

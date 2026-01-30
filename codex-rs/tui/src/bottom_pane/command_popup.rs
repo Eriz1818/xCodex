@@ -2,30 +2,24 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::widgets::WidgetRef;
 
+use super::popup_consts::MAX_POPUP_ROWS;
 use super::scroll_state::ScrollState;
 use super::selection_popup_common::GenericDisplayRow;
 use super::selection_popup_common::render_rows;
 use super::slash_arg_hints;
+use super::slash_commands;
 use super::slash_subcommands::build_subcommand_matches;
 use super::slash_subcommands::slash_command_supports_subcommands as subcommands_supported;
 use super::slash_subcommands::subcommand_list_hint;
 use crate::render::Insets;
 use crate::render::RectExt;
 use crate::slash_command::SlashCommand;
-use crate::slash_command::built_in_slash_commands;
 use crate::xcodex_plugins::PluginSlashCommand;
 use crate::xcodex_plugins::command_popup as xcodex_command_popup;
 use codex_protocol::custom_prompts::CustomPrompt;
 use codex_protocol::custom_prompts::PROMPTS_CMD_PREFIX;
 
-pub(crate) const DEFAULT_SLASH_POPUP_ROWS: usize = 8;
-
-fn windows_degraded_sandbox_active() -> bool {
-    cfg!(target_os = "windows")
-        && codex_core::windows_sandbox::ELEVATED_SANDBOX_NUX_ENABLED
-        && codex_core::get_platform_sandbox().is_some()
-        && !codex_core::is_windows_elevated_sandbox_enabled()
-}
+pub(crate) const DEFAULT_SLASH_POPUP_ROWS: usize = MAX_POPUP_ROWS as usize;
 
 /// A selectable item in the popup: either a built-in command or a user prompt.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -75,6 +69,9 @@ pub(crate) struct CommandPopup {
 #[derive(Clone, Copy, Debug, Default)]
 pub(crate) struct CommandPopupFlags {
     pub(crate) collaboration_modes_enabled: bool,
+    pub(crate) connectors_enabled: bool,
+    pub(crate) personality_command_enabled: bool,
+    pub(crate) windows_degraded_sandbox_active: bool,
 }
 
 impl CommandPopup {
@@ -83,12 +80,12 @@ impl CommandPopup {
         flags: CommandPopupFlags,
         max_rows: usize,
     ) -> Self {
-        let allow_elevate_sandbox = windows_degraded_sandbox_active();
-        let builtins: Vec<(&'static str, SlashCommand)> = built_in_slash_commands()
-            .into_iter()
-            .filter(|(_, cmd)| allow_elevate_sandbox || *cmd != SlashCommand::ElevateSandbox)
-            .filter(|(_, cmd)| flags.collaboration_modes_enabled || *cmd != SlashCommand::Collab)
-            .collect();
+        let builtins = slash_commands::builtins_for_input(
+            flags.collaboration_modes_enabled,
+            flags.connectors_enabled,
+            flags.personality_command_enabled,
+            flags.windows_degraded_sandbox_active,
+        );
         let plugin_commands: Vec<PluginSlashCommand> =
             xcodex_command_popup::popup_plugin_commands();
         // Exclude prompts that collide with builtin or plugin command names.
@@ -210,7 +207,7 @@ impl CommandPopup {
     /// Compute exact/prefix matches over built-in commands and user prompts,
     /// paired with optional highlight indices. Preserves the original
     /// presentation order for built-ins and prompts.
-    fn filtered(&self) -> Vec<(CommandItem, Option<Vec<usize>>)> {
+    pub(super) fn filtered(&self) -> Vec<(CommandItem, Option<Vec<usize>>)> {
         let filter = self.command_filter.trim();
         let subcommand_matches_by_anchor =
             build_subcommand_matches(&self.command_filter, &self.command_line);
@@ -218,6 +215,9 @@ impl CommandPopup {
         if filter.is_empty() {
             // Built-ins first, in presentation order.
             for (_, cmd) in self.builtins.iter() {
+                if *cmd == SlashCommand::Quit {
+                    continue;
+                }
                 out.push((CommandItem::Builtin(*cmd), None));
             }
             for command in self.plugin_commands.iter() {
@@ -327,11 +327,11 @@ impl CommandPopup {
         out
     }
 
-    fn filtered_items(&self) -> Vec<CommandItem> {
+    pub(super) fn filtered_items(&self) -> Vec<CommandItem> {
         self.filtered().into_iter().map(|(c, _)| c).collect()
     }
 
-    fn rows_from_matches(
+    pub(super) fn rows_from_matches(
         &self,
         matches: Vec<(CommandItem, Option<Vec<usize>>)>,
     ) -> Vec<GenericDisplayRow> {
@@ -486,35 +486,12 @@ mod tests {
         let matches = popup.filtered_items();
         let has_init = matches.iter().any(|item| match item {
             CommandItem::Builtin(cmd) => cmd.command() == "init",
-            CommandItem::BuiltinText { .. } => false,
-            CommandItem::ArgValue { .. } => false,
             CommandItem::UserPrompt(_) => false,
+            _ => false,
         });
         assert!(
             has_init,
             "expected '/init' to appear among filtered commands"
-        );
-    }
-
-    #[test]
-    fn filter_includes_thoughts_plugin_command() {
-        let mut popup = CommandPopup::new(
-            Vec::new(),
-            CommandPopupFlags::default(),
-            DEFAULT_SLASH_POPUP_ROWS,
-        );
-        popup.on_composer_text_change("/tho".to_string());
-
-        let matches = popup.filtered_items();
-        let has_thoughts = matches.iter().any(|item| match item {
-            CommandItem::BuiltinText { name, .. } => *name == "thoughts",
-            CommandItem::Builtin(_) => false,
-            CommandItem::ArgValue { .. } => false,
-            CommandItem::UserPrompt(_) => false,
-        });
-        assert!(
-            has_thoughts,
-            "expected '/thoughts' to appear among filtered commands"
         );
     }
 
@@ -532,13 +509,10 @@ mod tests {
         let selected = popup.selected_item();
         match selected {
             Some(CommandItem::Builtin(cmd)) => assert_eq!(cmd.command(), "init"),
-            Some(CommandItem::BuiltinText { .. }) => {
-                panic!("unexpected builtin-text suggestion selected for '/init'")
-            }
-            Some(CommandItem::ArgValue { .. }) => {
-                panic!("unexpected arg-value suggestion selected for '/init'")
-            }
             Some(CommandItem::UserPrompt(_)) => panic!("unexpected prompt selected for '/init'"),
+            Some(CommandItem::BuiltinText { .. }) | Some(CommandItem::ArgValue { .. }) => {
+                panic!("unexpected non-builtin selected for '/init'")
+            }
             None => panic!("expected a selected command for exact match"),
         }
     }
@@ -555,14 +529,11 @@ mod tests {
         let matches = popup.filtered_items();
         match matches.first() {
             Some(CommandItem::Builtin(cmd)) => assert_eq!(cmd.command(), "model"),
-            Some(CommandItem::BuiltinText { .. }) => {
-                panic!("unexpected builtin-text suggestion ranked before '/model' for '/mo'")
-            }
-            Some(CommandItem::ArgValue { .. }) => {
-                panic!("unexpected arg-value suggestion ranked before '/model' for '/mo'")
-            }
             Some(CommandItem::UserPrompt(_)) => {
                 panic!("unexpected prompt ranked before '/model' for '/mo'")
+            }
+            Some(CommandItem::BuiltinText { .. }) | Some(CommandItem::ArgValue { .. }) => {
+                panic!("unexpected non-builtin match for '/mo'")
             }
             None => panic!("expected at least one match for '/mo'"),
         }
@@ -582,8 +553,7 @@ mod tests {
             .into_iter()
             .filter_map(|item| match item {
                 CommandItem::Builtin(cmd) => Some(cmd.command()),
-                CommandItem::BuiltinText { .. } | CommandItem::ArgValue { .. } => None,
-                CommandItem::UserPrompt(_) => None,
+                _ => None,
             })
             .collect();
         assert_eq!(cmds, vec!["model", "mention", "mcp"]);
@@ -691,27 +661,6 @@ mod tests {
     }
 
     #[test]
-    fn prompt_is_suggested_when_filter_matches_prompt_name() {
-        let mut popup = CommandPopup::new(
-            vec![CustomPrompt {
-                name: "my-prompt".to_string(),
-                path: "/tmp/my-prompt.md".to_string().into(),
-                content: "hello from prompt".to_string(),
-                description: None,
-                argument_hint: None,
-            }],
-            CommandPopupFlags::default(),
-            DEFAULT_SLASH_POPUP_ROWS,
-        );
-        popup.on_composer_text_change("/my".to_string());
-        let items = popup.filtered_items();
-        let has_prompt = items
-            .into_iter()
-            .any(|item| matches!(item, CommandItem::UserPrompt(_)));
-        assert!(has_prompt, "expected /my to suggest the custom prompt");
-    }
-
-    #[test]
     fn prefix_filter_limits_matches_for_ac() {
         let mut popup = CommandPopup::new(
             Vec::new(),
@@ -725,447 +674,12 @@ mod tests {
             .into_iter()
             .filter_map(|item| match item {
                 CommandItem::Builtin(cmd) => Some(cmd.command()),
-                CommandItem::BuiltinText { .. } => None,
-                CommandItem::ArgValue { .. } => None,
-                CommandItem::UserPrompt(_) => None,
+                _ => None,
             })
             .collect();
         assert!(
             !cmds.contains(&"compact"),
             "expected prefix search for '/ac' to exclude 'compact', got {cmds:?}"
-        );
-    }
-
-    #[test]
-    fn worktree_subcommands_are_suggested_under_worktree() {
-        let mut popup = CommandPopup::new(
-            Vec::new(),
-            CommandPopupFlags::default(),
-            DEFAULT_SLASH_POPUP_ROWS,
-        );
-
-        popup.on_composer_text_change("/worktree ".to_string());
-
-        let items = popup.filtered_items();
-        assert!(
-            !items
-                .iter()
-                .any(|item| matches!(item, CommandItem::Builtin(SlashCommand::Worktree))),
-            "expected /worktree root command to be hidden in subcommand context"
-        );
-        assert!(
-            items
-                .iter()
-                .any(|item| matches!(item, CommandItem::BuiltinText { .. })),
-            "expected at least one /worktree subcommand suggestion under /worktree"
-        );
-    }
-
-    #[test]
-    fn worktree_subcommand_hint_uses_plugin_order() {
-        let hint = subcommand_list_hint("worktree").expect("worktree hint");
-        assert_eq!(
-            hint,
-            "Type space for subcommands: detect, doctor, init, shared, link-shared"
-        );
-    }
-
-    #[test]
-    fn settings_subcommands_are_suggested_under_settings() {
-        let mut popup = CommandPopup::new(
-            Vec::new(),
-            CommandPopupFlags::default(),
-            DEFAULT_SLASH_POPUP_ROWS,
-        );
-
-        popup.on_composer_text_change("/settings ".to_string());
-
-        let items = popup.filtered_items();
-        let subcommands: Vec<&str> = items
-            .into_iter()
-            .filter_map(|item| match item {
-                CommandItem::BuiltinText { name, .. } => Some(name),
-                _ => None,
-            })
-            .collect();
-
-        assert!(
-            subcommands.contains(&"settings status-bar")
-                && subcommands.contains(&"settings worktrees"),
-            "expected /settings to suggest subcommands, got {subcommands:?}"
-        );
-    }
-
-    #[test]
-    fn settings_nested_subcommands_are_suggested_under_status_bar() {
-        let mut popup = CommandPopup::new(
-            Vec::new(),
-            CommandPopupFlags::default(),
-            DEFAULT_SLASH_POPUP_ROWS,
-        );
-
-        popup.on_composer_text_change("/settings status-bar ".to_string());
-
-        let items = popup.filtered_items();
-        let subcommands: Vec<&str> = items
-            .into_iter()
-            .filter_map(|item| match item {
-                CommandItem::BuiltinText { name, .. } => Some(name),
-                _ => None,
-            })
-            .collect();
-
-        assert!(
-            subcommands.contains(&"settings status-bar git-branch")
-                && subcommands.contains(&"settings status-bar worktree"),
-            "expected /settings status-bar to suggest nested subcommands, got {subcommands:?}"
-        );
-    }
-
-    #[test]
-    fn mcp_subcommands_are_suggested_under_mcp() {
-        let mut popup = CommandPopup::new(
-            Vec::new(),
-            CommandPopupFlags::default(),
-            DEFAULT_SLASH_POPUP_ROWS,
-        );
-
-        popup.on_composer_text_change("/mcp ".to_string());
-
-        let items = popup.filtered_items();
-        assert!(
-            !items
-                .iter()
-                .any(|item| matches!(item, CommandItem::Builtin(SlashCommand::Mcp))),
-            "expected /mcp root command to be hidden in subcommand context"
-        );
-
-        let subcommands: Vec<&str> = items
-            .into_iter()
-            .filter_map(|item| match item {
-                CommandItem::BuiltinText { name, .. } => Some(name),
-                _ => None,
-            })
-            .collect();
-
-        assert!(
-            subcommands.contains(&"mcp retry") && subcommands.contains(&"mcp timeout"),
-            "expected /mcp to suggest subcommands, got {subcommands:?}"
-        );
-    }
-
-    #[test]
-    fn mcp_retry_subcommands_are_suggested_under_retry() {
-        let mut popup = CommandPopup::new(
-            Vec::new(),
-            CommandPopupFlags::default(),
-            DEFAULT_SLASH_POPUP_ROWS,
-        );
-
-        popup.on_composer_text_change("/mcp retry ".to_string());
-
-        let items = popup.filtered_items();
-        let subcommands: Vec<&str> = items
-            .into_iter()
-            .filter_map(|item| match item {
-                CommandItem::BuiltinText { name, .. } => Some(name),
-                _ => None,
-            })
-            .collect();
-
-        assert!(
-            subcommands.contains(&"mcp retry failed"),
-            "expected /mcp retry to suggest failed, got {subcommands:?}"
-        );
-    }
-
-    #[test]
-    fn worktree_subcommands_are_hidden_until_space() {
-        let mut popup = CommandPopup::new(
-            Vec::new(),
-            CommandPopupFlags::default(),
-            DEFAULT_SLASH_POPUP_ROWS,
-        );
-
-        popup.on_composer_text_change("/worktree".to_string());
-
-        let items = popup.filtered_items();
-        assert!(
-            !items.iter().any(|item| {
-                matches!(item, CommandItem::BuiltinText { name, .. } if name.starts_with("worktree "))
-            }),
-            "expected no /worktree subcommand suggestions without a trailing space"
-        );
-    }
-
-    #[test]
-    fn arrow_key_selection_is_not_reset_by_popup_sync() {
-        let mut popup = CommandPopup::new(
-            Vec::new(),
-            CommandPopupFlags::default(),
-            DEFAULT_SLASH_POPUP_ROWS,
-        );
-        popup.on_composer_text_change("/worktree ".to_string());
-
-        let first = popup.selected_item();
-        popup.move_down();
-        let moved = popup.selected_item();
-        assert_ne!(first, moved, "expected move_down to change selection");
-
-        // Simulate redundant sync calls (e.g. after an Up/Down key event).
-        popup.on_composer_text_change("/worktree ".to_string());
-        assert_eq!(
-            popup.selected_item(),
-            moved,
-            "expected selection to persist across redundant sync"
-        );
-    }
-
-    #[test]
-    fn worktree_subcommands_filter_by_prefix() {
-        let mut popup = CommandPopup::new(
-            Vec::new(),
-            CommandPopupFlags::default(),
-            DEFAULT_SLASH_POPUP_ROWS,
-        );
-
-        popup.on_composer_text_change("/worktree d".to_string());
-
-        let items = popup.filtered_items();
-        let subcommands: Vec<&str> = items
-            .into_iter()
-            .filter_map(|item| match item {
-                CommandItem::BuiltinText { name, .. } => Some(name),
-                _ => None,
-            })
-            .collect();
-
-        assert!(
-            subcommands.contains(&"worktree detect") && subcommands.contains(&"worktree doctor"),
-            "expected /worktree d to suggest detect/doctor, got {subcommands:?}"
-        );
-    }
-
-    #[test]
-    fn subcommand_context_hides_other_root_suggestions() {
-        let prompts = vec![CustomPrompt {
-            name: "worktree-helper".to_string(),
-            path: "/tmp/worktree-helper.md".to_string().into(),
-            content: "hello".to_string(),
-            description: None,
-            argument_hint: None,
-        }];
-
-        let mut popup = CommandPopup::new(
-            prompts,
-            CommandPopupFlags::default(),
-            DEFAULT_SLASH_POPUP_ROWS,
-        );
-
-        popup.on_composer_text_change("/worktree d".to_string());
-
-        let items = popup.filtered_items();
-        assert!(
-            items.iter().all(|item| {
-                matches!(
-                    item,
-                    CommandItem::BuiltinText { .. } | CommandItem::ArgValue { .. }
-                )
-            }),
-            "expected subcommand context to hide other root suggestions, got {items:?}"
-        );
-    }
-
-    #[test]
-    fn selection_does_not_reset_when_refreshing_popup() {
-        let mut popup = CommandPopup::new(
-            Vec::new(),
-            CommandPopupFlags::default(),
-            DEFAULT_SLASH_POPUP_ROWS,
-        );
-
-        popup.on_composer_text_change("/worktree ".to_string());
-
-        popup.move_down();
-        let moved = popup.selected_item();
-        assert!(moved.is_some(), "expected selection after moving down");
-
-        popup.on_composer_text_change("/worktree ".to_string());
-        assert_eq!(
-            popup.selected_item(),
-            moved,
-            "expected selection to persist across refresh"
-        );
-    }
-
-    #[test]
-    fn worktree_nested_subcommands_are_suggested_under_shared() {
-        let mut popup = CommandPopup::new(
-            Vec::new(),
-            CommandPopupFlags::default(),
-            DEFAULT_SLASH_POPUP_ROWS,
-        );
-
-        popup.on_composer_text_change("/worktree shared ".to_string());
-
-        let items = popup.filtered_items();
-        let subcommands: Vec<&str> = items
-            .into_iter()
-            .filter_map(|item| match item {
-                CommandItem::BuiltinText { name, .. } => Some(name),
-                _ => None,
-            })
-            .collect();
-
-        assert!(
-            subcommands.contains(&"worktree shared add")
-                && subcommands.contains(&"worktree shared rm")
-                && subcommands.contains(&"worktree shared list"),
-            "expected /worktree shared to suggest nested subcommands, got {subcommands:?}"
-        );
-        assert!(
-            !subcommands.contains(&"worktree detect"),
-            "expected /worktree shared suggestions to be scoped (no detect), got {subcommands:?}"
-        );
-    }
-
-    #[test]
-    fn worktree_leaf_subcommand_stays_visible_while_typing_args() {
-        let mut popup = CommandPopup::new(
-            Vec::new(),
-            CommandPopupFlags::default(),
-            DEFAULT_SLASH_POPUP_ROWS,
-        );
-
-        popup.on_composer_text_change("/worktree shared add docs/impl-plans".to_string());
-
-        let items = popup.filtered_items();
-        let subcommands: Vec<&str> = items
-            .into_iter()
-            .filter_map(|item| match item {
-                CommandItem::BuiltinText { name, .. } => Some(name),
-                _ => None,
-            })
-            .collect();
-
-        assert!(
-            subcommands.contains(&"worktree shared add"),
-            "expected leaf subcommand to stay visible while typing args, got {subcommands:?}"
-        );
-    }
-
-    #[test]
-    fn worktree_leaf_subcommand_stays_visible_after_trailing_space_and_args() {
-        let mut popup = CommandPopup::new(
-            Vec::new(),
-            CommandPopupFlags::default(),
-            DEFAULT_SLASH_POPUP_ROWS,
-        );
-
-        popup.on_composer_text_change("/worktree init foo ".to_string());
-
-        let items = popup.filtered_items();
-        let subcommands: Vec<&str> = items
-            .into_iter()
-            .filter_map(|item| match item {
-                CommandItem::BuiltinText { name, .. } => Some(name),
-                _ => None,
-            })
-            .collect();
-
-        assert!(
-            subcommands.contains(&"worktree init"),
-            "expected leaf subcommand to stay visible after a trailing space and args, got {subcommands:?}"
-        );
-    }
-
-    #[test]
-    fn worktree_init_description_includes_next_arg_hint() {
-        let mut popup = CommandPopup::new(
-            Vec::new(),
-            CommandPopupFlags::default(),
-            DEFAULT_SLASH_POPUP_ROWS,
-        );
-
-        popup.on_composer_text_change("/worktree init foo ".to_string());
-
-        let rows = popup.rows_from_matches(popup.filtered());
-        let init = rows
-            .iter()
-            .find(|row| row.name == "/worktree init")
-            .and_then(|row| row.description.as_deref())
-            .unwrap_or_default();
-
-        assert!(
-            init.contains("Next: <branch>"),
-            "expected /worktree init row to include next-arg hint, got {init:?}"
-        );
-    }
-
-    #[test]
-    fn worktree_init_branch_arg_suggests_branches() {
-        let mut popup = CommandPopup::new(
-            Vec::new(),
-            CommandPopupFlags::default(),
-            DEFAULT_SLASH_POPUP_ROWS,
-        );
-
-        popup.set_slash_completion_branches(vec!["main".to_string(), "feature".to_string()]);
-        popup.set_current_git_branch(Some("feature".to_string()));
-        popup.on_composer_text_change("/worktree init foo ".to_string());
-
-        let items = popup.filtered_items();
-        let values: Vec<String> = items
-            .into_iter()
-            .filter_map(|item| match item {
-                CommandItem::ArgValue { display, .. } => Some(display),
-                _ => None,
-            })
-            .collect();
-
-        assert!(
-            values.contains(&"feature".to_string()) && values.contains(&"main".to_string()),
-            "expected branch suggestions to include current and default branches, got {values:?}"
-        );
-    }
-
-    #[test]
-    fn worktree_init_path_arg_suggests_default_path() {
-        let mut popup = CommandPopup::new(
-            Vec::new(),
-            CommandPopupFlags::default(),
-            DEFAULT_SLASH_POPUP_ROWS,
-        );
-
-        popup.on_composer_text_change("/worktree init feat/x main ".to_string());
-
-        let items = popup.filtered_items();
-        let values: Vec<String> = items
-            .into_iter()
-            .filter_map(|item| match item {
-                CommandItem::ArgValue { display, .. } => Some(display),
-                _ => None,
-            })
-            .collect();
-
-        assert!(
-            values.contains(&".worktrees/feat-x".to_string()),
-            "expected path suggestions to include default .worktrees slug, got {values:?}"
-        );
-    }
-
-    #[test]
-    fn default_selection_prefers_subcommands_in_worktree_context() {
-        let mut popup = CommandPopup::new(
-            Vec::new(),
-            CommandPopupFlags::default(),
-            DEFAULT_SLASH_POPUP_ROWS,
-        );
-
-        popup.on_composer_text_change("/worktree shar".to_string());
-        assert!(
-            matches!(popup.selected_item(), Some(CommandItem::BuiltinText { .. })),
-            "expected subcommand to be selected by default for /worktree context"
         );
     }
 
@@ -1183,8 +697,8 @@ mod tests {
             .into_iter()
             .filter_map(|item| match item {
                 CommandItem::Builtin(cmd) => Some(cmd.command()),
-                CommandItem::BuiltinText { .. } | CommandItem::ArgValue { .. } => None,
                 CommandItem::UserPrompt(_) => None,
+                _ => None,
             })
             .collect();
         assert!(
@@ -1199,6 +713,9 @@ mod tests {
             Vec::new(),
             CommandPopupFlags {
                 collaboration_modes_enabled: true,
+                connectors_enabled: false,
+                personality_command_enabled: true,
+                windows_degraded_sandbox_active: false,
             },
             DEFAULT_SLASH_POPUP_ROWS,
         );
@@ -1208,5 +725,50 @@ mod tests {
             Some(CommandItem::Builtin(cmd)) => assert_eq!(cmd.command(), "collab"),
             other => panic!("expected collab to be selected for exact match, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn quit_hidden_in_empty_filter_but_shown_for_prefix() {
+        let mut popup = CommandPopup::new(
+            Vec::new(),
+            CommandPopupFlags::default(),
+            DEFAULT_SLASH_POPUP_ROWS,
+        );
+        popup.on_composer_text_change("/".to_string());
+        let items = popup.filtered_items();
+        assert!(!items.contains(&CommandItem::Builtin(SlashCommand::Quit)));
+
+        popup.on_composer_text_change("/qu".to_string());
+        let items = popup.filtered_items();
+        assert!(items.contains(&CommandItem::Builtin(SlashCommand::Quit)));
+    }
+
+    #[test]
+    fn personality_command_hidden_when_disabled() {
+        let mut popup = CommandPopup::new(
+            Vec::new(),
+            CommandPopupFlags {
+                collaboration_modes_enabled: true,
+                connectors_enabled: false,
+                personality_command_enabled: false,
+                windows_degraded_sandbox_active: false,
+            },
+            DEFAULT_SLASH_POPUP_ROWS,
+        );
+        popup.on_composer_text_change("/pers".to_string());
+
+        let cmds: Vec<&str> = popup
+            .filtered_items()
+            .into_iter()
+            .filter_map(|item| match item {
+                CommandItem::Builtin(cmd) => Some(cmd.command()),
+                CommandItem::UserPrompt(_) => None,
+                _ => None,
+            })
+            .collect();
+        assert!(
+            !cmds.contains(&"personality"),
+            "expected '/personality' to be hidden when disabled, got {cmds:?}"
+        );
     }
 }
