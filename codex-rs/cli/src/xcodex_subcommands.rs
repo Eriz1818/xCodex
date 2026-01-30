@@ -657,6 +657,8 @@ pub(crate) async fn run_hooks_command(
                     });
                     use std::io::Write;
                     writeln!(stdin, "{msg}")?;
+                    // Close the write end so the host sees EOF and exits cleanly.
+                    drop(stdin);
 
                     let status = tokio::time::timeout(
                         Duration::from_secs(args.timeout_seconds),
@@ -779,6 +781,8 @@ pub(crate) async fn run_hooks_command(
                                     }
                                 })
                             )?;
+                            // Close the write end so the host sees EOF and exits cleanly.
+                            drop(stdin);
 
                             let status = tokio::time::timeout(
                                 Duration::from_secs(host_args.timeout_seconds),
