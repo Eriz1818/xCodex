@@ -6,6 +6,7 @@ use super::model::ExecCell;
 use crate::exec_command::strip_bash_lc_and_escape;
 use crate::history_cell::HistoryCell;
 use crate::render::highlight::highlight_bash_to_lines;
+use crate::render::highlight::syntax_highlighting_enabled;
 use crate::render::line_utils::prefix_lines;
 use crate::render::line_utils::push_owned_lines;
 use crate::shimmer::shimmer_spans;
@@ -213,7 +214,16 @@ impl HistoryCell for ExecCell {
                 lines.push("".into());
             }
             let script = strip_bash_lc_and_escape(&call.command);
-            let highlighted_script = highlight_bash_to_lines(&script);
+            let highlighted_script = if syntax_highlighting_enabled() {
+                highlight_bash_to_lines(&script)
+            } else if script.is_empty() {
+                vec![Line::from("")]
+            } else {
+                script
+                    .lines()
+                    .map(|line| Line::from(line.to_string()))
+                    .collect()
+            };
             let cmd_display = word_wrap_lines(
                 &highlighted_script,
                 RtOptions::new(width as usize)

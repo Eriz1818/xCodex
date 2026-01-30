@@ -25,6 +25,7 @@ use crate::model_migration::migration_copy_for_models;
 use crate::model_migration::run_model_migration_prompt;
 use crate::pager_overlay::Overlay;
 use crate::render::highlight::highlight_bash_to_lines;
+use crate::render::highlight::syntax_highlighting_enabled;
 use crate::render::renderable::Renderable;
 use crate::resume_picker::SessionSelection;
 use crate::tui;
@@ -2527,7 +2528,16 @@ impl App {
                 ApprovalRequest::Exec { command, .. } => {
                     let _ = tui.enter_alt_screen();
                     let full_cmd = strip_bash_lc_and_escape(&command);
-                    let full_cmd_lines = highlight_bash_to_lines(&full_cmd);
+                    let full_cmd_lines = if syntax_highlighting_enabled() {
+                        highlight_bash_to_lines(&full_cmd)
+                    } else if full_cmd.is_empty() {
+                        vec![Line::from("")]
+                    } else {
+                        full_cmd
+                            .lines()
+                            .map(|line| Line::from(line.to_string()))
+                            .collect()
+                    };
                     self.overlay = Some(Overlay::new_static_with_lines(
                         full_cmd_lines,
                         "E X E C".to_string(),
