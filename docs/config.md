@@ -147,6 +147,7 @@ Common `roles.*` keys:
 - `roles.selection_fg` / `roles.selection_bg`: selection highlight in pickers
 - `roles.border`: box borders and chrome
 - `roles.command`: command-ish labels and command identifiers (defaults to `palette.magenta`)
+- `roles.code_*`: syntax highlighting roles for fenced code blocks (defaults to palette-derived colors; see the example themes below)
 - `roles.dim`: derived from `roles.fg/bg` (no YAML key)
 
 See `docs/themes/example-dark.yaml` and `docs/themes/example-light.yaml` for reference.

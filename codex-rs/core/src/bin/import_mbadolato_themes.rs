@@ -129,6 +129,23 @@ fn to_theme_definition(name: String, wez: WeztermTheme) -> anyhow::Result<ThemeD
         diff_hunk_bg: ThemeColor::inherit(),
         badge: Some(ThemeColor::new("palette.bright_blue")),
         link: Some(ThemeColor::new("palette.blue")),
+        code_keyword: ThemeColor::new("palette.magenta"),
+        code_operator: ThemeColor::new("palette.magenta"),
+        code_comment: ThemeColor::new("palette.bright_green"),
+        code_string: ThemeColor::new("palette.green"),
+        code_number: ThemeColor::new("palette.blue"),
+        code_type: ThemeColor::new("palette.cyan"),
+        code_function: ThemeColor::new("palette.green"),
+        code_constant: ThemeColor::new("palette.cyan"),
+        code_macro: ThemeColor::new("palette.magenta"),
+        code_punctuation: ThemeColor::inherit(),
+        code_variable: ThemeColor::inherit(),
+        code_property: ThemeColor::inherit(),
+        code_attribute: ThemeColor::new("palette.yellow"),
+        code_module: ThemeColor::new("palette.cyan"),
+        code_label: ThemeColor::new("palette.yellow"),
+        code_tag: ThemeColor::new("palette.magenta"),
+        code_embedded: ThemeColor::new("palette.red"),
     };
 
     let bg = roles.bg.resolve(&palette).context("resolve roles.bg")?;

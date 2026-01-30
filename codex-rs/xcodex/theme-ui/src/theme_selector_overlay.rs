@@ -20,6 +20,7 @@ pub(crate) struct ThemeSelectorOverlay {
     last_preview_area: Option<Rect>,
     last_editor_area: Option<Rect>,
     preview_keys_overlay_open: bool,
+    sample_code_tab_idx: usize,
 }
 
 #[derive(Clone, Debug)]
@@ -27,6 +28,36 @@ struct ThemeEntry {
     name: String,
     variant: codex_core::themes::ThemeVariant,
 }
+
+#[derive(Clone, Copy, Debug)]
+struct SampleCodeTab {
+    label: &'static str,
+    fence_lang: &'static str,
+    code: &'static str,
+}
+
+const SAMPLE_CODE_TABS: &[SampleCodeTab] = &[
+    SampleCodeTab {
+        label: "Rust",
+        fence_lang: "rust",
+        code: "use std::collections::HashMap;\n\n// Sample comment.\n\n/// Sample doc comment.\nfn greet(name: &str) -> String {\n    format!(\"Hello, {name}!\")\n}\n\nfn main() {\n    let mut counts: HashMap<&str, usize> = HashMap::new();\n\n    for i in 0..=16 {\n        let msg = if i % 15 == 0 {\n            greet(\"ZigZagg\")\n        } else if i % 3 == 0 {\n            \"Zigg\".to_string()\n        } else if i % 5 == 0 {\n            \"Zagg\".to_string()\n        } else {\n            format!(\"{i}\")\n        };\n        *counts.entry(\"lines\").or_insert(0) += 1;\n        println!(\"{msg}\");\n    }\n}\n",
+    },
+    SampleCodeTab {
+        label: "Python",
+        fence_lang: "python",
+        code: "from __future__ import annotations\n\nfrom dataclasses import dataclass\n\n# Sample comment.\n\n@dataclass(frozen=True)\nclass Item:\n    name: str\n    count: int = 0\n\ndef greet(name: str) -> str:\n    return f\"Hello, {name}!\"\n\ndef main() -> None:\n    items = [Item(\"zigg\"), Item(\"zagg\")]\n    for i in range(0, 17):\n        if i % 15 == 0:\n            msg = greet(\"ZigZagg\")\n        elif i % 3 == 0:\n            msg = \"Zigg\"\n        elif i % 5 == 0:\n            msg = \"Zagg\"\n        else:\n            msg = str(i)\n        print(f\"{i:02d}: {msg}\")\n\nif __name__ == \"__main__\":\n    main()\n",
+    },
+    SampleCodeTab {
+        label: "JavaScript",
+        fence_lang: "javascript",
+        code: "/** @param {string} name */\nfunction greet(name) {\n  // Sample comment.\n  return `Hello, ${name}!`;\n}\n\nfunction main() {\n  const counts = new Map();\n  for (let i = 0; i <= 16; i += 1) {\n    const msg =\n      i % 15 === 0\n        ? greet(\"ZigZagg\")\n        : i % 3 === 0\n          ? \"Zigg\"\n          : i % 5 === 0\n            ? \"Zagg\"\n            : String(i);\n\n    counts.set(\"lines\", (counts.get(\"lines\") ?? 0) + 1);\n    console.log(`${i.toString().padStart(2, \"0\")}: ${msg}`);\n  }\n}\n\nmain();\n",
+    },
+    SampleCodeTab {
+        label: "TypeScript",
+        fence_lang: "typescript",
+        code: "type Counts = Map<string, number>;\n\nfunction greet(name: string): string {\n  // Sample comment.\n  return `Hello, ${name}!`;\n}\n\nfunction inc(map: Counts, key: string): void {\n  map.set(key, (map.get(key) ?? 0) + 1);\n}\n\nfunction main(): void {\n  const counts: Counts = new Map();\n  for (let i = 0; i <= 16; i += 1) {\n    let msg: string;\n    if (i % 15 === 0) {\n      msg = greet(\"ZigZagg\");\n    } else if (i % 3 === 0) {\n      msg = \"Zigg\";\n    } else if (i % 5 === 0) {\n      msg = \"Zagg\";\n    } else {\n      msg = String(i);\n    }\n\n    inc(counts, \"lines\");\n    console.log(`${i.toString().padStart(2, \"0\")}: ${msg}`);\n  }\n}\n\nmain();\n",
+    },
+];
 
 impl ThemeSelectorOverlay {
     fn update_picker_mouse_mode(&mut self, tui: &mut tui::Tui) {
@@ -138,6 +169,7 @@ impl ThemeSelectorOverlay {
             last_preview_area: None,
             last_editor_area: None,
             preview_keys_overlay_open: false,
+            sample_code_tab_idx: 0,
         }
     }
 
@@ -591,6 +623,27 @@ impl ThemeSelectorOverlay {
                 )
                 .display_lines(area.width),
             );
+            lines.push(Line::from(""));
+
+            let sample = SAMPLE_CODE_TABS
+                .get(self.sample_code_tab_idx % SAMPLE_CODE_TABS.len())
+                .copied()
+                .unwrap_or(SAMPLE_CODE_TABS[0]);
+
+            let mut sample_lines: Vec<Line<'static>> = Vec::new();
+            sample_lines.push(sample_code_tabs_line(sample));
+            sample_lines.push(Line::from("").style(crate::theme::transcript_style()));
+
+            let wrap_width = usize::from(area.width).saturating_sub(2);
+            let lang = sample.fence_lang;
+            let code = sample.code;
+            let markdown = format!("```{lang}\n{code}```\n");
+            let rendered =
+                crate::markdown_render::render_markdown_text_with_width(&markdown, Some(wrap_width));
+            sample_lines.extend(rendered.lines);
+
+            let sample_cell = crate::history_cell::AgentMessageCell::new(sample_lines, true);
+            lines.extend(sample_cell.display_lines(area.width));
             lines.push(Line::from(""));
 
             let mut changes = HashMap::new();
@@ -1097,6 +1150,15 @@ impl ThemeSelectorOverlay {
                             }
                         };
                         self.set_edit_variant(next);
+                        tui.frame_requester().schedule_frame();
+                        Ok(())
+                    }
+                    KeyEvent {
+                        code: KeyCode::BackTab,
+                        ..
+                    } => {
+                        self.sample_code_tab_idx =
+                            self.sample_code_tab_idx.saturating_add(1) % SAMPLE_CODE_TABS.len();
                         tui.frame_requester().schedule_frame();
                         Ok(())
                     }
@@ -2893,7 +2955,7 @@ struct SaveThemeState {
     error: Option<String>,
 }
 
-const THEME_PREVIEW_ROLE_KEYS: [&str; 27] = [
+const THEME_PREVIEW_ROLE_KEYS: [&str; 44] = [
     "roles.fg",
     "roles.bg",
     "roles.transcript_bg",
@@ -2921,6 +2983,23 @@ const THEME_PREVIEW_ROLE_KEYS: [&str; 27] = [
     "roles.diff_hunk_bg",
     "roles.badge",
     "roles.link",
+    "roles.code_keyword",
+    "roles.code_operator",
+    "roles.code_comment",
+    "roles.code_string",
+    "roles.code_number",
+    "roles.code_type",
+    "roles.code_function",
+    "roles.code_constant",
+    "roles.code_macro",
+    "roles.code_punctuation",
+    "roles.code_variable",
+    "roles.code_property",
+    "roles.code_attribute",
+    "roles.code_module",
+    "roles.code_label",
+    "roles.code_tag",
+    "roles.code_embedded",
 ];
 
 const THEME_PREVIEW_PALETTE_KEYS: [&str; 16] = [
@@ -2975,6 +3054,23 @@ fn role_label(key: &str) -> &'static str {
         "roles.diff_hunk_bg" => "Diff Hunk BG",
         "roles.badge" => "Badge",
         "roles.link" => "Link",
+        "roles.code_keyword" => "Code Keyword",
+        "roles.code_operator" => "Code Operator",
+        "roles.code_comment" => "Code Comment",
+        "roles.code_string" => "Code String",
+        "roles.code_number" => "Code Number",
+        "roles.code_type" => "Code Type",
+        "roles.code_function" => "Code Function",
+        "roles.code_constant" => "Code Constant",
+        "roles.code_macro" => "Code Macro",
+        "roles.code_punctuation" => "Code Punctuation",
+        "roles.code_variable" => "Code Variable",
+        "roles.code_property" => "Code Property",
+        "roles.code_attribute" => "Code Attribute",
+        "roles.code_module" => "Code Module",
+        "roles.code_label" => "Code Label",
+        "roles.code_tag" => "Code Tag",
+        "roles.code_embedded" => "Code Embedded",
         _ => "Role",
     }
 }
@@ -3367,6 +3463,23 @@ fn role_value(theme: &codex_core::themes::ThemeDefinition, key: &'static str) ->
         "roles.diff_hunk_bg" => Some(theme.roles.diff_hunk_bg.to_string()),
         "roles.badge" => theme.roles.badge.as_ref().map(ToString::to_string),
         "roles.link" => theme.roles.link.as_ref().map(ToString::to_string),
+        "roles.code_keyword" => Some(theme.roles.code_keyword.to_string()),
+        "roles.code_operator" => Some(theme.roles.code_operator.to_string()),
+        "roles.code_comment" => Some(theme.roles.code_comment.to_string()),
+        "roles.code_string" => Some(theme.roles.code_string.to_string()),
+        "roles.code_number" => Some(theme.roles.code_number.to_string()),
+        "roles.code_type" => Some(theme.roles.code_type.to_string()),
+        "roles.code_function" => Some(theme.roles.code_function.to_string()),
+        "roles.code_constant" => Some(theme.roles.code_constant.to_string()),
+        "roles.code_macro" => Some(theme.roles.code_macro.to_string()),
+        "roles.code_punctuation" => Some(theme.roles.code_punctuation.to_string()),
+        "roles.code_variable" => Some(theme.roles.code_variable.to_string()),
+        "roles.code_property" => Some(theme.roles.code_property.to_string()),
+        "roles.code_attribute" => Some(theme.roles.code_attribute.to_string()),
+        "roles.code_module" => Some(theme.roles.code_module.to_string()),
+        "roles.code_label" => Some(theme.roles.code_label.to_string()),
+        "roles.code_tag" => Some(theme.roles.code_tag.to_string()),
+        "roles.code_embedded" => Some(theme.roles.code_embedded.to_string()),
         _ => None,
     }
 }
@@ -3455,6 +3568,23 @@ fn set_role_value(
         "roles.diff_del_bg" => &mut theme.roles.diff_del_bg,
         "roles.diff_hunk_fg" => &mut theme.roles.diff_hunk_fg,
         "roles.diff_hunk_bg" => &mut theme.roles.diff_hunk_bg,
+        "roles.code_keyword" => &mut theme.roles.code_keyword,
+        "roles.code_operator" => &mut theme.roles.code_operator,
+        "roles.code_comment" => &mut theme.roles.code_comment,
+        "roles.code_string" => &mut theme.roles.code_string,
+        "roles.code_number" => &mut theme.roles.code_number,
+        "roles.code_type" => &mut theme.roles.code_type,
+        "roles.code_function" => &mut theme.roles.code_function,
+        "roles.code_constant" => &mut theme.roles.code_constant,
+        "roles.code_macro" => &mut theme.roles.code_macro,
+        "roles.code_punctuation" => &mut theme.roles.code_punctuation,
+        "roles.code_variable" => &mut theme.roles.code_variable,
+        "roles.code_property" => &mut theme.roles.code_property,
+        "roles.code_attribute" => &mut theme.roles.code_attribute,
+        "roles.code_module" => &mut theme.roles.code_module,
+        "roles.code_label" => &mut theme.roles.code_label,
+        "roles.code_tag" => &mut theme.roles.code_tag,
+        "roles.code_embedded" => &mut theme.roles.code_embedded,
         _ => return Err("Unknown role key.".to_string()),
     };
     dst.set(value.to_string());
@@ -3513,6 +3643,28 @@ fn set_palette_value(
     } else {
         dst.set(value.to_string());
     }
+}
+
+fn sample_code_tabs_line(active: SampleCodeTab) -> Line<'static> {
+    let mut spans: Vec<Span<'static>> = vec![
+        "Sample code: ".bold().into(),
+        "(Shift+Tab)".dim().into(),
+        " ".into(),
+    ];
+
+    for tab in SAMPLE_CODE_TABS {
+        let is_active = tab.fence_lang == active.fence_lang;
+        let style = if is_active {
+            crate::theme::accent_style().add_modifier(Modifier::BOLD)
+        } else {
+            crate::theme::transcript_dim_style()
+        };
+        let label = tab.label;
+        spans.push(Span::from(format!("[{label}]")).set_style(style));
+        spans.push(" ".into());
+    }
+
+    Line::from(spans).style(crate::theme::transcript_style())
 }
 
 fn suggested_theme_name(base_theme_name: &str) -> String {

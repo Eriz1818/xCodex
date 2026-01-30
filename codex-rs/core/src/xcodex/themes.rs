@@ -247,10 +247,117 @@ pub struct ThemeRoles {
     pub badge: Option<ThemeColor>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub link: Option<ThemeColor>,
+
+    // Syntax highlighting roles (fenced code blocks).
+    //
+    // These default to palette-based values so themes can override token colors independently of
+    // broader UI roles like `roles.brand`/`roles.command`.
+    #[serde(default = "default_code_keyword_role")]
+    pub code_keyword: ThemeColor,
+    #[serde(default = "default_code_operator_role")]
+    pub code_operator: ThemeColor,
+    #[serde(default = "default_code_comment_role")]
+    pub code_comment: ThemeColor,
+    #[serde(default = "default_code_string_role")]
+    pub code_string: ThemeColor,
+    #[serde(default = "default_code_number_role")]
+    pub code_number: ThemeColor,
+    #[serde(default = "default_code_type_role")]
+    pub code_type: ThemeColor,
+    #[serde(default = "default_code_function_role")]
+    pub code_function: ThemeColor,
+    #[serde(default = "default_code_constant_role")]
+    pub code_constant: ThemeColor,
+    #[serde(default = "default_code_macro_role")]
+    pub code_macro: ThemeColor,
+    #[serde(default = "default_code_punctuation_role")]
+    pub code_punctuation: ThemeColor,
+    #[serde(default = "default_code_variable_role")]
+    pub code_variable: ThemeColor,
+    #[serde(default = "default_code_property_role")]
+    pub code_property: ThemeColor,
+    #[serde(default = "default_code_attribute_role")]
+    pub code_attribute: ThemeColor,
+    #[serde(default = "default_code_module_role")]
+    pub code_module: ThemeColor,
+    #[serde(default = "default_code_label_role")]
+    pub code_label: ThemeColor,
+    #[serde(default = "default_code_tag_role")]
+    pub code_tag: ThemeColor,
+    #[serde(default = "default_code_embedded_role")]
+    pub code_embedded: ThemeColor,
 }
 
 fn default_command_role() -> ThemeColor {
     ThemeColor("palette.magenta".to_string())
+}
+
+fn default_code_keyword_role() -> ThemeColor {
+    ThemeColor("palette.magenta".to_string())
+}
+
+fn default_code_operator_role() -> ThemeColor {
+    ThemeColor("palette.magenta".to_string())
+}
+
+fn default_code_comment_role() -> ThemeColor {
+    ThemeColor("palette.bright_green".to_string())
+}
+
+fn default_code_string_role() -> ThemeColor {
+    ThemeColor("palette.bright_green".to_string())
+}
+
+fn default_code_number_role() -> ThemeColor {
+    ThemeColor("palette.blue".to_string())
+}
+
+fn default_code_type_role() -> ThemeColor {
+    ThemeColor("palette.cyan".to_string())
+}
+
+fn default_code_function_role() -> ThemeColor {
+    ThemeColor("palette.green".to_string())
+}
+
+fn default_code_constant_role() -> ThemeColor {
+    ThemeColor("palette.cyan".to_string())
+}
+
+fn default_code_macro_role() -> ThemeColor {
+    ThemeColor("palette.magenta".to_string())
+}
+
+fn default_code_punctuation_role() -> ThemeColor {
+    ThemeColor::inherit()
+}
+
+fn default_code_variable_role() -> ThemeColor {
+    ThemeColor::inherit()
+}
+
+fn default_code_property_role() -> ThemeColor {
+    ThemeColor::inherit()
+}
+
+fn default_code_attribute_role() -> ThemeColor {
+    ThemeColor("palette.yellow".to_string())
+}
+
+fn default_code_module_role() -> ThemeColor {
+    ThemeColor("palette.cyan".to_string())
+}
+
+fn default_code_label_role() -> ThemeColor {
+    ThemeColor("palette.yellow".to_string())
+}
+
+fn default_code_tag_role() -> ThemeColor {
+    ThemeColor("palette.magenta".to_string())
+}
+
+fn default_code_embedded_role() -> ThemeColor {
+    ThemeColor("palette.red".to_string())
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -383,7 +490,7 @@ impl ThemeDefinition {
     pub fn validate(&self) -> Result<(), ThemeError> {
         // Roles are “required” but can be set to inherit or palette refs. We validate they resolve.
         let roles = &self.roles;
-        let required: [(&'static str, &ThemeColor); 19] = [
+        let required: [(&'static str, &ThemeColor); 36] = [
             ("roles.fg", &roles.fg),
             ("roles.bg", &roles.bg),
             ("roles.selection_fg", &roles.selection_fg),
@@ -403,6 +510,23 @@ impl ThemeDefinition {
             ("roles.diff_del_bg", &roles.diff_del_bg),
             ("roles.diff_hunk_fg", &roles.diff_hunk_fg),
             ("roles.diff_hunk_bg", &roles.diff_hunk_bg),
+            ("roles.code_keyword", &roles.code_keyword),
+            ("roles.code_operator", &roles.code_operator),
+            ("roles.code_comment", &roles.code_comment),
+            ("roles.code_string", &roles.code_string),
+            ("roles.code_number", &roles.code_number),
+            ("roles.code_type", &roles.code_type),
+            ("roles.code_function", &roles.code_function),
+            ("roles.code_constant", &roles.code_constant),
+            ("roles.code_macro", &roles.code_macro),
+            ("roles.code_punctuation", &roles.code_punctuation),
+            ("roles.code_variable", &roles.code_variable),
+            ("roles.code_property", &roles.code_property),
+            ("roles.code_attribute", &roles.code_attribute),
+            ("roles.code_module", &roles.code_module),
+            ("roles.code_label", &roles.code_label),
+            ("roles.code_tag", &roles.code_tag),
+            ("roles.code_embedded", &roles.code_embedded),
         ];
 
         for (field, color) in required {
@@ -502,6 +626,23 @@ impl ThemeCatalog {
                 diff_hunk_bg: inherit,
                 badge: None,
                 link: None,
+                code_keyword: default_code_keyword_role(),
+                code_operator: default_code_operator_role(),
+                code_comment: default_code_comment_role(),
+                code_string: default_code_string_role(),
+                code_number: default_code_number_role(),
+                code_type: default_code_type_role(),
+                code_function: default_code_function_role(),
+                code_constant: default_code_constant_role(),
+                code_macro: default_code_macro_role(),
+                code_punctuation: default_code_punctuation_role(),
+                code_variable: default_code_variable_role(),
+                code_property: default_code_property_role(),
+                code_attribute: default_code_attribute_role(),
+                code_module: default_code_module_role(),
+                code_label: default_code_label_role(),
+                code_tag: default_code_tag_role(),
+                code_embedded: default_code_embedded_role(),
             },
         }
     }
@@ -565,6 +706,23 @@ impl ThemeCatalog {
                     diff_hunk_bg: slot("bright_black"),
                     badge: Some(slot("bright_blue")),
                     link: Some(slot("blue")),
+                    code_keyword: default_code_keyword_role(),
+                    code_operator: default_code_operator_role(),
+                    code_comment: default_code_comment_role(),
+                    code_string: default_code_string_role(),
+                    code_number: default_code_number_role(),
+                    code_type: default_code_type_role(),
+                    code_function: default_code_function_role(),
+                    code_constant: default_code_constant_role(),
+                    code_macro: default_code_macro_role(),
+                    code_punctuation: default_code_punctuation_role(),
+                    code_variable: default_code_variable_role(),
+                    code_property: default_code_property_role(),
+                    code_attribute: default_code_attribute_role(),
+                    code_module: default_code_module_role(),
+                    code_label: default_code_label_role(),
+                    code_tag: default_code_tag_role(),
+                    code_embedded: default_code_embedded_role(),
                 },
             },
             ThemeDefinition {
@@ -616,6 +774,23 @@ impl ThemeCatalog {
                     diff_hunk_bg: rgb("#32302f"),
                     badge: Some(slot("bright_blue")),
                     link: Some(slot("blue")),
+                    code_keyword: default_code_keyword_role(),
+                    code_operator: default_code_operator_role(),
+                    code_comment: default_code_comment_role(),
+                    code_string: default_code_string_role(),
+                    code_number: default_code_number_role(),
+                    code_type: default_code_type_role(),
+                    code_function: default_code_function_role(),
+                    code_constant: default_code_constant_role(),
+                    code_macro: default_code_macro_role(),
+                    code_punctuation: default_code_punctuation_role(),
+                    code_variable: default_code_variable_role(),
+                    code_property: default_code_property_role(),
+                    code_attribute: default_code_attribute_role(),
+                    code_module: default_code_module_role(),
+                    code_label: default_code_label_role(),
+                    code_tag: default_code_tag_role(),
+                    code_embedded: default_code_embedded_role(),
                 },
             },
             ThemeDefinition {
@@ -667,6 +842,23 @@ impl ThemeCatalog {
                     diff_hunk_bg: rgb("#3b4252"),
                     badge: Some(slot("bright_blue")),
                     link: Some(slot("cyan")),
+                    code_keyword: default_code_keyword_role(),
+                    code_operator: default_code_operator_role(),
+                    code_comment: default_code_comment_role(),
+                    code_string: default_code_string_role(),
+                    code_number: default_code_number_role(),
+                    code_type: default_code_type_role(),
+                    code_function: default_code_function_role(),
+                    code_constant: default_code_constant_role(),
+                    code_macro: default_code_macro_role(),
+                    code_punctuation: default_code_punctuation_role(),
+                    code_variable: default_code_variable_role(),
+                    code_property: default_code_property_role(),
+                    code_attribute: default_code_attribute_role(),
+                    code_module: default_code_module_role(),
+                    code_label: default_code_label_role(),
+                    code_tag: default_code_tag_role(),
+                    code_embedded: default_code_embedded_role(),
                 },
             },
             ThemeDefinition {
@@ -718,6 +910,23 @@ impl ThemeCatalog {
                     diff_hunk_bg: rgb("#073642"),
                     badge: Some(slot("bright_blue")),
                     link: Some(slot("blue")),
+                    code_keyword: default_code_keyword_role(),
+                    code_operator: default_code_operator_role(),
+                    code_comment: default_code_comment_role(),
+                    code_string: default_code_string_role(),
+                    code_number: default_code_number_role(),
+                    code_type: default_code_type_role(),
+                    code_function: default_code_function_role(),
+                    code_constant: default_code_constant_role(),
+                    code_macro: default_code_macro_role(),
+                    code_punctuation: default_code_punctuation_role(),
+                    code_variable: default_code_variable_role(),
+                    code_property: default_code_property_role(),
+                    code_attribute: default_code_attribute_role(),
+                    code_module: default_code_module_role(),
+                    code_label: default_code_label_role(),
+                    code_tag: default_code_tag_role(),
+                    code_embedded: default_code_embedded_role(),
                 },
             },
             ThemeDefinition {
@@ -769,6 +978,23 @@ impl ThemeCatalog {
                     diff_hunk_bg: rgb("#eee8d5"),
                     badge: Some(slot("bright_blue")),
                     link: Some(slot("blue")),
+                    code_keyword: default_code_keyword_role(),
+                    code_operator: default_code_operator_role(),
+                    code_comment: default_code_comment_role(),
+                    code_string: default_code_string_role(),
+                    code_number: default_code_number_role(),
+                    code_type: default_code_type_role(),
+                    code_function: default_code_function_role(),
+                    code_constant: default_code_constant_role(),
+                    code_macro: default_code_macro_role(),
+                    code_punctuation: default_code_punctuation_role(),
+                    code_variable: default_code_variable_role(),
+                    code_property: default_code_property_role(),
+                    code_attribute: default_code_attribute_role(),
+                    code_module: default_code_module_role(),
+                    code_label: default_code_label_role(),
+                    code_tag: default_code_tag_role(),
+                    code_embedded: default_code_embedded_role(),
                 },
             },
         ]
@@ -839,6 +1065,23 @@ impl ThemeCatalog {
                 diff_hunk_bg: ThemeColor("palette.bright_black".to_string()),
                 badge: Some(ThemeColor("palette.bright_blue".to_string())),
                 link: Some(ThemeColor("palette.blue".to_string())),
+                code_keyword: default_code_keyword_role(),
+                code_operator: default_code_operator_role(),
+                code_comment: default_code_comment_role(),
+                code_string: default_code_string_role(),
+                code_number: default_code_number_role(),
+                code_type: default_code_type_role(),
+                code_function: default_code_function_role(),
+                code_constant: default_code_constant_role(),
+                code_macro: default_code_macro_role(),
+                code_punctuation: default_code_punctuation_role(),
+                code_variable: default_code_variable_role(),
+                code_property: default_code_property_role(),
+                code_attribute: default_code_attribute_role(),
+                code_module: default_code_module_role(),
+                code_label: default_code_label_role(),
+                code_tag: default_code_tag_role(),
+                code_embedded: default_code_embedded_role(),
             },
         };
 
