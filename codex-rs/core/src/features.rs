@@ -5,8 +5,10 @@
 //! booleans through multiple types, call sites consult a single `Features`
 //! container attached to `Config`.
 
+use crate::config::Config;
 use crate::config::ConfigToml;
 use crate::config::profile::ConfigProfile;
+use crate::protocol::Event;
 use codex_otel::OtelManager;
 use schemars::JsonSchema;
 use serde::Deserialize;
@@ -110,6 +112,8 @@ pub enum Feature {
     /// Use the Responses API WebSocket transport for OpenAI by default.
     ResponsesWebsockets,
 }
+
+pub fn maybe_push_unstable_features_warning(_config: &Config, _events: &mut Vec<Event>) {}
 
 impl Feature {
     pub fn key(self) -> &'static str {

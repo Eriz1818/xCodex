@@ -20,6 +20,7 @@ use crate::compact_remote::run_inline_remote_auto_compact_task;
 use crate::exec_policy::ExecPolicyManager;
 use crate::features::Feature;
 use crate::features::Features;
+use crate::features::maybe_push_unstable_features_warning;
 use crate::hooks::UserHooks;
 use crate::models_manager::manager::ModelsManager;
 use crate::parse_command::parse_command;
@@ -726,18 +727,12 @@ impl Session {
             });
         }
         maybe_push_chat_wire_api_deprecation(&config, &mut post_session_configured_events);
-        if matches!(config.xcodex.notify.as_ref(), Some(notify) if !notify.is_empty()) {
-            post_session_configured_events.push(Event {
-                id: INITIAL_SUBMIT_ID.to_owned(),
-                msg: EventMsg::DeprecationNotice(DeprecationNoticeEvent {
-                    summary: "`notify` is deprecated. Use `[hooks].agent_turn_complete` instead."
-                        .to_string(),
-                    details: Some(
-                        "See docs/xcodex/hooks.md for the hooks contract and examples.".to_string(),
-                    ),
-                }),
-            });
-        }
+        crate::xcodex::maybe_push_notify_deprecation(
+            INITIAL_SUBMIT_ID,
+            &config,
+            &mut post_session_configured_events,
+        );
+        maybe_push_unstable_features_warning(&config, &mut post_session_configured_events);
 
         let auth = auth_manager.auth().await;
         let auth = auth.as_ref();
@@ -800,15 +795,9 @@ impl Session {
         let services = SessionServices {
             mcp_connection_manager: Arc::new(RwLock::new(McpConnectionManager::default())),
             mcp_startup_cancellation_token: Mutex::new(CancellationToken::new()),
-            user_hooks: UserHooks::new(
-                config.codex_home.clone(),
-                config.xcodex.hooks.clone(),
-                Some(tx_event.clone()),
-                config.sandbox_policy.get().clone(),
-                config.codex_linux_sandbox_exe.clone(),
-            ),
+            user_hooks: crate::xcodex::build_user_hooks(&config, tx_event.clone()),
             unified_exec_manager: UnifiedExecProcessManager::default(),
-            notifier: UserNotifier::new(config.xcodex.notify.clone()),
+            notifier: crate::xcodex::build_user_notifier(&config),
             rollout: Mutex::new(Some(rollout_recorder)),
             user_shell: Arc::new(default_shell),
             show_raw_agent_reasoning: config.show_raw_agent_reasoning,
@@ -879,10 +868,10 @@ impl Session {
                 tx_event.clone(),
                 cancel_token,
                 sandbox_state,
-                Some(crate::mcp_connection_manager::McpHookContext::new(
+                Some(crate::xcodex::mcp_hook_context(
                     sess.services.user_hooks.clone(),
-                    sess.conversation_id.to_string(),
-                    session_configuration.cwd.display().to_string(),
+                    &sess.conversation_id.to_string(),
+                    &session_configuration.cwd,
                 )),
             )
             .await;
@@ -2202,10 +2191,10 @@ impl Session {
                 self.get_tx_event(),
                 cancel_token,
                 sandbox_state,
-                Some(crate::mcp_connection_manager::McpHookContext::new(
+                Some(crate::xcodex::mcp_hook_context(
                     self.services.user_hooks.clone(),
-                    self.conversation_id.to_string(),
-                    turn_context.cwd.display().to_string(),
+                    &self.conversation_id.to_string(),
+                    &turn_context.cwd,
                 )),
             )
             .await;
@@ -2886,10 +2875,10 @@ mod handlers {
         let hook_context = {
             let state = sess.state.lock().await;
             let cfg = &state.session_configuration;
-            Some(crate::mcp_connection_manager::McpHookContext::new(
+            Some(crate::xcodex::mcp_hook_context(
                 sess.services.user_hooks.clone(),
-                sess.conversation_id.to_string(),
-                cfg.cwd.display().to_string(),
+                &sess.conversation_id.to_string(),
+                &cfg.cwd,
             ))
         };
 
