@@ -40,22 +40,22 @@ const SAMPLE_CODE_TABS: &[SampleCodeTab] = &[
     SampleCodeTab {
         label: "Rust",
         fence_lang: "rust",
-        code: "use std::collections::HashMap;\n\n// Sample comment.\n\n/// Sample doc comment.\nfn greet(name: &str) -> String {\n    format!(\"Hello, {name}!\")\n}\n\nfn main() {\n    let mut counts: HashMap<&str, usize> = HashMap::new();\n\n    for i in 0..=16 {\n        let msg = if i % 15 == 0 {\n            greet(\"ZigZagg\")\n        } else if i % 3 == 0 {\n            \"Zigg\".to_string()\n        } else if i % 5 == 0 {\n            \"Zagg\".to_string()\n        } else {\n            format!(\"{i}\")\n        };\n        *counts.entry(\"lines\").or_insert(0) += 1;\n        println!(\"{msg}\");\n    }\n}\n",
+        code: "use std::collections::HashMap;\n\n// Note: appease the borrow checker with snacks.\n\n/// Returns a greeting (no unsafe rituals required).\nfn greet(name: &str) -> String {\n    format!(\"Hello, {name}!\")\n}\n\nfn main() {\n    let mut counts: HashMap<&str, usize> = HashMap::new();\n\n    for i in 0..=16 {\n        let msg = if i % 15 == 0 {\n            greet(\"CaptainBorrowChecker\")\n        } else if i % 3 == 0 {\n            \"Borrow\".to_string()\n        } else if i % 5 == 0 {\n            \"Checker\".to_string()\n        } else {\n            format!(\"{i}\")\n        };\n        *counts.entry(\"lines\").or_insert(0) += 1;\n        println!(\"{msg}\");\n    }\n}\n",
     },
     SampleCodeTab {
         label: "Python",
         fence_lang: "python",
-        code: "from __future__ import annotations\n\nfrom dataclasses import dataclass\n\n# Sample comment.\n\n@dataclass(frozen=True)\nclass Item:\n    name: str\n    count: int = 0\n\ndef greet(name: str) -> str:\n    return f\"Hello, {name}!\"\n\ndef main() -> None:\n    items = [Item(\"zigg\"), Item(\"zagg\")]\n    for i in range(0, 17):\n        if i % 15 == 0:\n            msg = greet(\"ZigZagg\")\n        elif i % 3 == 0:\n            msg = \"Zigg\"\n        elif i % 5 == 0:\n            msg = \"Zagg\"\n        else:\n            msg = str(i)\n        print(f\"{i:02d}: {msg}\")\n\nif __name__ == \"__main__\":\n    main()\n",
+        code: "from __future__ import annotations\n\nfrom dataclasses import dataclass\n\n# Note: type hints keep the gremlins calm.\n\n@dataclass(frozen=True)\nclass Item:\n    name: str\n    count: int = 0\n\ndef greet(name: str) -> str:\n    return f\"Hello, {name}!\"\n\ndef main() -> None:\n    items = [Item(\"borrow\"), Item(\"checker\")]\n    for i in range(0, 17):\n        if i % 15 == 0:\n            msg = greet(\"CaptainBorrowChecker\")\n        elif i % 3 == 0:\n            msg = \"Borrow\"\n        elif i % 5 == 0:\n            msg = \"Checker\"\n        else:\n            msg = str(i)\n        print(f\"{i:02d}: {msg}\")\n\nif __name__ == \"__main__\":\n    main()\n",
     },
     SampleCodeTab {
         label: "JavaScript",
         fence_lang: "javascript",
-        code: "/** @param {string} name */\nfunction greet(name) {\n  // Sample comment.\n  return `Hello, ${name}!`;\n}\n\nfunction main() {\n  const counts = new Map();\n  for (let i = 0; i <= 16; i += 1) {\n    const msg =\n      i % 15 === 0\n        ? greet(\"ZigZagg\")\n        : i % 3 === 0\n          ? \"Zigg\"\n          : i % 5 === 0\n            ? \"Zagg\"\n            : String(i);\n\n    counts.set(\"lines\", (counts.get(\"lines\") ?? 0) + 1);\n    console.log(`${i.toString().padStart(2, \"0\")}: ${msg}`);\n  }\n}\n\nmain();\n",
+        code: "/** @param {string} name */\nfunction greet(name) {\n  // Note: this function is 99% vibes, 1% types.\n  return `Hello, ${name}!`;\n}\n\nfunction main() {\n  const counts = new Map();\n  for (let i = 0; i <= 16; i += 1) {\n    const msg =\n      i % 15 === 0\n        ? greet(\"CaptainBorrowChecker\")\n        : i % 3 === 0\n          ? \"Borrow\"\n          : i % 5 === 0\n            ? \"Checker\"\n            : String(i);\n\n    counts.set(\"lines\", (counts.get(\"lines\") ?? 0) + 1);\n    console.log(`${i.toString().padStart(2, \"0\")}: ${msg}`);\n  }\n}\n\nmain();\n",
     },
     SampleCodeTab {
         label: "TypeScript",
         fence_lang: "typescript",
-        code: "type Counts = Map<string, number>;\n\nfunction greet(name: string): string {\n  // Sample comment.\n  return `Hello, ${name}!`;\n}\n\nfunction inc(map: Counts, key: string): void {\n  map.set(key, (map.get(key) ?? 0) + 1);\n}\n\nfunction main(): void {\n  const counts: Counts = new Map();\n  for (let i = 0; i <= 16; i += 1) {\n    let msg: string;\n    if (i % 15 === 0) {\n      msg = greet(\"ZigZagg\");\n    } else if (i % 3 === 0) {\n      msg = \"Zigg\";\n    } else if (i % 5 === 0) {\n      msg = \"Zagg\";\n    } else {\n      msg = String(i);\n    }\n\n    inc(counts, \"lines\");\n    console.log(`${i.toString().padStart(2, \"0\")}: ${msg}`);\n  }\n}\n\nmain();\n",
+        code: "type Counts = Map<string, number>;\n\nfunction greet(name: string): string {\n  // Note: strict mode demands a tribute.\n  return `Hello, ${name}!`;\n}\n\nfunction inc(map: Counts, key: string): void {\n  map.set(key, (map.get(key) ?? 0) + 1);\n}\n\nfunction main(): void {\n  const counts: Counts = new Map();\n  for (let i = 0; i <= 16; i += 1) {\n    let msg: string;\n    if (i % 15 === 0) {\n      msg = greet(\"CaptainBorrowChecker\");\n    } else if (i % 3 === 0) {\n      msg = \"Borrow\";\n    } else if (i % 5 === 0) {\n      msg = \"Checker\";\n    } else {\n      msg = String(i);\n    }\n\n    inc(counts, \"lines\");\n    console.log(`${i.toString().padStart(2, \"0\")}: ${msg}`);\n  }\n}\n\nmain();\n",
     },
 ];
 
@@ -3698,19 +3698,19 @@ fn sample_diff_for_tab(active: SampleCodeTab) -> (PathBuf, String) {
     match active.fence_lang {
         "python" => (
             PathBuf::from("preview/sample.py"),
-            "--- a/preview/sample.py\n+++ b/preview/sample.py\n@@ -1,3 +1,3 @@\n-# Note: keep the greeting soft.\n+# Note: keep the greeting bright.\n def greet(name: str) -> str:\n-    return f\"hello, {name}.\"\n+    return f\"hello, {name}!\"\n".to_string(),
+            "--- a/preview/sample.py\n+++ b/preview/sample.py\n@@ -1,3 +1,3 @@\n-# Note: type hints keep the gremlins calm.\n+# Note: type hints keep the gremlins fed.\n def greet(name: str) -> str:\n-    return f\"hello, {name}.\"\n+    return f\"hello, {name}!\"\n".to_string(),
         ),
         "javascript" => (
             PathBuf::from("preview/sample.js"),
-            "--- a/preview/sample.js\n+++ b/preview/sample.js\n@@ -1,4 +1,4 @@\n-// Note: keep greetings minimal.\n+// Note: add a little flair.\n function greet(name) {\n-  return `Hello, ${name}.`;\n+  return `Hello, ${name}!`;\n }\n".to_string(),
+            "--- a/preview/sample.js\n+++ b/preview/sample.js\n@@ -1,4 +1,4 @@\n-// Note: this function is 99% vibes, 1% types.\n+// Note: this function is 99% vibes, 1% semicolons.\n function greet(name) {\n-  return `Hello, ${name}.`;\n+  return `Hello, ${name}!`;\n }\n".to_string(),
         ),
         "typescript" => (
             PathBuf::from("preview/sample.ts"),
-            "--- a/preview/sample.ts\n+++ b/preview/sample.ts\n@@ -1,4 +1,4 @@\n-// Note: no excitement yet.\n+// Note: add excitement.\n function greet(name: string): string {\n-  return `Hello, ${name}.`;\n+  return `Hello, ${name}!`;\n }\n".to_string(),
+            "--- a/preview/sample.ts\n+++ b/preview/sample.ts\n@@ -1,4 +1,4 @@\n-// Note: strict mode demands a tribute.\n+// Note: strict mode demands two tributes.\n function greet(name: string): string {\n-  return `Hello, ${name}.`;\n+  return `Hello, ${name}!`;\n }\n".to_string(),
         ),
         _ => (
             PathBuf::from("preview/sample.rs"),
-            "--- a/preview/sample.rs\n+++ b/preview/sample.rs\n@@ -1,4 +1,4 @@\n-// Note: keep it calm.\n+// Note: add a little sparkle.\n fn greet(name: &str) -> String {\n-    format!(\"Hello, {name}.\")\n+    format!(\"Hello, {name}!\")\n }\n".to_string(),
+            "--- a/preview/sample.rs\n+++ b/preview/sample.rs\n@@ -1,4 +1,4 @@\n-// Note: appease the borrow checker with snacks.\n+// Note: appease the borrow checker with more snacks.\n fn greet(name: &str) -> String {\n-    format!(\"Hello, {name}.\")\n+    format!(\"Hello, {name}!\")\n }\n".to_string(),
         ),
     }
 }
