@@ -229,6 +229,14 @@ static PYTHON_HIGHLIGHT_CONFIG: OnceLock<HighlightConfiguration> = OnceLock::new
 static JAVASCRIPT_HIGHLIGHT_CONFIG: OnceLock<HighlightConfiguration> = OnceLock::new();
 static TYPESCRIPT_HIGHLIGHT_CONFIG: OnceLock<HighlightConfiguration> = OnceLock::new();
 static RUBY_HIGHLIGHT_CONFIG: OnceLock<HighlightConfiguration> = OnceLock::new();
+static GO_HIGHLIGHT_CONFIG: OnceLock<HighlightConfiguration> = OnceLock::new();
+static C_HIGHLIGHT_CONFIG: OnceLock<HighlightConfiguration> = OnceLock::new();
+static CPP_HIGHLIGHT_CONFIG: OnceLock<HighlightConfiguration> = OnceLock::new();
+static JAVA_HIGHLIGHT_CONFIG: OnceLock<HighlightConfiguration> = OnceLock::new();
+static HTML_HIGHLIGHT_CONFIG: OnceLock<HighlightConfiguration> = OnceLock::new();
+static CSS_HIGHLIGHT_CONFIG: OnceLock<HighlightConfiguration> = OnceLock::new();
+static JSON_HIGHLIGHT_CONFIG: OnceLock<HighlightConfiguration> = OnceLock::new();
+static YAML_HIGHLIGHT_CONFIG: OnceLock<HighlightConfiguration> = OnceLock::new();
 const TYPESCRIPT_EXTRA_HIGHLIGHTS: &str = r#"
 (comment) @comment
 
@@ -326,6 +334,122 @@ fn ruby_highlight_config() -> &'static HighlightConfiguration {
     })
 }
 
+fn go_highlight_config() -> &'static HighlightConfiguration {
+    GO_HIGHLIGHT_CONFIG.get_or_init(|| {
+        let language = tree_sitter_go::LANGUAGE.into();
+        #[expect(clippy::expect_used)]
+        let mut config =
+            HighlightConfiguration::new(language, "go", tree_sitter_go::HIGHLIGHTS_QUERY, "", "")
+                .expect("load go highlight query");
+        config.configure(GENERIC_HIGHLIGHT_NAMES);
+        config
+    })
+}
+
+fn c_highlight_config() -> &'static HighlightConfiguration {
+    C_HIGHLIGHT_CONFIG.get_or_init(|| {
+        let language = tree_sitter_c::LANGUAGE.into();
+        #[expect(clippy::expect_used)]
+        let mut config =
+            HighlightConfiguration::new(language, "c", tree_sitter_c::HIGHLIGHT_QUERY, "", "")
+                .expect("load c highlight query");
+        config.configure(GENERIC_HIGHLIGHT_NAMES);
+        config
+    })
+}
+
+fn cpp_highlight_config() -> &'static HighlightConfiguration {
+    CPP_HIGHLIGHT_CONFIG.get_or_init(|| {
+        let language = tree_sitter_cpp::LANGUAGE.into();
+        #[expect(clippy::expect_used)]
+        let mut config =
+            HighlightConfiguration::new(language, "cpp", tree_sitter_cpp::HIGHLIGHT_QUERY, "", "")
+                .expect("load c++ highlight query");
+        config.configure(GENERIC_HIGHLIGHT_NAMES);
+        config
+    })
+}
+
+fn java_highlight_config() -> &'static HighlightConfiguration {
+    JAVA_HIGHLIGHT_CONFIG.get_or_init(|| {
+        let language = tree_sitter_java::LANGUAGE.into();
+        #[expect(clippy::expect_used)]
+        let mut config = HighlightConfiguration::new(
+            language,
+            "java",
+            tree_sitter_java::HIGHLIGHTS_QUERY,
+            "",
+            "",
+        )
+        .expect("load java highlight query");
+        config.configure(GENERIC_HIGHLIGHT_NAMES);
+        config
+    })
+}
+
+fn html_highlight_config() -> &'static HighlightConfiguration {
+    HTML_HIGHLIGHT_CONFIG.get_or_init(|| {
+        let language = tree_sitter_html::LANGUAGE.into();
+        #[expect(clippy::expect_used)]
+        let mut config = HighlightConfiguration::new(
+            language,
+            "html",
+            tree_sitter_html::HIGHLIGHTS_QUERY,
+            "",
+            "",
+        )
+        .expect("load html highlight query");
+        config.configure(GENERIC_HIGHLIGHT_NAMES);
+        config
+    })
+}
+
+fn css_highlight_config() -> &'static HighlightConfiguration {
+    CSS_HIGHLIGHT_CONFIG.get_or_init(|| {
+        let language = tree_sitter_css::LANGUAGE.into();
+        #[expect(clippy::expect_used)]
+        let mut config =
+            HighlightConfiguration::new(language, "css", tree_sitter_css::HIGHLIGHTS_QUERY, "", "")
+                .expect("load css highlight query");
+        config.configure(GENERIC_HIGHLIGHT_NAMES);
+        config
+    })
+}
+
+fn json_highlight_config() -> &'static HighlightConfiguration {
+    JSON_HIGHLIGHT_CONFIG.get_or_init(|| {
+        let language = tree_sitter_json::LANGUAGE.into();
+        #[expect(clippy::expect_used)]
+        let mut config = HighlightConfiguration::new(
+            language,
+            "json",
+            tree_sitter_json::HIGHLIGHTS_QUERY,
+            "",
+            "",
+        )
+        .expect("load json highlight query");
+        config.configure(GENERIC_HIGHLIGHT_NAMES);
+        config
+    })
+}
+
+fn yaml_highlight_config() -> &'static HighlightConfiguration {
+    YAML_HIGHLIGHT_CONFIG.get_or_init(|| {
+        let language = tree_sitter_yaml::LANGUAGE.into();
+        #[expect(clippy::expect_used)]
+        let mut config = HighlightConfiguration::new(
+            language,
+            "yaml",
+            tree_sitter_yaml::HIGHLIGHTS_QUERY,
+            "",
+            "",
+        )
+        .expect("load yaml highlight query");
+        config.configure(GENERIC_HIGHLIGHT_NAMES);
+        config
+    })
+}
+
 fn highlight_config_for(lang: &str) -> Option<&'static HighlightConfiguration> {
     match lang {
         "rust" | "rs" => Some(rust_highlight_config()),
@@ -333,6 +457,14 @@ fn highlight_config_for(lang: &str) -> Option<&'static HighlightConfiguration> {
         "javascript" | "js" => Some(javascript_highlight_config()),
         "typescript" | "ts" => Some(typescript_highlight_config()),
         "ruby" | "rb" => Some(ruby_highlight_config()),
+        "go" | "golang" => Some(go_highlight_config()),
+        "c" => Some(c_highlight_config()),
+        "cpp" | "c++" | "cxx" | "cc" => Some(cpp_highlight_config()),
+        "java" => Some(java_highlight_config()),
+        "html" | "htm" => Some(html_highlight_config()),
+        "css" => Some(css_highlight_config()),
+        "json" => Some(json_highlight_config()),
+        "yaml" | "yml" => Some(yaml_highlight_config()),
         _ => None,
     }
 }
