@@ -512,6 +512,14 @@ fn heredoc_lang_for(tag: &str) -> Option<&'static str> {
         "TS" | "TYPESCRIPT" => Some("typescript"),
         "SH" | "BASH" | "ZSH" => Some("bash"),
         "RB" | "RUBY" => Some("ruby"),
+        "GO" | "GOLANG" => Some("go"),
+        "C" => Some("c"),
+        "CPP" | "CXX" | "C++" | "CC" => Some("cpp"),
+        "JAVA" => Some("java"),
+        "HTML" | "HTM" => Some("html"),
+        "CSS" => Some("css"),
+        "JSON" => Some("json"),
+        "YAML" | "YML" => Some("yaml"),
         _ => None,
     }
 }
