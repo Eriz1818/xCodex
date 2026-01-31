@@ -1,6 +1,7 @@
 use diffy::Hunk;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
+use ratatui::style::Modifier;
 use ratatui::style::Style;
 use ratatui::style::Stylize;
 use ratatui::text::Line as RtLine;
@@ -26,6 +27,7 @@ use codex_core::git_info::get_git_repo_root;
 use codex_core::protocol::FileChange;
 
 // Internal representation for diff line rendering
+#[derive(Copy, Clone)]
 enum DiffLineType {
     Insert,
     Delete,
@@ -454,13 +456,19 @@ fn push_wrapped_diff_line(
     let prefix_cols = gutter_width + 1;
 
     let (sign_char, line_style) = match kind {
-        DiffLineType::Insert => ('+', style_add(diff_highlight)),
-        DiffLineType::Delete => ('-', style_del(diff_highlight)),
+        DiffLineType::Insert => (
+            '+',
+            diff_sign_style(style_add(diff_highlight), syntax_highlight, diff_highlight),
+        ),
+        DiffLineType::Delete => (
+            '-',
+            diff_sign_style(style_del(diff_highlight), syntax_highlight, diff_highlight),
+        ),
         DiffLineType::Context => (' ', style_context()),
     };
     let content_style = match kind {
-        DiffLineType::Insert => style_add(diff_highlight),
-        DiffLineType::Delete => style_del(diff_highlight),
+        DiffLineType::Insert => diff_content_style(style_add(diff_highlight), syntax_highlight),
+        DiffLineType::Delete => diff_content_style(style_del(diff_highlight), syntax_highlight),
         DiffLineType::Context => style_context(),
     };
 
@@ -490,7 +498,10 @@ fn push_wrapped_diff_line(
             };
             let sign = if is_first { sign_char } else { ' ' };
             let mut spans: Vec<RtSpan<'static>> = Vec::with_capacity(chunk.spans.len() + 2);
-            spans.push(RtSpan::styled(gutter, style_gutter()));
+            spans.push(RtSpan::styled(
+                gutter,
+                diff_gutter_style(kind, syntax_highlight, diff_highlight),
+            ));
             spans.push(RtSpan::styled(format!("{sign}"), line_style));
             if chunk.spans.is_empty() {
                 spans.push(RtSpan::styled("".to_string(), content_style));
@@ -507,7 +518,10 @@ fn push_wrapped_diff_line(
     if out.is_empty() {
         let gutter = format!("{ln_str:>gutter_width$} ");
         out.push(RtLine::from(vec![
-            RtSpan::styled(gutter, style_gutter()),
+            RtSpan::styled(
+                gutter,
+                diff_gutter_style(kind, syntax_highlight, diff_highlight),
+            ),
             RtSpan::styled(format!("{sign_char}"), line_style),
         ]));
     }
@@ -603,6 +617,34 @@ fn style_hunk(diff_highlight: bool) -> Style {
         crate::theme::diff_hunk_highlight_style()
     } else {
         crate::theme::diff_hunk_text_style()
+    }
+}
+
+fn diff_content_style(style: Style, syntax_highlight: bool) -> Style {
+    if syntax_highlight {
+        Style { fg: None, ..style }
+    } else {
+        style
+    }
+}
+
+fn diff_sign_style(style: Style, syntax_highlight: bool, diff_highlight: bool) -> Style {
+    if syntax_highlight && !diff_highlight {
+        style.add_modifier(Modifier::BOLD)
+    } else {
+        style
+    }
+}
+
+fn diff_gutter_style(kind: DiffLineType, syntax_highlight: bool, diff_highlight: bool) -> Style {
+    if syntax_highlight && !diff_highlight {
+        match kind {
+            DiffLineType::Insert => style_add(false).add_modifier(Modifier::BOLD),
+            DiffLineType::Delete => style_del(false).add_modifier(Modifier::BOLD),
+            DiffLineType::Context => style_gutter(),
+        }
+    } else {
+        style_gutter()
     }
 }
 
