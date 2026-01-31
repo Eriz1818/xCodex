@@ -1,5 +1,6 @@
 ---
 source: tui/src/bottom_pane/mod.rs
+assertion_line: 1400
 expression: "render_snapshot(&pane, area)"
 ---
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -7,4 +8,4 @@ expression: "render_snapshot(&pane, area)"
 › Ask xcodex to do anything                     
                                                 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  100% context left · ? for shortcuts
+  ? for shortcuts            100% context left

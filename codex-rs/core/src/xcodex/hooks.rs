@@ -1505,7 +1505,7 @@ async fn spawn_hook_host_process(
         SandboxPolicy::DangerFullAccess | SandboxPolicy::ExternalSandbox { .. } => {
             crate::exec::SandboxType::None
         }
-        _ => crate::safety::get_platform_sandbox().unwrap_or(crate::exec::SandboxType::None),
+        _ => crate::safety::get_platform_sandbox(false).unwrap_or(crate::exec::SandboxType::None),
     };
 
     let downgraded =

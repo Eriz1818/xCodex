@@ -183,3 +183,7 @@ mcp-server-run-cargo *args:
 # Regenerate the json schema for config.toml from the current config types.
 write-config-schema:
     cargo run -p codex-core --bin codex-write-config-schema
+
+# Tail logs from the state SQLite database
+log *args:
+    if [ "${1:-}" = "--" ]; then shift; fi; cargo run -p codex-state --bin logs_client -- "$@"

@@ -65,6 +65,7 @@ use crate::model_provider_info::ModelProviderInfo;
 use crate::model_provider_info::WireApi;
 use crate::tools::spec::create_tools_json_for_chat_completions_api;
 use crate::tools::spec::create_tools_json_for_responses_api;
+use crate::transport_manager::TransportManager;
 
 pub const WEB_SEARCH_ELIGIBLE_HEADER: &str = "x-oai-web-search-eligible";
 pub const X_CODEX_TURN_STATE_HEADER: &str = "x-codex-turn-state";
@@ -80,6 +81,7 @@ struct ModelClientState {
     effort: Option<ReasoningEffortConfig>,
     summary: ReasoningSummaryConfig,
     session_source: SessionSource,
+    transport_manager: TransportManager,
 }
 
 #[derive(Debug, Clone)]
@@ -91,6 +93,7 @@ pub struct ModelClientSession {
     state: Arc<ModelClientState>,
     connection: Option<ApiWebSocketConnection>,
     websocket_last_items: Vec<ResponseItem>,
+    transport_manager: TransportManager,
     /// Turn state for sticky routing.
     ///
     /// This is an `OnceLock` that stores the turn state value received from the server
@@ -116,6 +119,7 @@ impl ModelClient {
         summary: ReasoningSummaryConfig,
         conversation_id: ThreadId,
         session_source: SessionSource,
+        transport_manager: TransportManager,
     ) -> Self {
         Self {
             state: Arc::new(ModelClientState {
@@ -128,6 +132,7 @@ impl ModelClient {
                 effort,
                 summary,
                 session_source,
+                transport_manager,
             }),
         }
     }
@@ -137,6 +142,7 @@ impl ModelClient {
             state: Arc::clone(&self.state),
             connection: None,
             websocket_last_items: Vec::new(),
+            transport_manager: self.state.transport_manager.clone(),
             turn_state: Arc::new(OnceLock::new()),
         }
     }
@@ -174,6 +180,10 @@ impl ModelClient {
 
     pub fn get_session_source(&self) -> SessionSource {
         self.state.session_source.clone()
+    }
+
+    pub(crate) fn transport_manager(&self) -> TransportManager {
+        self.state.transport_manager.clone()
     }
 
     /// Returns the currently configured model slug.
@@ -231,13 +241,11 @@ impl ModelClient {
 
         let mut extra_headers = ApiHeaderMap::new();
         if let SessionSource::SubAgent(sub) = &self.state.session_source {
-            let subagent = if let crate::protocol::SubAgentSource::Other(label) = sub {
-                label.clone()
-            } else {
-                serde_json::to_value(sub)
-                    .ok()
-                    .and_then(|v| v.as_str().map(std::string::ToString::to_string))
-                    .unwrap_or_else(|| "other".to_string())
+            let subagent = match sub {
+                crate::protocol::SubAgentSource::Review => "review".to_string(),
+                crate::protocol::SubAgentSource::Compact => "compact".to_string(),
+                crate::protocol::SubAgentSource::ThreadSpawn { .. } => "collab_spawn".to_string(),
+                crate::protocol::SubAgentSource::Other(label) => label.clone(),
             };
             if let Ok(val) = HeaderValue::from_str(&subagent) {
                 extra_headers.insert("x-openai-subagent", val);
@@ -257,9 +265,18 @@ impl ModelClientSession {
     /// For Chat providers, the underlying stream is optionally aggregated
     /// based on the `show_raw_agent_reasoning` flag in the config.
     pub async fn stream(&mut self, prompt: &Prompt) -> Result<ResponseStream> {
-        match self.state.provider.wire_api {
-            WireApi::Responses => self.stream_responses_api(prompt).await,
-            WireApi::ResponsesWebsocket => self.stream_responses_websocket(prompt).await,
+        let wire_api = self.state.provider.wire_api;
+        match wire_api {
+            WireApi::Responses => {
+                let websocket_enabled = self.responses_websocket_enabled()
+                    && !self.transport_manager.disable_websockets();
+
+                if websocket_enabled {
+                    self.stream_responses_websocket(prompt).await
+                } else {
+                    self.stream_responses_api(prompt).await
+                }
+            }
             WireApi::Chat => {
                 let api_stream = self.stream_chat_completions(prompt).await?;
 
@@ -276,6 +293,34 @@ impl ModelClientSession {
                 }
             }
         }
+    }
+
+    pub(crate) fn try_switch_fallback_transport(&mut self) -> bool {
+        let websocket_enabled = self.responses_websocket_enabled();
+        let activated = self
+            .transport_manager
+            .activate_http_fallback(websocket_enabled);
+        if activated {
+            warn!("falling back to HTTP");
+            self.state.otel_manager.counter(
+                "codex.transport.fallback_to_http",
+                1,
+                &[("from_wire_api", "responses_websocket")],
+            );
+
+            self.connection = None;
+            self.websocket_last_items.clear();
+        }
+        activated
+    }
+
+    fn responses_websocket_enabled(&self) -> bool {
+        self.state.provider.supports_websockets
+            && self
+                .state
+                .config
+                .features
+                .enabled(Feature::ResponsesWebsockets)
     }
 
     fn build_responses_request(&self, prompt: &Prompt) -> Result<ApiPrompt> {
@@ -429,7 +474,9 @@ impl ModelClientSession {
             .config
             .features
             .enabled(Feature::EnableRequestCompression)
-            && auth.is_some_and(|auth| auth.mode == AuthMode::ChatGPT)
+            && auth.is_some_and(|auth| {
+                matches!(auth.mode, AuthMode::ChatGPT | AuthMode::ChatgptAuthTokens)
+            })
             && self.state.provider.is_openai()
         {
             Compression::Zstd
@@ -632,11 +679,13 @@ fn build_api_prompt(prompt: &Prompt, instructions: String, tools_json: Vec<Value
     }
 }
 
-fn beta_feature_headers(config: &Config) -> ApiHeaderMap {
+fn experimental_feature_headers(config: &Config) -> ApiHeaderMap {
     let enabled = FEATURES
         .iter()
         .filter_map(|spec| {
-            if spec.stage.beta_menu_description().is_some() && config.features.enabled(spec.id) {
+            if spec.stage.experimental_menu_description().is_some()
+                && config.features.enabled(spec.id)
+            {
                 Some(spec.key)
             } else {
                 None
@@ -657,7 +706,7 @@ fn build_responses_headers(
     config: &Config,
     turn_state: Option<&Arc<OnceLock<String>>>,
 ) -> ApiHeaderMap {
-    let mut headers = beta_feature_headers(config);
+    let mut headers = experimental_feature_headers(config);
     headers.insert(
         WEB_SEARCH_ELIGIBLE_HEADER,
         HeaderValue::from_static(

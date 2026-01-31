@@ -603,11 +603,6 @@ impl Default for Notifications {
     }
 }
 
-/// How TUI2 should interpret mouse scroll events.
-///
-/// Terminals generally encode both mouse wheels and trackpads as the same "scroll up/down" mouse
-/// button events, without a magnitude. This setting controls whether Codex uses a heuristic to
-/// infer wheel vs trackpad per stream, or forces a specific behavior.
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum NotificationMethod {
@@ -911,7 +906,6 @@ const fn default_true() -> bool {
 /// (primarily the Codex IDE extension). NOTE: these are different from
 /// notifications - notices are warnings, NUX screens, acknowledgements, etc.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema)]
-#[schemars(deny_unknown_fields)]
 pub struct Notice {
     /// Tracks whether the user has acknowledged the full access warning prompt.
     pub hide_full_access_warning: Option<bool>,

@@ -7,6 +7,7 @@ use crossterm::event::KeyEvent;
 use crossterm::event::KeyModifiers;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
+use ratatui::style::Style;
 use ratatui::widgets::StatefulWidgetRef;
 use ratatui::widgets::WidgetRef;
 use std::cell::Ref;
@@ -771,12 +772,6 @@ impl TextArea {
             .collect()
     }
 
-    pub fn element_payload_starting_at(&self, pos: usize) -> Option<String> {
-        let pos = pos.min(self.text.len());
-        let elem = self.elements.iter().find(|e| e.range.start == pos)?;
-        self.text.get(elem.range.clone()).map(str::to_string)
-    }
-
     /// Renames a single text element in-place, keeping it atomic.
     ///
     /// Use this when the element payload is an identifier (e.g. a placeholder) that must be
@@ -1157,6 +1152,22 @@ impl StatefulWidgetRef for &TextArea {
 }
 
 impl TextArea {
+    pub(crate) fn render_ref_masked(
+        &self,
+        area: Rect,
+        buf: &mut Buffer,
+        state: &mut TextAreaState,
+        mask_char: char,
+    ) {
+        let lines = self.wrapped_lines(area.width);
+        let scroll = self.effective_scroll(area.height, &lines, state.scroll);
+        state.scroll = scroll;
+
+        let start = scroll as usize;
+        let end = (scroll + area.height).min(lines.len() as u16) as usize;
+        self.render_lines_masked(area, buf, &lines, start..end, mask_char);
+    }
+
     fn render_lines(
         &self,
         area: Rect,
@@ -1191,6 +1202,26 @@ impl TextArea {
                 let style = base_style.patch(crate::theme::accent_style());
                 buf.set_string(area.x + x_off, y, styled, style);
             }
+        }
+    }
+
+    fn render_lines_masked(
+        &self,
+        area: Rect,
+        buf: &mut Buffer,
+        lines: &[Range<usize>],
+        range: std::ops::Range<usize>,
+        mask_char: char,
+    ) {
+        for (row, idx) in range.enumerate() {
+            let r = &lines[idx];
+            let y = area.y + row as u16;
+            let line_range = r.start..r.end - 1;
+            let masked = self.text[line_range.clone()]
+                .chars()
+                .map(|_| mask_char)
+                .collect::<String>();
+            buf.set_string(area.x, y, &masked, Style::default());
         }
     }
 }
@@ -1337,6 +1368,21 @@ mod tests {
         t.set_cursor(t.text().len());
         t.delete_forward(1);
         assert_eq!(t.text(), "b");
+    }
+
+    #[test]
+    fn delete_forward_deletes_element_at_left_edge() {
+        let mut t = TextArea::new();
+        t.insert_str("a");
+        t.insert_element("<element>");
+        t.insert_str("b");
+
+        let elem_start = t.elements[0].range.start;
+        t.set_cursor(elem_start);
+        t.delete_forward(1);
+
+        assert_eq!(t.text(), "ab");
+        assert_eq!(t.cursor(), elem_start);
     }
 
     #[test]

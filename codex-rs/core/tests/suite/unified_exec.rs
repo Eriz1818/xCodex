@@ -211,6 +211,7 @@ async fn unified_exec_intercepts_apply_patch_exec_command() -> Result<()> {
             effort: None,
             summary: ReasoningSummary::Auto,
             collaboration_mode: None,
+            personality: None,
         })
         .await?;
 
@@ -339,6 +340,7 @@ async fn unified_exec_emits_exec_command_begin_event() -> Result<()> {
             effort: None,
             summary: ReasoningSummary::Auto,
             collaboration_mode: None,
+            personality: None,
         })
         .await?;
 
@@ -416,6 +418,7 @@ async fn unified_exec_resolves_relative_workdir() -> Result<()> {
             effort: None,
             summary: ReasoningSummary::Auto,
             collaboration_mode: None,
+            personality: None,
         })
         .await?;
 
@@ -496,6 +499,7 @@ async fn unified_exec_respects_workdir_override() -> Result<()> {
             effort: None,
             summary: ReasoningSummary::Auto,
             collaboration_mode: None,
+            personality: None,
         })
         .await?;
 
@@ -588,6 +592,7 @@ async fn unified_exec_emits_exec_command_end_event() -> Result<()> {
             effort: None,
             summary: ReasoningSummary::Auto,
             collaboration_mode: None,
+            personality: None,
         })
         .await?;
 
@@ -662,6 +667,7 @@ async fn unified_exec_emits_output_delta_for_exec_command() -> Result<()> {
             effort: None,
             summary: ReasoningSummary::Auto,
             collaboration_mode: None,
+            personality: None,
         })
         .await?;
 
@@ -737,6 +743,7 @@ async fn unified_exec_full_lifecycle_with_background_end_event() -> Result<()> {
             effort: None,
             summary: ReasoningSummary::Auto,
             collaboration_mode: None,
+            personality: None,
         })
         .await?;
 
@@ -866,6 +873,7 @@ async fn unified_exec_emits_terminal_interaction_for_write_stdin() -> Result<()>
             effort: None,
             summary: ReasoningSummary::Auto,
             collaboration_mode: None,
+            personality: None,
         })
         .await?;
 
@@ -1002,6 +1010,7 @@ async fn unified_exec_terminal_interaction_captures_delayed_output() -> Result<(
             effort: None,
             summary: ReasoningSummary::Auto,
             collaboration_mode: None,
+            personality: None,
         })
         .await?;
 
@@ -1161,6 +1170,7 @@ async fn unified_exec_emits_one_begin_and_one_end_event() -> Result<()> {
             effort: None,
             summary: ReasoningSummary::Auto,
             collaboration_mode: None,
+            personality: None,
         })
         .await?;
 
@@ -1258,6 +1268,7 @@ async fn exec_command_reports_chunk_and_exit_metadata() -> Result<()> {
             effort: None,
             summary: ReasoningSummary::Auto,
             collaboration_mode: None,
+            personality: None,
         })
         .await?;
 
@@ -1375,6 +1386,7 @@ async fn unified_exec_defaults_to_pipe() -> Result<()> {
             effort: None,
             summary: ReasoningSummary::Auto,
             collaboration_mode: None,
+            personality: None,
         })
         .await?;
 
@@ -1464,6 +1476,7 @@ async fn unified_exec_can_enable_tty() -> Result<()> {
             effort: None,
             summary: ReasoningSummary::Auto,
             collaboration_mode: None,
+            personality: None,
         })
         .await?;
 
@@ -1544,6 +1557,7 @@ async fn unified_exec_respects_early_exit_notifications() -> Result<()> {
             effort: None,
             summary: ReasoningSummary::Auto,
             collaboration_mode: None,
+            personality: None,
         })
         .await?;
 
@@ -1674,6 +1688,7 @@ async fn write_stdin_returns_exit_metadata_and_clears_session() -> Result<()> {
             effort: None,
             summary: ReasoningSummary::Auto,
             collaboration_mode: None,
+            personality: None,
         })
         .await?;
 
@@ -1841,6 +1856,7 @@ async fn unified_exec_emits_end_event_when_session_dies_via_stdin() -> Result<()
             effort: None,
             summary: ReasoningSummary::Auto,
             collaboration_mode: None,
+            personality: None,
         })
         .await?;
 
@@ -1917,6 +1933,7 @@ async fn unified_exec_closes_long_running_session_at_turn_end() -> Result<()> {
             effort: None,
             summary: ReasoningSummary::Auto,
             collaboration_mode: None,
+            personality: None,
         })
         .await?;
 
@@ -2038,6 +2055,7 @@ async fn unified_exec_reuses_session_via_stdin() -> Result<()> {
             effort: None,
             summary: ReasoningSummary::Auto,
             collaboration_mode: None,
+            personality: None,
         })
         .await?;
 
@@ -2172,6 +2190,7 @@ PY
             effort: None,
             summary: ReasoningSummary::Auto,
             collaboration_mode: None,
+            personality: None,
         })
         .await?;
     // This is a worst case scenario for the truncate logic.
@@ -2285,6 +2304,7 @@ async fn unified_exec_timeout_and_followup_poll() -> Result<()> {
             effort: None,
             summary: ReasoningSummary::Auto,
             collaboration_mode: None,
+            personality: None,
         })
         .await?;
 
@@ -2380,6 +2400,7 @@ PY
             effort: None,
             summary: ReasoningSummary::Auto,
             collaboration_mode: None,
+            personality: None,
         })
         .await?;
 
@@ -2461,6 +2482,7 @@ async fn unified_exec_runs_under_sandbox() -> Result<()> {
             effort: None,
             summary: ReasoningSummary::Auto,
             collaboration_mode: None,
+            personality: None,
         })
         .await?;
 
@@ -2564,6 +2586,7 @@ async fn unified_exec_python_prompt_under_seatbelt() -> Result<()> {
             effort: None,
             summary: ReasoningSummary::Auto,
             collaboration_mode: None,
+            personality: None,
         })
         .await?;
 
@@ -2658,6 +2681,7 @@ async fn unified_exec_runs_on_all_platforms() -> Result<()> {
             effort: None,
             summary: ReasoningSummary::Auto,
             collaboration_mode: None,
+            personality: None,
         })
         .await?;
 
@@ -2880,6 +2904,7 @@ async fn unified_exec_prunes_exited_processes_first() -> Result<()> {
             effort: None,
             summary: ReasoningSummary::Auto,
             collaboration_mode: None,
+            personality: None,
         })
         .await?;
 

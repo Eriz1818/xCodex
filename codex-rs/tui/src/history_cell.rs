@@ -19,6 +19,7 @@ use crate::exec_cell::output_lines;
 use crate::exec_cell::spinner;
 use crate::exec_command::relativize_to_home;
 use crate::exec_command::strip_bash_lc_and_escape;
+use crate::live_wrap::take_prefix_by_width;
 use crate::markdown::append_markdown;
 use crate::render::line_utils::line_to_static;
 use crate::render::line_utils::prefix_lines;
@@ -38,6 +39,8 @@ use codex_core::config::Config;
 use codex_core::protocol::FileChange;
 use codex_core::protocol::McpInvocation;
 use codex_core::protocol::SessionConfiguredEvent;
+use codex_core::web_search::web_search_detail;
+use codex_protocol::models::WebSearchAction;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::plan_tool::PlanItemArg;
 use codex_protocol::plan_tool::StepStatus;
@@ -63,6 +66,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 use std::time::Instant;
 use tracing::error;
+use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 
 fn transcript_spacer_line() -> Line<'static> {
@@ -562,7 +566,6 @@ pub(crate) fn new_unified_exec_interaction(
 }
 
 #[derive(Debug)]
-// Live-only wait cell that shimmers while we poll; flushes into a static entry later.
 #[allow(dead_code)]
 pub(crate) struct UnifiedExecWaitCell {
     command_display: Option<String>,
@@ -602,17 +605,15 @@ impl HistoryCell for UnifiedExecWaitCell {
         if width == 0 {
             return Vec::new();
         }
-        let wrap_width = width as usize;
 
+        let wrap_width = width as usize;
         let mut header_spans = vec!["• ".dim()];
         if self.animations_enabled {
             header_spans.extend(shimmer_spans("Waiting for background terminal"));
         } else {
             header_spans.push("Waiting for background terminal".bold());
         }
-        if let Some(command) = &self.command_display
-            && !command.is_empty()
-        {
+        if let Some(command) = &self.command_display {
             header_spans.push(" · ".dim());
             header_spans.push(command.clone().dim());
         }
@@ -629,12 +630,146 @@ impl HistoryCell for UnifiedExecWaitCell {
     }
 }
 
-#[allow(dead_code)]
 pub(crate) fn new_unified_exec_wait_live(
     command_display: Option<String>,
     animations_enabled: bool,
 ) -> UnifiedExecWaitCell {
     UnifiedExecWaitCell::new(command_display, animations_enabled)
+}
+
+#[derive(Debug)]
+struct UnifiedExecProcessesCell {
+    processes: Vec<UnifiedExecProcessDetails>,
+}
+
+impl UnifiedExecProcessesCell {
+    fn new(processes: Vec<UnifiedExecProcessDetails>) -> Self {
+        Self { processes }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct UnifiedExecProcessDetails {
+    pub(crate) command_display: String,
+    pub(crate) recent_chunks: Vec<String>,
+}
+
+impl HistoryCell for UnifiedExecProcessesCell {
+    fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
+        if width == 0 {
+            return Vec::new();
+        }
+
+        let wrap_width = width as usize;
+        let max_processes = 16usize;
+        let mut out: Vec<Line<'static>> = Vec::new();
+        out.push(vec!["Background terminals".bold()].into());
+        out.push("".into());
+
+        if self.processes.is_empty() {
+            out.push("  • No background terminals running.".italic().into());
+            return out;
+        }
+
+        let prefix = "  • ";
+        let prefix_width = UnicodeWidthStr::width(prefix);
+        let truncation_suffix = " [...]";
+        let truncation_suffix_width = UnicodeWidthStr::width(truncation_suffix);
+        let mut shown = 0usize;
+        for process in &self.processes {
+            if shown >= max_processes {
+                break;
+            }
+            let command = &process.command_display;
+            let (snippet, snippet_truncated) = {
+                let (first_line, has_more_lines) = match command.split_once('\n') {
+                    Some((first, _)) => (first, true),
+                    None => (command.as_str(), false),
+                };
+                let max_graphemes = 80;
+                let mut graphemes = first_line.grapheme_indices(true);
+                if let Some((byte_index, _)) = graphemes.nth(max_graphemes) {
+                    (first_line[..byte_index].to_string(), true)
+                } else {
+                    (first_line.to_string(), has_more_lines)
+                }
+            };
+            if wrap_width <= prefix_width {
+                out.push(Line::from(prefix.dim()));
+                shown += 1;
+                continue;
+            }
+            let budget = wrap_width.saturating_sub(prefix_width);
+            let mut needs_suffix = snippet_truncated;
+            if !needs_suffix {
+                let (_, remainder, _) = take_prefix_by_width(&snippet, budget);
+                if !remainder.is_empty() {
+                    needs_suffix = true;
+                }
+            }
+            if needs_suffix && budget > truncation_suffix_width {
+                let available = budget.saturating_sub(truncation_suffix_width);
+                let (truncated, _, _) = take_prefix_by_width(&snippet, available);
+                out.push(vec![prefix.dim(), truncated.cyan(), truncation_suffix.dim()].into());
+            } else {
+                let (truncated, _, _) = take_prefix_by_width(&snippet, budget);
+                out.push(vec![prefix.dim(), truncated.cyan()].into());
+            }
+
+            let chunk_prefix_first = "    ↳ ";
+            let chunk_prefix_next = "      ";
+            for (idx, chunk) in process.recent_chunks.iter().enumerate() {
+                let chunk_prefix = if idx == 0 {
+                    chunk_prefix_first
+                } else {
+                    chunk_prefix_next
+                };
+                let chunk_prefix_width = UnicodeWidthStr::width(chunk_prefix);
+                if wrap_width <= chunk_prefix_width {
+                    out.push(Line::from(chunk_prefix.dim()));
+                    continue;
+                }
+                let budget = wrap_width.saturating_sub(chunk_prefix_width);
+                let (truncated, remainder, _) = take_prefix_by_width(chunk, budget);
+                if !remainder.is_empty() && budget > truncation_suffix_width {
+                    let available = budget.saturating_sub(truncation_suffix_width);
+                    let (shorter, _, _) = take_prefix_by_width(chunk, available);
+                    out.push(
+                        vec![chunk_prefix.dim(), shorter.dim(), truncation_suffix.dim()].into(),
+                    );
+                } else {
+                    out.push(vec![chunk_prefix.dim(), truncated.dim()].into());
+                }
+            }
+            shown += 1;
+        }
+
+        let remaining = self.processes.len().saturating_sub(shown);
+        if remaining > 0 {
+            let more_text = format!("... and {remaining} more running");
+            if wrap_width <= prefix_width {
+                out.push(Line::from(prefix.dim()));
+            } else {
+                let budget = wrap_width.saturating_sub(prefix_width);
+                let (truncated, _, _) = take_prefix_by_width(&more_text, budget);
+                out.push(vec![prefix.dim(), truncated.dim()].into());
+            }
+        }
+
+        out
+    }
+
+    fn desired_height(&self, width: u16) -> u16 {
+        self.display_lines(width).len() as u16
+    }
+}
+
+pub(crate) fn new_unified_exec_processes_output(
+    processes: Vec<UnifiedExecProcessDetails>,
+) -> CompositeHistoryCell {
+    let command = PlainHistoryCell::new(vec!["/ps".magenta().into()]);
+    let summary = UnifiedExecProcessesCell::new(processes);
+    CompositeHistoryCell::new(vec![Box::new(command), Box::new(summary)])
 }
 
 fn truncate_exec_snippet(full_cmd: &str) -> String {
@@ -1361,49 +1496,147 @@ pub(crate) fn new_active_mcp_tool_call(
     McpToolCallCell::new(call_id, invocation, animations_enabled)
 }
 
-pub(crate) fn new_web_search_call(query: String) -> PrefixedWrappedHistoryCell {
-    let text: Text<'static> = Line::from(vec!["Searched".bold(), " ".into(), query.into()]).into();
-    PrefixedWrappedHistoryCell::new(text, "• ".dim(), "  ")
+fn web_search_header(completed: bool) -> &'static str {
+    if completed {
+        "Searched"
+    } else {
+        "Searching the web"
+    }
 }
 
-/// If the first content is an image, return a new cell with the image.
-/// TODO(rgwood-dd): Handle images properly even if they're not the first result.
+#[derive(Debug)]
+pub(crate) struct WebSearchCell {
+    call_id: String,
+    query: String,
+    action: Option<WebSearchAction>,
+    start_time: Instant,
+    completed: bool,
+    animations_enabled: bool,
+}
+
+impl WebSearchCell {
+    pub(crate) fn new(
+        call_id: String,
+        query: String,
+        action: Option<WebSearchAction>,
+        animations_enabled: bool,
+    ) -> Self {
+        Self {
+            call_id,
+            query,
+            action,
+            start_time: Instant::now(),
+            completed: false,
+            animations_enabled,
+        }
+    }
+
+    pub(crate) fn call_id(&self) -> &str {
+        &self.call_id
+    }
+
+    pub(crate) fn update(&mut self, action: WebSearchAction, query: String) {
+        self.action = Some(action);
+        self.query = query;
+    }
+
+    pub(crate) fn complete(&mut self) {
+        self.completed = true;
+    }
+}
+
+impl HistoryCell for WebSearchCell {
+    fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
+        let bullet = if self.completed {
+            "•".dim()
+        } else {
+            spinner(Some(self.start_time), self.animations_enabled)
+        };
+        let header = web_search_header(self.completed);
+        let detail = web_search_detail(self.action.as_ref(), &self.query);
+        let text: Text<'static> = if detail.is_empty() {
+            Line::from(vec![header.bold()]).into()
+        } else {
+            Line::from(vec![header.bold(), " ".into(), detail.into()]).into()
+        };
+        PrefixedWrappedHistoryCell::new(text, vec![bullet, " ".into()], "  ").display_lines(width)
+    }
+}
+
+pub(crate) fn new_active_web_search_call(
+    call_id: String,
+    query: String,
+    animations_enabled: bool,
+) -> WebSearchCell {
+    WebSearchCell::new(call_id, query, None, animations_enabled)
+}
+
+pub(crate) fn new_web_search_call(
+    call_id: String,
+    query: String,
+    action: WebSearchAction,
+) -> WebSearchCell {
+    let mut cell = WebSearchCell::new(call_id, query, Some(action), false);
+    cell.complete();
+    cell
+}
+
+/// Returns an additional history cell if an MCP tool result includes a decodable image.
+///
+/// This intentionally returns at most one cell: the first image in `CallToolResult.content` that
+/// successfully base64-decodes and parses as an image. This is used as a lightweight “image output
+/// exists” affordance separate from the main MCP tool call cell.
+///
+/// Manual testing tip:
+/// - Run the rmcp stdio test server (`codex-rs/rmcp-client/src/bin/test_stdio_server.rs`) and
+///   register it as an MCP server via `codex mcp add`.
+/// - Use its `image_scenario` tool with cases like `text_then_image`,
+///   `invalid_base64_then_image`, or `invalid_image_bytes_then_image` to ensure this path triggers
+///   even when the first block is not a valid image.
 fn try_new_completed_mcp_tool_call_with_image_output(
     result: &Result<mcp_types::CallToolResult, String>,
 ) -> Option<CompletedMcpToolCallWithImageOutput> {
-    match result {
-        Ok(mcp_types::CallToolResult { content, .. }) => {
-            if let Some(mcp_types::ContentBlock::ImageContent(image)) = content.first() {
-                let raw_data = match base64::engine::general_purpose::STANDARD.decode(&image.data) {
-                    Ok(data) => data,
-                    Err(e) => {
-                        error!("Failed to decode image data: {e}");
-                        return None;
-                    }
-                };
-                let reader = match ImageReader::new(Cursor::new(raw_data)).with_guessed_format() {
-                    Ok(reader) => reader,
-                    Err(e) => {
-                        error!("Failed to guess image format: {e}");
-                        return None;
-                    }
-                };
+    let image = result
+        .as_ref()
+        .ok()?
+        .content
+        .iter()
+        .find_map(decode_mcp_image)?;
 
-                let image = match reader.decode() {
-                    Ok(image) => image,
-                    Err(e) => {
-                        error!("Image decoding failed: {e}");
-                        return None;
-                    }
-                };
+    Some(CompletedMcpToolCallWithImageOutput { _image: image })
+}
 
-                Some(CompletedMcpToolCallWithImageOutput { _image: image })
-            } else {
-                None
-            }
-        }
-        _ => None,
-    }
+/// Decodes an MCP `ImageContent` block into an in-memory image.
+///
+/// Returns `None` when the block is not an image, when base64 decoding fails, when the format
+/// cannot be inferred, or when the image decoder rejects the bytes.
+fn decode_mcp_image(block: &mcp_types::ContentBlock) -> Option<DynamicImage> {
+    let image = match block {
+        mcp_types::ContentBlock::ImageContent(image) => image,
+        _ => return None,
+    };
+    let raw_data = base64::engine::general_purpose::STANDARD
+        .decode(&image.data)
+        .map_err(|e| {
+            error!("Failed to decode image data: {e}");
+            e
+        })
+        .ok()?;
+    let reader = ImageReader::new(Cursor::new(raw_data))
+        .with_guessed_format()
+        .map_err(|e| {
+            error!("Failed to guess image format: {e}");
+            e
+        })
+        .ok()?;
+
+    reader
+        .decode()
+        .map_err(|e| {
+            error!("Image decoding failed: {e}");
+            e
+        })
+        .ok()
 }
 
 #[allow(clippy::disallowed_methods)]
@@ -1767,6 +2000,9 @@ mod tests {
     use codex_core::config::types::McpServerConfig;
     use codex_core::config::types::McpServerTransportConfig;
     use codex_core::protocol::McpAuthStatus;
+
+    use codex_protocol::models::WebSearchAction;
+
     use codex_protocol::parse_command::ParsedCommand;
     use dirs::home_dir;
     use pretty_assertions::assert_eq;
@@ -1776,9 +2012,12 @@ mod tests {
     use codex_core::protocol::ExecCommandSource;
     use mcp_types::CallToolResult;
     use mcp_types::ContentBlock;
+    use mcp_types::ImageContent;
     use mcp_types::TextContent;
     use mcp_types::Tool;
     use mcp_types::ToolInputSchema;
+
+    const SMALL_PNG_BASE64: &str = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg==";
     async fn test_config() -> Config {
         let codex_home = std::env::temp_dir();
         ConfigBuilder::default()
@@ -1804,12 +2043,22 @@ mod tests {
         render_lines(&cell.transcript_lines(u16::MAX))
     }
 
+    #[allow(dead_code)]
     fn exec_entries(commands: Vec<String>) -> Vec<BackgroundActivityEntry> {
         commands
             .into_iter()
             .enumerate()
             .map(|(idx, command)| BackgroundActivityEntry::new(format!("exec-{idx}"), command))
             .collect()
+    }
+
+    fn image_block(data: &str) -> ContentBlock {
+        ContentBlock::ImageContent(ImageContent {
+            annotations: None,
+            data: data.to_string(),
+            mime_type: "image/png".into(),
+            r#type: "image".into(),
+        })
     }
 
     #[test]
@@ -1846,36 +2095,58 @@ mod tests {
 
     #[test]
     fn ps_output_multiline_snapshot() {
-        let cell = xcodex_new_unified_exec_processes_output(
-            exec_entries(vec![
-                "echo hello\nand then some extra text".to_string(),
-                "rg \"foo\" src".to_string(),
-            ]),
-            Vec::new(),
-        );
+        let cell = new_unified_exec_processes_output(vec![
+            UnifiedExecProcessDetails {
+                command_display: "echo hello\nand then some extra text".to_string(),
+                recent_chunks: vec!["hello".to_string(), "done".to_string()],
+            },
+            UnifiedExecProcessDetails {
+                command_display: "rg \"foo\" src".to_string(),
+                recent_chunks: vec!["src/main.rs:12:foo".to_string()],
+            },
+        ]);
+
         let rendered = render_lines(&cell.display_lines(40)).join("\n");
         insta::assert_snapshot!(rendered);
     }
 
     #[test]
     fn ps_output_long_command_snapshot() {
-        let cell = xcodex_new_unified_exec_processes_output(
-            exec_entries(vec![String::from(
+        let cell = new_unified_exec_processes_output(vec![UnifiedExecProcessDetails {
+            command_display: String::from(
                 "rg \"foo\" src --glob '**/*.rs' --max-count 1000 --no-ignore --hidden --follow --glob '!target/**'",
-            )]),
-            Vec::new(),
-        );
+            ),
+            recent_chunks: vec!["searching...".to_string()],
+        }]);
+
         let rendered = render_lines(&cell.display_lines(36)).join("\n");
         insta::assert_snapshot!(rendered);
     }
 
     #[test]
     fn ps_output_many_sessions_snapshot() {
-        let cell = xcodex_new_unified_exec_processes_output(
-            exec_entries((0..20).map(|idx| format!("command {idx}")).collect()),
-            Vec::new(),
+        let cell = new_unified_exec_processes_output(
+            (0..20)
+                .map(|idx| UnifiedExecProcessDetails {
+                    command_display: format!("command {idx}"),
+                    recent_chunks: Vec::new(),
+                })
+                .collect(),
         );
         let rendered = render_lines(&cell.display_lines(32)).join("\n");
+        insta::assert_snapshot!(rendered);
+    }
+
+    #[test]
+    fn ps_output_chunk_leading_whitespace_snapshot() {
+        let cell = new_unified_exec_processes_output(vec![UnifiedExecProcessDetails {
+            command_display: "just fix".to_string(),
+            recent_chunks: vec![
+                "  indented first".to_string(),
+                "    more indented".to_string(),
+            ],
+        }]);
+        let rendered = render_lines(&cell.display_lines(60)).join("\n");
         insta::assert_snapshot!(rendered);
     }
 
@@ -2006,8 +2277,12 @@ mod tests {
 
     #[test]
     fn web_search_history_cell_snapshot() {
+        let query =
+            "example search query with several generic words to exercise wrapping".to_string();
         let cell = new_web_search_call(
-            "example search query with several generic words to exercise wrapping".to_string(),
+            "call-1".to_string(),
+            query.clone(),
+            WebSearchAction::Search { query: Some(query) },
         );
         let rendered = render_lines(&cell.display_lines(64)).join("\n");
 
@@ -2016,8 +2291,12 @@ mod tests {
 
     #[test]
     fn web_search_history_cell_wraps_with_indented_continuation() {
+        let query =
+            "example search query with several generic words to exercise wrapping".to_string();
         let cell = new_web_search_call(
-            "example search query with several generic words to exercise wrapping".to_string(),
+            "call-1".to_string(),
+            query.clone(),
+            WebSearchAction::Search { query: Some(query) },
         );
         let rendered = render_lines(&cell.display_lines(64));
 
@@ -2032,7 +2311,12 @@ mod tests {
 
     #[test]
     fn web_search_history_cell_short_query_does_not_wrap() {
-        let cell = new_web_search_call("short query".to_string());
+        let query = "short query".to_string();
+        let cell = new_web_search_call(
+            "call-1".to_string(),
+            query.clone(),
+            WebSearchAction::Search { query: Some(query) },
+        );
         let rendered = render_lines(&cell.display_lines(64));
 
         assert_eq!(rendered, vec!["• Searched short query".to_string()]);
@@ -2040,8 +2324,12 @@ mod tests {
 
     #[test]
     fn web_search_history_cell_transcript_snapshot() {
+        let query =
+            "example search query with several generic words to exercise wrapping".to_string();
         let cell = new_web_search_call(
-            "example search query with several generic words to exercise wrapping".to_string(),
+            "call-1".to_string(),
+            query.clone(),
+            WebSearchAction::Search { query: Some(query) },
         );
         let rendered = render_lines(&cell.transcript_lines(64)).join("\n");
 
@@ -2095,6 +2383,63 @@ mod tests {
         let rendered = render_lines(&cell.display_lines(80)).join("\n");
 
         insta::assert_snapshot!(rendered);
+    }
+
+    #[test]
+    fn completed_mcp_tool_call_image_after_text_returns_extra_cell() {
+        let invocation = McpInvocation {
+            server: "image".into(),
+            tool: "generate".into(),
+            arguments: Some(json!({
+                "prompt": "tiny image",
+            })),
+        };
+
+        let result = CallToolResult {
+            content: vec![
+                ContentBlock::TextContent(TextContent {
+                    annotations: None,
+                    text: "Here is the image:".into(),
+                    r#type: "text".into(),
+                }),
+                image_block(SMALL_PNG_BASE64),
+            ],
+            is_error: None,
+            structured_content: None,
+        };
+
+        let mut cell = new_active_mcp_tool_call("call-image".into(), invocation, true);
+        let extra_cell = cell
+            .complete(Duration::from_millis(25), Ok(result))
+            .expect("expected image cell");
+
+        let rendered = render_lines(&extra_cell.display_lines(80));
+        assert_eq!(rendered, vec!["tool result (image output)"]);
+    }
+
+    #[test]
+    fn completed_mcp_tool_call_skips_invalid_image_blocks() {
+        let invocation = McpInvocation {
+            server: "image".into(),
+            tool: "generate".into(),
+            arguments: Some(json!({
+                "prompt": "tiny image",
+            })),
+        };
+
+        let result = CallToolResult {
+            content: vec![image_block("not-base64"), image_block(SMALL_PNG_BASE64)],
+            is_error: None,
+            structured_content: None,
+        };
+
+        let mut cell = new_active_mcp_tool_call("call-image-2".into(), invocation, true);
+        let extra_cell = cell
+            .complete(Duration::from_millis(25), Ok(result))
+            .expect("expected image cell");
+
+        let rendered = render_lines(&extra_cell.display_lines(80));
+        assert_eq!(rendered, vec!["tool result (image output)"]);
     }
 
     #[test]

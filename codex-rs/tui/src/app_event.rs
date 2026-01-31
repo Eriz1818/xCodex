@@ -10,6 +10,7 @@
 
 use std::path::PathBuf;
 
+use codex_chatgpt::connectors::AppInfo;
 use codex_common::approval_presets::ApprovalPreset;
 use codex_core::git_info::GitWorktreeEntry;
 use codex_core::protocol::Event;
@@ -27,7 +28,8 @@ use codex_core::config::types::XtremeMode;
 use codex_core::features::Feature;
 use codex_core::protocol::AskForApproval;
 use codex_core::protocol::SandboxPolicy;
-use codex_protocol::config_types::CollaborationMode;
+use codex_protocol::config_types::CollaborationModeMask;
+use codex_protocol::config_types::Personality;
 use codex_protocol::openai_models::ReasoningEffort;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -43,14 +45,19 @@ pub(crate) enum WindowsSandboxFallbackReason {
     ElevationFailed,
 }
 
+#[derive(Debug, Clone)]
+pub(crate) struct ConnectorsSnapshot {
+    pub(crate) connectors: Vec<AppInfo>,
+}
+
 #[allow(clippy::large_enum_variant)]
 #[derive(Debug)]
 pub(crate) enum AppEvent {
     CodexEvent(Event),
-    ExternalApprovalRequest {
-        thread_id: ThreadId,
-        event: Event,
-    },
+    /// Open the agent picker for switching active threads.
+    OpenAgentPicker,
+    /// Switch the active thread to the selected agent.
+    SelectAgentThread(ThreadId),
 
     /// Start a new session.
     NewSession,
@@ -97,6 +104,9 @@ pub(crate) enum AppEvent {
 
     /// Result of refreshing rate limits
     RateLimitSnapshotFetched(RateLimitSnapshot),
+
+    /// Result of prefetching connectors.
+    ConnectorsLoaded(Result<ConnectorsSnapshot, String>),
 
     /// Result of computing a `/diff` command.
     DiffResult(String),
@@ -200,6 +210,15 @@ pub(crate) enum AppEvent {
         sample: Vec<String>,
     },
 
+    /// Open the app link view in the bottom pane.
+    OpenAppLink {
+        title: String,
+        description: Option<String>,
+        instructions: String,
+        url: String,
+        is_installed: bool,
+    },
+
     InsertHistoryCell(Box<dyn HistoryCell>),
 
     StartCommitAnimation,
@@ -214,8 +233,11 @@ pub(crate) enum AppEvent {
 
     /// Update whether agent reasoning is displayed in the TUI.
     UpdateHideAgentReasoning(bool),
-    /// Update the current collaboration mode in the running app and widget.
-    UpdateCollaborationMode(CollaborationMode),
+    /// Update the active collaboration mask in the running app and widget.
+    UpdateCollaborationMode(CollaborationModeMask),
+
+    /// Update the current personality in the running app and widget.
+    UpdatePersonality(Personality),
 
     /// Persist the selected model and reasoning effort to the appropriate config.
     PersistModelSelection {
@@ -225,6 +247,11 @@ pub(crate) enum AppEvent {
 
     /// Persist the agent reasoning visibility preference to the appropriate config.
     PersistHideAgentReasoning(bool),
+
+    /// Persist the selected personality to the appropriate config.
+    PersistPersonalitySelection {
+        personality: Personality,
+    },
 
     /// Persist status bar item toggles to the appropriate config.
     PersistStatusBarGitOptions {
@@ -350,6 +377,9 @@ pub(crate) enum AppEvent {
         mode: WindowsSandboxEnableMode,
     },
 
+    /// Update the Windows sandbox feature mode without changing approval presets.
+    #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+
     /// Update the current approval policy in the running app and widget.
     UpdateAskForApprovalPolicy(AskForApproval),
 
@@ -420,6 +450,12 @@ pub(crate) enum AppEvent {
 
     /// Open the custom prompt option from the review popup.
     OpenReviewCustomPrompt,
+
+    /// Submit a user message with an explicit collaboration mask.
+    SubmitUserMessageWithMode {
+        text: String,
+        collaboration_mode: CollaborationModeMask,
+    },
 
     /// Open the approval popup.
     FullScreenApprovalRequest(ApprovalRequest),

@@ -23,10 +23,6 @@ pub(crate) async fn try_handle_event(
                 Ok(None)
             }
         }
-        AppEvent::ExternalApprovalRequest { thread_id, event } => {
-            handle_external_approval_request(app, thread_id, event);
-            Ok(None)
-        }
         AppEvent::CodexOp(op) => {
             handle_codex_op(app, op).await;
             Ok(None)
@@ -486,6 +482,7 @@ pub(crate) fn resume_command(thread_id: ThreadId) -> String {
 /// `thread_id` is the external thread that issued the approval request.
 /// `event` is the approval request event whose id is rewritten so replies
 /// can be routed back to the correct thread.
+#[allow(dead_code)]
 fn handle_external_approval_request(app: &mut App, thread_id: ThreadId, mut event: Event) {
     match &mut event.msg {
         EventMsg::RequestUserInput(ev) => {

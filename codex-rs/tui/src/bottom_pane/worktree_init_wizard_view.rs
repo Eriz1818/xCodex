@@ -708,10 +708,12 @@ impl WorktreeInitWizardView {
                     cwd: Some(path.clone()),
                     approval_policy: None,
                     sandbox_policy: None,
+                    windows_sandbox_level: None,
                     model: None,
                     effort: None,
                     summary: None,
                     collaboration_mode: None,
+                    personality: None,
                 },
             ));
             app_event_tx.send(AppEvent::CodexOp(codex_core::protocol::Op::ListSkills {

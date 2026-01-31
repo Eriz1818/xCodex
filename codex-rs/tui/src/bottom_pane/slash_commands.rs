@@ -15,12 +15,15 @@ pub(crate) fn builtins_for_input(
     personality_command_enabled: bool,
     allow_elevate_sandbox: bool,
 ) -> Vec<(&'static str, SlashCommand)> {
-    let _ = connectors_enabled;
-    let _ = personality_command_enabled;
     built_in_slash_commands()
         .into_iter()
         .filter(|(_, cmd)| allow_elevate_sandbox || *cmd != SlashCommand::ElevateSandbox)
-        .filter(|(_, cmd)| collaboration_modes_enabled || *cmd != SlashCommand::Collab)
+        .filter(|(_, cmd)| {
+            collaboration_modes_enabled
+                || !matches!(*cmd, SlashCommand::Collab | SlashCommand::Plan)
+        })
+        .filter(|(_, cmd)| connectors_enabled || *cmd != SlashCommand::Apps)
+        .filter(|(_, cmd)| personality_command_enabled || *cmd != SlashCommand::Personality)
         .collect()
 }
 
@@ -44,7 +47,6 @@ pub(crate) fn find_builtin_command(
 }
 
 /// Whether any visible built-in fuzzily matches the provided prefix.
-#[allow(dead_code)]
 pub(crate) fn has_builtin_prefix(
     name: &str,
     collaboration_modes_enabled: bool,
