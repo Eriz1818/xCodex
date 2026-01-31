@@ -147,6 +147,10 @@ impl ThemeSelectorOverlay {
             .position(|entry| entry.name == current_theme)
             .unwrap_or(0);
 
+        crate::render::highlight::set_syntax_highlighting_enabled(
+            config.tui_transcript_syntax_highlight,
+        );
+
         Self {
             app_event_tx,
             config,
@@ -237,7 +241,7 @@ impl ThemeSelectorOverlay {
             vec![
                 Span::from(KEY_CTRL_P),
                 "  ".into(),
-                format!("toggle prompt highlight ({prompt_highlight})").into(),
+                format!("toggle history prompt highlight ({prompt_highlight})").into(),
             ]
             .into(),
             vec![
@@ -641,6 +645,24 @@ impl ThemeSelectorOverlay {
                 .copied()
                 .unwrap_or(SAMPLE_CODE_TABS[0]);
 
+            let mut changes = HashMap::new();
+            let (path, unified_diff) = sample_diff_for_tab(sample);
+            changes.insert(
+                path,
+                FileChange::Update {
+                    unified_diff,
+                    move_path: None,
+                },
+            );
+
+            let patch = crate::history_cell::new_patch_event(
+                changes,
+                self.config.cwd.as_path(),
+                self.config.tui_transcript_diff_highlight,
+            );
+            lines.extend(patch.display_lines(area.width));
+            lines.push(Line::from(""));
+
             let mut sample_lines: Vec<Line<'static>> = Vec::new();
             sample_lines.push(sample_code_tabs_line(sample));
             sample_lines.push(Line::from("").style(crate::theme::transcript_style()));
@@ -655,23 +677,6 @@ impl ThemeSelectorOverlay {
 
             let sample_cell = crate::history_cell::AgentMessageCell::new(sample_lines, true);
             lines.extend(sample_cell.display_lines(area.width));
-            lines.push(Line::from(""));
-
-            let mut changes = HashMap::new();
-            changes.insert(
-                PathBuf::from("codex-rs/tui/src/pager_overlay.rs"),
-                FileChange::Update {
-                    unified_diff: "@@ -1,2 +1,2 @@\n-old\n-stale\n+new\n+extra\n".to_string(),
-                    move_path: None,
-                },
-            );
-
-            let patch = crate::history_cell::new_patch_event(
-                changes,
-                self.config.cwd.as_path(),
-                self.config.tui_transcript_diff_highlight,
-            );
-            lines.extend(patch.display_lines(area.width));
             lines.push(Line::from(""));
 
             let patch_failed = crate::history_cell::new_patch_apply_failure(
@@ -1215,6 +1220,7 @@ impl ThemeSelectorOverlay {
                     e if KEY_CTRL_H.is_press(e) => {
                         let next = !self.config.tui_transcript_syntax_highlight;
                         self.config.tui_transcript_syntax_highlight = next;
+                        crate::render::highlight::set_syntax_highlighting_enabled(next);
                         self.app_event_tx
                             .send(AppEvent::UpdateTranscriptSyntaxHighlight(next));
                         self.app_event_tx
@@ -3686,6 +3692,27 @@ fn sample_code_tabs_line(active: SampleCodeTab) -> Line<'static> {
     }
 
     Line::from(spans).style(crate::theme::transcript_style())
+}
+
+fn sample_diff_for_tab(active: SampleCodeTab) -> (PathBuf, String) {
+    match active.fence_lang {
+        "python" => (
+            PathBuf::from("preview/sample.py"),
+            "--- a/preview/sample.py\n+++ b/preview/sample.py\n@@ -1,3 +1,3 @@\n-# Note: keep the greeting soft.\n+# Note: keep the greeting bright.\n def greet(name: str) -> str:\n-    return f\"hello, {name}.\"\n+    return f\"hello, {name}!\"\n".to_string(),
+        ),
+        "javascript" => (
+            PathBuf::from("preview/sample.js"),
+            "--- a/preview/sample.js\n+++ b/preview/sample.js\n@@ -1,4 +1,4 @@\n-// Note: keep greetings minimal.\n+// Note: add a little flair.\n function greet(name) {\n-  return `Hello, ${name}.`;\n+  return `Hello, ${name}!`;\n }\n".to_string(),
+        ),
+        "typescript" => (
+            PathBuf::from("preview/sample.ts"),
+            "--- a/preview/sample.ts\n+++ b/preview/sample.ts\n@@ -1,4 +1,4 @@\n-// Note: no excitement yet.\n+// Note: add excitement.\n function greet(name: string): string {\n-  return `Hello, ${name}.`;\n+  return `Hello, ${name}!`;\n }\n".to_string(),
+        ),
+        _ => (
+            PathBuf::from("preview/sample.rs"),
+            "--- a/preview/sample.rs\n+++ b/preview/sample.rs\n@@ -1,4 +1,4 @@\n-// Note: keep it calm.\n+// Note: add a little sparkle.\n fn greet(name: &str) -> String {\n-    format!(\"Hello, {name}.\")\n+    format!(\"Hello, {name}!\")\n }\n".to_string(),
+        ),
+    }
 }
 
 fn suggested_theme_name(base_theme_name: &str) -> String {
