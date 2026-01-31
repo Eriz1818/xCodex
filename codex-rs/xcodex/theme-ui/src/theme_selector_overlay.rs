@@ -202,6 +202,11 @@ impl ThemeSelectorOverlay {
         } else {
             "off"
         };
+        let syntax_highlight = if self.config.tui_transcript_syntax_highlight {
+            "on"
+        } else {
+            "off"
+        };
         let minimal_composer = if self.config.tui_minimal_composer {
             "on"
         } else {
@@ -221,6 +226,12 @@ impl ThemeSelectorOverlay {
                 Span::from(KEY_CTRL_G),
                 "  ".into(),
                 format!("toggle diff highlight ({diff_highlight})").into(),
+            ]
+            .into(),
+            vec![
+                Span::from(KEY_CTRL_H),
+                "  ".into(),
+                format!("toggle syntax highlight ({syntax_highlight})").into(),
             ]
             .into(),
             vec![
@@ -1198,6 +1209,16 @@ impl ThemeSelectorOverlay {
                             .send(AppEvent::UpdateTranscriptDiffHighlight(next));
                         self.app_event_tx
                             .send(AppEvent::PersistTranscriptDiffHighlight(next));
+                        tui.frame_requester().schedule_frame();
+                        Ok(())
+                    }
+                    e if KEY_CTRL_H.is_press(e) => {
+                        let next = !self.config.tui_transcript_syntax_highlight;
+                        self.config.tui_transcript_syntax_highlight = next;
+                        self.app_event_tx
+                            .send(AppEvent::UpdateTranscriptSyntaxHighlight(next));
+                        self.app_event_tx
+                            .send(AppEvent::PersistTranscriptSyntaxHighlight(next));
                         tui.frame_requester().schedule_frame();
                         Ok(())
                     }
