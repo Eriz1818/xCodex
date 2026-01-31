@@ -12,10 +12,16 @@ use std::path::PathBuf;
 
 use crate::exec_command::relativize_to_home;
 use crate::render::Insets;
+use crate::render::highlight::highlight_code_block_to_lines;
+use crate::render::highlight::supports_highlighting;
+use crate::render::highlight::syntax_highlighting_enabled;
+use crate::render::line_utils::merge_span_style;
 use crate::render::line_utils::prefix_lines;
 use crate::render::renderable::ColumnRenderable;
 use crate::render::renderable::InsetRenderable;
 use crate::render::renderable::Renderable;
+use crate::wrapping::RtOptions;
+use crate::wrapping::word_wrap_line;
 use codex_core::git_info::get_git_repo_root;
 use codex_core::protocol::FileChange;
 
@@ -40,13 +46,13 @@ impl DiffSummary {
 impl Renderable for FileChange {
     fn render(&self, area: Rect, buf: &mut Buffer) {
         let mut lines = vec![];
-        render_change(self, &mut lines, area.width as usize, false);
+        render_change(self, &mut lines, area.width as usize, false, None);
         Paragraph::new(lines).render(area, buf);
     }
 
     fn desired_height(&self, width: u16) -> u16 {
         let mut lines = vec![];
-        render_change(self, &mut lines, width as usize, false);
+        render_change(self, &mut lines, width as usize, false, None);
         lines.len() as u16
     }
 }
@@ -93,6 +99,7 @@ struct Row {
     added: usize,
     removed: usize,
     change: FileChange,
+    lang: Option<String>,
 }
 
 fn collect_rows(changes: &HashMap<PathBuf, FileChange>) -> Vec<Row> {
@@ -116,10 +123,25 @@ fn collect_rows(changes: &HashMap<PathBuf, FileChange>) -> Vec<Row> {
             added,
             removed,
             change: change.clone(),
+            lang: guess_lang_for_path(path),
         });
     }
     rows.sort_by_key(|r| r.path.clone());
     rows
+}
+
+fn guess_lang_for_path(path: &Path) -> Option<String> {
+    let ext = path.extension()?.to_string_lossy();
+    let lang = match ext.as_ref() {
+        "rs" => "rust",
+        "py" => "python",
+        "js" | "mjs" | "cjs" => "javascript",
+        "ts" | "mts" | "cts" => "typescript",
+        "rb" => "ruby",
+        "sh" | "bash" => "bash",
+        _ => return None,
+    };
+    Some(lang.to_string())
 }
 
 fn render_line_count_summary(
@@ -214,7 +236,13 @@ fn render_changes_block(
         }
 
         let mut lines = vec![];
-        render_change(&r.change, &mut lines, wrap_cols - 4, diff_highlight);
+        render_change(
+            &r.change,
+            &mut lines,
+            wrap_cols - 4,
+            diff_highlight,
+            r.lang.as_deref(),
+        );
         out.extend(prefix_lines(lines, "    ".into(), "    ".into()));
     }
 
@@ -226,7 +254,11 @@ fn render_change(
     out: &mut Vec<RtLine<'static>>,
     width: usize,
     diff_highlight: bool,
+    lang: Option<&str>,
 ) {
+    let use_diff_background = diff_highlight;
+    let highlight_lang = lang.filter(|value| supports_highlighting(value));
+    let use_syntax = syntax_highlighting_enabled() && highlight_lang.is_some();
     match change {
         FileChange::Add { content } => {
             let line_number_width = line_number_width(content.lines().count());
@@ -237,7 +269,9 @@ fn render_change(
                     raw,
                     width,
                     line_number_width,
-                    diff_highlight,
+                    use_diff_background,
+                    use_syntax,
+                    highlight_lang,
                 ));
             }
         }
@@ -250,7 +284,9 @@ fn render_change(
                     raw,
                     width,
                     line_number_width,
-                    diff_highlight,
+                    use_diff_background,
+                    use_syntax,
+                    highlight_lang,
                 ));
             }
         }
@@ -303,7 +339,9 @@ fn render_change(
                                     s,
                                     width,
                                     line_number_width,
-                                    diff_highlight,
+                                    use_diff_background,
+                                    use_syntax,
+                                    highlight_lang,
                                 ));
                                 new_ln += 1;
                             }
@@ -315,7 +353,9 @@ fn render_change(
                                     s,
                                     width,
                                     line_number_width,
-                                    diff_highlight,
+                                    use_diff_background,
+                                    use_syntax,
+                                    highlight_lang,
                                 ));
                                 old_ln += 1;
                             }
@@ -327,7 +367,9 @@ fn render_change(
                                     s,
                                     width,
                                     line_number_width,
-                                    diff_highlight,
+                                    use_diff_background,
+                                    use_syntax,
+                                    highlight_lang,
                                 ));
                                 old_ln += 1;
                                 new_ln += 1;
@@ -401,21 +443,89 @@ fn push_wrapped_diff_line(
     width: usize,
     line_number_width: usize,
     diff_highlight: bool,
+    syntax_highlight: bool,
+    lang: Option<&str>,
 ) -> Vec<RtLine<'static>> {
     let ln_str = line_number.to_string();
-    let mut remaining_text: &str = text;
 
     // Reserve a fixed number of spaces (equal to the widest line number plus a
     // trailing spacer) so the sign column stays aligned across the diff block.
     let gutter_width = line_number_width.max(1);
     let prefix_cols = gutter_width + 1;
 
-    let mut first = true;
     let (sign_char, line_style) = match kind {
         DiffLineType::Insert => ('+', style_add(diff_highlight)),
         DiffLineType::Delete => ('-', style_del(diff_highlight)),
         DiffLineType::Context => (' ', style_context()),
     };
+    let content_style = match kind {
+        DiffLineType::Insert => style_add(diff_highlight),
+        DiffLineType::Delete => style_del(diff_highlight),
+        DiffLineType::Context => style_context(),
+    };
+
+    if !syntax_highlight {
+        return push_wrapped_diff_text_line(
+            text,
+            ln_str,
+            gutter_width,
+            width,
+            sign_char,
+            line_style,
+        );
+    }
+
+    let content_width = width.saturating_sub(prefix_cols + 1).max(1);
+    let highlighted = highlight_code_block_to_lines(lang, text);
+    let mut out: Vec<RtLine<'static>> = Vec::new();
+
+    for (line_idx, line) in highlighted.iter().enumerate() {
+        let wrapped = word_wrap_line(line, RtOptions::new(content_width));
+        for (wrapped_idx, chunk) in wrapped.iter().enumerate() {
+            let is_first = line_idx == 0 && wrapped_idx == 0;
+            let gutter = if is_first {
+                format!("{ln_str:>gutter_width$} ")
+            } else {
+                format!("{:gutter_width$}  ", "")
+            };
+            let sign = if is_first { sign_char } else { ' ' };
+            let mut spans: Vec<RtSpan<'static>> = Vec::with_capacity(chunk.spans.len() + 2);
+            spans.push(RtSpan::styled(gutter, style_gutter()));
+            spans.push(RtSpan::styled(format!("{sign}"), line_style));
+            if chunk.spans.is_empty() {
+                spans.push(RtSpan::styled("".to_string(), content_style));
+            } else {
+                for span in &chunk.spans {
+                    let merged = merge_span_style(span.style, content_style);
+                    spans.push(RtSpan::styled(span.content.to_string(), merged));
+                }
+            }
+            out.push(RtLine::from(spans));
+        }
+    }
+
+    if out.is_empty() {
+        let gutter = format!("{ln_str:>gutter_width$} ");
+        out.push(RtLine::from(vec![
+            RtSpan::styled(gutter, style_gutter()),
+            RtSpan::styled(format!("{sign_char}"), line_style),
+        ]));
+    }
+
+    out
+}
+
+fn push_wrapped_diff_text_line(
+    text: &str,
+    ln_str: String,
+    gutter_width: usize,
+    width: usize,
+    sign_char: char,
+    line_style: Style,
+) -> Vec<RtLine<'static>> {
+    let prefix_cols = gutter_width + 1;
+    let mut remaining_text: &str = text;
+    let mut first = true;
     let mut lines: Vec<RtLine<'static>> = Vec::new();
 
     loop {
@@ -573,6 +683,8 @@ mod tests {
             80,
             line_number_width(1),
             false,
+            false,
+            None,
         );
 
         // Render into a small terminal to capture the visual layout
