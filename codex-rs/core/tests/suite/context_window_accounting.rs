@@ -219,7 +219,13 @@ async fn resume_emits_prompt_estimate_consistent_with_aborted_history() -> Resul
     let abort_estimate = abort_estimate.expect("abort token estimate captured");
 
     let mut resume_builder = test_codex().with_model("gpt-5.1");
-    let resumed = resume_builder.resume(&server, home, rollout_path).await?;
+    let resumed = resume_builder
+        .resume(
+            &server,
+            home,
+            rollout_path.expect("resume requires rollout path"),
+        )
+        .await?;
     let resumed_token_event = core_test_support::wait_for_event(&resumed.codex, |ev| {
         matches!(ev, EventMsg::TokenCount(payload) if payload.info.as_ref().is_some_and(|info| {
             info.total_token_usage.total_tokens == 50 && info.last_token_usage.input_tokens == 0

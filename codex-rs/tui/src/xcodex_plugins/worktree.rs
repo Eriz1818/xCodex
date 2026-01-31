@@ -835,10 +835,12 @@ pub(crate) fn spawn_worktree_init_command(
             cwd: Some(path.clone()),
             approval_policy: None,
             sandbox_policy: None,
+            windows_sandbox_level: None,
             model: None,
             effort: None,
             summary: None,
             collaboration_mode: None,
+            personality: None,
         }));
         tx.send(AppEvent::CodexOp(Op::ListSkills {
             cwds: vec![path],
@@ -1040,10 +1042,12 @@ pub(crate) fn open_worktree_picker(chat: &mut ChatWidget) {
                         cwd: Some(path.clone()),
                         approval_policy: None,
                         sandbox_policy: None,
+                        windows_sandbox_level: None,
                         model: None,
                         effort: None,
                         summary: None,
                         collaboration_mode: None,
+                        personality: None,
                     }));
                     tx.send(AppEvent::CodexOp(Op::ListSkills {
                         cwds: vec![path.clone()],

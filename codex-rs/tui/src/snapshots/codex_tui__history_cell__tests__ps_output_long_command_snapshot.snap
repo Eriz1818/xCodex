@@ -4,10 +4,7 @@ expression: rendered
 ---
 /ps
 
-Background terminals (1)
+Background terminals
 
-  • exec-0 rg "foo" src --glob [...]
-
-Hooks (0)
-
-  • No hooks running.
+  • rg "foo" src --glob '**/*. [...]
+    ↳ searching...

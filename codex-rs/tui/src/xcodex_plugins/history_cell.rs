@@ -27,6 +27,7 @@ use codex_core::protocol::McpStartupStatus;
 use codex_core::protocol::SandboxPolicy;
 use codex_core::protocol::SessionConfiguredEvent;
 use codex_protocol::config_types::CollaborationMode;
+use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::Settings;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
 use crossterm::event::KeyCode;
@@ -950,11 +951,12 @@ impl XcodexSessionHeaderHistoryCell {
         if !self.is_collaboration {
             return None;
         }
-        match &self.collaboration_mode {
-            CollaborationMode::Plan(_) => Some("Plan"),
-            CollaborationMode::PairProgramming(_) => Some("Pair Programming"),
-            CollaborationMode::Execute(_) => Some("Execute"),
-            CollaborationMode::Custom(_) => None,
+        match self.collaboration_mode.mode {
+            ModeKind::Plan => Some("Plan"),
+            ModeKind::Code => Some("Code"),
+            ModeKind::PairProgramming => Some("Pair Programming"),
+            ModeKind::Execute => Some("Execute"),
+            ModeKind::Custom => None,
         }
     }
 
@@ -1323,11 +1325,14 @@ pub(crate) fn placeholder_session_header_cell(
         config.sandbox_policy.get().clone(),
         xtreme::xtreme_ui_enabled(config),
         false,
-        CollaborationMode::Custom(Settings {
-            model: model.to_string(),
-            reasoning_effort: None,
-            developer_instructions: None,
-        }),
+        CollaborationMode {
+            mode: ModeKind::Custom,
+            settings: Settings {
+                model: model.to_string(),
+                reasoning_effort: None,
+                developer_instructions: None,
+            },
+        },
     ))
 }
 

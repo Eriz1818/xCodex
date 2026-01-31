@@ -1,29 +1,26 @@
 ---
 source: tui/src/history_cell.rs
+assertion_line: 2137
 expression: rendered
 ---
 /ps
 
-Background terminals (20)
+Background terminals
 
-  • exec-0 command 0
-  • exec-1 command 1
-  • exec-2 command 2
-  • exec-3 command 3
-  • exec-4 command 4
-  • exec-5 command 5
-  • exec-6 command 6
-  • exec-7 command 7
-  • exec-8 command 8
-  • exec-9 command 9
-  • exec-10 command 10
-  • exec-11 command 11
-  • exec-12 command 12
-  • exec-13 command 13
-  • exec-14 command 14
-  • exec-15 command 15
+  • command 0
+  • command 1
+  • command 2
+  • command 3
+  • command 4
+  • command 5
+  • command 6
+  • command 7
+  • command 8
+  • command 9
+  • command 10
+  • command 11
+  • command 12
+  • command 13
+  • command 14
+  • command 15
   • ... and 4 more running
-
-Hooks (0)
-
-  • No hooks running.

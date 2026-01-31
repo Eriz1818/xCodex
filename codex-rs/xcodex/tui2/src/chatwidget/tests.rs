@@ -59,8 +59,12 @@ use codex_core::protocol::UndoCompletedEvent;
 use codex_core::protocol::UndoStartedEvent;
 use codex_core::protocol::ViewImageToolCallEvent;
 use codex_core::protocol::WarningEvent;
+#[cfg(target_os = "windows")]
+use codex_core::windows_sandbox::WindowsSandboxLevelExt;
 use codex_protocol::ThreadId;
 use codex_protocol::account::PlanType;
+#[cfg(target_os = "windows")]
+use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::openai_models::ReasoningEffortPreset;
 use codex_protocol::parse_command::ParsedCommand;
@@ -145,8 +149,9 @@ async fn resumed_initial_messages_render_history() {
                 message: "assistant reply".to_string(),
             }),
         ]),
-        rollout_path: rollout_file.path().to_path_buf(),
+        rollout_path: Some(rollout_file.path().to_path_buf()),
         forked_from_id: None,
+        thread_name: None,
     };
 
     chat.handle_codex_event(Event {
@@ -2619,6 +2624,7 @@ async fn model_picker_hides_show_in_picker_false_models_from_cache() {
             effort: ReasoningEffortConfig::Medium,
             description: "medium".to_string(),
         }],
+        supports_personality: false,
         is_default: false,
         upgrade: None,
         show_in_picker,
@@ -2663,7 +2669,8 @@ async fn approvals_selection_popup_snapshot() {
 async fn approvals_selection_popup_snapshot_windows_degraded_sandbox() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
 
-    let was_sandbox_enabled = codex_core::get_platform_sandbox().is_some();
+    let was_sandbox_enabled =
+        WindowsSandboxLevel::from_config(&chat.config) != WindowsSandboxLevel::Disabled;
     let was_elevated_enabled = codex_core::is_windows_elevated_sandbox_enabled();
 
     chat.config.notices.hide_full_access_warning = None;
@@ -2831,6 +2838,7 @@ async fn single_reasoning_option_skips_selection() {
         description: "".to_string(),
         default_reasoning_effort: ReasoningEffortConfig::High,
         supported_reasoning_efforts: single_effort,
+        supports_personality: false,
         is_default: false,
         upgrade: None,
         show_in_picker: true,

@@ -19,7 +19,7 @@ use crate::xcodex_plugins::command_popup as xcodex_command_popup;
 use codex_protocol::custom_prompts::CustomPrompt;
 use codex_protocol::custom_prompts::PROMPTS_CMD_PREFIX;
 
-pub(crate) const DEFAULT_SLASH_POPUP_ROWS: usize = MAX_POPUP_ROWS as usize;
+pub(crate) const DEFAULT_SLASH_POPUP_ROWS: usize = MAX_POPUP_ROWS;
 
 /// A selectable item in the popup: either a built-in command or a user prompt.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -375,6 +375,7 @@ impl CommandPopup {
                     display_shortcut: None,
                     description: Some(description),
                     wrap_indent: None,
+                    is_disabled: false,
                     disabled_reason: None,
                 }
             })

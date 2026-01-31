@@ -13,8 +13,10 @@
 //!
 //! Some UI is time-based rather than input-based, such as the transient "press again to quit"
 //! hint. The pane schedules redraws so those hints can expire even when the UI is otherwise idle.
+use std::collections::HashMap;
 use std::path::PathBuf;
 
+use crate::app_event::ConnectorsSnapshot;
 use crate::app_event_sender::AppEventSender;
 use crate::bottom_pane::queued_user_messages::QueuedUserMessages;
 use crate::bottom_pane::unified_exec_footer::UnifiedExecFooter;
@@ -53,6 +55,7 @@ pub(crate) struct LocalImageAttachment {
     pub(crate) placeholder: String,
     pub(crate) path: PathBuf,
 }
+mod app_link_view;
 mod chat_composer;
 mod chat_composer_history;
 mod command_popup;
@@ -119,12 +122,16 @@ pub(crate) enum CancellationEvent {
 }
 
 pub(crate) use chat_composer::ChatComposer;
+pub(crate) use chat_composer::ChatComposerConfig;
 pub(crate) use chat_composer::InputResult;
 use codex_protocol::custom_prompts::CustomPrompt;
 
 use crate::status_indicator_widget::StatusIndicatorWidget;
-pub(crate) use experimental_features_view::BetaFeatureItem;
+pub(crate) use app_link_view::AppLinkView;
+pub(crate) use experimental_features_view::ExperimentalFeatureItem;
 pub(crate) use experimental_features_view::ExperimentalFeaturesView;
+pub(crate) use feedback_view::FeedbackAudience;
+pub(crate) use footer::CollaborationModeIndicator;
 pub(crate) use list_selection_view::SelectionAction;
 pub(crate) use list_selection_view::SelectionItem;
 pub(crate) use status_menu_view::StatusMenuTab;
@@ -257,6 +264,8 @@ pub(crate) struct BottomPane {
     frame_requester: FrameRequester,
 
     has_input_focus: bool,
+    enhanced_keys_supported: bool,
+    disable_paste_burst: bool,
     is_task_running: bool,
     esc_backtrack_hint: bool,
     animations_enabled: bool,
@@ -320,6 +329,8 @@ impl BottomPane {
             app_event_tx,
             frame_requester,
             has_input_focus,
+            enhanced_keys_supported,
+            disable_paste_burst,
             is_task_running: false,
             status: None,
             mcp_startup_banner: None,
@@ -339,12 +350,37 @@ impl BottomPane {
         self.request_redraw();
     }
 
+    pub fn set_connectors_snapshot(&mut self, connectors_snapshot: Option<ConnectorsSnapshot>) {
+        self.composer.set_connector_mentions(connectors_snapshot);
+        self.request_redraw();
+    }
+
+    pub(crate) fn take_mention_paths(&mut self) -> HashMap<String, String> {
+        self.composer.take_mention_paths()
+    }
+
     pub fn set_steer_enabled(&mut self, enabled: bool) {
         self.composer.set_steer_enabled(enabled);
     }
 
     pub fn set_collaboration_modes_enabled(&mut self, enabled: bool) {
         self.composer.set_collaboration_modes_enabled(enabled);
+    }
+
+    pub fn set_connectors_enabled(&mut self, enabled: bool) {
+        self.composer.set_connectors_enabled(enabled);
+    }
+
+    pub fn set_personality_command_enabled(&mut self, enabled: bool) {
+        self.composer.set_personality_command_enabled(enabled);
+    }
+
+    pub fn set_collaboration_mode_indicator(
+        &mut self,
+        indicator: Option<CollaborationModeIndicator>,
+    ) {
+        self.composer.set_collaboration_mode_indicator(indicator);
+        self.request_redraw();
     }
 
     pub fn set_slash_popup_max_rows(&mut self, max_rows: usize) {
@@ -885,7 +921,13 @@ impl BottomPane {
             request
         };
 
-        let modal = RequestUserInputOverlay::new(request, self.app_event_tx.clone());
+        let modal = RequestUserInputOverlay::new(
+            request,
+            self.app_event_tx.clone(),
+            self.has_input_focus,
+            self.enhanced_keys_supported,
+            self.disable_paste_burst,
+        );
         self.pause_status_timer_for_modal();
         self.set_composer_input_enabled(
             false,
@@ -1439,6 +1481,7 @@ mod tests {
                 description: "test skill".to_string(),
                 short_description: None,
                 interface: None,
+                dependencies: None,
                 path: PathBuf::from("test-skill"),
                 scope: SkillScope::User,
             }]),

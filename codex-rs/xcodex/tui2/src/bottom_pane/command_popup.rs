@@ -26,8 +26,7 @@ pub(crate) const DEFAULT_SLASH_POPUP_ROWS: usize = 8;
 fn windows_degraded_sandbox_active() -> bool {
     cfg!(target_os = "windows")
         && codex_core::windows_sandbox::ELEVATED_SANDBOX_NUX_ENABLED
-        && codex_core::get_platform_sandbox().is_some()
-        && !codex_core::is_windows_elevated_sandbox_enabled()
+        && codex_core::get_platform_sandbox(true).is_some()
 }
 
 /// A selectable item in the popup: either a built-in command or a user prompt.

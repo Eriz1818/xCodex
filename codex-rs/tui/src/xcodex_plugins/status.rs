@@ -19,6 +19,7 @@ pub(crate) fn status_menu_status_cell(chat: &ChatWidget) -> Box<dyn HistoryCell>
         token_info,
         total_usage,
         &chat.thread_id(),
+        chat.thread_name(),
         session_stats,
         chat.forked_from(),
         chat.rate_limit_snapshot(),

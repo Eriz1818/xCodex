@@ -11,6 +11,7 @@ use codex_core::ModelClient;
 use codex_core::ModelProviderInfo;
 use codex_core::Prompt;
 use codex_core::ResponseItem;
+use codex_core::TransportManager;
 use codex_core::WireApi;
 use codex_core::models_manager::manager::ModelsManager;
 use codex_otel::OtelManager;
@@ -59,6 +60,7 @@ async fn run_request(input: Vec<ResponseItem>) -> Value {
         stream_max_retries: Some(0),
         stream_idle_timeout_ms: Some(5_000),
         requires_openai_auth: false,
+        supports_websockets: false,
     };
 
     let codex_home = match TempDir::new() {
@@ -98,6 +100,7 @@ async fn run_request(input: Vec<ResponseItem>) -> Value {
         summary,
         conversation_id,
         SessionSource::Exec,
+        TransportManager::new(),
     )
     .new_session();
 
@@ -135,6 +138,7 @@ fn user_message(text: &str) -> ResponseItem {
         content: vec![ContentItem::InputText {
             text: text.to_string(),
         }],
+        end_turn: None,
     }
 }
 
@@ -145,6 +149,7 @@ fn assistant_message(text: &str) -> ResponseItem {
         content: vec![ContentItem::OutputText {
             text: text.to_string(),
         }],
+        end_turn: None,
     }
 }
 

@@ -23,11 +23,12 @@ use codex_core::config::find_codex_home;
 use codex_core::config::load_config_as_toml_with_cli_overrides;
 use codex_core::config::resolve_oss_provider;
 use codex_core::find_thread_path_by_id_str;
-use codex_core::get_platform_sandbox;
 use codex_core::protocol::AskForApproval;
 use codex_core::terminal::Multiplexer;
+use codex_core::windows_sandbox::WindowsSandboxLevelExt;
 use codex_protocol::config_types::AltScreenMode;
 use codex_protocol::config_types::SandboxMode;
+use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use std::fs::OpenOptions;
 use std::path::PathBuf;
@@ -270,10 +271,12 @@ pub async fn run_main(
         codex_linux_sandbox_exe,
         base_instructions: None,
         developer_instructions: None,
+        model_personality: None,
         compact_prompt: None,
         include_apply_patch_tool: None,
         show_raw_agent_reasoning: cli.oss.then_some(true),
         tools_web_search_request: None,
+        ephemeral: None,
         additional_writable_roots: additional_dirs,
     };
 
@@ -831,7 +834,9 @@ async fn load_config_or_exit(
 /// or if the current cwd project is already trusted. If not, we need to
 /// show the trust screen.
 fn should_show_trust_screen(config: &Config) -> bool {
-    if cfg!(target_os = "windows") && get_platform_sandbox().is_none() {
+    if cfg!(target_os = "windows")
+        && WindowsSandboxLevel::from_config(config) == WindowsSandboxLevel::Disabled
+    {
         // If the experimental sandbox is not enabled, Native Windows cannot enforce sandboxed write access; skip the trust prompt entirely.
         return false;
     }
@@ -887,7 +892,7 @@ mod tests {
         let mut config = build_config(&temp_dir).await?;
         config.did_user_set_custom_approval_policy_or_sandbox_mode = false;
         config.active_project = ProjectConfig { trust_level: None };
-        config.set_windows_sandbox_globally(false);
+        config.set_windows_sandbox_enabled(false);
 
         let should_show = should_show_trust_screen(&config);
         if cfg!(target_os = "windows") {
@@ -910,7 +915,7 @@ mod tests {
         let mut config = build_config(&temp_dir).await?;
         config.did_user_set_custom_approval_policy_or_sandbox_mode = false;
         config.active_project = ProjectConfig { trust_level: None };
-        config.set_windows_sandbox_globally(true);
+        config.set_windows_sandbox_enabled(true);
 
         let should_show = should_show_trust_screen(&config);
         if cfg!(target_os = "windows") {

@@ -147,14 +147,14 @@ impl Prompt {
                         total
                     }
                 },
-                ResponseItem::WebSearchCall { action, .. } => match action {
-                    WebSearchAction::Search { query } => {
+                ResponseItem::WebSearchCall { action, .. } => match action.as_ref() {
+                    Some(WebSearchAction::Search { query }) => {
                         query.as_ref().map_or(0, |query| estimate_str_tokens(query))
                     }
-                    WebSearchAction::OpenPage { url } => {
+                    Some(WebSearchAction::OpenPage { url }) => {
                         url.as_ref().map_or(0, |url| estimate_str_tokens(url))
                     }
-                    WebSearchAction::FindInPage { url, pattern } => url
+                    Some(WebSearchAction::FindInPage { url, pattern }) => url
                         .as_ref()
                         .map_or(0, |url| estimate_str_tokens(url))
                         .saturating_add(
@@ -162,7 +162,7 @@ impl Prompt {
                                 .as_ref()
                                 .map_or(0, |pattern| estimate_str_tokens(pattern)),
                         ),
-                    WebSearchAction::Other => 0,
+                    Some(WebSearchAction::Other) | None => 0,
                 },
                 ResponseItem::Reasoning { .. } => 0,
                 ResponseItem::Other => 0,

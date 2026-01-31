@@ -87,8 +87,10 @@ use codex_core::protocol::ViewImageToolCallEvent;
 use codex_core::protocol::WarningEvent;
 use codex_core::protocol::WebSearchBeginEvent;
 use codex_core::protocol::WebSearchEndEvent;
+use codex_core::skills::model::SkillDependencies;
 use codex_core::skills::model::SkillInterface;
 use codex_core::skills::model::SkillMetadata;
+use codex_core::skills::model::SkillToolDependency;
 use codex_protocol::ThreadId;
 use codex_protocol::account::PlanType;
 use codex_protocol::approvals::ElicitationRequestEvent;
@@ -557,7 +559,7 @@ impl ChatWidget {
         self.set_skills(None);
         self.conversation_id = Some(event.session_id);
         self.forked_from = event.forked_from_id;
-        self.current_rollout_path = Some(event.rollout_path.clone());
+        self.current_rollout_path = event.rollout_path.clone();
         let initial_messages = event.initial_messages.clone();
         let model_for_header = event.model.clone();
         self.model = Some(model_for_header.clone());
@@ -2288,9 +2290,9 @@ impl ChatWidget {
             SlashCommand::ElevateSandbox => {
                 #[cfg(target_os = "windows")]
                 {
-                    let windows_degraded_sandbox_enabled = codex_core::get_platform_sandbox()
-                        .is_some()
-                        && !codex_core::is_windows_elevated_sandbox_enabled();
+                    let windows_sandbox_level = WindowsSandboxLevel::from_config(&self.config);
+                    let windows_degraded_sandbox_enabled =
+                        matches!(windows_sandbox_level, WindowsSandboxLevel::RestrictedToken);
                     if !windows_degraded_sandbox_enabled
                         || !codex_core::windows_sandbox::ELEVATED_SANDBOX_NUX_ENABLED
                     {
@@ -3167,9 +3169,11 @@ impl ChatWidget {
             EventMsg::CollabCloseEnd(ev) => self.on_collab_event(collab::close_end(ev)),
             EventMsg::RawResponseItem(_)
             | EventMsg::ThreadRolledBack(_)
+            | EventMsg::ThreadNameUpdated(_)
             | EventMsg::ItemStarted(_)
             | EventMsg::ItemCompleted(_)
             | EventMsg::AgentMessageContentDelta(_)
+            | EventMsg::DynamicToolCallRequest(_)
             | EventMsg::ReasoningContentDelta(_)
             | EventMsg::ReasoningRawContentDelta(_) => {}
         }
@@ -3691,10 +3695,12 @@ impl ChatWidget {
                 cwd: Some(path.clone()),
                 approval_policy: None,
                 sandbox_policy: None,
+                windows_sandbox_level: None,
                 model: None,
                 effort: None,
                 summary: None,
                 collaboration_mode: None,
+                personality: None,
             }));
         self.app_event_tx.send(AppEvent::CodexOp(Op::ListSkills {
             cwds: vec![path],
@@ -3791,10 +3797,12 @@ impl ChatWidget {
                 cwd: None,
                 approval_policy: None,
                 sandbox_policy: None,
+                windows_sandbox_level: None,
                 model: Some(switch_model.clone()),
                 effort: Some(Some(default_effort)),
                 summary: None,
                 collaboration_mode: None,
+                personality: None,
             }));
             tx.send(AppEvent::UpdateModel(switch_model.clone()));
             tx.send(AppEvent::UpdateReasoningEffort(Some(default_effort)));
@@ -4024,10 +4032,12 @@ impl ChatWidget {
                 cwd: None,
                 approval_policy: None,
                 sandbox_policy: None,
+                windows_sandbox_level: None,
                 model: Some(model_for_action.clone()),
                 effort: Some(effort_for_action),
                 summary: None,
                 collaboration_mode: None,
+                personality: None,
             }));
             tx.send(AppEvent::UpdateModel(model_for_action.clone()));
             tx.send(AppEvent::UpdateReasoningEffort(effort_for_action));
@@ -4196,10 +4206,12 @@ impl ChatWidget {
                 cwd: None,
                 approval_policy: None,
                 sandbox_policy: None,
+                windows_sandbox_level: None,
                 model: Some(model.clone()),
                 effort: Some(effort),
                 summary: None,
                 collaboration_mode: None,
+                personality: None,
             }));
         self.app_event_tx.send(AppEvent::UpdateModel(model.clone()));
         self.app_event_tx
@@ -4225,8 +4237,10 @@ impl ChatWidget {
         let presets: Vec<ApprovalPreset> = builtin_approval_presets();
 
         #[cfg(target_os = "windows")]
-        let windows_degraded_sandbox_enabled = codex_core::get_platform_sandbox().is_some()
-            && !codex_core::is_windows_elevated_sandbox_enabled();
+        let windows_sandbox_level = WindowsSandboxLevel::from_config(&self.config);
+        #[cfg(target_os = "windows")]
+        let windows_degraded_sandbox_enabled =
+            matches!(windows_sandbox_level, WindowsSandboxLevel::RestrictedToken);
         #[cfg(not(target_os = "windows"))]
         let windows_degraded_sandbox_enabled = false;
 
@@ -4260,7 +4274,9 @@ impl ChatWidget {
             } else if preset.id == "auto" {
                 #[cfg(target_os = "windows")]
                 {
-                    if codex_core::get_platform_sandbox().is_none() {
+                    if WindowsSandboxLevel::from_config(&self.config)
+                        == WindowsSandboxLevel::Disabled
+                    {
                         let preset_clone = preset.clone();
                         if codex_core::windows_sandbox::ELEVATED_SANDBOX_NUX_ENABLED
                             && codex_core::windows_sandbox::sandbox_setup_is_complete(
@@ -4342,10 +4358,12 @@ impl ChatWidget {
                 cwd: None,
                 approval_policy: Some(approval),
                 sandbox_policy: Some(sandbox_clone.clone()),
+                windows_sandbox_level: None,
                 model: None,
                 effort: None,
                 summary: None,
                 collaboration_mode: None,
+                personality: None,
             }));
             tx.send(AppEvent::UpdateAskForApprovalPolicy(approval));
             tx.send(AppEvent::UpdateSandboxPolicy(sandbox_clone));
@@ -4803,7 +4821,7 @@ impl ChatWidget {
     #[cfg(target_os = "windows")]
     pub(crate) fn maybe_prompt_windows_sandbox_enable(&mut self) {
         if self.config.forced_auto_mode_downgraded_on_windows
-            && codex_core::get_platform_sandbox().is_none()
+            && WindowsSandboxLevel::from_config(&self.config) == WindowsSandboxLevel::Disabled
             && let Some(preset) = builtin_approval_presets()
                 .into_iter()
                 .find(|preset| preset.id == "auto")
@@ -4863,7 +4881,7 @@ impl ChatWidget {
     pub(crate) fn set_sandbox_policy(&mut self, policy: SandboxPolicy) -> ConstraintResult<()> {
         #[cfg(target_os = "windows")]
         let should_clear_downgrade = !matches!(&policy, SandboxPolicy::ReadOnly)
-            || codex_core::get_platform_sandbox().is_some();
+            || WindowsSandboxLevel::from_config(&self.config) != WindowsSandboxLevel::Disabled;
 
         self.config.sandbox_policy.set(policy)?;
 
@@ -5787,6 +5805,22 @@ fn skills_for_cwd(cwd: &Path, skills_entries: &[SkillsListEntry]) -> Vec<SkillMe
                         icon_large: interface.icon_large,
                         brand_color: interface.brand_color,
                         default_prompt: interface.default_prompt,
+                    }),
+                    dependencies: skill.dependencies.clone().map(|dependencies| {
+                        SkillDependencies {
+                            tools: dependencies
+                                .tools
+                                .into_iter()
+                                .map(|tool| SkillToolDependency {
+                                    r#type: tool.r#type,
+                                    value: tool.value,
+                                    description: tool.description,
+                                    transport: tool.transport,
+                                    command: tool.command,
+                                    url: tool.url,
+                                })
+                                .collect(),
+                        }
                     }),
                     path: skill.path.clone(),
                     scope: skill.scope,

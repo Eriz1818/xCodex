@@ -6,19 +6,16 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::Constraint;
 use ratatui::layout::Layout;
 use ratatui::layout::Rect;
-use ratatui::style::Color;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
 use ratatui::text::Span;
-use ratatui::widgets::Block;
 use ratatui::widgets::Paragraph;
 use ratatui::widgets::Widget;
 
+use super::selection_popup_common::render_menu_surface;
 use super::selection_popup_common::wrap_styled_line;
 use crate::app_event_sender::AppEventSender;
 use crate::key_hint::KeyBinding;
-use crate::render::Insets;
-use crate::render::RectExt as _;
 use crate::render::renderable::ColumnRenderable;
 use crate::render::renderable::Renderable;
 use crate::style::user_message_style;
@@ -43,8 +40,8 @@ pub(crate) struct SelectionItem {
     pub selected_description: Option<String>,
     pub is_current: bool,
     pub is_default: bool,
+    pub is_disabled: bool,
     pub actions: Vec<SelectionAction>,
-    pub highlight_actions: Vec<SelectionAction>,
     pub dismiss_on_select: bool,
     pub search_value: Option<String>,
     pub disabled_reason: Option<String>,
@@ -60,7 +57,6 @@ pub(crate) struct SelectionViewParams {
     pub search_placeholder: Option<String>,
     pub header: Box<dyn Renderable>,
     pub initial_selected_idx: Option<usize>,
-    pub on_cancel: Option<SelectionAction>,
 }
 
 impl Default for SelectionViewParams {
@@ -75,7 +71,6 @@ impl Default for SelectionViewParams {
             search_placeholder: None,
             header: Box::new(()),
             initial_selected_idx: None,
-            on_cancel: None,
         }
     }
 }
@@ -94,8 +89,6 @@ pub(crate) struct ListSelectionView {
     last_selected_actual_idx: Option<usize>,
     header: Box<dyn Renderable>,
     initial_selected_idx: Option<usize>,
-    on_cancel: Option<SelectionAction>,
-    last_highlighted_actual_idx: Option<usize>,
 }
 
 impl ListSelectionView {
@@ -128,11 +121,8 @@ impl ListSelectionView {
             last_selected_actual_idx: None,
             header,
             initial_selected_idx: params.initial_selected_idx,
-            on_cancel: params.on_cancel,
-            last_highlighted_actual_idx: None,
         };
         s.apply_filter();
-        s.apply_highlight();
         s
     }
 
@@ -145,17 +135,12 @@ impl ListSelectionView {
     }
 
     fn apply_filter(&mut self) {
-        let previous_selection = self
-            .state
-            .selected_idx
-            .and_then(|visible_idx| self.filtered_indices.get(visible_idx).copied());
         let previously_selected = self
             .state
             .selected_idx
             .and_then(|visible_idx| self.filtered_indices.get(visible_idx).copied())
             .or_else(|| {
-                self.search_query
-                    .is_empty()
+                (!self.is_searchable)
                     .then(|| self.items.iter().position(|item| item.is_current))
                     .flatten()
             })
@@ -197,14 +182,6 @@ impl ListSelectionView {
         let visible = Self::max_visible_rows(len);
         self.state.clamp_selection(len);
         self.state.ensure_visible(len, visible);
-
-        let new_selection = self
-            .state
-            .selected_idx
-            .and_then(|visible_idx| self.filtered_indices.get(visible_idx).copied());
-        if previous_selection != new_selection {
-            self.apply_highlight();
-        }
     }
 
     fn build_rows(&self) -> Vec<GenericDisplayRow> {
@@ -239,12 +216,14 @@ impl ListSelectionView {
                         .flatten()
                         .or_else(|| item.description.clone());
                     let wrap_indent = description.is_none().then_some(wrap_prefix_width);
+                    let is_disabled = item.is_disabled || item.disabled_reason.is_some();
                     GenericDisplayRow {
                         name: display_name,
                         display_shortcut: item.display_shortcut,
                         match_indices: None,
                         description,
                         wrap_indent,
+                        is_disabled,
                         disabled_reason: item.disabled_reason.clone(),
                     }
                 })
@@ -253,51 +232,43 @@ impl ListSelectionView {
     }
 
     fn move_up(&mut self) {
-        let before = self.state.selected_idx;
         let len = self.visible_len();
         self.state.move_up_wrap(len);
         let visible = Self::max_visible_rows(len);
         self.state.ensure_visible(len, visible);
         self.skip_disabled_up();
-        if before != self.state.selected_idx {
-            self.apply_highlight();
-        }
     }
 
     fn move_down(&mut self) {
-        let before = self.state.selected_idx;
         let len = self.visible_len();
         self.state.move_down_wrap(len);
         let visible = Self::max_visible_rows(len);
         self.state.ensure_visible(len, visible);
         self.skip_disabled_down();
-        if before != self.state.selected_idx {
-            self.apply_highlight();
-        }
     }
 
     fn accept(&mut self) {
-        let Some(idx) = self.state.selected_idx else {
-            self.complete = true;
-            return;
-        };
-        let Some(actual_idx) = self.filtered_indices.get(idx) else {
-            self.complete = true;
-            return;
-        };
-        let Some(item) = self.items.get(*actual_idx) else {
-            self.complete = true;
-            return;
-        };
-        if item.disabled_reason.is_some() {
-            return;
-        }
-
-        self.last_selected_actual_idx = Some(*actual_idx);
-        for act in &item.actions {
-            act(&self.app_event_tx);
-        }
-        if item.dismiss_on_select {
+        let selected_item = self
+            .state
+            .selected_idx
+            .and_then(|idx| self.filtered_indices.get(idx))
+            .and_then(|actual_idx| self.items.get(*actual_idx));
+        if let Some(item) = selected_item
+            && item.disabled_reason.is_none()
+            && !item.is_disabled
+        {
+            if let Some(idx) = self.state.selected_idx
+                && let Some(actual_idx) = self.filtered_indices.get(idx)
+            {
+                self.last_selected_actual_idx = Some(*actual_idx);
+            }
+            for act in &item.actions {
+                act(&self.app_event_tx);
+            }
+            if item.dismiss_on_select {
+                self.complete = true;
+            }
+        } else if selected_item.is_none() {
             self.complete = true;
         }
     }
@@ -324,7 +295,7 @@ impl ListSelectionView {
                 && self
                     .items
                     .get(*actual_idx)
-                    .is_some_and(|item| item.disabled_reason.is_some())
+                    .is_some_and(|item| item.disabled_reason.is_some() || item.is_disabled)
             {
                 self.state.move_down_wrap(len);
             } else {
@@ -341,7 +312,7 @@ impl ListSelectionView {
                 && self
                     .items
                     .get(*actual_idx)
-                    .is_some_and(|item| item.disabled_reason.is_some())
+                    .is_some_and(|item| item.disabled_reason.is_some() || item.is_disabled)
             {
                 self.state.move_up_wrap(len);
             } else {
@@ -349,75 +320,10 @@ impl ListSelectionView {
             }
         }
     }
-
-    fn handle_display_shortcut(&mut self, key_event: KeyEvent) -> bool {
-        let Some((idx, item)) = self.items.iter().enumerate().find(|(_, item)| {
-            item.display_shortcut
-                .is_some_and(|binding| binding.is_press(key_event))
-        }) else {
-            return false;
-        };
-
-        if item.disabled_reason.is_some() {
-            return true;
-        }
-
-        if let Some(visible_idx) = self
-            .filtered_indices
-            .iter()
-            .position(|actual| *actual == idx)
-        {
-            self.state.selected_idx = Some(visible_idx);
-        }
-
-        self.last_selected_actual_idx = Some(idx);
-        for act in &item.actions {
-            act(&self.app_event_tx);
-        }
-        if item.dismiss_on_select {
-            self.complete = true;
-        }
-
-        true
-    }
-
-    fn apply_highlight(&mut self) {
-        let Some(visible_idx) = self.state.selected_idx else {
-            return;
-        };
-        let Some(actual_idx) = self.filtered_indices.get(visible_idx).copied() else {
-            return;
-        };
-        let Some(item) = self.items.get(actual_idx) else {
-            return;
-        };
-        if item.disabled_reason.is_some() {
-            return;
-        }
-        if self.last_highlighted_actual_idx == Some(actual_idx) {
-            return;
-        }
-        self.last_highlighted_actual_idx = Some(actual_idx);
-        for act in &item.highlight_actions {
-            act(&self.app_event_tx);
-        }
-    }
-
-    fn cancel(&mut self) {
-        if let Some(action) = &self.on_cancel {
-            action(&self.app_event_tx);
-        }
-        self.complete = true;
-    }
 }
 
 impl BottomPaneView for ListSelectionView {
     fn handle_key_event(&mut self, key_event: KeyEvent) {
-        if self.handle_display_shortcut(key_event) {
-            self.apply_highlight();
-            return;
-        }
-
         match key_event {
             // Some terminals (or configurations) send Control key chords as
             // C0 control characters without reporting the CONTROL modifier.
@@ -469,7 +375,7 @@ impl BottomPaneView for ListSelectionView {
             KeyEvent {
                 code: KeyCode::Esc, ..
             } => {
-                self.cancel();
+                self.on_ctrl_c();
             }
             KeyEvent {
                 code: KeyCode::Char(c),
@@ -498,7 +404,7 @@ impl BottomPaneView for ListSelectionView {
                     && self
                         .items
                         .get(idx)
-                        .is_some_and(|item| item.disabled_reason.is_none())
+                        .is_some_and(|item| item.disabled_reason.is_none() && !item.is_disabled)
                 {
                     self.state.selected_idx = Some(idx);
                     self.accept();
@@ -518,7 +424,7 @@ impl BottomPaneView for ListSelectionView {
     }
 
     fn on_ctrl_c(&mut self) -> CancellationEvent {
-        self.cancel();
+        self.complete = true;
         CancellationEvent::Handled
     }
 }
@@ -568,16 +474,16 @@ impl Renderable for ListSelectionView {
         let [content_area, footer_area] =
             Layout::vertical([Constraint::Fill(1), Constraint::Length(footer_rows)]).areas(area);
 
-        let base_style = user_message_style().patch(crate::theme::composer_style());
-        Block::default().style(base_style).render(content_area, buf);
-        Block::default().style(base_style).render(footer_area, buf);
+        let outer_content_area = content_area;
+        // Paint the shared menu surface and then layout inside the returned inset.
+        let content_area = render_menu_surface(outer_content_area, buf);
 
         let header_height = self
             .header
             // Subtract 4 for the padding on the left and right of the header.
-            .desired_height(content_area.width.saturating_sub(4));
+            .desired_height(outer_content_area.width.saturating_sub(4));
         let rows = self.build_rows();
-        let rows_width = Self::rows_width(content_area.width);
+        let rows_width = Self::rows_width(outer_content_area.width);
         let rows_height = measure_rows_height(
             &rows,
             &self.state,
@@ -590,7 +496,7 @@ impl Renderable for ListSelectionView {
             Constraint::Length(if self.is_searchable { 1 } else { 0 }),
             Constraint::Length(rows_height),
         ])
-        .areas(content_area.inset(Insets::vh(1, 2)));
+        .areas(content_area);
 
         if header_area.height < header_height {
             let [header_area, elision_area] =
@@ -624,6 +530,7 @@ impl Renderable for ListSelectionView {
                 width: rows_width.max(1),
                 height: list_area.height,
             };
+            let base_style = user_message_style();
             render_rows(
                 render_area,
                 buf,
@@ -673,18 +580,6 @@ impl Renderable for ListSelectionView {
                 hint.clone().dim().render(hint_area, buf);
             }
         }
-
-        if let Some(base_bg) = base_style.bg {
-            let transcript_bg = crate::theme::transcript_style().bg;
-            for y in area.top()..area.bottom() {
-                for x in area.left()..area.right() {
-                    let cell = &mut buf[(x, y)];
-                    if cell.bg == Color::Reset || transcript_bg.is_some_and(|bg| cell.bg == bg) {
-                        cell.set_bg(base_bg);
-                    }
-                }
-            }
-        }
     }
 }
 
@@ -693,9 +588,6 @@ mod tests {
     use super::*;
     use crate::app_event::AppEvent;
     use crate::bottom_pane::popup_consts::standard_popup_hint_line;
-    use crossterm::event::KeyCode;
-    use crossterm::event::KeyEvent;
-    use crossterm::event::KeyModifiers;
     use insta::assert_snapshot;
     use ratatui::layout::Rect;
     use tokio::sync::mpsc::unbounded_channel;
@@ -706,14 +598,14 @@ mod tests {
         let items = vec![
             SelectionItem {
                 name: "Read Only".to_string(),
-                description: Some("xcodex can read files".to_string()),
+                description: Some("Codex can read files".to_string()),
                 is_current: true,
                 dismiss_on_select: true,
                 ..Default::default()
             },
             SelectionItem {
                 name: "Full Access".to_string(),
-                description: Some("xcodex can edit files".to_string()),
+                description: Some("Codex can edit files".to_string()),
                 is_current: false,
                 dismiss_on_select: true,
                 ..Default::default()
@@ -769,7 +661,7 @@ mod tests {
 
     #[test]
     fn renders_blank_line_between_subtitle_and_items() {
-        let view = make_selection_view(Some("Switch between xcodex approval presets"));
+        let view = make_selection_view(Some("Switch between Codex approval presets"));
         assert_snapshot!("list_selection_spacing_with_subtitle", render_lines(&view));
     }
 
@@ -779,7 +671,7 @@ mod tests {
         let tx = AppEventSender::new(tx_raw);
         let items = vec![SelectionItem {
             name: "Read Only".to_string(),
-            description: Some("xcodex can read files".to_string()),
+            description: Some("Codex can read files".to_string()),
             is_current: true,
             dismiss_on_select: true,
             ..Default::default()
@@ -811,7 +703,7 @@ mod tests {
         let tx = AppEventSender::new(tx_raw);
         let items = vec![SelectionItem {
             name: "Read Only".to_string(),
-            description: Some("xcodex can read files".to_string()),
+            description: Some("Codex can read files".to_string()),
             is_current: false,
             dismiss_on_select: true,
             ..Default::default()
@@ -833,129 +725,6 @@ mod tests {
         assert!(
             lines.contains("filters"),
             "expected search query line to include rendered query, got {lines:?}"
-        );
-    }
-
-    #[test]
-    fn searchable_views_select_current_by_default() {
-        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
-        let tx = AppEventSender::new(tx_raw);
-        let items = vec![
-            SelectionItem {
-                name: "First".to_string(),
-                description: Some("not current".to_string()),
-                is_current: false,
-                dismiss_on_select: true,
-                ..Default::default()
-            },
-            SelectionItem {
-                name: "Second".to_string(),
-                description: Some("current item".to_string()),
-                is_current: true,
-                dismiss_on_select: true,
-                ..Default::default()
-            },
-        ];
-        let view = ListSelectionView::new(
-            SelectionViewParams {
-                title: Some("Searchable picker".to_string()),
-                footer_hint: Some(standard_popup_hint_line()),
-                items,
-                is_searchable: true,
-                search_placeholder: Some("Type to search".to_string()),
-                ..Default::default()
-            },
-            tx,
-        );
-
-        let rendered = render_lines_with_width(&view, 48);
-        assert!(
-            rendered.contains("› Second (current)"),
-            "expected current item to be selected by default:\n{rendered}"
-        );
-    }
-
-    #[test]
-    fn display_shortcut_triggers_actions_even_when_searchable() {
-        use crate::key_hint;
-
-        let (tx_raw, mut rx) = unbounded_channel::<AppEvent>();
-        let tx = AppEventSender::new(tx_raw);
-        let items = vec![SelectionItem {
-            name: "Refresh".to_string(),
-            display_shortcut: Some(key_hint::alt(KeyCode::Char('r'))),
-            dismiss_on_select: true,
-            actions: vec![Box::new(|tx: &AppEventSender| {
-                tx.send(AppEvent::OpenResumePicker);
-            })],
-            ..Default::default()
-        }];
-
-        let mut view = ListSelectionView::new(
-            SelectionViewParams {
-                title: Some("Shortcuts".to_string()),
-                items,
-                is_searchable: true,
-                search_placeholder: Some("Type to search".to_string()),
-                ..Default::default()
-            },
-            tx,
-        );
-
-        view.handle_key_event(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::ALT));
-        assert!(view.is_complete(), "expected shortcut to dismiss the view");
-        assert!(
-            matches!(rx.try_recv(), Ok(AppEvent::OpenResumePicker)),
-            "expected shortcut to trigger selection action"
-        );
-    }
-
-    #[test]
-    fn renders_display_shortcuts() {
-        use crate::key_hint;
-
-        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
-        let tx = AppEventSender::new(tx_raw);
-        let items = vec![
-            SelectionItem {
-                name: "Refresh worktrees".to_string(),
-                display_shortcut: Some(key_hint::alt(KeyCode::Char('r'))),
-                dismiss_on_select: true,
-                ..Default::default()
-            },
-            SelectionItem {
-                name: "Worktrees settings…".to_string(),
-                display_shortcut: Some(key_hint::alt(KeyCode::Char('s'))),
-                dismiss_on_select: true,
-                ..Default::default()
-            },
-            SelectionItem {
-                name: "Create worktree…".to_string(),
-                display_shortcut: Some(key_hint::alt(KeyCode::Char('i'))),
-                dismiss_on_select: true,
-                ..Default::default()
-            },
-            SelectionItem {
-                name: "Worktree doctor".to_string(),
-                display_shortcut: Some(key_hint::alt(KeyCode::Char('d'))),
-                dismiss_on_select: true,
-                ..Default::default()
-            },
-        ];
-
-        let view = ListSelectionView::new(
-            SelectionViewParams {
-                title: Some("Select a worktree".to_string()),
-                footer_hint: Some(standard_popup_hint_line()),
-                items,
-                ..Default::default()
-            },
-            tx,
-        );
-
-        assert_snapshot!(
-            "list_selection_display_shortcuts",
-            render_lines_with_width(&view, 56)
         );
     }
 

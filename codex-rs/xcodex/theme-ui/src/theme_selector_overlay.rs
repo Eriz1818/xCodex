@@ -499,6 +499,7 @@ impl ThemeSelectorOverlay {
         let session_event = codex_core::protocol::SessionConfiguredEvent {
             session_id: ThreadId::new(),
             forked_from_id: None,
+            thread_name: None,
             model: "gpt-5.2 medium".to_string(),
             model_provider_id: "openai".to_string(),
             approval_policy: self.config.approval_policy.value(),
@@ -508,7 +509,7 @@ impl ThemeSelectorOverlay {
             history_log_id: 0,
             history_entry_count: 0,
             initial_messages: None,
-            rollout_path: PathBuf::from("/tmp/theme-preview.jsonl"),
+            rollout_path: Some(PathBuf::from("/tmp/theme-preview.jsonl")),
         };
 
         let mut preview_config = self.config.clone();
@@ -527,13 +528,14 @@ impl ThemeSelectorOverlay {
         command_lines.truncate(2);
         session_help_lines.extend(command_lines);
 
-        let collaboration_mode = codex_protocol::config_types::CollaborationMode::Custom(
-            codex_protocol::config_types::Settings {
+        let collaboration_mode = codex_protocol::config_types::CollaborationMode {
+            mode: codex_protocol::config_types::ModeKind::Custom,
+            settings: codex_protocol::config_types::Settings {
                 model: "gpt-5.2 medium".to_string(),
                 reasoning_effort: None,
                 developer_instructions: None,
             },
-        );
+        };
         let session_info = crate::xcodex_plugins::history_cell::new_session_info_with_help_lines(
             &preview_config,
             "gpt-5.2 medium",

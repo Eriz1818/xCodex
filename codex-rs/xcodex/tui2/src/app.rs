@@ -132,6 +132,7 @@ impl From<AppExitInfo> for codex_tui::AppExitInfo {
         codex_tui::AppExitInfo {
             token_usage: info.token_usage,
             thread_id: info.conversation_id,
+            thread_name: None,
             update_action: info.update_action.map(Into::into),
             exit_reason,
         }
@@ -628,7 +629,8 @@ impl App {
         // On startup, if Agent mode (workspace-write) or ReadOnly is active, warn about world-writable dirs on Windows.
         #[cfg(target_os = "windows")]
         {
-            let should_check = codex_core::get_platform_sandbox().is_some()
+            let should_check = WindowsSandboxLevel::from_config(&app.config)
+                != WindowsSandboxLevel::Disabled
                 && matches!(
                     app.config.sandbox_policy.get(),
                     codex_core::protocol::SandboxPolicy::WorkspaceWrite { .. }
@@ -2488,10 +2490,12 @@ impl App {
                                         cwd: None,
                                         approval_policy: Some(preset.approval),
                                         sandbox_policy: Some(preset.sandbox.clone()),
+                                        windows_sandbox_level: None,
                                         model: None,
                                         effort: None,
                                         summary: None,
                                         collaboration_mode: None,
+                                        personality: None,
                                     },
                                 ));
                                 self.app_event_tx
@@ -2937,7 +2941,8 @@ impl App {
                 }
                 #[cfg(target_os = "windows")]
                 if !matches!(&policy, codex_core::protocol::SandboxPolicy::ReadOnly)
-                    || codex_core::get_platform_sandbox().is_some()
+                    || WindowsSandboxLevel::from_config(&self.config)
+                        != WindowsSandboxLevel::Disabled
                 {
                     self.config.forced_auto_mode_downgraded_on_windows = false;
                 }
@@ -2957,7 +2962,8 @@ impl App {
                         return Ok(AppRunControl::Continue);
                     }
 
-                    let should_check = codex_core::get_platform_sandbox().is_some()
+                    let should_check = WindowsSandboxLevel::from_config(&self.config)
+                        != WindowsSandboxLevel::Disabled
                         && policy_is_workspace_write_or_ro
                         && !self.chat_widget.world_writable_warning_hidden();
                     if should_check {
@@ -3721,8 +3727,9 @@ mod tests {
                 history_log_id: 0,
                 history_entry_count: 0,
                 initial_messages: None,
-                rollout_path: PathBuf::new(),
+                rollout_path: None,
                 forked_from_id: None,
+                thread_name: None,
             };
             Arc::new(new_session_info(
                 app.chat_widget.config_ref(),
@@ -3763,8 +3770,9 @@ mod tests {
                 history_log_id: 0,
                 history_entry_count: 0,
                 initial_messages: None,
-                rollout_path: PathBuf::new(),
+                rollout_path: None,
                 forked_from_id: None,
+                thread_name: None,
             }),
         });
 
@@ -4052,8 +4060,9 @@ mod tests {
             history_log_id: 0,
             history_entry_count: 0,
             initial_messages: None,
-            rollout_path: PathBuf::new(),
+            rollout_path: None,
             forked_from_id: None,
+            thread_name: None,
         };
 
         app.chat_widget.handle_codex_event(Event {

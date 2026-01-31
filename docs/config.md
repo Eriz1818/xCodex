@@ -151,6 +151,12 @@ Common `roles.*` keys:
 
 See `docs/themes/example-dark.yaml` and `docs/themes/example-light.yaml` for reference.
 
+## Apps (Connectors)
+
+Use `$` in the composer to insert an app; the popover lists accessible apps. The `/apps` command
+lists available and installed apps. Connected apps appear first and are labeled as connected;
+others are marked as can be installed.
+
 ## Notify
 
 Codex can run a notification hook when the agent finishes a turn. See the configuration reference for the latest notification settings:

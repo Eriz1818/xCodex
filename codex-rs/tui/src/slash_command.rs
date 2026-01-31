@@ -21,13 +21,16 @@ pub enum SlashCommand {
     Skills,
     Help,
     Review,
+    Rename,
     New,
     Resume,
     Fork,
     Init,
     Compact,
     Autocompact,
+    Plan,
     Collab,
+    Agent,
     // Undo,
     Diff,
     Mention,
@@ -38,6 +41,7 @@ pub enum SlashCommand {
     Worktree,
     Hooks,
     Mcp,
+    Apps,
     Logout,
     Quit,
     Exit,
@@ -45,6 +49,7 @@ pub enum SlashCommand {
     Rollout,
     Ps,
     PsKill,
+    Personality,
     TestApproval,
 }
 
@@ -58,6 +63,7 @@ impl SlashCommand {
             SlashCommand::Compact => "summarize conversation to prevent hitting the context limit",
             SlashCommand::Autocompact => "toggle automatic conversation compaction (persists)",
             SlashCommand::Review => "review my current changes and find issues",
+            SlashCommand::Rename => "rename the current thread",
             SlashCommand::Resume => "resume a saved chat",
             SlashCommand::Fork => "fork the current chat",
             // SlashCommand::Undo => "ask Codex to undo a turn",
@@ -77,11 +83,15 @@ impl SlashCommand {
             SlashCommand::Model => "choose what model and reasoning effort to use",
             SlashCommand::Approvals => "choose what xcodex can do without approval",
             SlashCommand::Permissions => "choose what xcodex is allowed to do",
+            SlashCommand::Personality => "choose a communication style for xcodex",
+            SlashCommand::Plan => "switch to Plan mode",
             SlashCommand::Collab => "change collaboration mode (experimental)",
+            SlashCommand::Agent => "switch the active agent thread",
             SlashCommand::ElevateSandbox => "set up elevated agent sandbox",
-            SlashCommand::Experimental => "toggle beta features",
+            SlashCommand::Experimental => "toggle experimental features",
             SlashCommand::Mcp => "list configured MCP tools",
             SlashCommand::Logout => "log out of xcodex",
+            SlashCommand::Apps => "manage apps",
             SlashCommand::Rollout => "print the rollout file path",
             SlashCommand::TestApproval => "test approval request",
         }
@@ -104,6 +114,7 @@ impl SlashCommand {
             | SlashCommand::Autocompact
             // | SlashCommand::Undo
             | SlashCommand::Model
+            | SlashCommand::Personality
             | SlashCommand::Approvals
             | SlashCommand::Permissions
             | SlashCommand::ElevateSandbox
@@ -111,6 +122,7 @@ impl SlashCommand {
             | SlashCommand::Review
             | SlashCommand::Logout => false,
             SlashCommand::Diff
+            | SlashCommand::Rename
             | SlashCommand::Mention
             | SlashCommand::Skills
             | SlashCommand::Help
@@ -123,12 +135,15 @@ impl SlashCommand {
             | SlashCommand::Ps
             | SlashCommand::PsKill
             | SlashCommand::Mcp
+            | SlashCommand::Apps
             | SlashCommand::Feedback
             | SlashCommand::Quit
             | SlashCommand::Exit => true,
             SlashCommand::Rollout => true,
             SlashCommand::TestApproval => true,
+            SlashCommand::Plan => true,
             SlashCommand::Collab => true,
+            SlashCommand::Agent => true,
         }
     }
 
