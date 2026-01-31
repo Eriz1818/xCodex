@@ -463,6 +463,7 @@ mod tests {
                 enabled_tools: None,
                 disabled_tools: None,
                 scopes: None,
+                startup_mode: None,
             },
         )]);
 
@@ -510,6 +511,7 @@ mod tests {
                 enabled_tools: None,
                 disabled_tools: None,
                 scopes: None,
+                startup_mode: None,
             },
         )]);
 

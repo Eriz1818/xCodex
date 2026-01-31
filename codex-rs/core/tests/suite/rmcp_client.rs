@@ -235,6 +235,7 @@ async fn mcp_unattested_output_confirm_denied_blocks_output() -> anyhow::Result<
                     enabled_tools: None,
                     disabled_tools: None,
                     scopes: None,
+                    startup_mode: None,
                 },
             );
             config
@@ -360,6 +361,7 @@ async fn mcp_unattested_output_confirm_approved_passes_output() -> anyhow::Resul
                     enabled_tools: None,
                     disabled_tools: None,
                     scopes: None,
+                    startup_mode: None,
                 },
             );
             config
@@ -485,6 +487,7 @@ async fn lazy_startup_starts_on_tool_call() -> anyhow::Result<()> {
                     enabled_tools: None,
                     disabled_tools: None,
                     startup_mode: None,
+                    scopes: None,
                 },
             );
             config
@@ -511,6 +514,7 @@ async fn lazy_startup_starts_on_tool_call() -> anyhow::Result<()> {
             effort: None,
             summary: ReasoningSummary::Auto,
             collaboration_mode: None,
+            personality: None,
         })
         .await?;
 

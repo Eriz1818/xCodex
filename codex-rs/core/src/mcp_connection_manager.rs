@@ -1967,6 +1967,7 @@ mod tests {
             enabled_tools: None,
             disabled_tools: None,
             startup_mode: None,
+            scopes: None,
         };
         let config_hash = server_config_hash(&config);
 
