@@ -7,6 +7,7 @@ use crate::config::types::History;
 use crate::config::types::McpServerConfig;
 use crate::config::types::McpServerDisabledReason;
 use crate::config::types::McpServerTransportConfig;
+use crate::config::types::McpStartupMode;
 use crate::config::types::Notice;
 use crate::config::types::NotificationMethod;
 use crate::config::types::Notifications;
@@ -337,6 +338,9 @@ pub struct Config {
 
     /// Definition for MCP servers that Codex can reach out to for tool calls.
     pub mcp_servers: Constrained<HashMap<String, McpServerConfig>>,
+
+    /// Startup policy for MCP servers (eager, lazy, manual).
+    pub mcp_startup_mode: McpStartupMode,
 
     /// Preferred store for MCP OAuth credentials.
     /// keyring: Use an OS-specific keyring service.
@@ -962,6 +966,10 @@ pub struct ConfigToml {
     // Uses the raw MCP input shape (custom deserialization) rather than `McpServerConfig`.
     #[schemars(schema_with = "crate::config::schema::mcp_servers_schema")]
     pub mcp_servers: HashMap<String, McpServerConfig>,
+
+    /// Startup policy for MCP servers (eager, lazy, manual).
+    #[serde(default)]
+    pub mcp_startup_mode: Option<McpStartupMode>,
 
     /// Preferred backend for storing MCP OAuth credentials.
     /// keyring: Use an OS-specific keyring service.
@@ -2021,6 +2029,7 @@ impl Config {
             // is important in code to differentiate the mode from the store implementation.
             mcp_oauth_credentials_store_mode: cfg.mcp_oauth_credentials_store.unwrap_or_default(),
             mcp_oauth_callback_port: cfg.mcp_oauth_callback_port,
+            mcp_startup_mode: cfg.mcp_startup_mode.unwrap_or_default(),
             model_providers,
             project_doc_max_bytes: cfg.project_doc_max_bytes.unwrap_or(PROJECT_DOC_MAX_BYTES),
             project_doc_fallback_filenames: cfg
@@ -2414,6 +2423,7 @@ mod tests {
             tool_timeout_sec: None,
             enabled_tools: None,
             disabled_tools: None,
+            startup_mode: None,
             scopes: None,
         }
     }
@@ -2432,6 +2442,7 @@ mod tests {
             tool_timeout_sec: None,
             enabled_tools: None,
             disabled_tools: None,
+            startup_mode: None,
             scopes: None,
         }
     }
@@ -3312,6 +3323,7 @@ profile = "project"
                 tool_timeout_sec: Some(Duration::from_secs(5)),
                 enabled_tools: None,
                 disabled_tools: None,
+                startup_mode: None,
                 scopes: None,
             },
         );
@@ -3468,6 +3480,7 @@ bearer_token = "secret"
                 tool_timeout_sec: None,
                 enabled_tools: None,
                 disabled_tools: None,
+                startup_mode: None,
                 scopes: None,
             },
         )]);
@@ -3538,6 +3551,7 @@ ZIG_VAR = "3"
                 tool_timeout_sec: None,
                 enabled_tools: None,
                 disabled_tools: None,
+                startup_mode: None,
                 scopes: None,
             },
         )]);
@@ -3588,6 +3602,7 @@ ZIG_VAR = "3"
                 tool_timeout_sec: None,
                 enabled_tools: None,
                 disabled_tools: None,
+                startup_mode: None,
                 scopes: None,
             },
         )]);
@@ -3636,6 +3651,7 @@ ZIG_VAR = "3"
                 tool_timeout_sec: None,
                 enabled_tools: None,
                 disabled_tools: None,
+                startup_mode: None,
                 scopes: None,
             },
         )]);
@@ -3700,6 +3716,7 @@ startup_timeout_sec = 2.0
                 tool_timeout_sec: None,
                 enabled_tools: None,
                 disabled_tools: None,
+                startup_mode: None,
                 scopes: None,
             },
         )]);
@@ -3776,6 +3793,7 @@ X-Auth = "DOCS_AUTH"
                 tool_timeout_sec: None,
                 enabled_tools: None,
                 disabled_tools: None,
+                startup_mode: None,
                 scopes: None,
             },
         )]);
@@ -3805,6 +3823,7 @@ X-Auth = "DOCS_AUTH"
                 tool_timeout_sec: None,
                 enabled_tools: None,
                 disabled_tools: None,
+                startup_mode: None,
                 scopes: None,
             },
         );
@@ -3872,6 +3891,7 @@ url = "https://example.com/mcp"
                     tool_timeout_sec: None,
                     enabled_tools: None,
                     disabled_tools: None,
+                    startup_mode: None,
                     scopes: None,
                 },
             ),
@@ -3891,6 +3911,7 @@ url = "https://example.com/mcp"
                     tool_timeout_sec: None,
                     enabled_tools: None,
                     disabled_tools: None,
+                    startup_mode: None,
                     scopes: None,
                 },
             ),
@@ -3973,6 +3994,7 @@ url = "https://example.com/mcp"
                 tool_timeout_sec: None,
                 enabled_tools: None,
                 disabled_tools: None,
+                startup_mode: None,
                 scopes: None,
             },
         )]);
@@ -4017,6 +4039,7 @@ url = "https://example.com/mcp"
                 tool_timeout_sec: None,
                 enabled_tools: Some(vec!["allowed".to_string()]),
                 disabled_tools: Some(vec!["blocked".to_string()]),
+                startup_mode: None,
                 scopes: None,
             },
         )]);
@@ -4400,6 +4423,7 @@ model_verbosity = "high"
                 worktrees_pinned_paths: Vec::new(),
                 cli_auth_credentials_store_mode: Default::default(),
                 mcp_servers: Constrained::allow_any(HashMap::new()),
+                mcp_startup_mode: McpStartupMode::default(),
                 mcp_oauth_credentials_store_mode: Default::default(),
                 mcp_oauth_callback_port: None,
                 model_providers: fixture.model_provider_map.clone(),
@@ -4505,6 +4529,7 @@ model_verbosity = "high"
             worktrees_pinned_paths: Vec::new(),
             cli_auth_credentials_store_mode: Default::default(),
             mcp_servers: Constrained::allow_any(HashMap::new()),
+            mcp_startup_mode: McpStartupMode::default(),
             mcp_oauth_credentials_store_mode: Default::default(),
             mcp_oauth_callback_port: None,
             model_providers: fixture.model_provider_map.clone(),
@@ -4625,6 +4650,7 @@ model_verbosity = "high"
             worktrees_pinned_paths: Vec::new(),
             cli_auth_credentials_store_mode: Default::default(),
             mcp_servers: Constrained::allow_any(HashMap::new()),
+            mcp_startup_mode: McpStartupMode::default(),
             mcp_oauth_credentials_store_mode: Default::default(),
             mcp_oauth_callback_port: None,
             model_providers: fixture.model_provider_map.clone(),
@@ -4731,6 +4757,7 @@ model_verbosity = "high"
             worktrees_pinned_paths: Vec::new(),
             cli_auth_credentials_store_mode: Default::default(),
             mcp_servers: Constrained::allow_any(HashMap::new()),
+            mcp_startup_mode: McpStartupMode::default(),
             mcp_oauth_credentials_store_mode: Default::default(),
             mcp_oauth_callback_port: None,
             model_providers: fixture.model_provider_map.clone(),

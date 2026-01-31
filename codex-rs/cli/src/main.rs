@@ -908,6 +908,9 @@ pub(crate) fn prepend_config_flags(
     subcommand_config_overrides
         .raw_overrides
         .splice(0..0, cli_config_overrides.raw_overrides);
+    if subcommand_config_overrides.mcp_startup_mode.is_none() {
+        subcommand_config_overrides.mcp_startup_mode = cli_config_overrides.mcp_startup_mode;
+    }
 }
 
 /// Run the interactive Codex TUI, dispatching to either the legacy implementation or the
@@ -968,7 +971,10 @@ fn confirm(prompt: &str) -> std::io::Result<bool> {
 /// TUI frontend to launch. The full configuration is still loaded later by the interactive TUI.
 async fn is_tui2_enabled(cli: &TuiCli) -> std::io::Result<bool> {
     let raw_overrides = cli.config_overrides.raw_overrides.clone();
-    let overrides_cli = CliConfigOverrides { raw_overrides };
+    let overrides_cli = CliConfigOverrides {
+        raw_overrides,
+        mcp_startup_mode: cli.config_overrides.mcp_startup_mode.clone(),
+    };
     let cli_kv_overrides = overrides_cli
         .parse_overrides()
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e))?;
@@ -1088,6 +1094,9 @@ fn merge_interactive_cli_flags(interactive: &mut TuiCli, subcommand_cli: TuiCli)
         .config_overrides
         .raw_overrides
         .extend(subcommand_cli.config_overrides.raw_overrides);
+    if let Some(mode) = subcommand_cli.config_overrides.mcp_startup_mode {
+        interactive.config_overrides.mcp_startup_mode = Some(mode);
+    }
 }
 
 fn print_completion(cmd: CompletionCommand) {

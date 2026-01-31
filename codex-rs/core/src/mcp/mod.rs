@@ -19,6 +19,7 @@ use crate::CodexAuth;
 use crate::config::Config;
 use crate::config::types::McpServerConfig;
 use crate::config::types::McpServerTransportConfig;
+use crate::config::types::McpStartupMode;
 use crate::features::Feature;
 use crate::mcp::auth::compute_auth_statuses;
 use crate::mcp_connection_manager::McpConnectionManager;
@@ -149,6 +150,7 @@ pub async fn collect_mcp_snapshot(config: &Config) -> McpListToolsResponseEvent 
             resources: HashMap::new(),
             resource_templates: HashMap::new(),
             auth_statuses: HashMap::new(),
+            server_states: HashMap::new(),
         };
     }
 
@@ -167,6 +169,9 @@ pub async fn collect_mcp_snapshot(config: &Config) -> McpListToolsResponseEvent 
         sandbox_cwd: env::current_dir().unwrap_or_else(|_| PathBuf::from("/")),
     };
 
+    // Snapshot collection should not inherit lazy startup behavior.
+    let startup_mode = McpStartupMode::Eager;
+
     mcp_connection_manager
         .initialize(
             &mcp_servers,
@@ -176,6 +181,8 @@ pub async fn collect_mcp_snapshot(config: &Config) -> McpListToolsResponseEvent 
             cancel_token.clone(),
             sandbox_state,
             None,
+            startup_mode,
+            config.codex_home.clone(),
         )
         .await;
 
@@ -225,6 +232,7 @@ pub(crate) async fn collect_mcp_snapshot_from_manager(
         mcp_connection_manager.list_all_resources(),
         mcp_connection_manager.list_all_resource_templates(),
     );
+    let server_states = mcp_connection_manager.list_server_snapshot_states().await;
 
     let auth_statuses = auth_status_entries
         .iter()
@@ -239,6 +247,7 @@ pub(crate) async fn collect_mcp_snapshot_from_manager(
         resources,
         resource_templates,
         auth_statuses,
+        server_states,
     }
 }
 

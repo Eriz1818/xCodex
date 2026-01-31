@@ -216,6 +216,40 @@ impl ExclusionConfig {
     }
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+#[derive(Default)]
+pub enum McpStartupMode {
+    #[default]
+    Eager,
+    Lazy,
+    Manual,
+}
+
+impl std::fmt::Display for McpStartupMode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mode = match self {
+            Self::Eager => "eager",
+            Self::Lazy => "lazy",
+            Self::Manual => "manual",
+        };
+        write!(f, "{mode}")
+    }
+}
+
+impl std::str::FromStr for McpStartupMode {
+    type Err = &'static str;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "eager" => Ok(Self::Eager),
+            "lazy" => Ok(Self::Lazy),
+            "manual" => Ok(Self::Manual),
+            _ => Err("invalid MCP startup mode"),
+        }
+    }
+}
+
 #[derive(Serialize, Debug, Clone, PartialEq)]
 pub struct McpServerConfig {
     #[serde(flatten)]
@@ -252,6 +286,9 @@ pub struct McpServerConfig {
     /// Optional OAuth scopes to request during MCP login.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub scopes: Option<Vec<String>>,
+    /// Override startup behavior for this MCP server.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub startup_mode: Option<McpStartupMode>,
 }
 
 // Raw MCP config shape used for deserialization and JSON Schema generation.
@@ -294,6 +331,8 @@ pub(crate) struct RawMcpServerConfig {
     pub disabled_tools: Option<Vec<String>>,
     #[serde(default)]
     pub scopes: Option<Vec<String>>,
+    #[serde(default)]
+    pub startup_mode: Option<McpStartupMode>,
 }
 
 impl<'de> Deserialize<'de> for McpServerConfig {
@@ -316,6 +355,7 @@ impl<'de> Deserialize<'de> for McpServerConfig {
         let enabled_tools = raw.enabled_tools.clone();
         let disabled_tools = raw.disabled_tools.clone();
         let scopes = raw.scopes.clone();
+        let startup_mode = raw.startup_mode;
 
         fn throw_if_set<E, T>(transport: &str, field: &str, value: Option<&T>) -> Result<(), E>
         where
@@ -368,11 +408,12 @@ impl<'de> Deserialize<'de> for McpServerConfig {
             tool_timeout_sec,
             enabled,
             disabled_reason: None,
-            enabled_tools,
-            disabled_tools,
-            scopes,
-        })
-    }
+        enabled_tools,
+        disabled_tools,
+        scopes,
+        startup_mode,
+    })
+}
 }
 
 const fn default_enabled() -> bool {

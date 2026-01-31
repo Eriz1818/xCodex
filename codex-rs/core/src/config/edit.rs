@@ -157,6 +157,9 @@ mod document_helpers {
         if let Some(timeout) = config.tool_timeout_sec {
             entry["tool_timeout_sec"] = value(timeout.as_secs_f64());
         }
+        if let Some(startup_mode) = config.startup_mode {
+            entry["startup_mode"] = value(startup_mode.to_string());
+        }
         if let Some(enabled_tools) = &config.enabled_tools
             && !enabled_tools.is_empty()
         {
@@ -1378,6 +1381,7 @@ gpt-5 = "gpt-5.1"
                 tool_timeout_sec: None,
                 enabled_tools: Some(vec!["one".to_string(), "two".to_string()]),
                 disabled_tools: None,
+                startup_mode: None,
                 scopes: None,
             },
         );
@@ -1401,6 +1405,7 @@ gpt-5 = "gpt-5.1"
                 tool_timeout_sec: None,
                 enabled_tools: None,
                 disabled_tools: Some(vec!["forbidden".to_string()]),
+                startup_mode: None,
                 scopes: None,
             },
         );
@@ -1467,6 +1472,7 @@ foo = { command = "cmd" }
                 tool_timeout_sec: None,
                 enabled_tools: None,
                 disabled_tools: None,
+                startup_mode: None,
                 scopes: None,
             },
         );
@@ -1512,6 +1518,7 @@ foo = { command = "cmd" } # keep me
                 tool_timeout_sec: None,
                 enabled_tools: None,
                 disabled_tools: None,
+                startup_mode: None,
                 scopes: None,
             },
         );
@@ -1556,6 +1563,7 @@ foo = { command = "cmd", args = ["--flag"] } # keep me
                 tool_timeout_sec: None,
                 enabled_tools: None,
                 disabled_tools: None,
+                startup_mode: None,
                 scopes: None,
             },
         );
@@ -1601,6 +1609,7 @@ foo = { command = "cmd" }
                 tool_timeout_sec: None,
                 enabled_tools: None,
                 disabled_tools: None,
+                startup_mode: None,
                 scopes: None,
             },
         );

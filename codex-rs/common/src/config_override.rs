@@ -9,6 +9,7 @@
 
 use clap::ArgAction;
 use clap::Parser;
+use codex_core::config::types::McpStartupMode;
 use serde::de::Error as SerdeError;
 use toml::Value;
 
@@ -34,13 +35,30 @@ pub struct CliConfigOverrides {
         global = true,
     )]
     pub raw_overrides: Vec<String>,
+
+    /// Override the default MCP startup policy for this run.
+    /// Equivalent to `-c mcp_startup_mode=<mode>`.
+    #[arg(
+        long = "mcp-startup-mode",
+        value_name = "MODE",
+        value_parser = ["eager", "lazy", "manual"],
+        global = true,
+    )]
+    pub mcp_startup_mode: Option<String>,
 }
 
 impl CliConfigOverrides {
     /// Parse the raw strings captured from the CLI into a list of `(path,
     /// value)` tuples where `value` is a `serde_json::Value`.
     pub fn parse_overrides(&self) -> Result<Vec<(String, Value)>, String> {
-        self.raw_overrides
+        let mut raw_overrides = self.raw_overrides.clone();
+        if let Some(mode) = self.mcp_startup_mode.as_deref() {
+            let parsed = mode.parse::<McpStartupMode>().map_err(|_| {
+                format!("Invalid mcp startup mode '{mode}'. Use eager, lazy, or manual.")
+            })?;
+            raw_overrides.push(format!("mcp_startup_mode=\"{parsed}\""));
+        }
+        raw_overrides
             .iter()
             .map(|s| {
                 // Only split on the *first* '=' so values are free to contain
@@ -144,6 +162,7 @@ fn parse_toml_value(raw: &str) -> Result<Value, toml::de::Error> {
 #[cfg(all(test, feature = "cli"))]
 mod tests {
     use super::*;
+    use pretty_assertions::assert_eq;
 
     #[test]
     fn parses_basic_scalar() {
@@ -178,5 +197,21 @@ mod tests {
         let tbl = v.as_table().expect("table");
         assert_eq!(tbl.get("a").unwrap().as_integer(), Some(1));
         assert_eq!(tbl.get("b").unwrap().as_integer(), Some(2));
+    }
+
+    #[test]
+    fn parses_mcp_startup_mode_override() {
+        let overrides = CliConfigOverrides {
+            raw_overrides: Vec::new(),
+            mcp_startup_mode: Some("lazy".to_string()),
+        };
+        let parsed = overrides.parse_overrides().expect("parse");
+        assert_eq!(
+            parsed,
+            vec![(
+                "mcp_startup_mode".to_string(),
+                Value::String("lazy".to_string())
+            )]
+        );
     }
 }

@@ -159,6 +159,14 @@ pub enum Op {
         servers: Vec<String>,
     },
 
+    /// Manually start a set of configured MCP servers.
+    ///
+    /// This is intended for manual MCP startup mode or on-demand server loads.
+    McpLoad {
+        /// Names of MCP servers to load.
+        servers: Vec<String>,
+    },
+
     /// Override the startup timeout for an MCP server for the current session.
     ///
     /// This does not persist to disk; UIs may additionally persist the configuration.
@@ -2154,6 +2162,17 @@ pub struct McpListToolsResponseEvent {
     pub resource_templates: std::collections::HashMap<String, Vec<McpResourceTemplate>>,
     /// Authentication status for each configured MCP server.
     pub auth_statuses: std::collections::HashMap<String, McpAuthStatus>,
+    /// Snapshot state for each MCP server (cached vs ready).
+    #[serde(default)]
+    pub server_states: std::collections::HashMap<String, McpServerSnapshotState>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(rename_all = "snake_case")]
+pub enum McpServerSnapshotState {
+    Cached,
+    Ready,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]

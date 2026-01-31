@@ -15,6 +15,7 @@ use codex_core::config::types::UnattestedOutputPolicy;
 use codex_core::protocol::AskForApproval;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::McpInvocation;
+use codex_core::protocol::McpStartupStatus;
 use codex_core::protocol::McpToolCallBeginEvent;
 use codex_core::protocol::Op;
 use codex_core::protocol::SandboxPolicy;
@@ -28,7 +29,9 @@ use core_test_support::skip_if_no_network;
 use core_test_support::stdio_server_bin;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
+use core_test_support::wait_for_event_match;
 use mcp_types::ContentBlock;
+use pretty_assertions::assert_eq;
 use serde_json::Value;
 use serde_json::json;
 use serial_test::serial;
@@ -95,6 +98,7 @@ async fn stdio_server_round_trip() -> anyhow::Result<()> {
                     tool_timeout_sec: None,
                     enabled_tools: None,
                     disabled_tools: None,
+                    startup_mode: None,
                     scopes: None,
                 },
             );
@@ -431,6 +435,141 @@ async fn mcp_unattested_output_confirm_approved_passes_output() -> anyhow::Resul
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 #[serial(mcp_test_value)]
+async fn lazy_startup_starts_on_tool_call() -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = responses::start_mock_server().await;
+
+    let call_id = "call-lazy-1";
+    let server_name = "rmcp";
+    let tool_name = format!("mcp__{server_name}__echo");
+
+    mount_sse_once(
+        &server,
+        responses::sse(vec![
+            responses::ev_response_created("resp-lazy-1"),
+            responses::ev_function_call(call_id, &tool_name, "{\"message\":\"ping\"}"),
+            responses::ev_completed("resp-lazy-1"),
+        ]),
+    )
+    .await;
+    mount_sse_once(
+        &server,
+        responses::sse(vec![
+            responses::ev_assistant_message("msg-lazy-1", "rmcp echo tool completed."),
+            responses::ev_completed("resp-lazy-2"),
+        ]),
+    )
+    .await;
+
+    let rmcp_test_server_bin = stdio_server_bin()?;
+
+    let fixture = test_codex()
+        .with_config(move |config| {
+            config.mcp_startup_mode = codex_core::config::types::McpStartupMode::Lazy;
+            let mut servers = config.mcp_servers.get().clone();
+            servers.insert(
+                server_name.to_string(),
+                McpServerConfig {
+                    transport: McpServerTransportConfig::Stdio {
+                        command: rmcp_test_server_bin,
+                        args: Vec::new(),
+                        env: None,
+                        env_vars: Vec::new(),
+                        cwd: None,
+                    },
+                    enabled: true,
+                    disabled_reason: None,
+                    startup_timeout_sec: Some(Duration::from_secs(10)),
+                    tool_timeout_sec: None,
+                    enabled_tools: None,
+                    disabled_tools: None,
+                    startup_mode: None,
+                },
+            );
+            config
+                .mcp_servers
+                .set(servers)
+                .expect("test mcp servers should accept any configuration");
+        })
+        .build(&server)
+        .await?;
+    let session_model = fixture.session_configured.model.clone();
+
+    fixture
+        .codex
+        .submit(Op::UserTurn {
+            items: vec![UserInput::Text {
+                text: "call the rmcp echo tool".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            cwd: fixture.cwd.path().to_path_buf(),
+            approval_policy: AskForApproval::Never,
+            sandbox_policy: SandboxPolicy::ReadOnly,
+            model: session_model,
+            effort: None,
+            summary: ReasoningSummary::Auto,
+            collaboration_mode: None,
+        })
+        .await?;
+
+    let starting = wait_for_event_match(&fixture.codex, |ev| match ev {
+        EventMsg::McpStartupUpdate(update)
+            if update.server == server_name
+                && matches!(update.status, McpStartupStatus::Starting) =>
+        {
+            Some(update.clone())
+        }
+        _ => None,
+    })
+    .await;
+    assert_eq!(starting.server, server_name);
+    assert!(matches!(starting.status, McpStartupStatus::Starting));
+
+    let ready = wait_for_event_match(&fixture.codex, |ev| match ev {
+        EventMsg::McpStartupUpdate(update)
+            if update.server == server_name && matches!(update.status, McpStartupStatus::Ready) =>
+        {
+            Some(update.clone())
+        }
+        _ => None,
+    })
+    .await;
+    assert_eq!(ready.server, server_name);
+
+    let begin_event = wait_for_event(&fixture.codex, |ev| {
+        matches!(ev, EventMsg::McpToolCallBegin(_))
+    })
+    .await;
+    let EventMsg::McpToolCallBegin(begin) = begin_event else {
+        unreachable!("event guard guarantees McpToolCallBegin");
+    };
+    assert_eq!(begin.invocation.server, server_name);
+    assert_eq!(begin.invocation.tool, "echo");
+
+    let end_event = wait_for_event(&fixture.codex, |ev| {
+        matches!(ev, EventMsg::McpToolCallEnd(_))
+    })
+    .await;
+    let EventMsg::McpToolCallEnd(end) = end_event else {
+        unreachable!("event guard guarantees McpToolCallEnd");
+    };
+    let result = end
+        .result
+        .as_ref()
+        .expect("rmcp echo tool should return success");
+    assert_eq!(result.is_error, Some(false));
+
+    wait_for_event(&fixture.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    server.verify().await;
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+#[serial(mcp_test_value)]
 async fn stdio_image_responses_round_trip() -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
 
@@ -485,6 +624,7 @@ async fn stdio_image_responses_round_trip() -> anyhow::Result<()> {
                     tool_timeout_sec: None,
                     enabled_tools: None,
                     disabled_tools: None,
+                    startup_mode: None,
                     scopes: None,
                 },
             );
@@ -684,6 +824,7 @@ async fn stdio_image_completions_round_trip() -> anyhow::Result<()> {
                     tool_timeout_sec: None,
                     enabled_tools: None,
                     disabled_tools: None,
+                    startup_mode: None,
                     scopes: None,
                 },
             );
@@ -831,6 +972,7 @@ async fn stdio_server_propagates_whitelisted_env_vars() -> anyhow::Result<()> {
                     tool_timeout_sec: None,
                     enabled_tools: None,
                     disabled_tools: None,
+                    startup_mode: None,
                     scopes: None,
                 },
             );
@@ -989,6 +1131,7 @@ async fn streamable_http_tool_call_round_trip() -> anyhow::Result<()> {
                     tool_timeout_sec: None,
                     enabled_tools: None,
                     disabled_tools: None,
+                    startup_mode: None,
                     scopes: None,
                 },
             );
@@ -1179,6 +1322,7 @@ async fn streamable_http_with_oauth_round_trip() -> anyhow::Result<()> {
                     tool_timeout_sec: None,
                     enabled_tools: None,
                     disabled_tools: None,
+                    startup_mode: None,
                     scopes: None,
                 },
             );

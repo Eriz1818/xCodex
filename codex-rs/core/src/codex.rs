@@ -109,6 +109,7 @@ use crate::config::ConstraintResult;
 use crate::config::GhostSnapshotConfig;
 use crate::config::resolve_web_search_mode_for_turn;
 use crate::config::types::McpServerConfig;
+use crate::config::types::McpStartupMode;
 use crate::config::types::ShellEnvironmentPolicy;
 use crate::config::types::UnattestedOutputPolicy;
 use crate::context_manager::ContextManager;
@@ -1046,6 +1047,8 @@ impl Session {
                     &sess.conversation_id.to_string(),
                     &session_configuration.cwd,
                 )),
+                config.mcp_startup_mode,
+                config.codex_home.clone(),
             )
             .await;
 
@@ -2524,6 +2527,17 @@ impl Session {
             sandbox_cwd: turn_context.cwd.clone(),
         };
         let cancel_token = self.reset_mcp_startup_cancellation_token().await;
+        let startup_mode = {
+            let state = self.state.lock().await;
+            state
+                .session_configuration
+                .original_config_do_not_use
+                .mcp_startup_mode
+        };
+        let startup_mode = match startup_mode {
+            McpStartupMode::Manual => McpStartupMode::Eager,
+            other => other,
+        };
 
         let mut refreshed_manager = McpConnectionManager::default();
         refreshed_manager
@@ -2539,6 +2553,8 @@ impl Session {
                     &self.conversation_id.to_string(),
                     &turn_context.cwd,
                 )),
+                startup_mode,
+                turn_context.codex_home.clone(),
             )
             .await;
 
@@ -2712,6 +2728,9 @@ async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiv
             }
             Op::McpRetry { servers } => {
                 handlers::mcp_retry(&sess, &config, sub.id.clone(), servers).await;
+            }
+            Op::McpLoad { servers } => {
+                handlers::mcp_load(&sess, &config, sub.id.clone(), servers).await;
             }
             Op::McpSetStartupTimeout {
                 server,
@@ -3324,6 +3343,57 @@ mod handlers {
                 hook_context,
             )
             .await;
+    }
+
+    pub async fn mcp_load(
+        sess: &Arc<Session>,
+        config: &Arc<Config>,
+        sub_id: String,
+        servers: Vec<String>,
+    ) {
+        let mut load_targets = Vec::new();
+        for server in servers {
+            match config.mcp_servers.get().get(&server) {
+                Some(cfg) if cfg.enabled => load_targets.push(server),
+                Some(_) => {
+                    sess.send_event_raw(Event {
+                        id: sub_id.clone(),
+                        msg: EventMsg::Warning(WarningEvent {
+                            message: format!(
+                                "MCP server `{server}` is disabled; enable it in config.toml before loading."
+                            ),
+                        }),
+                    })
+                    .await;
+                }
+                None => {
+                    sess.send_event_raw(Event {
+                        id: sub_id.clone(),
+                        msg: EventMsg::Warning(WarningEvent {
+                            message: format!("Unknown MCP server `{server}`."),
+                        }),
+                    })
+                    .await;
+                }
+            }
+        }
+
+        if load_targets.is_empty() {
+            return;
+        }
+
+        let mcp_manager = sess.services.mcp_connection_manager.read().await;
+        for server in &load_targets {
+            if let Err(err) = mcp_manager.load_servers(std::slice::from_ref(server)).await {
+                sess.send_event_raw(Event {
+                    id: sub_id.clone(),
+                    msg: EventMsg::Warning(WarningEvent {
+                        message: format!("Failed to load MCP server `{server}`: {err}"),
+                    }),
+                })
+                .await;
+            }
+        }
     }
 
     pub async fn mcp_set_startup_timeout(
