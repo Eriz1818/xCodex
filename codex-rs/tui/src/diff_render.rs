@@ -37,11 +37,16 @@ enum DiffLineType {
 pub struct DiffSummary {
     changes: HashMap<PathBuf, FileChange>,
     cwd: PathBuf,
+    diff_highlight: bool,
 }
 
 impl DiffSummary {
-    pub fn new(changes: HashMap<PathBuf, FileChange>, cwd: PathBuf) -> Self {
-        Self { changes, cwd }
+    pub fn new(changes: HashMap<PathBuf, FileChange>, cwd: PathBuf, diff_highlight: bool) -> Self {
+        Self {
+            changes,
+            cwd,
+            diff_highlight,
+        }
     }
 }
 
@@ -73,7 +78,11 @@ impl From<DiffSummary> for Box<dyn Renderable> {
             rows.push(Box::new(path));
             rows.push(Box::new(RtLine::from("")));
             rows.push(Box::new(InsetRenderable::new(
-                Box::new(row.change) as Box<dyn Renderable>,
+                Box::new(ChangeRenderable::new(
+                    row.change,
+                    val.diff_highlight,
+                    row.lang.clone(),
+                )) as Box<dyn Renderable>,
                 Insets::tlbr(0, 2, 0, 0),
             )));
         }
@@ -102,6 +111,48 @@ struct Row {
     removed: usize,
     change: FileChange,
     lang: Option<String>,
+}
+
+struct ChangeRenderable {
+    change: FileChange,
+    diff_highlight: bool,
+    lang: Option<String>,
+}
+
+impl ChangeRenderable {
+    fn new(change: FileChange, diff_highlight: bool, lang: Option<String>) -> Self {
+        Self {
+            change,
+            diff_highlight,
+            lang,
+        }
+    }
+}
+
+impl Renderable for ChangeRenderable {
+    fn render(&self, area: Rect, buf: &mut Buffer) {
+        let mut lines = vec![];
+        render_change(
+            &self.change,
+            &mut lines,
+            area.width as usize,
+            self.diff_highlight,
+            self.lang.as_deref(),
+        );
+        Paragraph::new(lines).render(area, buf);
+    }
+
+    fn desired_height(&self, width: u16) -> u16 {
+        let mut lines = vec![];
+        render_change(
+            &self.change,
+            &mut lines,
+            width as usize,
+            self.diff_highlight,
+            self.lang.as_deref(),
+        );
+        lines.len() as u16
+    }
 }
 
 fn collect_rows(changes: &HashMap<PathBuf, FileChange>) -> Vec<Row> {

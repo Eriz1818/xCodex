@@ -24,7 +24,7 @@ use crate::model_migration::ModelMigrationOutcome;
 use crate::model_migration::migration_copy_for_models;
 use crate::model_migration::run_model_migration_prompt;
 use crate::pager_overlay::Overlay;
-use crate::render::highlight::highlight_bash_to_lines;
+use crate::render::highlight::highlight_bash_with_heredoc_overrides;
 use crate::render::highlight::syntax_highlighting_enabled;
 use crate::render::renderable::Renderable;
 use crate::resume_picker::SessionSelection;
@@ -2517,9 +2517,14 @@ impl App {
                 self.chat_widget.handle_manage_skills_closed();
             }
             AppEvent::FullScreenApprovalRequest(request) => match request {
-                ApprovalRequest::ApplyPatch { cwd, changes, .. } => {
+                ApprovalRequest::ApplyPatch {
+                    cwd,
+                    changes,
+                    diff_highlight,
+                    ..
+                } => {
                     let _ = tui.enter_alt_screen();
-                    let diff_summary = DiffSummary::new(changes, cwd);
+                    let diff_summary = DiffSummary::new(changes, cwd, diff_highlight);
                     self.overlay = Some(Overlay::new_static_with_renderables(
                         vec![diff_summary.into()],
                         "P A T C H".to_string(),
@@ -2529,7 +2534,7 @@ impl App {
                     let _ = tui.enter_alt_screen();
                     let full_cmd = strip_bash_lc_and_escape(&command);
                     let full_cmd_lines = if syntax_highlighting_enabled() {
-                        highlight_bash_to_lines(&full_cmd)
+                        highlight_bash_with_heredoc_overrides(&full_cmd)
                     } else if full_cmd.is_empty() {
                         vec![Line::from("")]
                     } else {

@@ -2219,6 +2219,7 @@ impl ChatWidget {
             reason: ev.reason,
             changes: ev.changes.clone(),
             cwd: self.config.cwd.clone(),
+            diff_highlight: self.config.tui_transcript_diff_highlight,
         };
         self.bottom_pane
             .push_approval_request(request, &self.config.features);
