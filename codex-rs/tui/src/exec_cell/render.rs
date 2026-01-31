@@ -374,6 +374,18 @@ impl ExecCell {
         let [call] = &self.calls.as_slice() else {
             panic!("Expected exactly one call in a command display cell");
         };
+
+        fn plain_lines(command: &str) -> Vec<Line<'static>> {
+            if command.is_empty() {
+                vec![Line::from("")]
+            } else {
+                command
+                    .lines()
+                    .map(|line| Line::from(line.to_string()))
+                    .collect()
+            }
+        }
+
         let layout = EXEC_DISPLAY_LAYOUT;
         let success = call.output.as_ref().map(|o| o.exit_code == 0);
         let bullet = match success {
@@ -404,7 +416,11 @@ impl ExecCell {
         } else {
             strip_bash_lc_and_escape(&call.command)
         };
-        let highlighted_lines = highlight_bash_with_heredoc_overrides(&cmd_display);
+        let highlighted_lines = if syntax_highlighting_enabled() {
+            highlight_bash_with_heredoc_overrides(&cmd_display)
+        } else {
+            plain_lines(&cmd_display)
+        };
 
         let continuation_wrap_width = layout.command_continuation.wrap_width(width);
         let continuation_opts =
