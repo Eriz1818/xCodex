@@ -59,13 +59,34 @@ jobs:
         working-directory: codex-rs
     steps:
       - uses: actions/checkout@v6
-      - uses: dtolnay/rust-toolchain@1.92
+      - uses: dtolnay/rust-toolchain@1.93
         with:
           components: rustfmt
       - name: cargo fmt
         run: cargo fmt -- --check
       - name: Verify codegen for mcp-types
         run: ./mcp-types/check_lib_rs.py
+      - name: Verify codegen for hooks schema/types
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cargo run -p codex-core --bin hooks_schema --features hooks-schema --quiet > ../docs/xcodex/hooks.schema.json
+          cargo run -p codex-core --bin hooks_typescript --features hooks-schema --quiet > common/src/hooks_sdk_assets/js/xcodex_hooks.d.ts
+          cargo run -p codex-core --bin hooks_python_types --features hooks-schema --quiet > common/src/hooks_sdk_assets/python/xcodex_hooks_types.py
+          cargo run -p codex-core --bin hooks_python_models --features hooks-schema --quiet > common/src/hooks_sdk_assets/python/xcodex_hooks_models.py
+          cargo run -p codex-core --bin hooks_python_models --features hooks-schema --quiet > ../examples/hooks/xcodex_hooks_models.py
+          cargo run -p codex-core --bin hooks_go_types --features hooks-schema --quiet > common/src/hooks_sdk_assets/go/hooksdk/types.go
+          cargo run -p codex-core --bin hooks_rust_sdk --features hooks-schema --quiet > hooks-sdk/src/generated.rs
+
+          git diff --exit-code -- \
+            ../docs/xcodex/hooks.schema.json \
+            common/src/hooks_sdk_assets/js/xcodex_hooks.d.ts \
+            common/src/hooks_sdk_assets/python/xcodex_hooks_types.py \
+            common/src/hooks_sdk_assets/python/xcodex_hooks_models.py \
+            ../examples/hooks/xcodex_hooks_models.py \
+            hooks-sdk/src/generated.rs \
+            common/src/hooks_sdk_assets/go/hooksdk/types.go
       - name: Verify codegen for hooks schema/types
         shell: bash
         run: |
@@ -135,12 +156,207 @@ jobs:
         working-directory: codex-rs
     steps:
       - uses: actions/checkout@v6
-      - uses: dtolnay/rust-toolchain@1.92
+      - uses: dtolnay/rust-toolchain@1.93
       - uses: taiki-e/install-action@44c6d64aa62cd779e873306675c7a58e86d6d532 # v2
         with:
           tool: cargo-shear@1.5.1
       - name: cargo shear
         run: cargo shear
+
+  bazel_build:
+    name: Bazel build (cli)
+    runs-on: ubuntu-24.04
+    needs: changed
+    if: ${{ needs.changed.outputs.codex == 'true' || needs.changed.outputs.workflows == 'true' || github.event_name == 'push' }}
+    steps:
+      - uses: actions/checkout@v6
+
+      # Some builds rely on DotSlash being installed.
+      - uses: facebook/install-dotslash@v2
+
+      - name: Make DotSlash available in PATH
+        run: sudo cp "$(which dotslash)" /usr/local/bin
+
+      - name: Set Cargo version env (for Bazel)
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo_ver="$(grep -m1 '^version' codex-rs/Cargo.toml | sed -E 's/version *= *\"([^\"]+)\".*/\1/')"
+          base_ver="${cargo_ver%%-*}"
+          IFS='.' read -r major minor patch <<<"$base_ver"
+
+          echo "CARGO_PKG_VERSION=$cargo_ver" >> "$GITHUB_ENV"
+          echo "CARGO_PKG_VERSION_MAJOR=$major" >> "$GITHUB_ENV"
+          echo "CARGO_PKG_VERSION_MINOR=$minor" >> "$GITHUB_ENV"
+          echo "CARGO_PKG_VERSION_PATCH=$patch" >> "$GITHUB_ENV"
+
+      - name: Set up Bazel
+        uses: bazelbuild/setup-bazelisk@v3
+
+      - name: bazel build //codex-rs/cli:codex (local)
+        shell: bash
+        run: |
+          set -euo pipefail
+          bazel build \
+            --bes_backend= \
+            --bes_results_url= \
+            --remote_cache= \
+            --remote_executor= \
+            //codex-rs/cli:codex
+
+  hooks_templates_smoke:
+    name: Hooks templates smoke (docker)
+    runs-on: ubuntu-24.04
+    needs: changed
+    if: ${{ needs.changed.outputs.codex == 'true' || needs.changed.outputs.workflows == 'true' || github.event_name == 'push' }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Smoke test Python template (run)
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          docker run --rm \
+            -v "${GITHUB_WORKSPACE}:/ws" \
+            python:3.11 \
+            bash -lc '
+              set -euo pipefail
+
+              CODEX_HOME="$(mktemp -d)"
+              export CODEX_HOME
+              mkdir -p "${CODEX_HOME}/hooks/templates/python"
+              cp /ws/codex-rs/common/src/hooks_sdk_assets/python/xcodex_hooks.py "${CODEX_HOME}/hooks/"
+              cp /ws/codex-rs/common/src/hooks_sdk_assets/python/xcodex_hooks_types.py "${CODEX_HOME}/hooks/"
+              cp /ws/codex-rs/common/src/hooks_sdk_assets/python/xcodex_hooks_runtime.py "${CODEX_HOME}/hooks/"
+              cp /ws/codex-rs/common/src/hooks_sdk_assets/python/xcodex_hooks_models.py "${CODEX_HOME}/hooks/"
+              cp /ws/codex-rs/common/src/hooks_sdk_assets/python/template_hook.py "${CODEX_HOME}/hooks/templates/python/log_jsonl.py"
+
+              payload_path="${CODEX_HOME}/payload.json"
+              printf "%s" "{\"schema-version\":1,\"type\":\"tool-call-finished\",\"event-id\":\"e\",\"timestamp\":\"t\",\"thread-id\":\"th\",\"turn-id\":\"tu\",\"cwd\":\"/tmp\",\"model-request-id\":\"m\",\"attempt\":1,\"tool-name\":\"exec\",\"call-id\":\"c\",\"status\":\"completed\",\"duration-ms\":1,\"success\":true,\"output-bytes\":0,\"__marker__\":\"py\"}" > "${payload_path}"
+
+              printf "%s" "{\"payload-path\":\"${payload_path}\"}" | python3 "${CODEX_HOME}/hooks/templates/python/log_jsonl.py"
+              grep -Eq "\"__marker__\"\\s*:\\s*\"py\"" "${CODEX_HOME}/hooks.jsonl"
+            '
+
+      - name: Smoke test Node.js template (run)
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          docker run --rm \
+            -v "${GITHUB_WORKSPACE}:/ws" \
+            node:22 \
+            bash -lc '
+              set -euo pipefail
+
+              CODEX_HOME="$(mktemp -d)"
+              export CODEX_HOME
+              mkdir -p "${CODEX_HOME}/hooks/templates/js"
+              cp /ws/codex-rs/common/src/hooks_sdk_assets/js/xcodex_hooks.mjs "${CODEX_HOME}/hooks/"
+              cp /ws/codex-rs/common/src/hooks_sdk_assets/js/template_hook.mjs "${CODEX_HOME}/hooks/templates/js/log_jsonl.mjs"
+
+              payload_path="${CODEX_HOME}/payload.json"
+              printf "%s" "{\"schema-version\":1,\"type\":\"tool-call-finished\",\"event-id\":\"e\",\"timestamp\":\"t\",\"thread-id\":\"th\",\"turn-id\":\"tu\",\"cwd\":\"/tmp\",\"model-request-id\":\"m\",\"attempt\":1,\"tool-name\":\"exec\",\"call-id\":\"c\",\"status\":\"completed\",\"duration-ms\":1,\"success\":true,\"output-bytes\":0,\"__marker__\":\"node\"}" > "${payload_path}"
+
+              printf "%s" "{\"payload-path\":\"${payload_path}\"}" | node "${CODEX_HOME}/hooks/templates/js/log_jsonl.mjs"
+              grep -q "\"__marker__\":\"node\"" "${CODEX_HOME}/hooks.jsonl"
+            '
+
+      - name: Smoke test Ruby template (run)
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          docker run --rm \
+            -v "${GITHUB_WORKSPACE}:/ws" \
+            ruby:3.3 \
+            bash -lc '
+              set -euo pipefail
+
+              CODEX_HOME="$(mktemp -d)"
+              export CODEX_HOME
+              mkdir -p "${CODEX_HOME}/hooks/templates/ruby"
+              cp /ws/codex-rs/common/src/hooks_sdk_assets/ruby/xcodex_hooks.rb "${CODEX_HOME}/hooks/"
+              cp /ws/codex-rs/common/src/hooks_sdk_assets/ruby/template_hook.rb "${CODEX_HOME}/hooks/templates/ruby/log_jsonl.rb"
+
+              payload_path="${CODEX_HOME}/payload.json"
+              printf "%s" "{\"schema-version\":1,\"type\":\"tool-call-finished\",\"event-id\":\"e\",\"timestamp\":\"t\",\"thread-id\":\"th\",\"turn-id\":\"tu\",\"cwd\":\"/tmp\",\"model-request-id\":\"m\",\"attempt\":1,\"tool-name\":\"exec\",\"call-id\":\"c\",\"status\":\"completed\",\"duration-ms\":1,\"success\":true,\"output-bytes\":0,\"__marker__\":\"rb\"}" > "${payload_path}"
+
+              printf "%s" "{\"payload-path\":\"${payload_path}\"}" | ruby "${CODEX_HOME}/hooks/templates/ruby/log_jsonl.rb"
+              grep -q "\"__marker__\":\"rb\"" "${CODEX_HOME}/hooks.jsonl"
+            '
+
+      - name: Smoke test Go template (build + run)
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          docker run --rm \
+            -v "${GITHUB_WORKSPACE}:/ws" \
+            -w /ws/codex-rs/common/src/hooks_sdk_assets/go \
+            golang:1.22 \
+            bash -lc '
+              set -euo pipefail
+              export PATH="/usr/local/go/bin:${PATH}"
+              go build -o /tmp/hook ./cmd/log_jsonl
+
+              CODEX_HOME="$(mktemp -d)"
+              export CODEX_HOME
+              payload_path="${CODEX_HOME}/payload.json"
+              printf "%s" "{\"schema-version\":1,\"type\":\"tool-call-finished\",\"event-id\":\"e\",\"timestamp\":\"t\",\"thread-id\":\"th\",\"turn-id\":\"tu\",\"cwd\":\"/tmp\",\"model-request-id\":\"m\",\"attempt\":1,\"tool-name\":\"exec\",\"call-id\":\"c\",\"status\":\"completed\",\"duration-ms\":1,\"success\":true,\"output-bytes\":0,\"__marker__\":\"go\"}" > "${payload_path}"
+
+              printf "%s" "{\"payload-path\":\"${payload_path}\"}" | /tmp/hook
+              grep -q "\"__marker__\":\"go\"" "${CODEX_HOME}/hooks.jsonl"
+            '
+
+      - name: Smoke test Java template (build + run)
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          docker run --rm \
+            -v "${GITHUB_WORKSPACE}:/ws" \
+            -w /ws/codex-rs/common/src/hooks_sdk_assets/java \
+            maven:3.9-eclipse-temurin-17 \
+            bash -lc '
+              set -euo pipefail
+              mvn -q -DskipTests -pl template -am package dependency:copy-dependencies
+
+              CODEX_HOME="$(mktemp -d)"
+              export CODEX_HOME
+              payload_path="${CODEX_HOME}/payload.json"
+              printf "%s" "{\"schema-version\":1,\"type\":\"tool-call-finished\",\"event-id\":\"e\",\"timestamp\":\"t\",\"thread-id\":\"th\",\"turn-id\":\"tu\",\"cwd\":\"/tmp\",\"model-request-id\":\"m\",\"attempt\":1,\"tool-name\":\"exec\",\"call-id\":\"c\",\"status\":\"completed\",\"duration-ms\":1,\"success\":true,\"output-bytes\":0,\"__marker__\":\"java\"}" > "${payload_path}"
+
+              printf "%s" "{\"payload-path\":\"${payload_path}\"}" \
+                | java -cp "template/target/classes:template/target/dependency/*" dev.xcodex.hooks.LogJsonlHook
+
+              grep -q "\"__marker__\":\"java\"" "${CODEX_HOME}/hooks.jsonl"
+            '
+
+      - name: Smoke test Rust template (build + run)
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          docker run --rm \
+            -v "${GITHUB_WORKSPACE}:/ws" \
+            -w /ws/codex-rs/common/src/hooks_sdk_assets/rust \
+            rust:1.90 \
+            bash -lc '
+              set -euo pipefail
+              cargo build --release
+
+              CODEX_HOME="$(mktemp -d)"
+              export CODEX_HOME
+              payload_path="${CODEX_HOME}/payload.json"
+              printf "%s" "{\"schema-version\":1,\"type\":\"tool-call-finished\",\"event-id\":\"e\",\"timestamp\":\"t\",\"thread-id\":\"th\",\"turn-id\":\"tu\",\"cwd\":\"/tmp\",\"model-request-id\":\"m\",\"attempt\":1,\"tool-name\":\"exec\",\"call-id\":\"c\",\"status\":\"completed\",\"duration-ms\":1,\"success\":true,\"output-bytes\":0,\"__marker__\":\"rust\"}" > "${payload_path}"
+
+              printf "%s" "{\"payload-path\":\"${payload_path}\"}" \
+                | ./target/release/xcodex-hooks-rust-template
+
+              grep -q "\"__marker__\":\"rust\"" "${CODEX_HOME}/hooks.jsonl"
+            '
 
   hooks_templates_smoke:
     name: Hooks templates smoke (docker)
@@ -388,7 +604,16 @@ jobs:
 
     steps:
       - uses: actions/checkout@v6
-      - uses: dtolnay/rust-toolchain@1.92
+      - name: Install UBSan runtime (musl)
+        if: ${{ matrix.target == 'x86_64-unknown-linux-musl' || matrix.target == 'aarch64-unknown-linux-musl' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if command -v apt-get >/dev/null 2>&1; then
+            sudo apt-get update -y
+            sudo DEBIAN_FRONTEND=noninteractive apt-get install -y libubsan1
+          fi
+      - uses: dtolnay/rust-toolchain@1.93
         with:
           targets: ${{ matrix.target }}
           components: clippy
@@ -404,6 +629,17 @@ jobs:
           set -euo pipefail
           python -V
           echo "PYO3_PYTHON=$(python -c 'import sys; print(sys.executable)')" >> "$GITHUB_ENV"
+
+      - if: ${{ matrix.target == 'x86_64-unknown-linux-musl' || matrix.target == 'aarch64-unknown-linux-musl'}}
+        name: Use hermetic Cargo home (musl)
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo_home="${GITHUB_WORKSPACE}/.cargo-home"
+          mkdir -p "${cargo_home}/bin"
+          echo "CARGO_HOME=${cargo_home}" >> "$GITHUB_ENV"
+          echo "${cargo_home}/bin" >> "$GITHUB_PATH"
+          : > "${cargo_home}/config.toml"
 
       - name: Compute lockfile hash
         id: lockhash
@@ -425,6 +661,10 @@ jobs:
             ~/.cargo/registry/index/
             ~/.cargo/registry/cache/
             ~/.cargo/git/db/
+            ${{ github.workspace }}/.cargo-home/bin/
+            ${{ github.workspace }}/.cargo-home/registry/index/
+            ${{ github.workspace }}/.cargo-home/registry/cache/
+            ${{ github.workspace }}/.cargo-home/git/db/
           key: cargo-home-${{ matrix.runner }}-${{ matrix.target }}-${{ matrix.profile }}-${{ steps.lockhash.outputs.hash }}-${{ steps.lockhash.outputs.toolchain_hash }}
           restore-keys: |
             cargo-home-${{ matrix.runner }}-${{ matrix.target }}-${{ matrix.profile }}-
@@ -468,6 +708,14 @@ jobs:
             sccache-${{ matrix.runner }}-${{ matrix.target }}-${{ matrix.profile }}-
 
       - if: ${{ matrix.target == 'x86_64-unknown-linux-musl' || matrix.target == 'aarch64-unknown-linux-musl'}}
+        name: Disable sccache wrapper (musl)
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "RUSTC_WRAPPER=" >> "$GITHUB_ENV"
+          echo "RUSTC_WORKSPACE_WRAPPER=" >> "$GITHUB_ENV"
+
+      - if: ${{ matrix.target == 'x86_64-unknown-linux-musl' || matrix.target == 'aarch64-unknown-linux-musl'}}
         name: Prepare APT cache directories (musl)
         shell: bash
         run: |
@@ -485,14 +733,72 @@ jobs:
           key: apt-${{ matrix.runner }}-${{ matrix.target }}-v1
 
       - if: ${{ matrix.target == 'x86_64-unknown-linux-musl' || matrix.target == 'aarch64-unknown-linux-musl'}}
+        name: Install Zig
+        uses: mlugg/setup-zig@v2
+        with:
+          version: 0.14.0
+
+      - if: ${{ matrix.target == 'x86_64-unknown-linux-musl' || matrix.target == 'aarch64-unknown-linux-musl'}}
         name: Install musl build tools
         env:
           DEBIAN_FRONTEND: noninteractive
+          TARGET: ${{ matrix.target }}
+          APT_UPDATE_ARGS: -o Acquire::Retries=3
+          APT_INSTALL_ARGS: --no-install-recommends
+        shell: bash
+        run: bash "${GITHUB_WORKSPACE}/.github/scripts/install-musl-build-tools.sh"
+
+      - if: ${{ matrix.target == 'x86_64-unknown-linux-musl' || matrix.target == 'aarch64-unknown-linux-musl'}}
+        name: Configure rustc UBSan wrapper (musl host)
         shell: bash
         run: |
           set -euo pipefail
-          sudo apt-get -y update -o Acquire::Retries=3
-          sudo apt-get -y install --no-install-recommends musl-tools pkg-config gcc
+          ubsan=""
+          if command -v ldconfig >/dev/null 2>&1; then
+            ubsan="$(ldconfig -p | grep -m1 'libubsan\.so\.1' | sed -E 's/.*=> (.*)$/\1/')"
+          fi
+          wrapper_root="${RUNNER_TEMP:-/tmp}"
+          wrapper="${wrapper_root}/rustc-ubsan-wrapper"
+          cat > "${wrapper}" <<EOF
+          #!/usr/bin/env bash
+          set -euo pipefail
+          if [[ -n "${ubsan}" ]]; then
+            export LD_PRELOAD="${ubsan}\${LD_PRELOAD:+:\${LD_PRELOAD}}"
+          fi
+          exec "\$1" "\${@:2}"
+          EOF
+          chmod +x "${wrapper}"
+          echo "RUSTC_WRAPPER=${wrapper}" >> "$GITHUB_ENV"
+          echo "RUSTC_WORKSPACE_WRAPPER=" >> "$GITHUB_ENV"
+
+      - if: ${{ matrix.target == 'x86_64-unknown-linux-musl' || matrix.target == 'aarch64-unknown-linux-musl'}}
+        name: Clear sanitizer flags (musl)
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Clear global Rust flags so host/proc-macro builds don't pull in UBSan.
+          echo "RUSTFLAGS=" >> "$GITHUB_ENV"
+          echo "CARGO_ENCODED_RUSTFLAGS=" >> "$GITHUB_ENV"
+          echo "RUSTDOCFLAGS=" >> "$GITHUB_ENV"
+          # Override any runner-level Cargo config rustflags as well.
+          echo "CARGO_BUILD_RUSTFLAGS=" >> "$GITHUB_ENV"
+          echo "CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS=" >> "$GITHUB_ENV"
+          echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_RUSTFLAGS=" >> "$GITHUB_ENV"
+          echo "CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_RUSTFLAGS=" >> "$GITHUB_ENV"
+          echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_RUSTFLAGS=" >> "$GITHUB_ENV"
+
+          sanitize_flags() {
+            local input="$1"
+            input="${input//-fsanitize=undefined/}"
+            input="${input//-fno-sanitize-recover=undefined/}"
+            input="${input//-fno-sanitize-trap=undefined/}"
+            echo "$input"
+          }
+
+          cflags="$(sanitize_flags "${CFLAGS-}")"
+          cxxflags="$(sanitize_flags "${CXXFLAGS-}")"
+          echo "CFLAGS=${cflags}" >> "$GITHUB_ENV"
+          echo "CXXFLAGS=${cxxflags}" >> "$GITHUB_ENV"
 
       - name: Install cargo-chef
         if: ${{ matrix.profile == 'release' }}
@@ -539,6 +845,10 @@ jobs:
             ~/.cargo/registry/index/
             ~/.cargo/registry/cache/
             ~/.cargo/git/db/
+            ${{ github.workspace }}/.cargo-home/bin/
+            ${{ github.workspace }}/.cargo-home/registry/index/
+            ${{ github.workspace }}/.cargo-home/registry/cache/
+            ${{ github.workspace }}/.cargo-home/git/db/
           key: cargo-home-${{ matrix.runner }}-${{ matrix.target }}-${{ matrix.profile }}-${{ steps.lockhash.outputs.hash }}-${{ steps.lockhash.outputs.toolchain_hash }}
 
       - name: Save sccache cache (fallback)
@@ -639,7 +949,7 @@ jobs:
       - name: Install DotSlash
         uses: facebook/install-dotslash@v2
 
-      - uses: dtolnay/rust-toolchain@1.92
+      - uses: dtolnay/rust-toolchain@1.93
         with:
           targets: ${{ matrix.target }}
       - name: Setup Python (macOS)

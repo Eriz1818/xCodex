@@ -11,11 +11,12 @@ use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
 
 use crate::exec_env::create_env;
+use crate::exec_policy::ExecApprovalRequest;
 use crate::protocol::ExecCommandSource;
 use crate::sandboxing::ExecEnv;
-use crate::sandboxing::SandboxPermissions;
 use crate::tools::events::ToolEmitter;
 use crate::tools::events::ToolEventCtx;
+use crate::tools::events::ToolEventFailure;
 use crate::tools::events::ToolEventStage;
 use crate::tools::orchestrator::ToolOrchestrator;
 use crate::tools::runtimes::unified_exec::UnifiedExecRequest as UnifiedExecToolRequest;
@@ -111,6 +112,36 @@ impl UnifiedExecProcessManager {
             .workdir
             .clone()
             .unwrap_or_else(|| context.turn.cwd.clone());
+
+        let process = self
+            .open_session_with_sandbox(&request, cwd.clone(), context)
+            .await;
+
+        let process = match process {
+            Ok(process) => Arc::new(process),
+            Err(err) => {
+                let event_ctx = ToolEventCtx::new(
+                    context.session.as_ref(),
+                    context.turn.as_ref(),
+                    &context.call_id,
+                    None,
+                );
+                let emitter = ToolEmitter::unified_exec(
+                    &request.command,
+                    cwd.clone(),
+                    ExecCommandSource::UnifiedExecStartup,
+                    None,
+                );
+                emitter
+                    .emit(
+                        event_ctx,
+                        ToolEventStage::Failure(ToolEventFailure::Message(err.to_string())),
+                    )
+                    .await;
+                self.release_process_id(&request.process_id).await;
+                return Err(err);
+            }
+        };
         let transcript = Arc::new(tokio::sync::Mutex::new(HeadTailBuffer::default()));
         let event_ctx = ToolEventCtx::new(
             context.session.as_ref(),
@@ -125,40 +156,6 @@ impl UnifiedExecProcessManager {
             Some(request.process_id.clone()),
         );
         emitter.emit(event_ctx, ToolEventStage::Begin).await;
-
-        let open_started_at = Instant::now();
-        let process = self
-            .open_session_with_sandbox(
-                &request.command,
-                cwd.clone(),
-                request.sandbox_permissions,
-                request.justification,
-                request.tty,
-                context,
-            )
-            .await;
-
-        let process = match process {
-            Ok(process) => Arc::new(process),
-            Err(err) => {
-                emit_exec_end_for_unified_exec(
-                    Arc::clone(&context.session),
-                    Arc::clone(&context.turn),
-                    context.call_id.clone(),
-                    request.command.clone(),
-                    cwd,
-                    Some(request.process_id.clone()),
-                    Arc::clone(&transcript),
-                    String::new(),
-                    -1,
-                    open_started_at.elapsed(),
-                )
-                .await;
-                self.release_process_id(&request.process_id).await;
-                return Err(err);
-            }
-        };
-
         start_streaming_output(&process, context, Arc::clone(&transcript));
 
         let max_tokens = resolve_max_tokens(request.max_output_tokens);
@@ -489,11 +486,8 @@ impl UnifiedExecProcessManager {
 
     pub(super) async fn open_session_with_sandbox(
         &self,
-        command: &[String],
+        request: &ExecCommandRequest,
         cwd: PathBuf,
-        sandbox_permissions: SandboxPermissions,
-        justification: Option<String>,
-        tty: bool,
         context: &UnifiedExecContext,
     ) -> Result<UnifiedExecProcess, UnifiedExecError> {
         let env = apply_unified_exec_env(create_env(&context.turn.shell_environment_policy));
@@ -504,21 +498,22 @@ impl UnifiedExecProcessManager {
             .session
             .services
             .exec_policy
-            .create_exec_approval_requirement_for_command(
-                &features,
-                command,
-                context.turn.approval_policy,
-                &context.turn.sandbox_policy,
-                sandbox_permissions,
-            )
+            .create_exec_approval_requirement_for_command(ExecApprovalRequest {
+                features: &features,
+                command: &request.command,
+                approval_policy: context.turn.approval_policy,
+                sandbox_policy: &context.turn.sandbox_policy,
+                sandbox_permissions: request.sandbox_permissions,
+                prefix_rule: request.prefix_rule.clone(),
+            })
             .await;
         let req = UnifiedExecToolRequest::new(
-            command.to_vec(),
+            request.command.clone(),
             cwd,
             env,
-            tty,
-            sandbox_permissions,
-            justification,
+            request.tty,
+            request.sandbox_permissions,
+            request.justification.clone(),
             exec_approval_requirement,
         );
         let tool_ctx = ToolCtx {

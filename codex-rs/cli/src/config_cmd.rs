@@ -69,6 +69,7 @@ async fn run_config_path(config_overrides: CliConfigOverrides) -> Result<()> {
         Some(resolved_cwd),
         &cli_overrides,
         LoaderOverrides::default(),
+        None,
     )
     .await?;
 
@@ -80,7 +81,7 @@ async fn run_config_path(config_overrides: CliConfigOverrides) -> Result<()> {
 
     println!();
     println!("Layers (highest precedence first):");
-    for layer in layers.get_layers(ConfigLayerStackOrdering::HighestPrecedenceFirst) {
+    for layer in layers.get_layers(ConfigLayerStackOrdering::HighestPrecedenceFirst, false) {
         println!("- {}", format_layer_path(layer));
     }
 
@@ -249,6 +250,7 @@ async fn run_config_doctor(config_overrides: CliConfigOverrides) -> Result<()> {
         Some(resolved_cwd),
         &cli_overrides,
         LoaderOverrides::default(),
+        None,
     )
     .await
     {

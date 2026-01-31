@@ -1,0 +1,10 @@
+---
+source: tui2/src/chatwidget/tests.rs
+expression: rendered_text
+---
+/mcp
+
+🔌  MCP Tools
+
+  • No MCP servers configured.
+    See the ]8;;https://github.com/openai/codex/blob/main/docs/config.md#mcp_serversMCP docs]8;; to configure them.

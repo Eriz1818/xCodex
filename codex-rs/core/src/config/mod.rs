@@ -8,6 +8,7 @@ use crate::config::types::McpServerConfig;
 use crate::config::types::McpServerDisabledReason;
 use crate::config::types::McpServerTransportConfig;
 use crate::config::types::Notice;
+use crate::config::types::NotificationMethod;
 use crate::config::types::Notifications;
 use crate::config::types::OtelConfig;
 use crate::config::types::OtelConfigToml;
@@ -21,7 +22,7 @@ use crate::config::types::Tui;
 use crate::config::types::UnattestedOutputPolicy;
 use crate::config::types::UriBasedFileOpener;
 use crate::config::types::Worktrees;
-use crate::config::types::XtremeMode;
+use crate::config_loader::CloudRequirementsLoader;
 use crate::config_loader::ConfigLayerStack;
 use crate::config_loader::ConfigRequirements;
 use crate::config_loader::LoaderOverrides;
@@ -43,6 +44,7 @@ use crate::project_doc::DEFAULT_PROJECT_DOC_FILENAME;
 use crate::project_doc::LOCAL_PROJECT_DOC_FILENAME;
 use crate::protocol::AskForApproval;
 use crate::protocol::SandboxPolicy;
+use crate::windows_sandbox::WindowsSandboxLevelExt;
 use codex_app_server_protocol::Tools;
 use codex_app_server_protocol::UserSavedConfig;
 use codex_protocol::config_types::AltScreenMode;
@@ -54,6 +56,7 @@ use codex_protocol::config_types::SandboxMode;
 use codex_protocol::config_types::TrustLevel;
 use codex_protocol::config_types::Verbosity;
 use codex_protocol::config_types::WebSearchMode;
+use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_rmcp_client::OAuthCredentialsStoreMode;
 use codex_utils_absolute_path::AbsolutePathBuf;
@@ -65,7 +68,6 @@ use serde::Serialize;
 use similar::DiffableStr;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
-use std::ffi::OsStr;
 use std::io::ErrorKind;
 use std::path::Path;
 use std::path::PathBuf;
@@ -95,7 +97,7 @@ pub use codex_git::GhostSnapshotConfig;
 /// files are *silently truncated* to this size so we do not take up too much of
 /// the context window.
 pub(crate) const PROJECT_DOC_MAX_BYTES: usize = 32 * 1024; // 32 KiB
-pub(crate) const DEFAULT_AGENT_MAX_THREADS: Option<usize> = None;
+pub(crate) const DEFAULT_AGENT_MAX_THREADS: Option<usize> = Some(6);
 
 pub const CONFIG_TOML_FILE: &str = "config.toml";
 
@@ -193,22 +195,15 @@ pub struct Config {
     /// notify-send Codex '{"type":"agent-turn-complete","turn-id":"12345"}'
     /// ```
     ///
-    /// Deprecated (xcodex): use `hooks.agent_turn_complete` instead.
-    ///
     /// If unset the feature is disabled.
     pub notify: Option<Vec<String>>,
 
-    /// Optional external hook commands to spawn on specific lifecycle events.
-    ///
-    /// Hooks are fire-and-forget: failures are logged and do not affect the
-    /// session. Hook commands receive event JSON on stdin. For large payloads,
-    /// stdin contains a small JSON envelope including `payload_path` pointing
-    /// at the full payload under CODEX_HOME.
-    pub hooks: HooksConfig,
-
-    /// TUI notifications preference. When set, the TUI will send OSC 9 notifications on approvals
-    /// and turn completions when not focused.
+    /// TUI notifications preference. When set, the TUI will send terminal notifications on
+    /// approvals and turn completions when not focused.
     pub tui_notifications: Notifications,
+
+    /// Notification method for terminal notifications (osc9 or bel).
+    pub tui_notification_method: NotificationMethod,
 
     /// Enable ASCII animations and shimmer effects in the TUI.
     pub animations: bool,
@@ -216,23 +211,8 @@ pub struct Config {
     /// Show startup tooltips in the TUI welcome screen.
     pub show_tooltips: bool,
 
-    /// How the TUI should render xcodex "xtreme mode" styling.
-    pub tui_xtreme_mode: XtremeMode,
-
-    /// Xcodex-only: rotate between multiple "ramp" status label flows across turns.
-    pub tui_ramps_rotate: bool,
-
-    /// Xcodex-only: enable the Build ramp for per-turn rotation.
-    pub tui_ramps_build: bool,
-
-    /// Xcodex-only: enable the DevOps ramp for per-turn rotation.
-    pub tui_ramps_devops: bool,
-
-    /// When true, the TUI asks for confirmation before exiting if external hooks are still running.
-    pub tui_confirm_exit_with_running_hooks: bool,
-
-    /// Theme configuration for xcodex (theme selection + theme directory).
-    pub themes: crate::config::types::Themes,
+    /// Xcodex-specific runtime settings extracted from config.toml.
+    pub xcodex: crate::xcodex::config::XcodexRuntimeConfig,
 
     /// Override the events-per-wheel-tick factor for TUI2 scroll normalization.
     ///
@@ -349,12 +329,6 @@ pub struct Config {
     /// This is the same `worktrees.pinned_paths` value from `config.toml` (see [`Worktrees`]).
     pub worktrees_pinned_paths: Vec<String>,
 
-    /// Whether xcodex should automatically link shared dirs when switching worktrees.
-    ///
-    /// This is the same `worktrees.auto_link_shared_dirs` value from `config.toml` (see
-    /// [`Worktrees`]).
-    pub worktrees_auto_link_shared_dirs: bool,
-
     /// Preferred store for CLI auth credentials.
     /// file (default): Use a file in the Codex home directory.
     /// keyring: Use an OS-specific keyring service.
@@ -402,6 +376,9 @@ pub struct Config {
 
     /// Settings that govern if and what will be written to `~/.codex/history.jsonl`.
     pub history: History,
+
+    /// When true, session is not persisted on disk. Default to `false`
+    pub ephemeral: bool,
 
     /// Optional URI-based file opener. If set, citations to files in the model
     /// output will be hyperlinked using the specified URI scheme.
@@ -457,6 +434,8 @@ pub struct Config {
 
     /// Sensitive-path exclusion configuration (ignore files + outbound gateway).
     pub exclusion: ExclusionConfig,
+    /// When `true`, suppress warnings about unstable (under development) features.
+    pub suppress_unstable_features_warning: bool,
 
     /// The active profile name used to derive this `Config` (if any).
     pub active_profile: Option<String>,
@@ -499,6 +478,7 @@ pub struct ConfigBuilder {
     cli_overrides: Option<Vec<(String, TomlValue)>>,
     harness_overrides: Option<ConfigOverrides>,
     loader_overrides: Option<LoaderOverrides>,
+    cloud_requirements: Option<CloudRequirementsLoader>,
     fallback_cwd: Option<PathBuf>,
 }
 
@@ -523,6 +503,11 @@ impl ConfigBuilder {
         self
     }
 
+    pub fn cloud_requirements(mut self, cloud_requirements: CloudRequirementsLoader) -> Self {
+        self.cloud_requirements = Some(cloud_requirements);
+        self
+    }
+
     pub fn fallback_cwd(mut self, fallback_cwd: Option<PathBuf>) -> Self {
         self.fallback_cwd = fallback_cwd;
         self
@@ -534,6 +519,7 @@ impl ConfigBuilder {
             cli_overrides,
             harness_overrides,
             loader_overrides,
+            cloud_requirements,
             fallback_cwd,
         } = self;
         let codex_home = codex_home.map_or_else(find_codex_home, std::io::Result::Ok)?;
@@ -546,18 +532,35 @@ impl ConfigBuilder {
             None => AbsolutePathBuf::current_dir()?,
         };
         harness_overrides.cwd = Some(cwd.to_path_buf());
-        let config_layer_stack =
-            load_config_layers_state(&codex_home, Some(cwd), &cli_overrides, loader_overrides)
-                .await?;
+        let config_layer_stack = load_config_layers_state(
+            &codex_home,
+            Some(cwd),
+            &cli_overrides,
+            loader_overrides,
+            cloud_requirements,
+        )
+        .await?;
         let merged_toml = config_layer_stack.effective_config();
 
         // Note that each layer in ConfigLayerStack should have resolved
         // relative paths to absolute paths based on the parent folder of the
         // respective config file, so we should be safe to deserialize without
         // AbsolutePathBufGuard here.
-        let config_toml: ConfigToml = merged_toml
-            .try_into()
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+        let config_toml: ConfigToml = match merged_toml.try_into() {
+            Ok(config_toml) => config_toml,
+            Err(err) => {
+                if let Some(config_error) =
+                    crate::config_loader::first_layer_config_error(&config_layer_stack).await
+                {
+                    return Err(crate::config_loader::io_error_from_config_error(
+                        std::io::ErrorKind::InvalidData,
+                        config_error,
+                        Some(err),
+                    ));
+                }
+                return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, err));
+            }
+        };
         Config::load_config_with_layer_stack(
             config_toml,
             harness_overrides,
@@ -632,6 +635,7 @@ pub async fn load_config_as_toml_with_cli_overrides(
         Some(cwd.clone()),
         &cli_overrides,
         LoaderOverrides::default(),
+        None,
     )
     .await?;
 
@@ -730,9 +734,14 @@ pub async fn load_global_mcp_servers(
     // There is no cwd/project context for this query, so this will not include
     // MCP servers defined in in-repo .codex/ folders.
     let cwd: Option<AbsolutePathBuf> = None;
-    let config_layer_stack =
-        load_config_layers_state(codex_home, cwd, &cli_overrides, LoaderOverrides::default())
-            .await?;
+    let config_layer_stack = load_config_layers_state(
+        codex_home,
+        cwd,
+        &cli_overrides,
+        LoaderOverrides::default(),
+        None,
+    )
+    .await?;
     let merged_toml = config_layer_stack.effective_config();
     let Some(servers_value) = merged_toml.get("mcp_servers") else {
         return Ok(BTreeMap::new());
@@ -1052,6 +1061,8 @@ pub struct ConfigToml {
     /// Sensitive-path exclusion configuration (ignore files + outbound gateway).
     #[serde(default)]
     pub exclusion: Option<ExclusionConfig>,
+    /// Suppress warnings about unstable (under development) features.
+    pub suppress_unstable_features_warning: Option<bool>,
 
     /// Settings for ghost snapshots (used for undo).
     #[serde(default)]
@@ -1197,6 +1208,7 @@ impl ConfigToml {
         &self,
         sandbox_mode_override: Option<SandboxMode>,
         profile_sandbox_mode: Option<SandboxMode>,
+        windows_sandbox_level: WindowsSandboxLevel,
         resolved_cwd: &Path,
     ) -> SandboxPolicyResolution {
         let resolved_sandbox_mode = sandbox_mode_override
@@ -1235,7 +1247,7 @@ impl ConfigToml {
         if cfg!(target_os = "windows")
             && matches!(resolved_sandbox_mode, SandboxMode::WorkspaceWrite)
             // If the experimental Windows sandbox is enabled, do not force a downgrade.
-            && crate::safety::get_platform_sandbox().is_none()
+            && windows_sandbox_level == codex_protocol::config_types::WindowsSandboxLevel::Disabled
         {
             sandbox_policy = SandboxPolicy::new_read_only_policy();
             forced_auto_mode_downgraded_on_windows = true;
@@ -1303,10 +1315,12 @@ pub struct ConfigOverrides {
     pub codex_linux_sandbox_exe: Option<PathBuf>,
     pub base_instructions: Option<String>,
     pub developer_instructions: Option<String>,
+    pub model_personality: Option<Personality>,
     pub compact_prompt: Option<String>,
     pub include_apply_patch_tool: Option<bool>,
     pub show_raw_agent_reasoning: Option<bool>,
     pub tools_web_search_request: Option<bool>,
+    pub ephemeral: Option<bool>,
     /// Additional directories that should be treated as writable roots for this session.
     pub additional_writable_roots: Vec<PathBuf>,
 }
@@ -1654,11 +1668,13 @@ pub fn resolve_oss_provider(
     }
 }
 
-/// Resolve the web search mode from explicit config and feature flags.
+/// Resolve the web search mode from explicit config, feature flags, and sandbox policy.
+/// Live search is auto-enabled when sandbox policy is `DangerFullAccess`.
 fn resolve_web_search_mode(
     config_toml: &ConfigToml,
     config_profile: &ConfigProfile,
     features: &Features,
+    sandbox_policy: &SandboxPolicy,
 ) -> Option<WebSearchMode> {
     if let Some(mode) = config_profile.web_search.or(config_toml.web_search) {
         return Some(mode);
@@ -1669,7 +1685,24 @@ fn resolve_web_search_mode(
     if features.enabled(Feature::WebSearchRequest) {
         return Some(WebSearchMode::Live);
     }
+    if matches!(sandbox_policy, SandboxPolicy::DangerFullAccess) {
+        return Some(WebSearchMode::Live);
+    }
     None
+}
+
+pub(crate) fn resolve_web_search_mode_for_turn(
+    explicit_mode: Option<WebSearchMode>,
+    sandbox_policy: &SandboxPolicy,
+) -> WebSearchMode {
+    if let Some(mode) = explicit_mode {
+        return mode;
+    }
+    if matches!(sandbox_policy, SandboxPolicy::DangerFullAccess) {
+        WebSearchMode::Live
+    } else {
+        WebSearchMode::Cached
+    }
 }
 
 impl Config {
@@ -1705,10 +1738,12 @@ impl Config {
             codex_linux_sandbox_exe,
             base_instructions,
             developer_instructions,
+            model_personality,
             compact_prompt,
             include_apply_patch_tool: include_apply_patch_tool_override,
             show_raw_agent_reasoning,
             tools_web_search_request: override_tools_web_search_request,
+            ephemeral,
             additional_writable_roots,
         } = overrides;
 
@@ -1740,7 +1775,6 @@ impl Config {
             config_profile.exclusion.clone().or(cfg.exclusion.clone()),
             &features,
         );
-        let web_search_mode = resolve_web_search_mode(&cfg, &config_profile, &features);
         #[cfg(target_os = "windows")]
         {
             // Base flag controls sandbox on/off; elevated only applies when base is enabled.
@@ -1750,7 +1784,6 @@ impl Config {
                 sandbox_enabled && features.enabled(Feature::WindowsSandboxElevated);
             crate::safety::set_windows_elevated_sandbox_enabled(elevated_enabled);
         }
-
         let resolved_cwd = {
             use std::env;
 
@@ -1777,10 +1810,16 @@ impl Config {
             .get_active_project(&resolved_cwd)
             .unwrap_or(ProjectConfig { trust_level: None });
 
+        let windows_sandbox_level = WindowsSandboxLevel::from_features(&features);
         let SandboxPolicyResolution {
             policy: mut sandbox_policy,
             forced_auto_mode_downgraded_on_windows,
-        } = cfg.derive_sandbox_policy(sandbox_mode, config_profile.sandbox_mode, &resolved_cwd);
+        } = cfg.derive_sandbox_policy(
+            sandbox_mode,
+            config_profile.sandbox_mode,
+            windows_sandbox_level,
+            &resolved_cwd,
+        );
         if let SandboxPolicy::WorkspaceWrite { writable_roots, .. } = &mut sandbox_policy {
             for path in additional_writable_roots {
                 if !writable_roots.iter().any(|existing| existing == &path) {
@@ -1800,6 +1839,8 @@ impl Config {
                     AskForApproval::default()
                 }
             });
+        let web_search_mode =
+            resolve_web_search_mode(&cfg, &config_profile, &features, &sandbox_policy);
         // TODO(dylan): We should be able to leverage ConfigLayerStack so that
         // we can reliably check this at every config level.
         let did_user_set_custom_approval_policy_or_sandbox_mode = approval_policy_override
@@ -1811,12 +1852,6 @@ impl Config {
             || cfg.sandbox_mode.is_some();
 
         let mut model_providers = built_in_model_providers();
-        if features.enabled(Feature::ResponsesWebsockets)
-            && let Some(provider) = model_providers.get_mut("openai")
-            && provider.is_openai()
-        {
-            provider.wire_api = crate::model_provider_info::WireApi::ResponsesWebsocket;
-        }
         // Merge user-defined providers into the built-in list.
         for (key, provider) in cfg.model_providers.into_iter() {
             model_providers.entry(key).or_insert(provider);
@@ -1914,6 +1949,9 @@ impl Config {
             Self::try_read_non_empty_file(model_instructions_path, "model instructions file")?;
         let base_instructions = base_instructions.or(file_base_instructions);
         let developer_instructions = developer_instructions.or(cfg.developer_instructions);
+        let model_personality = model_personality
+            .or(config_profile.model_personality)
+            .or(cfg.model_personality);
 
         let experimental_compact_prompt_path = config_profile
             .experimental_compact_prompt_file
@@ -1965,21 +2003,14 @@ impl Config {
                 .as_ref()
                 .map(|w| w.pinned_paths.clone())
                 .unwrap_or_default(),
-            worktrees_auto_link_shared_dirs: cfg
-                .worktrees
-                .as_ref()
-                .map(|w| w.auto_link_shared_dirs)
-                .unwrap_or(false),
             approval_policy: constrained_approval_policy,
             sandbox_policy: constrained_sandbox_policy,
             did_user_set_custom_approval_policy_or_sandbox_mode,
             forced_auto_mode_downgraded_on_windows,
             shell_environment_policy,
-            notify: cfg.notify,
-            hooks: cfg.hooks,
             user_instructions,
             base_instructions,
-            model_personality: config_profile.model_personality.or(cfg.model_personality),
+            model_personality,
             developer_instructions,
             compact_prompt,
             // The config.toml omits "_mode" because it's a config file. However, "_mode"
@@ -2011,6 +2042,7 @@ impl Config {
             codex_home,
             config_layer_stack,
             history,
+            ephemeral: ephemeral.unwrap_or_default(),
             file_opener: cfg.file_opener.unwrap_or(UriBasedFileOpener::VsCode),
             codex_linux_sandbox_exe,
 
@@ -2040,6 +2072,9 @@ impl Config {
             ghost_snapshot,
             features,
             exclusion,
+            suppress_unstable_features_warning: cfg
+                .suppress_unstable_features_warning
+                .unwrap_or(false),
             active_profile: active_profile_name,
             active_project,
             windows_wsl_setup_acknowledged: cfg.windows_wsl_setup_acknowledged.unwrap_or(false),
@@ -2051,6 +2086,7 @@ impl Config {
                 .as_ref()
                 .and_then(|a| a.enabled)
                 .or(cfg.analytics.as_ref().and_then(|a| a.enabled)),
+            notify: cfg.notify.clone(),
             feedback_enabled: cfg
                 .feedback
                 .as_ref()
@@ -2061,18 +2097,20 @@ impl Config {
                 .as_ref()
                 .map(|t| t.notifications.clone())
                 .unwrap_or_default(),
-            animations: cfg.tui.as_ref().map(|t| t.animations).unwrap_or(true),
-            show_tooltips: cfg.tui.as_ref().map(|t| t.show_tooltips).unwrap_or(true),
-            tui_xtreme_mode: cfg.tui.as_ref().map(|t| t.xtreme_mode).unwrap_or_default(),
-            tui_ramps_rotate: cfg.tui.as_ref().map(|t| t.ramps_rotate).unwrap_or(true),
-            tui_ramps_build: cfg.tui.as_ref().map(|t| t.ramps_build).unwrap_or(true),
-            tui_ramps_devops: cfg.tui.as_ref().map(|t| t.ramps_devops).unwrap_or(true),
-            tui_confirm_exit_with_running_hooks: cfg
+            tui_notification_method: cfg
                 .tui
                 .as_ref()
-                .map(|t| t.confirm_exit_with_running_hooks)
-                .unwrap_or(true),
-            themes: cfg.themes.unwrap_or_default(),
+                .map(|t| t.notification_method)
+                .unwrap_or_default(),
+            animations: cfg.tui.as_ref().map(|t| t.animations).unwrap_or(true),
+            show_tooltips: cfg.tui.as_ref().map(|t| t.show_tooltips).unwrap_or(true),
+            xcodex: crate::xcodex::config::XcodexRuntimeConfig::from_toml(
+                cfg.notify,
+                cfg.hooks,
+                cfg.tui.as_ref(),
+                cfg.themes,
+                cfg.worktrees.as_ref(),
+            ),
             tui_scroll_events_per_tick: cfg.tui.as_ref().and_then(|t| t.scroll_events_per_tick),
             tui_scroll_wheel_lines: cfg.tui.as_ref().and_then(|t| t.scroll_wheel_lines),
             tui_scroll_trackpad_lines: cfg.tui.as_ref().and_then(|t| t.scroll_trackpad_lines),
@@ -2195,20 +2233,19 @@ impl Config {
         }
     }
 
-    pub fn set_windows_sandbox_globally(&mut self, value: bool) {
-        crate::safety::set_windows_sandbox_enabled(value);
+    pub fn set_windows_sandbox_enabled(&mut self, value: bool) {
         if value {
             self.features.enable(Feature::WindowsSandbox);
+            self.forced_auto_mode_downgraded_on_windows = false;
         } else {
             self.features.disable(Feature::WindowsSandbox);
         }
-        self.forced_auto_mode_downgraded_on_windows = !value;
     }
 
-    pub fn set_windows_elevated_sandbox_globally(&mut self, value: bool) {
-        crate::safety::set_windows_elevated_sandbox_enabled(value);
+    pub fn set_windows_elevated_sandbox_enabled(&mut self, value: bool) {
         if value {
             self.features.enable(Feature::WindowsSandboxElevated);
+            self.forced_auto_mode_downgraded_on_windows = false;
         } else {
             self.features.disable(Feature::WindowsSandboxElevated);
         }
@@ -2216,15 +2253,6 @@ impl Config {
 }
 
 const CODEX_DEFAULT_HOME_DIRNAME: &str = ".codex";
-const XCODEX_DEFAULT_HOME_DIRNAME: &str = ".xcodex";
-const XCODEX_EXE_STEM: &str = "xcodex";
-
-fn is_xcodex_exe_name(name: &OsStr) -> bool {
-    let Some(stem) = Path::new(name).file_stem().and_then(OsStr::to_str) else {
-        return false;
-    };
-    stem == XCODEX_EXE_STEM || stem.starts_with("xcodex-")
-}
 
 /// Returns `true` when this process appears to have been invoked via the
 /// `xcodex` binary name (e.g. installed as `~/.local/bin/xcodex`).
@@ -2232,55 +2260,23 @@ fn is_xcodex_exe_name(name: &OsStr) -> bool {
 /// This is used only for selecting a *default* home directory when `CODEX_HOME`
 /// is unset; if `CODEX_HOME` is set it always takes precedence.
 pub fn is_xcodex_invocation() -> bool {
-    if let Some(argv0) = std::env::args_os().next()
-        && is_xcodex_exe_name(&argv0)
-    {
-        return true;
-    }
-
-    if let Ok(exe) = std::env::current_exe()
-        && is_xcodex_exe_name(exe.as_os_str())
-    {
-        return true;
-    }
-
-    false
+    crate::xcodex::config::is_xcodex_invocation()
 }
 
-fn default_home_dirname_impl(is_xcodex: bool) -> &'static str {
-    if is_xcodex {
-        XCODEX_DEFAULT_HOME_DIRNAME
+fn default_home_dirname() -> &'static str {
+    if is_xcodex_invocation() {
+        crate::xcodex::config::xcodex_default_home_dirname()
     } else {
         CODEX_DEFAULT_HOME_DIRNAME
     }
 }
 
-fn default_home_dirname() -> &'static str {
-    default_home_dirname_impl(is_xcodex_invocation())
-}
-
 pub fn xcodex_first_run_wizard_marker_path(codex_home: &Path) -> PathBuf {
-    codex_home.join(".xcodex-first-run-wizard.complete")
-}
-
-fn should_run_xcodex_first_run_wizard_impl(
-    codex_home: &Path,
-    is_xcodex: bool,
-) -> std::io::Result<bool> {
-    if !is_xcodex {
-        return Ok(false);
-    }
-
-    let config_toml = codex_home.join(CONFIG_TOML_FILE);
-    if config_toml.exists() {
-        return Ok(false);
-    }
-
-    Ok(!xcodex_first_run_wizard_marker_path(codex_home).exists())
+    crate::xcodex::config::xcodex_first_run_wizard_marker_path(codex_home)
 }
 
 pub fn should_run_xcodex_first_run_wizard(codex_home: &Path) -> std::io::Result<bool> {
-    should_run_xcodex_first_run_wizard_impl(codex_home, is_xcodex_invocation())
+    crate::xcodex::config::should_run_xcodex_first_run_wizard(codex_home)
 }
 pub(crate) fn uses_deprecated_instructions_file(config_layer_stack: &ConfigLayerStack) -> bool {
     config_layer_stack
@@ -2347,7 +2343,7 @@ fn derive_exclusion_config(user: Option<ExclusionConfig>, _features: &Features) 
 }
 
 fn normalize_exclusion_files(files: Vec<String>) -> Vec<String> {
-    let mut out = vec![".aiexclude".to_string(), ".xcodexignore".to_string()];
+    let mut out = crate::xcodex::config::default_exclusion_files();
 
     for raw in files {
         let name = raw.trim();
@@ -2374,7 +2370,9 @@ mod tests {
     use crate::config::types::FeedbackConfigToml;
     use crate::config::types::HistoryPersistence;
     use crate::config::types::McpServerTransportConfig;
+    use crate::config::types::NotificationMethod;
     use crate::config::types::Notifications;
+    use crate::config::types::XtremeMode;
     use crate::config_loader::RequirementSource;
     use crate::features::Feature;
 
@@ -2386,52 +2384,19 @@ mod tests {
     use std::collections::HashMap;
     use std::time::Duration;
     use tempfile::TempDir;
-    use tempfile::tempdir;
 
-    #[test]
-    fn default_home_dirname_switches_for_xcodex_invocation() {
-        assert_eq!(CODEX_DEFAULT_HOME_DIRNAME, default_home_dirname_impl(false));
-        assert_eq!(XCODEX_DEFAULT_HOME_DIRNAME, default_home_dirname_impl(true));
-    }
-
-    #[test]
-    fn xcodex_exe_name_matches_prefixed_names() {
-        assert_eq!(true, is_xcodex_exe_name(OsStr::new("xcodex")));
-        assert_eq!(
-            true,
-            is_xcodex_exe_name(OsStr::new("xcodex-x86_64-unknown-linux-musl"))
-        );
-        assert_eq!(false, is_xcodex_exe_name(OsStr::new("codex")));
-    }
-
-    #[test]
-    fn xcodex_first_run_wizard_requires_missing_config_and_marker() -> std::io::Result<()> {
-        let dir = tempdir()?;
-        let codex_home = dir.path();
-
-        assert_eq!(
-            false,
-            should_run_xcodex_first_run_wizard_impl(codex_home, false)?
-        );
-        assert_eq!(
-            true,
-            should_run_xcodex_first_run_wizard_impl(codex_home, true)?
-        );
-
-        std::fs::write(codex_home.join(CONFIG_TOML_FILE), "")?;
-        assert_eq!(
-            false,
-            should_run_xcodex_first_run_wizard_impl(codex_home, true)?
-        );
-
-        std::fs::remove_file(codex_home.join(CONFIG_TOML_FILE))?;
-        std::fs::write(xcodex_first_run_wizard_marker_path(codex_home), "")?;
-        assert_eq!(
-            false,
-            should_run_xcodex_first_run_wizard_impl(codex_home, true)?
-        );
-
-        Ok(())
+    fn expected_xcodex_defaults() -> crate::xcodex::config::XcodexRuntimeConfig {
+        crate::xcodex::config::XcodexRuntimeConfig {
+            notify: None,
+            hooks: HooksConfig::default(),
+            tui_xtreme_mode: XtremeMode::On,
+            tui_ramps_rotate: true,
+            tui_ramps_build: true,
+            tui_ramps_devops: true,
+            tui_confirm_exit_with_running_hooks: true,
+            themes: crate::config::types::Themes::default(),
+            worktrees_auto_link_shared_dirs: false,
+        }
     }
 
     fn stdio_mcp(command: &str) -> McpServerConfig {
@@ -2449,6 +2414,7 @@ mod tests {
             tool_timeout_sec: None,
             enabled_tools: None,
             disabled_tools: None,
+            scopes: None,
         }
     }
 
@@ -2466,6 +2432,7 @@ mod tests {
             tool_timeout_sec: None,
             enabled_tools: None,
             disabled_tools: None,
+            scopes: None,
         }
     }
 
@@ -2515,6 +2482,7 @@ persistence = "none"
             tui,
             Tui {
                 notifications: Notifications::Enabled(true),
+                notification_method: NotificationMethod::Auto,
                 animations: true,
                 show_tooltips: true,
                 xtreme_mode: XtremeMode::On,
@@ -2558,6 +2526,7 @@ network_access = false  # This should be ignored.
         let resolution = sandbox_full_access_cfg.derive_sandbox_policy(
             sandbox_mode_override,
             None,
+            WindowsSandboxLevel::Disabled,
             &PathBuf::from("/tmp/test"),
         );
         assert_eq!(
@@ -2581,6 +2550,7 @@ network_access = true  # This should be ignored.
         let resolution = sandbox_read_only_cfg.derive_sandbox_policy(
             sandbox_mode_override,
             None,
+            WindowsSandboxLevel::Disabled,
             &PathBuf::from("/tmp/test"),
         );
         assert_eq!(
@@ -2612,6 +2582,7 @@ exclude_slash_tmp = true
         let resolution = sandbox_workspace_write_cfg.derive_sandbox_policy(
             sandbox_mode_override,
             None,
+            WindowsSandboxLevel::Disabled,
             &PathBuf::from("/tmp/test"),
         );
         if cfg!(target_os = "windows") {
@@ -2660,6 +2631,7 @@ trust_level = "trusted"
         let resolution = sandbox_workspace_write_cfg.derive_sandbox_policy(
             sandbox_mode_override,
             None,
+            WindowsSandboxLevel::Disabled,
             &PathBuf::from("/tmp/test"),
         );
         if cfg!(target_os = "windows") {
@@ -2951,12 +2923,15 @@ trust_level = "trusted"
     }
 
     #[test]
-    fn web_search_mode_uses_none_if_unset() {
+    fn web_search_mode_defaults_to_none_if_unset() {
         let cfg = ConfigToml::default();
         let profile = ConfigProfile::default();
         let features = Features::with_defaults();
 
-        assert_eq!(resolve_web_search_mode(&cfg, &profile, &features), None);
+        assert_eq!(
+            resolve_web_search_mode(&cfg, &profile, &features, &SandboxPolicy::ReadOnly),
+            None
+        );
     }
 
     #[test]
@@ -2970,7 +2945,7 @@ trust_level = "trusted"
         features.enable(Feature::WebSearchCached);
 
         assert_eq!(
-            resolve_web_search_mode(&cfg, &profile, &features),
+            resolve_web_search_mode(&cfg, &profile, &features, &SandboxPolicy::ReadOnly),
             Some(WebSearchMode::Live)
         );
     }
@@ -2986,9 +2961,33 @@ trust_level = "trusted"
         features.enable(Feature::WebSearchRequest);
 
         assert_eq!(
-            resolve_web_search_mode(&cfg, &profile, &features),
+            resolve_web_search_mode(&cfg, &profile, &features, &SandboxPolicy::ReadOnly),
             Some(WebSearchMode::Disabled)
         );
+    }
+
+    #[test]
+    fn web_search_mode_for_turn_defaults_to_cached_when_unset() {
+        let mode = resolve_web_search_mode_for_turn(None, &SandboxPolicy::ReadOnly);
+
+        assert_eq!(mode, WebSearchMode::Cached);
+    }
+
+    #[test]
+    fn web_search_mode_for_turn_defaults_to_live_for_danger_full_access() {
+        let mode = resolve_web_search_mode_for_turn(None, &SandboxPolicy::DangerFullAccess);
+
+        assert_eq!(mode, WebSearchMode::Live);
+    }
+
+    #[test]
+    fn web_search_mode_for_turn_prefers_explicit_value() {
+        let mode = resolve_web_search_mode_for_turn(
+            Some(WebSearchMode::Cached),
+            &SandboxPolicy::DangerFullAccess,
+        );
+
+        assert_eq!(mode, WebSearchMode::Cached);
     }
 
     #[test]
@@ -3191,7 +3190,7 @@ profile = "project"
     }
 
     #[test]
-    fn responses_websockets_feature_updates_openai_provider() -> std::io::Result<()> {
+    fn responses_websockets_feature_does_not_change_wire_api() -> std::io::Result<()> {
         let codex_home = TempDir::new()?;
         let mut entries = BTreeMap::new();
         entries.insert("responses_websockets".to_string(), true);
@@ -3208,7 +3207,7 @@ profile = "project"
 
         assert_eq!(
             config.model_provider.wire_api,
-            crate::model_provider_info::WireApi::ResponsesWebsocket
+            crate::model_provider_info::WireApi::Responses
         );
 
         Ok(())
@@ -3254,7 +3253,8 @@ profile = "project"
 
         let cwd = AbsolutePathBuf::try_from(codex_home.path())?;
         let config_layer_stack =
-            load_config_layers_state(codex_home.path(), Some(cwd), &Vec::new(), overrides).await?;
+            load_config_layers_state(codex_home.path(), Some(cwd), &Vec::new(), overrides, None)
+                .await?;
         let cfg = deserialize_config_toml_with_base(
             config_layer_stack.effective_config(),
             codex_home.path(),
@@ -3312,6 +3312,7 @@ profile = "project"
                 tool_timeout_sec: Some(Duration::from_secs(5)),
                 enabled_tools: None,
                 disabled_tools: None,
+                scopes: None,
             },
         );
 
@@ -3380,6 +3381,7 @@ profile = "project"
             Some(cwd),
             &[("model".to_string(), TomlValue::String("cli".to_string()))],
             overrides,
+            None,
         )
         .await?;
 
@@ -3466,6 +3468,7 @@ bearer_token = "secret"
                 tool_timeout_sec: None,
                 enabled_tools: None,
                 disabled_tools: None,
+                scopes: None,
             },
         )]);
 
@@ -3535,6 +3538,7 @@ ZIG_VAR = "3"
                 tool_timeout_sec: None,
                 enabled_tools: None,
                 disabled_tools: None,
+                scopes: None,
             },
         )]);
 
@@ -3584,6 +3588,7 @@ ZIG_VAR = "3"
                 tool_timeout_sec: None,
                 enabled_tools: None,
                 disabled_tools: None,
+                scopes: None,
             },
         )]);
 
@@ -3631,6 +3636,7 @@ ZIG_VAR = "3"
                 tool_timeout_sec: None,
                 enabled_tools: None,
                 disabled_tools: None,
+                scopes: None,
             },
         )]);
 
@@ -3694,6 +3700,7 @@ startup_timeout_sec = 2.0
                 tool_timeout_sec: None,
                 enabled_tools: None,
                 disabled_tools: None,
+                scopes: None,
             },
         )]);
         apply_blocking(
@@ -3769,6 +3776,7 @@ X-Auth = "DOCS_AUTH"
                 tool_timeout_sec: None,
                 enabled_tools: None,
                 disabled_tools: None,
+                scopes: None,
             },
         )]);
 
@@ -3797,6 +3805,7 @@ X-Auth = "DOCS_AUTH"
                 tool_timeout_sec: None,
                 enabled_tools: None,
                 disabled_tools: None,
+                scopes: None,
             },
         );
         apply_blocking(
@@ -3863,6 +3872,7 @@ url = "https://example.com/mcp"
                     tool_timeout_sec: None,
                     enabled_tools: None,
                     disabled_tools: None,
+                    scopes: None,
                 },
             ),
             (
@@ -3881,6 +3891,7 @@ url = "https://example.com/mcp"
                     tool_timeout_sec: None,
                     enabled_tools: None,
                     disabled_tools: None,
+                    scopes: None,
                 },
             ),
         ]);
@@ -3962,6 +3973,7 @@ url = "https://example.com/mcp"
                 tool_timeout_sec: None,
                 enabled_tools: None,
                 disabled_tools: None,
+                scopes: None,
             },
         )]);
 
@@ -4005,6 +4017,7 @@ url = "https://example.com/mcp"
                 tool_timeout_sec: None,
                 enabled_tools: Some(vec!["allowed".to_string()]),
                 disabled_tools: Some(vec!["blocked".to_string()]),
+                scopes: None,
             },
         )]);
 
@@ -4316,6 +4329,7 @@ model_verbosity = "high"
             stream_max_retries: Some(10),
             stream_idle_timeout_ms: Some(300_000),
             requires_openai_auth: false,
+            supports_websockets: false,
         };
         let model_provider_map = {
             let mut model_provider_map = built_in_model_providers();
@@ -4381,12 +4395,9 @@ model_verbosity = "high"
                 forced_auto_mode_downgraded_on_windows: false,
                 shell_environment_policy: ShellEnvironmentPolicy::default(),
                 user_instructions: None,
-                notify: None,
-                hooks: HooksConfig::default(),
                 cwd: fixture.cwd(),
                 worktrees_shared_dirs: Vec::new(),
                 worktrees_pinned_paths: Vec::new(),
-                worktrees_auto_link_shared_dirs: false,
                 cli_auth_credentials_store_mode: Default::default(),
                 mcp_servers: Constrained::allow_any(HashMap::new()),
                 mcp_oauth_credentials_store_mode: Default::default(),
@@ -4396,10 +4407,11 @@ model_verbosity = "high"
                 project_doc_fallback_filenames: Vec::new(),
                 tool_output_token_limit: None,
                 unattested_output_policy: UnattestedOutputPolicy::Allow,
-                agent_max_threads: None,
+                agent_max_threads: DEFAULT_AGENT_MAX_THREADS,
                 codex_home: fixture.codex_home(),
                 config_layer_stack: Default::default(),
                 history: History::default(),
+                ephemeral: false,
                 file_opener: UriBasedFileOpener::VsCode,
                 codex_linux_sandbox_exe: None,
                 hide_agent_reasoning: true,
@@ -4421,21 +4433,19 @@ model_verbosity = "high"
                 ghost_snapshot: GhostSnapshotConfig::default(),
                 features: Features::with_defaults(),
                 exclusion: ExclusionConfig::default(),
+                suppress_unstable_features_warning: false,
                 active_profile: Some("o3".to_string()),
                 active_project: ProjectConfig { trust_level: None },
                 windows_wsl_setup_acknowledged: false,
                 notices: Default::default(),
                 check_for_update_on_startup: true,
                 disable_paste_burst: false,
+                notify: None,
                 tui_notifications: Default::default(),
+                tui_notification_method: Default::default(),
                 animations: true,
                 show_tooltips: true,
-                tui_xtreme_mode: XtremeMode::On,
-                tui_ramps_rotate: true,
-                tui_ramps_build: true,
-                tui_ramps_devops: true,
-                tui_confirm_exit_with_running_hooks: true,
-                themes: crate::config::types::Themes::default(),
+                xcodex: expected_xcodex_defaults(),
                 analytics_enabled: Some(true),
                 feedback_enabled: true,
                 tui_scroll_events_per_tick: None,
@@ -4490,12 +4500,9 @@ model_verbosity = "high"
             forced_auto_mode_downgraded_on_windows: false,
             shell_environment_policy: ShellEnvironmentPolicy::default(),
             user_instructions: None,
-            notify: None,
-            hooks: HooksConfig::default(),
             cwd: fixture.cwd(),
             worktrees_shared_dirs: Vec::new(),
             worktrees_pinned_paths: Vec::new(),
-            worktrees_auto_link_shared_dirs: false,
             cli_auth_credentials_store_mode: Default::default(),
             mcp_servers: Constrained::allow_any(HashMap::new()),
             mcp_oauth_credentials_store_mode: Default::default(),
@@ -4505,10 +4512,11 @@ model_verbosity = "high"
             project_doc_fallback_filenames: Vec::new(),
             tool_output_token_limit: None,
             unattested_output_policy: UnattestedOutputPolicy::Allow,
-            agent_max_threads: None,
+            agent_max_threads: DEFAULT_AGENT_MAX_THREADS,
             codex_home: fixture.codex_home(),
             config_layer_stack: Default::default(),
             history: History::default(),
+            ephemeral: false,
             file_opener: UriBasedFileOpener::VsCode,
             codex_linux_sandbox_exe: None,
             hide_agent_reasoning: true,
@@ -4530,21 +4538,19 @@ model_verbosity = "high"
             ghost_snapshot: GhostSnapshotConfig::default(),
             features: Features::with_defaults(),
             exclusion: ExclusionConfig::default(),
+            suppress_unstable_features_warning: false,
             active_profile: Some("gpt3".to_string()),
             active_project: ProjectConfig { trust_level: None },
             windows_wsl_setup_acknowledged: false,
             notices: Default::default(),
             check_for_update_on_startup: true,
             disable_paste_burst: false,
+            notify: None,
             tui_notifications: Default::default(),
+            tui_notification_method: Default::default(),
             animations: true,
             show_tooltips: true,
-            tui_xtreme_mode: XtremeMode::On,
-            tui_ramps_rotate: true,
-            tui_ramps_build: true,
-            tui_ramps_devops: true,
-            tui_confirm_exit_with_running_hooks: true,
-            themes: crate::config::types::Themes::default(),
+            xcodex: expected_xcodex_defaults(),
             analytics_enabled: Some(true),
             feedback_enabled: true,
             tui_scroll_events_per_tick: None,
@@ -4614,12 +4620,9 @@ model_verbosity = "high"
             forced_auto_mode_downgraded_on_windows: false,
             shell_environment_policy: ShellEnvironmentPolicy::default(),
             user_instructions: None,
-            notify: None,
-            hooks: HooksConfig::default(),
             cwd: fixture.cwd(),
             worktrees_shared_dirs: Vec::new(),
             worktrees_pinned_paths: Vec::new(),
-            worktrees_auto_link_shared_dirs: false,
             cli_auth_credentials_store_mode: Default::default(),
             mcp_servers: Constrained::allow_any(HashMap::new()),
             mcp_oauth_credentials_store_mode: Default::default(),
@@ -4629,10 +4632,11 @@ model_verbosity = "high"
             project_doc_fallback_filenames: Vec::new(),
             tool_output_token_limit: None,
             unattested_output_policy: UnattestedOutputPolicy::Allow,
-            agent_max_threads: None,
+            agent_max_threads: DEFAULT_AGENT_MAX_THREADS,
             codex_home: fixture.codex_home(),
             config_layer_stack: Default::default(),
             history: History::default(),
+            ephemeral: false,
             file_opener: UriBasedFileOpener::VsCode,
             codex_linux_sandbox_exe: None,
             hide_agent_reasoning: true,
@@ -4654,21 +4658,19 @@ model_verbosity = "high"
             ghost_snapshot: GhostSnapshotConfig::default(),
             features: Features::with_defaults(),
             exclusion: ExclusionConfig::default(),
+            suppress_unstable_features_warning: false,
             active_profile: Some("zdr".to_string()),
             active_project: ProjectConfig { trust_level: None },
             windows_wsl_setup_acknowledged: false,
             notices: Default::default(),
             check_for_update_on_startup: true,
             disable_paste_burst: false,
+            notify: None,
             tui_notifications: Default::default(),
+            tui_notification_method: Default::default(),
             animations: true,
             show_tooltips: true,
-            tui_xtreme_mode: XtremeMode::On,
-            tui_ramps_rotate: true,
-            tui_ramps_build: true,
-            tui_ramps_devops: true,
-            tui_confirm_exit_with_running_hooks: true,
-            themes: crate::config::types::Themes::default(),
+            xcodex: expected_xcodex_defaults(),
             analytics_enabled: Some(false),
             feedback_enabled: true,
             tui_scroll_events_per_tick: None,
@@ -4724,12 +4726,9 @@ model_verbosity = "high"
             forced_auto_mode_downgraded_on_windows: false,
             shell_environment_policy: ShellEnvironmentPolicy::default(),
             user_instructions: None,
-            notify: None,
-            hooks: HooksConfig::default(),
             cwd: fixture.cwd(),
             worktrees_shared_dirs: Vec::new(),
             worktrees_pinned_paths: Vec::new(),
-            worktrees_auto_link_shared_dirs: false,
             cli_auth_credentials_store_mode: Default::default(),
             mcp_servers: Constrained::allow_any(HashMap::new()),
             mcp_oauth_credentials_store_mode: Default::default(),
@@ -4739,10 +4738,11 @@ model_verbosity = "high"
             project_doc_fallback_filenames: Vec::new(),
             tool_output_token_limit: None,
             unattested_output_policy: UnattestedOutputPolicy::Allow,
-            agent_max_threads: None,
+            agent_max_threads: DEFAULT_AGENT_MAX_THREADS,
             codex_home: fixture.codex_home(),
             config_layer_stack: Default::default(),
             history: History::default(),
+            ephemeral: false,
             file_opener: UriBasedFileOpener::VsCode,
             codex_linux_sandbox_exe: None,
             hide_agent_reasoning: true,
@@ -4764,21 +4764,19 @@ model_verbosity = "high"
             ghost_snapshot: GhostSnapshotConfig::default(),
             features: Features::with_defaults(),
             exclusion: ExclusionConfig::default(),
+            suppress_unstable_features_warning: false,
             active_profile: Some("gpt5".to_string()),
             active_project: ProjectConfig { trust_level: None },
             windows_wsl_setup_acknowledged: false,
             notices: Default::default(),
             check_for_update_on_startup: true,
             disable_paste_burst: false,
+            notify: None,
             tui_notifications: Default::default(),
+            tui_notification_method: Default::default(),
             animations: true,
             show_tooltips: true,
-            tui_xtreme_mode: XtremeMode::On,
-            tui_ramps_rotate: true,
-            tui_ramps_build: true,
-            tui_ramps_devops: true,
-            tui_confirm_exit_with_running_hooks: true,
-            themes: crate::config::types::Themes::default(),
+            xcodex: expected_xcodex_defaults(),
             analytics_enabled: Some(true),
             feedback_enabled: true,
             tui_scroll_events_per_tick: None,
@@ -4966,7 +4964,12 @@ trust_level = "untrusted"
         let cfg = toml::from_str::<ConfigToml>(config_with_untrusted)
             .expect("TOML deserialization should succeed");
 
-        let resolution = cfg.derive_sandbox_policy(None, None, &PathBuf::from("/tmp/test"));
+        let resolution = cfg.derive_sandbox_policy(
+            None,
+            None,
+            WindowsSandboxLevel::Disabled,
+            &PathBuf::from("/tmp/test"),
+        );
 
         // Verify that untrusted projects get WorkspaceWrite (or ReadOnly on Windows due to downgrade)
         if cfg!(target_os = "windows") {
@@ -5145,13 +5148,17 @@ mcp_oauth_callback_port = 5678
 
 #[cfg(test)]
 mod notifications_tests {
+    use crate::config::types::NotificationMethod;
     use crate::config::types::Notifications;
     use assert_matches::assert_matches;
     use serde::Deserialize;
 
     #[derive(Deserialize, Debug, PartialEq)]
     struct TuiTomlTest {
+        #[serde(default)]
         notifications: Notifications,
+        #[serde(default)]
+        notification_method: NotificationMethod,
     }
 
     #[derive(Deserialize, Debug, PartialEq)]
@@ -5181,5 +5188,16 @@ mod notifications_tests {
             parsed.tui.notifications,
             Notifications::Custom(ref v) if v == &vec!["foo".to_string()]
         );
+    }
+
+    #[test]
+    fn test_tui_notification_method() {
+        let toml = r#"
+            [tui]
+            notification_method = "bel"
+        "#;
+        let parsed: RootTomlTest =
+            toml::from_str(toml).expect("deserialize notification_method=\"bel\"");
+        assert_eq!(parsed.tui.notification_method, NotificationMethod::Bel);
     }
 }

@@ -7,11 +7,15 @@ use ratatui::style::Style;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
 use ratatui::text::Span;
+use ratatui::widgets::Block;
 use ratatui::widgets::Widget;
 use unicode_width::UnicodeWidthChar;
 use unicode_width::UnicodeWidthStr;
 
 use crate::key_hint::KeyBinding;
+use crate::render::Insets;
+use crate::render::RectExt as _;
+use crate::style::user_message_style;
 
 use super::scroll_state::ScrollState;
 
@@ -23,7 +27,38 @@ pub(crate) struct GenericDisplayRow {
     pub match_indices: Option<Vec<usize>>, // indices to bold (char positions)
     pub description: Option<String>,       // optional grey text after the name
     pub disabled_reason: Option<String>,   // optional disabled message
-    pub wrap_indent: Option<usize>,        // optional indent for wrapped lines
+    pub is_disabled: bool,
+    pub wrap_indent: Option<usize>, // optional indent for wrapped lines
+}
+
+const MENU_SURFACE_INSET_V: u16 = 1;
+const MENU_SURFACE_INSET_H: u16 = 2;
+
+/// Apply the shared "menu surface" padding used by bottom-pane overlays.
+///
+/// Rendering code should generally call [`render_menu_surface`] and then lay
+/// out content inside the returned inset rect.
+pub(crate) fn menu_surface_inset(area: Rect) -> Rect {
+    area.inset(Insets::vh(MENU_SURFACE_INSET_V, MENU_SURFACE_INSET_H))
+}
+
+/// Total vertical padding introduced by the menu surface treatment.
+pub(crate) const fn menu_surface_padding_height() -> u16 {
+    MENU_SURFACE_INSET_V * 2
+}
+
+/// Paint the shared menu background and return the inset content area.
+///
+/// This keeps the surface treatment consistent across selection-style overlays
+/// (for example `/model`, approvals, and request-user-input).
+pub(crate) fn render_menu_surface(area: Rect, buf: &mut Buffer) -> Rect {
+    if area.is_empty() {
+        return area;
+    }
+    Block::default()
+        .style(user_message_style())
+        .render(area, buf);
+    menu_surface_inset(area)
 }
 
 pub(crate) fn wrap_styled_line<'a>(line: &'a Line<'a>, width: u16) -> Vec<Line<'a>> {
@@ -292,13 +327,14 @@ pub(crate) fn render_rows(
         }
 
         let mut full_line = build_full_line(row, desc_col);
-        let row_style = if row.disabled_reason.is_some() {
+        let row_is_disabled = row.is_disabled || row.disabled_reason.is_some();
+        let row_style = if row_is_disabled {
             base_style.patch(crate::theme::dim_style())
         } else {
             base_style
         };
 
-        if row.disabled_reason.is_none() && Some(i) == state.selected_idx {
+        if Some(i) == state.selected_idx && !row_is_disabled {
             // Keep the popup background stable and use accent color for selection.
             let style = base_style
                 .patch(crate::theme::accent_style())
@@ -307,6 +343,11 @@ pub(crate) fn render_rows(
                 .spans
                 .iter_mut()
                 .for_each(|span| span.style = style);
+        }
+        if row_is_disabled {
+            full_line.spans.iter_mut().for_each(|span| {
+                span.style = span.style.dim();
+            });
         }
 
         // Wrap with subsequent indent aligned to the description column.
@@ -394,13 +435,14 @@ pub(crate) fn render_rows_single_line(
         }
 
         let mut full_line = build_full_line(row, desc_col);
-        let row_style = if row.disabled_reason.is_some() {
+        let row_is_disabled = row.is_disabled || row.disabled_reason.is_some();
+        let row_style = if row_is_disabled {
             base_style.patch(crate::theme::dim_style())
         } else {
             base_style
         };
 
-        if row.disabled_reason.is_none() && Some(i) == state.selected_idx {
+        if Some(i) == state.selected_idx && !row_is_disabled {
             let style = base_style
                 .patch(crate::theme::accent_style())
                 .add_modifier(Modifier::BOLD);
@@ -408,6 +450,11 @@ pub(crate) fn render_rows_single_line(
                 .spans
                 .iter_mut()
                 .for_each(|span| span.style = style);
+        }
+        if row_is_disabled {
+            full_line.spans.iter_mut().for_each(|span| {
+                span.style = span.style.dim();
+            });
         }
 
         let full_line = truncate_line_with_ellipsis_if_overflow(full_line, area.width as usize);

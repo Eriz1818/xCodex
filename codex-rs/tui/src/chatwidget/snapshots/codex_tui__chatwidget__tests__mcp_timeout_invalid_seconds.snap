@@ -1,0 +1,5 @@
+---
+source: tui/src/chatwidget/tests.rs
+expression: rendered_text
+---
+• Usage: /mcp timeout <name> <seconds>

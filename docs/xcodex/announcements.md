@@ -1,10 +1,10 @@
 # Announcements (startup tips)
 
-Both TUIs (`codex-tui` and `codex-tui2`) show a “startup tip” when you launch `xcodex`.
+Both TUIs (`codex-tui` and `codex-tui2`) show a “startup tip” when you launch `xcodex` (or `xcodex tui2`).
 
 - By default, the tip is a random line from:
   - `codex-rs/tui/tooltips.txt`
-  - `codex-rs/tui2/tooltips.txt`
+  - `codex-rs/xcodex/tui2/tooltips.txt`
 - However, if an “announcement tip” is available, it takes precedence and is shown instead.
 
 ## Where announcements come from

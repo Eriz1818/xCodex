@@ -13,7 +13,7 @@ async fn notify_emits_deprecation_notice() -> anyhow::Result<()> {
 
     let server = core_test_support::responses::start_mock_server().await;
     let TestCodex { codex, .. } = test_codex()
-        .with_config(|cfg| cfg.notify = Some(vec!["/bin/false".to_string()]))
+        .with_config(|cfg| cfg.xcodex.notify = Some(vec!["/bin/false".to_string()]))
         .build(&server)
         .await?;
 

@@ -71,15 +71,25 @@ For complete documentation of the `Op` and `EventMsg` variants, refer to [protoc
   - `Op::ExecApproval` – Approve or deny code execution
   - `Op::UserInputAnswer` – Provide answers for a `request_user_input` tool call
   - `Op::ListSkills` – Request skills for one or more cwd values (optionally `force_reload`)
+  - `Op::UserTurn` and `Op::OverrideTurnContext` accept an optional `personality` override that updates the model’s communication style
 - `EventMsg`
   - `EventMsg::AgentMessage` – Messages from the `Model`
   - `EventMsg::ExecApprovalRequest` – Request approval from user to execute a command
-  - `EventMsg::RequestUserInput` – Request user input for a tool call
+  - `EventMsg::RequestUserInput` – Request user input for a tool call (questions must include options; the client always adds a free-form choice)
   - `EventMsg::TurnComplete` – A turn completed successfully
   - `EventMsg::Error` – A turn stopped with an error
   - `EventMsg::Warning` – A non-fatal warning that the client should surface to the user
   - `EventMsg::TurnComplete` – Contains a `response_id` bookmark for last `response_id` executed by the turn. This can be used to continue the turn at a later point in time, perhaps with additional user input.
   - `EventMsg::ListSkillsResponse` – Response payload with per-cwd skill entries (`cwd`, `skills`, `errors`)
+
+### UserInput items
+
+`Op::UserTurn` content items can include:
+
+- `text` – Plain text plus optional UI text elements.
+- `image` / `local_image` – Image inputs.
+- `skill` – Explicit skill selection (`name`, `path` to `SKILL.md`).
+- `mention` – Explicit app/connector selection (`name`, `path` in `app://{connector_id}` form).
 
 Note: For v1 wire compatibility, `EventMsg::TurnStarted` and `EventMsg::TurnComplete` serialize as `task_started` / `task_complete`. The deserializer accepts both `task_*` and `turn_*` tags.
 

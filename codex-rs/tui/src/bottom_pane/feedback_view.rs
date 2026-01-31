@@ -26,6 +26,12 @@ use super::popup_consts::standard_popup_hint_line;
 use super::textarea::TextArea;
 use super::textarea::TextAreaState;
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum FeedbackAudience {
+    OpenAiEmployee,
+    External,
+}
+
 /// Minimal input overlay to collect an optional feedback note, then save
 /// a local report for troubleshooting.
 pub(crate) struct FeedbackNoteView {
@@ -34,6 +40,7 @@ pub(crate) struct FeedbackNoteView {
     rollout_path: Option<PathBuf>,
     app_event_tx: AppEventSender,
     include_logs: bool,
+    feedback_audience: FeedbackAudience,
 
     // UI state
     textarea: TextArea,
@@ -48,6 +55,7 @@ impl FeedbackNoteView {
         rollout_path: Option<PathBuf>,
         app_event_tx: AppEventSender,
         include_logs: bool,
+        feedback_audience: FeedbackAudience,
     ) -> Self {
         Self {
             category,
@@ -55,6 +63,7 @@ impl FeedbackNoteView {
             rollout_path,
             app_event_tx,
             include_logs,
+            feedback_audience,
             textarea: TextArea::new(),
             textarea_state: RefCell::new(TextAreaState::default()),
             complete: false,
@@ -538,7 +547,14 @@ mod tests {
         let (tx_raw, _rx) = tokio::sync::mpsc::unbounded_channel::<AppEvent>();
         let tx = AppEventSender::new(tx_raw);
         let snapshot = codex_feedback::CodexFeedback::new().snapshot(None);
-        FeedbackNoteView::new(category, snapshot, None, tx, true)
+        FeedbackNoteView::new(
+            category,
+            snapshot,
+            None,
+            tx,
+            true,
+            FeedbackAudience::External,
+        )
     }
 
     #[test]

@@ -82,6 +82,7 @@ pub(crate) struct ExecCommandRequest {
     pub tty: bool,
     pub sandbox_permissions: SandboxPermissions,
     pub justification: Option<String>,
+    pub prefix_rule: Option<Vec<String>>,
 }
 
 #[derive(Debug)]
@@ -209,6 +210,7 @@ mod tests {
             tty: false,
             sandbox_permissions: SandboxPermissions::UseDefault,
             justification: None,
+            prefix_rule: None,
         };
 
         let event_ctx = ToolEventCtx::new(session.as_ref(), turn.as_ref(), &call_id, None);
@@ -259,7 +261,7 @@ mod tests {
         }
 
         assert_eq!(begin_process_id.as_deref(), Some(process_id.as_str()));
-        assert_eq!(end_process_id.as_deref(), Some(process_id.as_str()));
+        assert!(end_process_id.is_none());
         assert_eq!(end_exit_code, Some(-1));
     }
 
@@ -290,6 +292,7 @@ mod tests {
                     tty: true,
                     sandbox_permissions: SandboxPermissions::UseDefault,
                     justification: None,
+                    prefix_rule: None,
                 },
                 &context,
             )

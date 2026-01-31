@@ -214,25 +214,18 @@ async fn enforce_sensitive_send_policy(
         return output;
     }
 
-    match turn.unattested_output_policy {
-        crate::config::types::UnattestedOutputPolicy::Allow => output,
-        crate::config::types::UnattestedOutputPolicy::Warn => {
-            emit_unattested_output_warning(session, turn, tool_name, call_id, &output).await;
-            output
-        }
-        crate::config::types::UnattestedOutputPolicy::Confirm => {
-            emit_unattested_output_warning(session, turn, tool_name, call_id, &output).await;
-            let provenance = match &output {
-                ToolOutput::Function { provenance, .. } => provenance,
-                ToolOutput::Mcp { provenance, .. } => provenance,
-            };
-            let mut command = vec!["send_unattested_output".to_string(), tool_name.to_string()];
-            command.push(provenance.origin_type().to_string());
-            if let Some(path) = provenance.origin_path() {
-                command.push(path);
-            }
-
-            let decision = session
+    enforce_unattested_output_policy(
+        output,
+        turn.unattested_output_policy,
+        tool_name,
+        call_id,
+        |message| async {
+            session
+                .send_event(turn, EventMsg::Warning(WarningEvent { message }))
+                .await;
+        },
+        |command| async {
+            session
                 .request_command_approval(
                     turn,
                     call_id.to_string(),
@@ -241,17 +234,10 @@ async fn enforce_sensitive_send_policy(
                     Some("unattested MCP output would be sent to the model".to_string()),
                     None,
                 )
-                .await;
-
-            match decision {
-                ReviewDecision::Approved
-                | ReviewDecision::ApprovedForSession
-                | ReviewDecision::ApprovedExecpolicyAmendment { .. } => output,
-                ReviewDecision::Denied | ReviewDecision::Abort => block_unattested_output(output),
-            }
-        }
-        crate::config::types::UnattestedOutputPolicy::Block => block_unattested_output(output),
-    }
+                .await
+        },
+    )
+    .await
 }
 
 fn enforce_sensitive_content_gateway(
@@ -483,13 +469,64 @@ fn is_unattested_output(output: &ToolOutput) -> bool {
     }
 }
 
-async fn emit_unattested_output_warning(
-    session: &crate::codex::Session,
-    turn: &crate::codex::TurnContext,
+async fn enforce_unattested_output_policy<WarnFut, WarnFn, ApprovalFut, ApprovalFn>(
+    output: ToolOutput,
+    policy: crate::config::types::UnattestedOutputPolicy,
     tool_name: &str,
     call_id: &str,
+    mut warn: WarnFn,
+    mut request_approval: ApprovalFn,
+) -> ToolOutput
+where
+    WarnFn: FnMut(String) -> WarnFut,
+    WarnFut: std::future::Future<Output = ()>,
+    ApprovalFn: FnMut(Vec<String>) -> ApprovalFut,
+    ApprovalFut: std::future::Future<Output = ReviewDecision>,
+{
+    match policy {
+        crate::config::types::UnattestedOutputPolicy::Allow => output,
+        crate::config::types::UnattestedOutputPolicy::Warn => {
+            warn(unattested_output_warning_message(
+                &output, policy, tool_name, call_id,
+            ))
+            .await;
+            output
+        }
+        crate::config::types::UnattestedOutputPolicy::Confirm => {
+            warn(unattested_output_warning_message(
+                &output, policy, tool_name, call_id,
+            ))
+            .await;
+
+            let provenance = match &output {
+                ToolOutput::Function { provenance, .. } => provenance,
+                ToolOutput::Mcp { provenance, .. } => provenance,
+            };
+
+            let mut command = vec!["send_unattested_output".to_string(), tool_name.to_string()];
+            command.push(provenance.origin_type().to_string());
+            if let Some(path) = provenance.origin_path() {
+                command.push(path);
+            }
+
+            let decision = request_approval(command).await;
+            match decision {
+                ReviewDecision::Approved
+                | ReviewDecision::ApprovedForSession
+                | ReviewDecision::ApprovedExecpolicyAmendment { .. } => output,
+                ReviewDecision::Denied | ReviewDecision::Abort => block_unattested_output(output),
+            }
+        }
+        crate::config::types::UnattestedOutputPolicy::Block => block_unattested_output(output),
+    }
+}
+
+fn unattested_output_warning_message(
     output: &ToolOutput,
-) {
+    policy: crate::config::types::UnattestedOutputPolicy,
+    tool_name: &str,
+    call_id: &str,
+) -> String {
     let provenance = match output {
         ToolOutput::Function { provenance, .. } => provenance,
         ToolOutput::Mcp { provenance, .. } => provenance,
@@ -497,13 +534,9 @@ async fn emit_unattested_output_warning(
     let origin = provenance
         .origin_path()
         .unwrap_or_else(|| String::from("<unknown>"));
-    let message = format!(
-        "unattested tool output ({tool_name}, call_id={call_id}, origin={origin}) may contain sensitive data; policy={policy:?}",
-        policy = turn.unattested_output_policy
-    );
-    session
-        .send_event(turn, EventMsg::Warning(WarningEvent { message }))
-        .await;
+    format!(
+        "unattested tool output ({tool_name}, call_id={call_id}, origin={origin}) may contain sensitive data; policy={policy:?}"
+    )
 }
 
 fn block_unattested_output(output: ToolOutput) -> ToolOutput {
@@ -519,6 +552,250 @@ fn block_unattested_output(output: ToolOutput) -> ToolOutput {
             result: Err(message),
             provenance,
         },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::types::UnattestedOutputPolicy;
+    use pretty_assertions::assert_eq;
+
+    fn unattested_output() -> ToolOutput {
+        ToolOutput::Function {
+            content: "payload".to_string(),
+            content_items: None,
+            success: Some(true),
+            provenance: ToolProvenance::Unattested {
+                origin_type: "mcp",
+                origin_path: Some("server/tool".to_string()),
+            },
+        }
+    }
+
+    #[test]
+    fn is_unattested_output_matches_expected_provenance() {
+        let output = unattested_output();
+        assert_eq!(true, super::is_unattested_output(&output));
+
+        let output = ToolOutput::Function {
+            content: "payload".to_string(),
+            content_items: None,
+            success: Some(true),
+            provenance: ToolProvenance::Filesystem {
+                path: std::path::PathBuf::from("/tmp/file"),
+            },
+        };
+        assert_eq!(false, super::is_unattested_output(&output));
+
+        let output = ToolOutput::Mcp {
+            result: Err("boom".to_string()),
+            provenance: ToolProvenance::Mcp {
+                server: "server".to_string(),
+                tool: "tool".to_string(),
+            },
+        };
+        assert_eq!(true, super::is_unattested_output(&output));
+    }
+
+    #[test]
+    fn block_unattested_output_replaces_payload_with_policy_message() {
+        let output = unattested_output();
+        let blocked = super::block_unattested_output(output);
+        match blocked {
+            ToolOutput::Function {
+                content,
+                content_items: None,
+                success: Some(false),
+                provenance:
+                    ToolProvenance::Unattested {
+                        origin_type: "mcp",
+                        origin_path: Some(origin),
+                    },
+            } => {
+                assert_eq!(content, "unattested tool output blocked by policy");
+                assert_eq!(origin, "server/tool");
+            }
+            _ => panic!("unexpected output variant"),
+        }
+    }
+
+    #[tokio::test]
+    async fn enforce_unattested_output_policy_warn_emits_warning() {
+        let output = unattested_output();
+        let warnings = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+
+        let output = super::enforce_unattested_output_policy(
+            output,
+            UnattestedOutputPolicy::Warn,
+            "mcp__server__tool",
+            "call-1",
+            {
+                let warnings = std::sync::Arc::clone(&warnings);
+                move |message| {
+                    let warnings = std::sync::Arc::clone(&warnings);
+                    async move {
+                        warnings
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner)
+                            .push(message);
+                    }
+                }
+            },
+            |_command| async { ReviewDecision::Abort },
+        )
+        .await;
+
+        let warnings = warnings
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        assert_eq!(warnings.len(), 1);
+        assert_eq!(
+            warnings[0],
+            "unattested tool output (mcp__server__tool, call_id=call-1, origin=server/tool) may contain sensitive data; policy=Warn"
+        );
+        match output {
+            ToolOutput::Function {
+                content,
+                content_items: None,
+                success: Some(true),
+                provenance:
+                    ToolProvenance::Unattested {
+                        origin_type: "mcp",
+                        origin_path: Some(origin),
+                    },
+            } => {
+                assert_eq!(content, "payload");
+                assert_eq!(origin, "server/tool");
+            }
+            _ => panic!("unexpected output variant"),
+        }
+    }
+
+    #[tokio::test]
+    async fn enforce_unattested_output_policy_confirm_requests_approval_and_blocks_on_denied() {
+        let output = unattested_output();
+        let warnings = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let approval_commands = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+
+        let output = super::enforce_unattested_output_policy(
+            output,
+            UnattestedOutputPolicy::Confirm,
+            "mcp__server__tool",
+            "call-1",
+            {
+                let warnings = std::sync::Arc::clone(&warnings);
+                move |message| {
+                    let warnings = std::sync::Arc::clone(&warnings);
+                    async move {
+                        warnings
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner)
+                            .push(message);
+                    }
+                }
+            },
+            {
+                let approval_commands = std::sync::Arc::clone(&approval_commands);
+                move |command| {
+                    let approval_commands = std::sync::Arc::clone(&approval_commands);
+                    async move {
+                        approval_commands
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner)
+                            .push(command);
+                        ReviewDecision::Denied
+                    }
+                }
+            },
+        )
+        .await;
+
+        let warnings = warnings
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let approval_commands = approval_commands
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        assert_eq!(warnings.len(), 1);
+        assert_eq!(approval_commands.len(), 1);
+        assert_eq!(
+            approval_commands[0],
+            vec![
+                "send_unattested_output".to_string(),
+                "mcp__server__tool".to_string(),
+                "mcp".to_string(),
+                "server/tool".to_string(),
+            ]
+        );
+
+        match output {
+            ToolOutput::Function {
+                content,
+                content_items: None,
+                success: Some(false),
+                provenance:
+                    ToolProvenance::Unattested {
+                        origin_type: "mcp",
+                        origin_path: Some(origin),
+                    },
+            } => {
+                assert_eq!(content, "unattested tool output blocked by policy");
+                assert_eq!(origin, "server/tool");
+            }
+            _ => panic!("unexpected output variant"),
+        }
+    }
+
+    #[tokio::test]
+    async fn enforce_unattested_output_policy_confirm_allows_on_approved() {
+        let output = unattested_output();
+        let approvals = std::sync::Arc::new(std::sync::Mutex::new(0_u64));
+
+        let output = super::enforce_unattested_output_policy(
+            output,
+            UnattestedOutputPolicy::Confirm,
+            "mcp__server__tool",
+            "call-1",
+            |_message| async {},
+            {
+                let approvals = std::sync::Arc::clone(&approvals);
+                move |_command| {
+                    let approvals = std::sync::Arc::clone(&approvals);
+                    async move {
+                        let mut guard = approvals
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner);
+                        *guard += 1;
+                        ReviewDecision::Approved
+                    }
+                }
+            },
+        )
+        .await;
+
+        assert_eq!(
+            *approvals
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner),
+            1
+        );
+        match output {
+            ToolOutput::Function {
+                content,
+                content_items: None,
+                success: Some(true),
+                provenance:
+                    ToolProvenance::Unattested {
+                        origin_type: "mcp",
+                        origin_path: Some(origin),
+                    },
+            } => {
+                assert_eq!(content, "payload");
+                assert_eq!(origin, "server/tool");
+            }
+            _ => panic!("unexpected output variant"),
+        }
     }
 }
 

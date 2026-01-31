@@ -1,0 +1,18 @@
+---
+source: tui/src/chatwidget/tests.rs
+expression: popup
+---
+  Select a worktree
+
+  Type to search worktrees
+› Refresh worktrees (⌥ + r)          Re-detect worktrees for this session.
+  Worktrees settings… (⌥ + s)        Edit shared dirs and pinned paths.
+  Create worktree… (⌥ + i)           Create a new worktree and switch to it.
+  Worktree doctor (⌥ + d)            Show shared-dir + untracked status for
+                             this worktree.
+  worktrees/main             branch: main
+  worktrees/notes            branch: notes
+  worktrees/bare (disabled)  branch: (detached) (bare repository) (disabled:
+                             Bare repository)
+
+  ↑/↓ select  enter open  ⌥ + r refresh  ⌥ + s settings  ⌥ + i create  ⌥ + d doc

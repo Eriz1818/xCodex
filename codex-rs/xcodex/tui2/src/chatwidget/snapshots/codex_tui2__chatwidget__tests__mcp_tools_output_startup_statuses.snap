@@ -1,0 +1,36 @@
+---
+source: tui2/src/chatwidget/tests.rs
+expression: rendered_text
+---
+/mcp
+
+🔌  MCP Tools
+
+  • MCP ready: (2.5s)
+
+  • No MCP tools available yet (servers still starting).
+
+  • alpha
+    • Status: enabled
+    • Startup: Starting
+    • Auth: Not logged in
+    • Command: alpha-cmd --alpha
+    • Tools: (none)
+    • Resources: (none)
+    • Resource templates: (none)
+
+  • beta
+    • Status: enabled
+    • Startup: Failed (1.2s)
+    • Auth: OAuth
+    • Error: timed out after 5 seconds
+    • Retry: /mcp retry beta
+    • Command: beta-cmd --beta
+    • Tools: (none)
+    • Resources: (none)
+    • Resource templates: (none)
+
+  • gamma (disabled)
+    • Reason: unknown
+
+  • Retry failed: /mcp retry failed (or a specific server above)

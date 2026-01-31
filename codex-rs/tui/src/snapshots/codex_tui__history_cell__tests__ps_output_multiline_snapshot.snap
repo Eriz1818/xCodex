@@ -4,11 +4,10 @@ expression: rendered
 ---
 /ps
 
-Background terminals (2)
+Background terminals
 
-  • proc-1 echo hello [...]
-  • proc-2 rg "foo" src
-
-Hooks (0)
-
-  • No hooks running.
+  • echo hello [...]
+    ↳ hello
+      done
+  • rg "foo" src
+    ↳ src/main.rs:12:foo

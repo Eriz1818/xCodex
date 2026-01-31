@@ -1,0 +1,4133 @@
+use crate::app_backtrack::BacktrackState;
+use crate::app_event::AppEvent;
+use crate::app_event::ExitMode;
+#[cfg(target_os = "windows")]
+use crate::app_event::WindowsSandboxEnableMode;
+#[cfg(target_os = "windows")]
+use crate::app_event::WindowsSandboxFallbackReason;
+use crate::app_event_sender::AppEventSender;
+use crate::bottom_pane::ApprovalRequest;
+use crate::chatwidget::ChatWidget;
+use crate::custom_terminal::Frame;
+use crate::diff_render::DiffSummary;
+use crate::exec_command::strip_bash_lc_and_escape;
+use crate::file_search::FileSearchManager;
+use crate::history_cell::HistoryCell;
+use crate::history_cell::UserHistoryCell;
+use crate::model_migration::ModelMigrationOutcome;
+use crate::model_migration::migration_copy_for_models;
+use crate::model_migration::run_model_migration_prompt;
+use crate::pager_overlay::Overlay;
+use crate::render::highlight::highlight_bash_to_lines;
+use crate::render::renderable::Renderable;
+use crate::resume_picker::SessionSelection;
+use crate::transcript_copy_action::TranscriptCopyAction;
+use crate::transcript_copy_action::TranscriptCopyFeedback;
+use crate::transcript_copy_ui::TranscriptCopyUi;
+use crate::transcript_multi_click::TranscriptMultiClick;
+use crate::transcript_scrollbar::render_transcript_scrollbar_if_active;
+use crate::transcript_scrollbar::split_transcript_area;
+use crate::transcript_scrollbar_ui::TranscriptScrollbarMouseEvent;
+use crate::transcript_scrollbar_ui::TranscriptScrollbarMouseHandling;
+use crate::transcript_scrollbar_ui::TranscriptScrollbarUi;
+use crate::transcript_selection::TRANSCRIPT_GUTTER_COLS;
+use crate::transcript_selection::TranscriptSelection;
+use crate::transcript_selection::TranscriptSelectionPoint;
+use crate::transcript_view_cache::TranscriptViewCache;
+use crate::tui;
+use crate::tui::TuiEvent;
+use crate::tui::scrolling::MouseScrollState;
+use crate::tui::scrolling::ScrollConfig;
+use crate::tui::scrolling::ScrollConfigOverrides;
+use crate::tui::scrolling::ScrollDirection;
+use crate::tui::scrolling::ScrollUpdate;
+use crate::tui::scrolling::TranscriptScroll;
+use crate::update_action::UpdateAction;
+use codex_ansi_escape::ansi_escape_line;
+use codex_core::AuthManager;
+use codex_core::ThreadManager;
+use codex_core::config::Config;
+use codex_core::config::edit::ConfigEdit;
+use codex_core::config::edit::ConfigEditsBuilder;
+#[cfg(target_os = "windows")]
+use codex_core::features::Feature;
+use codex_core::models_manager::manager::RefreshStrategy;
+use codex_core::models_manager::model_presets::HIDE_GPT_5_1_CODEX_MAX_MIGRATION_PROMPT_CONFIG;
+use codex_core::models_manager::model_presets::HIDE_GPT5_1_MIGRATION_PROMPT_CONFIG;
+use codex_core::protocol::DeprecationNoticeEvent;
+use codex_core::protocol::EventMsg;
+use codex_core::protocol::FinalOutput;
+use codex_core::protocol::ListSkillsResponseEvent;
+use codex_core::protocol::Op;
+use codex_core::protocol::SessionSource;
+use codex_core::protocol::SkillErrorInfo;
+use codex_core::protocol::TokenUsage;
+use codex_core::terminal::terminal_info;
+use codex_protocol::ThreadId;
+use codex_protocol::openai_models::ModelPreset;
+use codex_protocol::openai_models::ModelUpgrade;
+use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
+use color_eyre::eyre::Result;
+use color_eyre::eyre::WrapErr;
+use crossterm::event::KeyCode;
+use crossterm::event::KeyEvent;
+use crossterm::event::KeyEventKind;
+use crossterm::event::MouseButton;
+use ratatui::buffer::Buffer;
+use ratatui::layout::Rect;
+use ratatui::style::Style;
+use ratatui::style::Stylize;
+use ratatui::text::Line;
+use ratatui::text::Span;
+use ratatui::widgets::Paragraph;
+use ratatui::widgets::Wrap;
+use std::collections::BTreeMap;
+use std::path::Path;
+use std::path::PathBuf;
+use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering;
+use std::thread;
+use std::time::Duration;
+use tokio::select;
+use tokio::sync::mpsc::unbounded_channel;
+
+#[cfg(not(debug_assertions))]
+use crate::history_cell::UpdateAvailableHistoryCell;
+#[cfg(not(debug_assertions))]
+use crate::history_cell::WhatsNewHistoryCell;
+
+#[derive(Debug, Clone)]
+pub struct AppExitInfo {
+    pub token_usage: TokenUsage,
+    pub conversation_id: Option<ThreadId>,
+    pub update_action: Option<UpdateAction>,
+    pub exit_reason: ExitReason,
+    /// ANSI-styled transcript lines to print after the TUI exits.
+    ///
+    /// These lines are rendered against the same width as the final TUI
+    /// viewport and include styling (colors, bold, etc.) so that scrollback
+    /// preserves the visual structure of the on-screen transcript.
+    pub session_lines: Vec<String>,
+}
+
+#[derive(Debug)]
+pub(crate) enum AppRunControl {
+    Continue,
+    Exit(ExitReason),
+}
+
+#[derive(Debug, Clone)]
+pub enum ExitReason {
+    UserRequested,
+    Fatal(String),
+}
+
+impl From<AppExitInfo> for codex_tui::AppExitInfo {
+    fn from(info: AppExitInfo) -> Self {
+        let exit_reason = match info.exit_reason {
+            ExitReason::UserRequested => codex_tui::ExitReason::UserRequested,
+            ExitReason::Fatal(message) => codex_tui::ExitReason::Fatal(message),
+        };
+        codex_tui::AppExitInfo {
+            token_usage: info.token_usage,
+            thread_id: info.conversation_id,
+            thread_name: None,
+            update_action: info.update_action.map(Into::into),
+            exit_reason,
+        }
+    }
+}
+
+fn session_summary(
+    token_usage: TokenUsage,
+    conversation_id: Option<ThreadId>,
+) -> Option<SessionSummary> {
+    if token_usage.is_zero() {
+        return None;
+    }
+
+    let usage_line = FinalOutput::from(token_usage).to_string();
+    let resume_command =
+        conversation_id.map(|conversation_id| format!("xcodex resume {conversation_id}"));
+    Some(SessionSummary {
+        usage_line,
+        resume_command,
+    })
+}
+
+fn errors_for_cwd(cwd: &Path, response: &ListSkillsResponseEvent) -> Vec<SkillErrorInfo> {
+    response
+        .skills
+        .iter()
+        .find(|entry| entry.cwd.as_path() == cwd)
+        .map(|entry| entry.errors.clone())
+        .unwrap_or_default()
+}
+
+fn emit_skill_load_warnings(app_event_tx: &AppEventSender, errors: &[SkillErrorInfo]) {
+    if errors.is_empty() {
+        return;
+    }
+
+    let error_count = errors.len();
+    app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
+        crate::history_cell::new_warning_event(format!(
+            "Skipped loading {error_count} skill(s) due to invalid SKILL.md files."
+        )),
+    )));
+
+    for error in errors {
+        let path = error.path.display();
+        let message = error.message.as_str();
+        app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
+            crate::history_cell::new_warning_event(format!("{path}: {message}")),
+        )));
+    }
+}
+
+fn emit_deprecation_notice(app_event_tx: &AppEventSender, notice: Option<DeprecationNoticeEvent>) {
+    let Some(DeprecationNoticeEvent { summary, details }) = notice else {
+        return;
+    };
+    app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
+        crate::history_cell::new_deprecation_notice(summary, details),
+    )));
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct SessionSummary {
+    usage_line: String,
+    resume_command: Option<String>,
+}
+
+fn should_show_model_migration_prompt(
+    current_model: &str,
+    target_model: &str,
+    seen_migrations: &BTreeMap<String, String>,
+    available_models: &[ModelPreset],
+) -> bool {
+    if target_model == current_model {
+        return false;
+    }
+
+    if let Some(seen_target) = seen_migrations.get(current_model)
+        && seen_target == target_model
+    {
+        return false;
+    }
+
+    if available_models
+        .iter()
+        .any(|preset| preset.model == current_model && preset.upgrade.is_some())
+    {
+        return true;
+    }
+
+    if available_models
+        .iter()
+        .any(|preset| preset.upgrade.as_ref().map(|u| u.id.as_str()) == Some(target_model))
+    {
+        return true;
+    }
+
+    false
+}
+
+fn migration_prompt_hidden(config: &Config, migration_config_key: &str) -> bool {
+    match migration_config_key {
+        HIDE_GPT_5_1_CODEX_MAX_MIGRATION_PROMPT_CONFIG => config
+            .notices
+            .hide_gpt_5_1_codex_max_migration_prompt
+            .unwrap_or(false),
+        HIDE_GPT5_1_MIGRATION_PROMPT_CONFIG => {
+            config.notices.hide_gpt5_1_migration_prompt.unwrap_or(false)
+        }
+        _ => false,
+    }
+}
+
+async fn handle_model_migration_prompt_if_needed(
+    tui: &mut tui::Tui,
+    config: &mut Config,
+    model: &str,
+    app_event_tx: &AppEventSender,
+    available_models: Vec<ModelPreset>,
+) -> Option<AppExitInfo> {
+    let upgrade = available_models
+        .iter()
+        .find(|preset| preset.model == model)
+        .and_then(|preset| preset.upgrade.as_ref());
+
+    if let Some(ModelUpgrade {
+        id: target_model,
+        reasoning_effort_mapping,
+        migration_config_key,
+        migration_markdown,
+        ..
+    }) = upgrade
+    {
+        if migration_prompt_hidden(config, migration_config_key.as_str()) {
+            return None;
+        }
+
+        let target_model = target_model.to_string();
+        if !should_show_model_migration_prompt(
+            model,
+            &target_model,
+            &config.notices.model_migrations,
+            &available_models,
+        ) {
+            return None;
+        }
+
+        let current_preset = available_models.iter().find(|preset| preset.model == model);
+        let target_preset = available_models
+            .iter()
+            .find(|preset| preset.model == target_model);
+        let target_display_name = target_preset
+            .map(|preset| preset.display_name.clone())
+            .unwrap_or_else(|| target_model.clone());
+        let heading_label = if target_display_name == model {
+            target_model.clone()
+        } else {
+            target_display_name.clone()
+        };
+        let target_description = target_preset.and_then(|preset| {
+            if preset.description.is_empty() {
+                None
+            } else {
+                Some(preset.description.clone())
+            }
+        });
+        let can_opt_out = current_preset.is_some();
+        let prompt_copy = migration_copy_for_models(
+            model,
+            &target_model,
+            heading_label,
+            target_description,
+            migration_markdown.clone(),
+            can_opt_out,
+        );
+        match run_model_migration_prompt(tui, prompt_copy).await {
+            ModelMigrationOutcome::Accepted => {
+                app_event_tx.send(AppEvent::PersistModelMigrationPromptAcknowledged {
+                    from_model: model.to_string(),
+                    to_model: target_model.clone(),
+                });
+                config.model = Some(target_model.clone());
+
+                let mapped_effort = if let Some(reasoning_effort_mapping) = reasoning_effort_mapping
+                    && let Some(reasoning_effort) = config.model_reasoning_effort
+                {
+                    reasoning_effort_mapping
+                        .get(&reasoning_effort)
+                        .cloned()
+                        .or(config.model_reasoning_effort)
+                } else {
+                    config.model_reasoning_effort
+                };
+
+                config.model_reasoning_effort = mapped_effort;
+
+                app_event_tx.send(AppEvent::UpdateModel(target_model.clone()));
+                app_event_tx.send(AppEvent::UpdateReasoningEffort(mapped_effort));
+                app_event_tx.send(AppEvent::PersistModelSelection {
+                    model: target_model.clone(),
+                    effort: mapped_effort,
+                });
+            }
+            ModelMigrationOutcome::Rejected => {
+                app_event_tx.send(AppEvent::PersistModelMigrationPromptAcknowledged {
+                    from_model: model.to_string(),
+                    to_model: target_model.clone(),
+                });
+            }
+            ModelMigrationOutcome::Exit => {
+                return Some(AppExitInfo {
+                    token_usage: TokenUsage::default(),
+                    conversation_id: None,
+                    update_action: None,
+                    exit_reason: ExitReason::UserRequested,
+                    session_lines: Vec::new(),
+                });
+            }
+        }
+    }
+
+    None
+}
+
+pub(crate) struct App {
+    pub(crate) server: Arc<ThreadManager>,
+    pub(crate) app_event_tx: AppEventSender,
+    pub(crate) chat_widget: ChatWidget,
+    pub(crate) auth_manager: Arc<AuthManager>,
+    /// Config is stored here so we can recreate ChatWidgets as needed.
+    pub(crate) config: Config,
+    pub(crate) current_model: String,
+    pub(crate) active_profile: Option<String>,
+
+    pub(crate) file_search: FileSearchManager,
+
+    pub(crate) transcript_cells: Vec<Arc<dyn HistoryCell>>,
+    transcript_view_cache: TranscriptViewCache,
+
+    #[allow(dead_code)]
+    transcript_scroll: TranscriptScroll,
+    transcript_selection: TranscriptSelection,
+    transcript_multi_click: TranscriptMultiClick,
+    transcript_view_top: usize,
+    transcript_total_lines: usize,
+    transcript_copy_ui: TranscriptCopyUi,
+    expanded_exec_call_ids: std::collections::HashSet<String>,
+    last_transcript_width: u16,
+    transcript_copy_action: TranscriptCopyAction,
+    transcript_scrollbar_ui: TranscriptScrollbarUi,
+
+    // Pager overlay state (Transcript or Static like Diff).
+    pub(crate) overlay: Option<Overlay>,
+    /// History cells received while an overlay is active.
+    ///
+    /// While in an alt-screen overlay, the normal terminal buffer is not visible.
+    /// Instead we queue the incoming cells here and, on overlay close, render them at the *current*
+    /// width and queue them in one batch via `Tui::insert_history_lines`.
+    ///
+    /// This matters for correctness if/when scrollback printing is enabled: if we deferred
+    /// already-rendered `Vec<Line>`, we'd bake viewport-width wrapping based on the width at the
+    /// time the cell arrived (which may differ from the width when the overlay closes).
+    pub(crate) deferred_history_cells: Vec<Arc<dyn HistoryCell>>,
+    /// True once at least one history cell has been inserted into terminal scrollback.
+    ///
+    /// Used to decide whether to insert an extra blank separator line when flushing deferred cells.
+    pub(crate) has_emitted_history_lines: bool,
+
+    pub(crate) enhanced_keys_supported: bool,
+
+    /// Controls the animation thread that sends CommitTick events.
+    pub(crate) commit_anim_running: Arc<AtomicBool>,
+
+    scroll_config: ScrollConfig,
+    scroll_state: MouseScrollState,
+
+    // Esc-backtracking state grouped
+    pub(crate) backtrack: crate::app_backtrack::BacktrackState,
+    pub(crate) feedback: codex_feedback::CodexFeedback,
+    /// Set when the user confirms an update; propagated on exit.
+    pub(crate) pending_update_action: Option<UpdateAction>,
+
+    /// Ignore the next ShutdownComplete event when we're intentionally
+    /// stopping a conversation (e.g., before starting a new one).
+    suppress_shutdown_complete: bool,
+
+    // One-shot suppression of the next world-writable scan after user confirmation.
+    skip_world_writable_scan_once: bool,
+
+    shared_dirs_write_notice_shown: bool,
+}
+impl App {
+    fn clear_area_with_style(buf: &mut Buffer, area: Rect, style: Style) {
+        if area.width == 0 || area.height == 0 {
+            return;
+        }
+        for y in area.y..area.bottom() {
+            for x in area.x..area.right() {
+                buf[(x, y)].set_symbol(" ");
+                buf[(x, y)].set_style(style);
+            }
+        }
+    }
+
+    async fn shutdown_current_conversation(&mut self) {
+        if let Some(conversation_id) = self.chat_widget.conversation_id() {
+            self.suppress_shutdown_complete = true;
+            self.chat_widget.submit_op(Op::Shutdown);
+            self.server.remove_thread(&conversation_id).await;
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub async fn run(
+        tui: &mut tui::Tui,
+        auth_manager: Arc<AuthManager>,
+        mut config: Config,
+        active_profile: Option<String>,
+        initial_prompt: Option<String>,
+        initial_images: Vec<PathBuf>,
+        session_selection: SessionSelection,
+        feedback: codex_feedback::CodexFeedback,
+        is_first_run: bool,
+        ollama_chat_support_notice: Option<DeprecationNoticeEvent>,
+    ) -> Result<AppExitInfo> {
+        use tokio_stream::StreamExt;
+        let (app_event_tx, mut app_event_rx) = unbounded_channel();
+        let app_event_tx = AppEventSender::new(app_event_tx);
+        emit_deprecation_notice(&app_event_tx, ollama_chat_support_notice);
+
+        let thread_manager = Arc::new(ThreadManager::new(
+            config.codex_home.clone(),
+            auth_manager.clone(),
+            SessionSource::Cli,
+        ));
+        let mut model = thread_manager
+            .get_models_manager()
+            .get_default_model(&config.model, &config, RefreshStrategy::Offline)
+            .await;
+        let available_models = thread_manager
+            .get_models_manager()
+            .list_models(&config, RefreshStrategy::Offline)
+            .await;
+        let exit_info = handle_model_migration_prompt_if_needed(
+            tui,
+            &mut config,
+            model.as_str(),
+            &app_event_tx,
+            available_models,
+        )
+        .await;
+        if let Some(exit_info) = exit_info {
+            return Ok(exit_info);
+        }
+        if let Some(updated_model) = config.model.clone() {
+            model = updated_model;
+        }
+
+        crate::theme::init(&config, crate::terminal_palette::default_bg());
+
+        let enhanced_keys_supported = tui.enhanced_keys_supported();
+        let mut chat_widget = match session_selection {
+            SessionSelection::StartFresh | SessionSelection::Exit => {
+                let init = crate::chatwidget::ChatWidgetInit {
+                    config: config.clone(),
+                    frame_requester: tui.frame_requester(),
+                    app_event_tx: app_event_tx.clone(),
+                    initial_prompt: initial_prompt.clone(),
+                    initial_images: initial_images.clone(),
+                    enhanced_keys_supported,
+                    auth_manager: auth_manager.clone(),
+                    models_manager: thread_manager.get_models_manager(),
+                    feedback: feedback.clone(),
+                    is_first_run,
+                    model: config.model.clone(),
+                };
+                ChatWidget::new(init, thread_manager.clone())
+            }
+            SessionSelection::Resume(path) => {
+                let resumed = thread_manager
+                    .resume_thread_from_rollout(config.clone(), path.clone(), auth_manager.clone())
+                    .await
+                    .wrap_err_with(|| {
+                        let path_display = path.display();
+                        format!("Failed to resume session from {path_display}")
+                    })?;
+                let resumed_model = resumed.session_configured.model.clone();
+                model = resumed_model.clone();
+                let init = crate::chatwidget::ChatWidgetInit {
+                    config: config.clone(),
+                    frame_requester: tui.frame_requester(),
+                    app_event_tx: app_event_tx.clone(),
+                    initial_prompt: initial_prompt.clone(),
+                    initial_images: initial_images.clone(),
+                    enhanced_keys_supported,
+                    auth_manager: auth_manager.clone(),
+                    models_manager: thread_manager.get_models_manager(),
+                    feedback: feedback.clone(),
+                    is_first_run,
+                    model: Some(resumed_model),
+                };
+                ChatWidget::new_from_existing(init, resumed.thread, resumed.session_configured)
+            }
+            SessionSelection::Fork(path) => {
+                let forked = thread_manager
+                    .fork_thread(usize::MAX, config.clone(), path.clone())
+                    .await
+                    .wrap_err_with(|| {
+                        let path_display = path.display();
+                        format!("Failed to fork session from {path_display}")
+                    })?;
+                let init = crate::chatwidget::ChatWidgetInit {
+                    config: config.clone(),
+                    frame_requester: tui.frame_requester(),
+                    app_event_tx: app_event_tx.clone(),
+                    initial_prompt: initial_prompt.clone(),
+                    initial_images: initial_images.clone(),
+                    enhanced_keys_supported,
+                    auth_manager: auth_manager.clone(),
+                    models_manager: thread_manager.get_models_manager(),
+                    feedback: feedback.clone(),
+                    is_first_run,
+                    model: config.model.clone(),
+                };
+                ChatWidget::new_from_existing(init, forked.thread, forked.session_configured)
+            }
+        };
+
+        chat_widget.maybe_prompt_windows_sandbox_enable();
+
+        let file_search = FileSearchManager::new(
+            config.cwd.clone(),
+            config.exclusion.files.clone(),
+            app_event_tx.clone(),
+        );
+        #[cfg(not(debug_assertions))]
+        let upgrade_version = crate::updates::get_upgrade_version(&config);
+        #[cfg(not(debug_assertions))]
+        let whats_new = crate::whats_new::get_whats_new_on_startup(&config);
+        let scroll_config = ScrollConfig::from_terminal(
+            &terminal_info(),
+            ScrollConfigOverrides {
+                events_per_tick: config.tui_scroll_events_per_tick,
+                wheel_lines_per_tick: config.tui_scroll_wheel_lines,
+                trackpad_lines_per_tick: config.tui_scroll_trackpad_lines,
+                trackpad_accel_events: config.tui_scroll_trackpad_accel_events,
+                trackpad_accel_max: config.tui_scroll_trackpad_accel_max,
+                mode: Some(config.tui_scroll_mode),
+                wheel_tick_detect_max_ms: config.tui_scroll_wheel_tick_detect_max_ms,
+                wheel_like_max_duration_ms: config.tui_scroll_wheel_like_max_duration_ms,
+                invert_direction: config.tui_scroll_invert,
+            },
+        );
+
+        let copy_selection_shortcut = crate::transcript_copy_ui::detect_copy_selection_shortcut();
+
+        let mut app = Self {
+            server: thread_manager.clone(),
+            app_event_tx,
+            chat_widget,
+            auth_manager: auth_manager.clone(),
+            config,
+            current_model: model.clone(),
+            active_profile,
+            file_search,
+            enhanced_keys_supported,
+            transcript_cells: Vec::new(),
+            transcript_view_cache: TranscriptViewCache::new(),
+            transcript_scroll: TranscriptScroll::default(),
+            transcript_selection: TranscriptSelection::default(),
+            transcript_multi_click: TranscriptMultiClick::default(),
+            transcript_view_top: 0,
+            transcript_total_lines: 0,
+            transcript_copy_ui: TranscriptCopyUi::new_with_shortcut(copy_selection_shortcut),
+            expanded_exec_call_ids: std::collections::HashSet::new(),
+            last_transcript_width: 0,
+            transcript_copy_action: TranscriptCopyAction::default(),
+            transcript_scrollbar_ui: TranscriptScrollbarUi::default(),
+            overlay: None,
+            deferred_history_cells: Vec::new(),
+            has_emitted_history_lines: false,
+            commit_anim_running: Arc::new(AtomicBool::new(false)),
+            scroll_config,
+            scroll_state: MouseScrollState::default(),
+            backtrack: BacktrackState::default(),
+            feedback: feedback.clone(),
+            pending_update_action: None,
+            suppress_shutdown_complete: false,
+            skip_world_writable_scan_once: false,
+            shared_dirs_write_notice_shown: false,
+        };
+
+        // On startup, if Agent mode (workspace-write) or ReadOnly is active, warn about world-writable dirs on Windows.
+        #[cfg(target_os = "windows")]
+        {
+            let should_check = WindowsSandboxLevel::from_config(&app.config)
+                != WindowsSandboxLevel::Disabled
+                && matches!(
+                    app.config.sandbox_policy.get(),
+                    codex_core::protocol::SandboxPolicy::WorkspaceWrite { .. }
+                        | codex_core::protocol::SandboxPolicy::ReadOnly
+                )
+                && !app
+                    .config
+                    .notices
+                    .hide_world_writable_warning
+                    .unwrap_or(false);
+            if should_check {
+                let cwd = app.config.cwd.clone();
+                let env_map: std::collections::HashMap<String, String> = std::env::vars().collect();
+                let tx = app.app_event_tx.clone();
+                let logs_base_dir = app.config.codex_home.clone();
+                let sandbox_policy = app.config.sandbox_policy.get().clone();
+                Self::spawn_world_writable_scan(cwd, env_map, logs_base_dir, sandbox_policy, tx);
+            }
+        }
+
+        #[cfg(not(debug_assertions))]
+        if let Some(latest_version) = upgrade_version {
+            let control = app
+                .handle_event(
+                    tui,
+                    AppEvent::InsertHistoryCell(Box::new(UpdateAvailableHistoryCell::new(
+                        latest_version,
+                        crate::update_action::get_update_action(),
+                    ))),
+                )
+                .await?;
+            if let AppRunControl::Exit(exit_reason) = control {
+                return Ok(AppExitInfo {
+                    token_usage: app.token_usage(),
+                    conversation_id: app.chat_widget.conversation_id(),
+                    update_action: app.pending_update_action,
+                    exit_reason,
+                    session_lines: Vec::new(),
+                });
+            }
+        }
+
+        #[cfg(not(debug_assertions))]
+        if let Some(whats_new) = whats_new {
+            app.handle_event(
+                tui,
+                AppEvent::InsertHistoryCell(Box::new(WhatsNewHistoryCell::new(
+                    whats_new.version,
+                    whats_new.bullets,
+                ))),
+            )
+            .await?;
+        }
+
+        let tui_events = tui.event_stream();
+        tokio::pin!(tui_events);
+
+        tui.frame_requester().schedule_frame();
+
+        let exit_reason = loop {
+            let control = select! {
+                Some(event) = app_event_rx.recv() => {
+                    app.handle_event(tui, event).await?
+                }
+                Some(event) = tui_events.next() => {
+                    app.handle_tui_event(tui, event).await?
+                }
+            };
+            match control {
+                AppRunControl::Continue => {}
+                AppRunControl::Exit(reason) => break reason,
+            }
+        };
+        let width = tui.terminal.last_known_screen_size.width;
+        let session_lines = if width == 0 {
+            Vec::new()
+        } else {
+            let transcript = crate::transcript_render::build_transcript_lines(
+                &app.transcript_cells,
+                width,
+                app.config.tui_verbose_tool_output,
+                &app.expanded_exec_call_ids,
+            );
+            let (lines, line_meta) = (transcript.lines, transcript.meta);
+            let is_user_cell: Vec<bool> = app
+                .transcript_cells
+                .iter()
+                .map(|cell| cell.as_any().is::<UserHistoryCell>())
+                .collect();
+            let is_user_prompt_highlight: Vec<bool> = app
+                .transcript_cells
+                .iter()
+                .map(|cell| {
+                    cell.as_any()
+                        .downcast_ref::<UserHistoryCell>()
+                        .is_some_and(|cell| cell.highlight)
+                })
+                .collect();
+            crate::transcript_render::render_lines_to_ansi(
+                &lines,
+                &line_meta,
+                &is_user_cell,
+                &is_user_prompt_highlight,
+                width,
+            )
+        };
+
+        tui.terminal.clear()?;
+        Ok(AppExitInfo {
+            token_usage: app.token_usage(),
+            conversation_id: app.chat_widget.conversation_id(),
+            update_action: app.pending_update_action,
+            exit_reason,
+            session_lines,
+        })
+    }
+
+    pub(crate) async fn handle_tui_event(
+        &mut self,
+        tui: &mut tui::Tui,
+        event: TuiEvent,
+    ) -> Result<AppRunControl> {
+        if matches!(&event, TuiEvent::Draw) {
+            self.handle_scroll_tick(tui);
+        }
+
+        if self.overlay.is_some() {
+            let _ = self.handle_backtrack_overlay_event(tui, event).await?;
+        } else {
+            match event {
+                TuiEvent::Key(key_event) => {
+                    self.handle_key_event(tui, key_event).await;
+                }
+                TuiEvent::Mouse(mouse_event) => {
+                    self.handle_mouse_event(tui, mouse_event);
+                }
+                TuiEvent::Paste(pasted) => {
+                    // Many terminals convert newlines to \r when pasting (e.g., iTerm2),
+                    // but tui-textarea expects \n. Normalize CR to LF.
+                    // [tui-textarea]: https://github.com/rhysd/tui-textarea/blob/4d18622eeac13b309e0ff6a55a46ac6706da68cf/src/textarea.rs#L782-L783
+                    // [iTerm2]: https://github.com/gnachman/iTerm2/blob/5d0c0d9f68523cbd0494dad5422998964a2ecd8d/sources/iTermPasteHelper.m#L206-L216
+                    let pasted = pasted.replace("\r", "\n");
+                    self.chat_widget.handle_paste(pasted);
+                }
+                TuiEvent::Draw => {
+                    self.chat_widget.maybe_post_pending_notification(tui);
+                    if self
+                        .chat_widget
+                        .handle_paste_burst_tick(tui.frame_requester())
+                    {
+                        return Ok(AppRunControl::Continue);
+                    }
+                    let cells = self.transcript_cells.clone();
+                    tui.draw(tui.terminal.size()?.height, |frame| {
+                        let chat_height = self.chat_widget.desired_height(frame.area().width);
+                        let chat_top = self.render_transcript_cells(frame, &cells, chat_height);
+                        let chat_area = Rect {
+                            x: frame.area().x,
+                            y: chat_top,
+                            width: frame.area().width,
+                            height: chat_height.min(
+                                frame
+                                    .area()
+                                    .height
+                                    .saturating_sub(chat_top.saturating_sub(frame.area().y)),
+                            ),
+                        };
+                        self.chat_widget.render(chat_area, frame.buffer);
+                        let chat_bottom = chat_area.y.saturating_add(chat_area.height);
+                        if chat_bottom < frame.area().bottom() {
+                            Self::clear_area_with_style(
+                                frame.buffer,
+                                Rect {
+                                    x: frame.area().x,
+                                    y: chat_bottom,
+                                    width: frame.area().width,
+                                    height: frame.area().bottom().saturating_sub(chat_bottom),
+                                },
+                                crate::theme::base_style(),
+                            );
+                        }
+                        if let Some((x, y)) = self.chat_widget.cursor_pos(chat_area) {
+                            frame.set_cursor_position((x, y));
+                        }
+                    })?;
+                    let transcript_scrolled =
+                        !matches!(self.transcript_scroll, TranscriptScroll::ToBottom);
+                    let selection_active = matches!(
+                        (self.transcript_selection.anchor, self.transcript_selection.head),
+                        (Some(a), Some(b)) if a != b
+                    );
+                    let scroll_position = if self.transcript_total_lines == 0 {
+                        None
+                    } else {
+                        Some((
+                            self.transcript_view_top.saturating_add(1),
+                            self.transcript_total_lines,
+                        ))
+                    };
+                    let copy_selection_key = self.copy_selection_key();
+                    let copy_feedback = self.transcript_copy_feedback_for_footer();
+                    self.chat_widget.set_transcript_ui_state(
+                        transcript_scrolled,
+                        selection_active,
+                        scroll_position,
+                        copy_selection_key,
+                        copy_feedback,
+                    );
+                }
+            }
+        }
+        Ok(AppRunControl::Continue)
+    }
+
+    pub(crate) fn render_transcript_cells(
+        &mut self,
+        frame: &mut Frame,
+        cells: &[Arc<dyn HistoryCell>],
+        chat_height: u16,
+    ) -> u16 {
+        let area = frame.area();
+        if area.width == 0 || area.height == 0 {
+            self.transcript_scroll = TranscriptScroll::default();
+            self.transcript_view_top = 0;
+            self.transcript_total_lines = 0;
+            return area.bottom().saturating_sub(chat_height);
+        }
+
+        let chat_height = chat_height.min(area.height);
+        let max_transcript_height = area.height.saturating_sub(chat_height);
+        if max_transcript_height == 0 {
+            self.transcript_scroll = TranscriptScroll::default();
+            self.transcript_view_top = 0;
+            self.transcript_total_lines = 0;
+            return area.y;
+        }
+
+        let transcript_full_area = Rect {
+            x: area.x,
+            y: area.y,
+            width: area.width,
+            height: max_transcript_height,
+        };
+        let (transcript_area, _) = split_transcript_area(transcript_full_area);
+
+        self.last_transcript_width = transcript_area.width;
+        self.transcript_view_cache.ensure_wrapped(
+            cells,
+            transcript_area.width,
+            self.config.tui_verbose_tool_output,
+            &self.expanded_exec_call_ids,
+        );
+        let total_lines = self.transcript_view_cache.lines().len();
+        if total_lines == 0 {
+            Self::clear_area_with_style(
+                frame.buffer,
+                transcript_full_area,
+                crate::theme::transcript_style(),
+            );
+            self.transcript_scroll = TranscriptScroll::default();
+            self.transcript_view_top = 0;
+            self.transcript_total_lines = 0;
+            return area.y;
+        }
+
+        self.transcript_total_lines = total_lines;
+        let max_visible = std::cmp::min(max_transcript_height as usize, total_lines);
+        let max_start = total_lines.saturating_sub(max_visible);
+
+        let (scroll_state, top_offset) = {
+            let line_meta = self.transcript_view_cache.line_meta();
+            self.transcript_scroll.resolve_top(line_meta, max_start)
+        };
+        self.transcript_scroll = scroll_state;
+        self.transcript_view_top = top_offset;
+
+        let transcript_visible_height = max_visible as u16;
+        let chat_top = if total_lines <= max_transcript_height as usize {
+            let gap = if transcript_visible_height == 0 { 0 } else { 1 };
+            area.y
+                .saturating_add(transcript_visible_height)
+                .saturating_add(gap)
+        } else {
+            area.bottom().saturating_sub(chat_height)
+        };
+
+        let clear_height = chat_top.saturating_sub(area.y);
+        if clear_height > 0 {
+            Self::clear_area_with_style(
+                frame.buffer,
+                Rect {
+                    x: area.x,
+                    y: area.y,
+                    width: area.width,
+                    height: clear_height,
+                },
+                crate::theme::transcript_style(),
+            );
+        }
+        if total_lines <= max_transcript_height as usize && transcript_visible_height > 0 {
+            Self::clear_area_with_style(
+                frame.buffer,
+                Rect {
+                    x: area.x,
+                    y: area.y.saturating_add(transcript_visible_height),
+                    width: area.width,
+                    height: 1,
+                },
+                self.chat_widget.transcript_gap_style(),
+            );
+        }
+
+        let transcript_full_area = Rect {
+            x: area.x,
+            y: area.y,
+            width: area.width,
+            height: transcript_visible_height,
+        };
+        let (transcript_area, transcript_scrollbar_area) =
+            split_transcript_area(transcript_full_area);
+
+        // Cache a few viewports worth of rasterized rows so redraws during streaming can cheaply
+        // copy already-rendered `Cell`s instead of re-running grapheme segmentation.
+        self.transcript_view_cache
+            .set_raster_capacity(max_visible.saturating_mul(4).max(256));
+
+        for (row_index, line_index) in (top_offset..total_lines).enumerate() {
+            if row_index >= max_visible {
+                break;
+            }
+
+            let y = transcript_area.y + row_index as u16;
+            let row_area = Rect {
+                x: transcript_area.x,
+                y,
+                width: transcript_area.width,
+                height: 1,
+            };
+
+            self.transcript_view_cache
+                .render_row_index_into(line_index, row_area, frame.buffer);
+        }
+
+        self.apply_transcript_selection(transcript_area, frame.buffer);
+        if let (Some(anchor), Some(head)) = (
+            self.transcript_selection.anchor,
+            self.transcript_selection.head,
+        ) && anchor != head
+        {
+            self.transcript_copy_ui.render_copy_pill(
+                transcript_area,
+                frame.buffer,
+                (anchor.line_index, anchor.column),
+                (head.line_index, head.column),
+                self.transcript_view_top,
+                self.transcript_total_lines,
+            );
+        } else {
+            self.transcript_copy_ui.clear_affordances();
+        }
+
+        let line_meta = self.transcript_view_cache.line_meta();
+        if !self.config.tui_verbose_tool_output
+            && let Some(point) = self
+                .transcript_selection
+                .head
+                .or(self.transcript_selection.anchor)
+            && let Some(cell_index) = Self::cell_index_for_line(line_meta, point.line_index)
+            && let Some(cell) = self.transcript_cells.get(cell_index)
+            && let Some(exec_cell) = cell.as_any().downcast_ref::<crate::exec_cell::ExecCell>()
+            && let Some(call) = exec_cell.calls.first()
+        {
+            let call_id = &call.call_id;
+            let expanded = self.expanded_exec_call_ids.contains(call_id);
+            let toggle_key = crate::key_hint::alt(KeyCode::Char('e'));
+            let copy_full_key = crate::key_hint::alt(KeyCode::Char('c'));
+
+            let (anchor, head) = match (
+                self.transcript_selection.anchor,
+                self.transcript_selection.head,
+            ) {
+                (Some(anchor), Some(head)) if anchor != head => (
+                    (anchor.line_index, anchor.column),
+                    (head.line_index, head.column),
+                ),
+                _ => ((point.line_index, 0), (point.line_index, u16::MAX)),
+            };
+
+            self.transcript_copy_ui.render_exec_output_pills(
+                frame.buffer,
+                crate::transcript_copy_ui::ExecOutputPillsParams {
+                    area: transcript_area,
+                    anchor,
+                    head,
+                    view_top: self.transcript_view_top,
+                    total_lines: self.transcript_total_lines,
+                    expanded,
+                    toggle_key,
+                    copy_full_key,
+                },
+            );
+        } else {
+            self.transcript_copy_ui.clear_exec_affordances();
+        }
+        render_transcript_scrollbar_if_active(
+            frame.buffer,
+            transcript_scrollbar_area,
+            total_lines,
+            max_visible,
+            top_offset,
+        );
+        chat_top
+    }
+
+    /// Handle mouse interaction in the main transcript view.
+    ///
+    /// - Mouse wheel movement scrolls the conversation history using stream-based
+    ///   normalization (events-per-line factor, discrete vs. continuous streams),
+    ///   independent of the terminal's own scrollback.
+    /// - Mouse drags adjust a text selection defined in terms of
+    ///   flattened transcript lines and columns, so the selection is anchored
+    ///   to the underlying content rather than absolute screen rows.
+    /// - When the user drags to extend a selection while the view is following the bottom
+    ///   and a task is actively running (e.g., streaming a response), the scroll mode is
+    ///   first converted into an anchored position so that ongoing updates no longer move
+    ///   the viewport under the selection. A simple click without a drag does not change
+    ///   scroll behavior.
+    /// - Mouse events outside the transcript area (e.g. over the composer/footer) must not
+    ///   start or mutate transcript selection state. A left-click outside the transcript
+    ///   clears any existing transcript selection so the user can dismiss the highlight.
+    fn handle_mouse_event(
+        &mut self,
+        tui: &mut tui::Tui,
+        mouse_event: crossterm::event::MouseEvent,
+    ) {
+        use crossterm::event::MouseEventKind;
+
+        if self.overlay.is_some() {
+            return;
+        }
+
+        let size = tui.terminal.last_known_screen_size;
+        let width = size.width;
+        let height = size.height;
+        if width == 0 || height == 0 {
+            return;
+        }
+
+        let chat_height = self.chat_widget.desired_height(width);
+        if chat_height >= height {
+            return;
+        }
+
+        // Only handle events over the transcript area above the composer.
+        let transcript_height = height.saturating_sub(chat_height);
+        if transcript_height == 0 {
+            return;
+        }
+
+        let transcript_full_area = Rect {
+            x: 0,
+            y: 0,
+            width,
+            height: transcript_height,
+        };
+        let (transcript_area, transcript_scrollbar_area) =
+            split_transcript_area(transcript_full_area);
+        let base_x = transcript_area.x.saturating_add(TRANSCRIPT_GUTTER_COLS);
+        let max_x = transcript_area.right().saturating_sub(1);
+
+        if matches!(
+            self.transcript_scrollbar_ui
+                .handle_mouse_event(TranscriptScrollbarMouseEvent {
+                    tui,
+                    mouse_event,
+                    transcript_area,
+                    scrollbar_area: transcript_scrollbar_area,
+                    transcript_cells: &self.transcript_cells,
+                    transcript_view_cache: &mut self.transcript_view_cache,
+                    verbose_tool_output: self.config.tui_verbose_tool_output,
+                    expanded_exec_call_ids: &self.expanded_exec_call_ids,
+                    transcript_scroll: &mut self.transcript_scroll,
+                    transcript_view_top: &mut self.transcript_view_top,
+                    transcript_total_lines: &mut self.transcript_total_lines,
+                    mouse_scroll_state: &mut self.scroll_state,
+                }),
+            TranscriptScrollbarMouseHandling::Handled
+        ) {
+            return;
+        }
+
+        // Treat the transcript as the only interactive region for transcript selection.
+        //
+        // This prevents clicks in the composer/footer from starting or extending a transcript
+        // selection, while still allowing a left-click outside the transcript to clear an
+        // existing highlight.
+        if !self.transcript_scrollbar_ui.pointer_capture_active()
+            && (mouse_event.row < transcript_full_area.y
+                || mouse_event.row >= transcript_full_area.bottom())
+        {
+            if matches!(
+                mouse_event.kind,
+                MouseEventKind::Down(MouseButton::Left) | MouseEventKind::Up(MouseButton::Left)
+            ) && (self.transcript_selection.anchor.is_some()
+                || self.transcript_selection.head.is_some())
+            {
+                self.transcript_selection = TranscriptSelection::default();
+                // Mouse events do not inherently trigger a redraw; schedule one so the cleared
+                // highlight is reflected immediately.
+                tui.frame_requester().schedule_frame();
+            }
+            return;
+        }
+
+        let mut clamped_x = mouse_event.column;
+        let clamped_y = mouse_event.row;
+        if clamped_x < base_x {
+            clamped_x = base_x;
+        }
+        if clamped_x > max_x {
+            clamped_x = max_x;
+        }
+
+        let streaming = self.chat_widget.is_task_running();
+
+        if matches!(mouse_event.kind, MouseEventKind::Down(MouseButton::Left))
+            && let Some(action) = self
+                .transcript_copy_ui
+                .hit_test_action(mouse_event.column, mouse_event.row)
+        {
+            match action {
+                crate::transcript_copy_ui::TranscriptPillAction::CopySelection => {
+                    if self.transcript_copy_action.copy_and_handle(
+                        tui,
+                        chat_height,
+                        &self.transcript_cells,
+                        self.transcript_selection,
+                        self.config.tui_verbose_tool_output,
+                        &self.expanded_exec_call_ids,
+                    ) {
+                        self.transcript_selection = TranscriptSelection::default();
+                    }
+                }
+                crate::transcript_copy_ui::TranscriptPillAction::ToggleExecCellExpanded => {
+                    if self.toggle_exec_cell_expansion_at_selection() {
+                        tui.frame_requester().schedule_frame();
+                    }
+                }
+                crate::transcript_copy_ui::TranscriptPillAction::CopyExecCellFull => {
+                    if self.copy_exec_cell_full_at_cursor() {
+                        tui.frame_requester().schedule_frame();
+                    }
+                }
+            }
+            return;
+        }
+
+        match mouse_event.kind {
+            MouseEventKind::ScrollUp => {
+                let scroll_update = self.mouse_scroll_update(ScrollDirection::Up);
+                self.apply_scroll_update(
+                    tui,
+                    scroll_update,
+                    transcript_area.height as usize,
+                    transcript_area.width,
+                    true,
+                );
+            }
+            MouseEventKind::ScrollDown => {
+                let scroll_update = self.mouse_scroll_update(ScrollDirection::Down);
+                self.apply_scroll_update(
+                    tui,
+                    scroll_update,
+                    transcript_area.height as usize,
+                    transcript_area.width,
+                    true,
+                );
+            }
+            MouseEventKind::ScrollLeft | MouseEventKind::ScrollRight => {}
+            MouseEventKind::Down(MouseButton::Left) => {
+                self.transcript_copy_ui.set_dragging(true);
+                let point = self.transcript_point_from_coordinates(
+                    transcript_area,
+                    base_x,
+                    clamped_x,
+                    clamped_y,
+                );
+                if self.transcript_multi_click.on_mouse_down(
+                    &mut self.transcript_selection,
+                    &self.transcript_cells,
+                    transcript_area.width,
+                    self.config.tui_verbose_tool_output,
+                    &self.expanded_exec_call_ids,
+                    point,
+                ) {
+                    tui.frame_requester().schedule_frame();
+                }
+            }
+            MouseEventKind::Drag(MouseButton::Left) => {
+                let point = self.transcript_point_from_coordinates(
+                    transcript_area,
+                    base_x,
+                    clamped_x,
+                    clamped_y,
+                );
+                let outcome = crate::transcript_selection::on_mouse_drag(
+                    &mut self.transcript_selection,
+                    &self.transcript_scroll,
+                    point,
+                    streaming,
+                );
+                self.transcript_multi_click
+                    .on_mouse_drag(&self.transcript_selection, point);
+                if outcome.lock_scroll {
+                    self.lock_transcript_scroll_to_current_view(
+                        transcript_area.height as usize,
+                        transcript_area.width,
+                    );
+                }
+                if outcome.changed {
+                    tui.frame_requester().schedule_frame();
+                }
+            }
+            MouseEventKind::Up(MouseButton::Left) => {
+                self.transcript_copy_ui.set_dragging(false);
+                let selection_changed =
+                    crate::transcript_selection::on_mouse_up(&mut self.transcript_selection);
+                let has_active_selection = self.transcript_selection.anchor.is_some()
+                    && self.transcript_selection.head.is_some();
+                if selection_changed || has_active_selection {
+                    tui.frame_requester().schedule_frame();
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Convert a single mouse scroll event (direction-only) into a normalized scroll update.
+    ///
+    /// This delegates to [`MouseScrollState::on_scroll_event`] using the current [`ScrollConfig`].
+    /// The returned [`ScrollUpdate`] is intentionally split into:
+    ///
+    /// - `lines`: a *delta* in visual lines to apply immediately to the transcript viewport.
+    ///   - Sign convention matches [`ScrollDirection`] (`Up` is negative; `Down` is positive).
+    ///   - May be 0 in trackpad-like mode while sub-line fractions are still accumulating.
+    /// - `next_tick_in`: an optional delay after which we should trigger a follow-up tick.
+    ///   This is required because stream closure is defined by a *time gap* rather than an
+    ///   explicit "gesture end" event. See [`App::apply_scroll_update`] and
+    ///   [`App::handle_scroll_tick`].
+    ///
+    /// In TUI2, that follow-up tick is driven via `TuiEvent::Draw`: we schedule a frame, and on
+    /// the next draw we call [`MouseScrollState::on_tick`] to close idle streams and flush any
+    /// newly-reached whole lines. This prevents perceived "stop lag" where accumulated scroll only
+    /// applies once the next user input arrives.
+    fn mouse_scroll_update(&mut self, direction: ScrollDirection) -> ScrollUpdate {
+        self.scroll_state
+            .on_scroll_event(direction, self.scroll_config)
+    }
+
+    /// Apply a [`ScrollUpdate`] to the transcript viewport and schedule any needed follow-up tick.
+    ///
+    /// `update.lines` is applied immediately via [`App::scroll_transcript`].
+    ///
+    /// If `update.next_tick_in` is `Some`, we schedule a future frame so `TuiEvent::Draw` can call
+    /// [`App::handle_scroll_tick`] and close the stream after it goes idle and/or cadence-flush
+    /// pending whole lines.
+    ///
+    /// `schedule_frame` is forwarded to [`App::scroll_transcript`] and controls whether scrolling
+    /// should request an additional draw. Pass `false` when applying scroll during a
+    /// `TuiEvent::Draw` tick to avoid redundant frames.
+    fn apply_scroll_update(
+        &mut self,
+        tui: &mut tui::Tui,
+        update: ScrollUpdate,
+        visible_lines: usize,
+        width: u16,
+        schedule_frame: bool,
+    ) {
+        if update.lines != 0 {
+            self.scroll_transcript(tui, update.lines, visible_lines, width, schedule_frame);
+        }
+        if let Some(delay) = update.next_tick_in {
+            tui.frame_requester().schedule_frame_in(delay);
+        }
+    }
+
+    /// Drive stream closure and cadence-based flushing for mouse scrolling.
+    ///
+    /// This is called on every `TuiEvent::Draw` before rendering. If a scroll stream is active, it
+    /// may:
+    ///
+    /// - Close the stream once it has been idle for longer than the stream-gap threshold.
+    /// - Flush whole-line deltas on the redraw cadence for trackpad-like streams, even if no new
+    ///   events arrive.
+    ///
+    /// The resulting update is applied with `schedule_frame = false` because we are already in a
+    /// draw tick.
+    fn handle_scroll_tick(&mut self, tui: &mut tui::Tui) {
+        let Some((visible_lines, width)) = self.transcript_scroll_dimensions(tui) else {
+            return;
+        };
+        let update = self.scroll_state.on_tick();
+        self.apply_scroll_update(tui, update, visible_lines, width, false);
+    }
+
+    /// Compute the transcript viewport dimensions used for scrolling.
+    ///
+    /// Mouse scrolling is applied in terms of "visible transcript lines": the terminal height
+    /// minus the chat composer height. We compute this from the last known terminal size to avoid
+    /// querying the terminal during non-draw events.
+    ///
+    /// Returns `(visible_lines, width)` or `None` when the terminal is not yet sized or the chat
+    /// area consumes the full height.
+    fn transcript_scroll_dimensions(&self, tui: &tui::Tui) -> Option<(usize, u16)> {
+        let size = tui.terminal.last_known_screen_size;
+        let width = size.width;
+        let height = size.height;
+        if width == 0 || height == 0 {
+            return None;
+        }
+
+        let chat_height = self.chat_widget.desired_height(width);
+        if chat_height >= height {
+            return None;
+        }
+
+        let transcript_height = height.saturating_sub(chat_height);
+        if transcript_height == 0 {
+            return None;
+        }
+
+        let transcript_full_area = Rect {
+            x: 0,
+            y: 0,
+            width,
+            height: transcript_height,
+        };
+        let (transcript_area, _) = split_transcript_area(transcript_full_area);
+
+        Some((transcript_height as usize, transcript_area.width))
+    }
+
+    /// Scroll the transcript by a number of visual lines.
+    ///
+    /// This is the shared implementation behind mouse wheel movement and PgUp/PgDn keys in
+    /// the main view. Scroll state is expressed in terms of transcript cells and their
+    /// internal line indices, so scrolling refers to logical conversation content and
+    /// remains stable even as wrapping or streaming causes visual reflows.
+    ///
+    /// `schedule_frame` controls whether to request an extra draw; pass `false` when applying
+    /// scroll during a `TuiEvent::Draw` tick to avoid redundant frames.
+    fn scroll_transcript(
+        &mut self,
+        tui: &mut tui::Tui,
+        delta_lines: i32,
+        visible_lines: usize,
+        width: u16,
+        schedule_frame: bool,
+    ) {
+        if visible_lines == 0 {
+            return;
+        }
+
+        self.transcript_view_cache.ensure_wrapped(
+            &self.transcript_cells,
+            width,
+            self.config.tui_verbose_tool_output,
+            &self.expanded_exec_call_ids,
+        );
+        let line_meta = self.transcript_view_cache.line_meta();
+        self.transcript_scroll =
+            self.transcript_scroll
+                .scrolled_by(delta_lines, line_meta, visible_lines);
+
+        if schedule_frame {
+            // Request a redraw; the frame scheduler coalesces bursts and clamps to 60fps.
+            tui.frame_requester().schedule_frame();
+        }
+    }
+
+    /// Convert a `ToBottom` (auto-follow) scroll state into a fixed anchor at the current view.
+    ///
+    /// When the user begins a mouse selection while new output is streaming in, the view
+    /// should stop auto-following the latest line so the selection stays on the intended
+    /// content. This helper inspects the flattened transcript at the given width, derives
+    /// a concrete position corresponding to the current top row, and switches into a scroll
+    /// mode that keeps that position stable until the user scrolls again.
+    fn lock_transcript_scroll_to_current_view(&mut self, visible_lines: usize, width: u16) {
+        if self.transcript_cells.is_empty() || visible_lines == 0 || width == 0 {
+            return;
+        }
+
+        self.transcript_view_cache.ensure_wrapped(
+            &self.transcript_cells,
+            width,
+            self.config.tui_verbose_tool_output,
+            &self.expanded_exec_call_ids,
+        );
+        let lines = self.transcript_view_cache.lines();
+        let line_meta = self.transcript_view_cache.line_meta();
+        if lines.is_empty() || line_meta.is_empty() {
+            return;
+        }
+
+        let total_lines = lines.len();
+        let max_visible = std::cmp::min(visible_lines, total_lines);
+        if max_visible == 0 {
+            return;
+        }
+
+        let max_start = total_lines.saturating_sub(max_visible);
+        let top_offset = match self.transcript_scroll {
+            TranscriptScroll::ToBottom => max_start,
+            TranscriptScroll::Scrolled { .. }
+            | TranscriptScroll::ScrolledSpacerBeforeCell { .. } => {
+                // Already anchored; nothing to lock.
+                return;
+            }
+        };
+
+        if let Some(scroll_state) = TranscriptScroll::anchor_for(line_meta, top_offset) {
+            self.transcript_scroll = scroll_state;
+        }
+    }
+
+    /// Apply the current transcript selection to the given buffer.
+    ///
+    /// The selection is defined in terms of flattened wrapped transcript line
+    /// indices and columns. This method maps those content-relative endpoints
+    /// into the currently visible viewport based on `transcript_view_top` and
+    /// `transcript_total_lines`, so the highlight moves with the content as the
+    /// user scrolls.
+    fn apply_transcript_selection(&self, area: Rect, buf: &mut Buffer) {
+        let (anchor, head) = match (
+            self.transcript_selection.anchor,
+            self.transcript_selection.head,
+        ) {
+            (Some(a), Some(h)) => (a, h),
+            _ => return,
+        };
+
+        if self.transcript_total_lines == 0 {
+            return;
+        }
+
+        let base_x = area.x.saturating_add(TRANSCRIPT_GUTTER_COLS);
+        let max_x = area.right().saturating_sub(1);
+
+        let (start, end) = crate::transcript_selection::ordered_endpoints(anchor, head);
+
+        let visible_start = self.transcript_view_top;
+        let visible_end = self
+            .transcript_view_top
+            .saturating_add(area.height as usize)
+            .min(self.transcript_total_lines);
+
+        for (row_index, line_index) in (visible_start..visible_end).enumerate() {
+            if line_index < start.line_index || line_index > end.line_index {
+                continue;
+            }
+
+            let y = area.y + row_index as u16;
+
+            let mut first_text_x = None;
+            let mut last_text_x = None;
+            for x in base_x..=max_x {
+                let cell = &buf[(x, y)];
+                if cell.symbol() != " " {
+                    if first_text_x.is_none() {
+                        first_text_x = Some(x);
+                    }
+                    last_text_x = Some(x);
+                }
+            }
+
+            let (text_start, text_end) = match (first_text_x, last_text_x) {
+                // Treat indentation spaces as part of the selectable region by
+                // starting from the first content column to the right of the
+                // transcript gutter, but still clamp to the last non-space
+                // glyph so trailing padding is not included.
+                (Some(_), Some(e)) => (base_x, e),
+                _ => continue,
+            };
+
+            let line_start_col = if line_index == start.line_index {
+                start.column
+            } else {
+                0
+            };
+            let line_end_col = if line_index == end.line_index {
+                end.column
+            } else {
+                max_x.saturating_sub(base_x)
+            };
+
+            let row_sel_start = base_x.saturating_add(line_start_col);
+            let row_sel_end = base_x.saturating_add(line_end_col).min(max_x);
+
+            if row_sel_start > row_sel_end {
+                continue;
+            }
+
+            let from_x = row_sel_start.max(text_start);
+            let to_x = row_sel_end.min(text_end);
+
+            if from_x > to_x {
+                continue;
+            }
+
+            for x in from_x..=to_x {
+                let cell = &mut buf[(x, y)];
+                let style = cell.style();
+                cell.set_style(style.add_modifier(ratatui::style::Modifier::REVERSED));
+            }
+        }
+    }
+
+    fn transcript_copy_feedback_for_footer(&mut self) -> Option<TranscriptCopyFeedback> {
+        self.transcript_copy_action.footer_feedback()
+    }
+
+    fn copy_selection_key(&self) -> crate::key_hint::KeyBinding {
+        self.transcript_copy_ui.key_binding()
+    }
+
+    fn copy_exec_cell_full_at_cursor(&mut self) -> bool {
+        if self.last_transcript_width == 0 {
+            return false;
+        }
+
+        let Some(point) = self
+            .transcript_selection
+            .head
+            .or(self.transcript_selection.anchor)
+        else {
+            return false;
+        };
+
+        let transcript = crate::transcript_render::build_wrapped_transcript_lines(
+            &self.transcript_cells,
+            self.last_transcript_width,
+            self.config.tui_verbose_tool_output,
+            &self.expanded_exec_call_ids,
+        );
+        let Some(cell_index) = Self::cell_index_for_line(&transcript.meta, point.line_index) else {
+            return false;
+        };
+        let Some(cell) = self.transcript_cells.get(cell_index) else {
+            return false;
+        };
+        let Some(exec_cell) = cell.as_any().downcast_ref::<crate::exec_cell::ExecCell>() else {
+            return false;
+        };
+        let Some(call) = exec_cell.calls.first() else {
+            return false;
+        };
+        let call_id = call.call_id.clone();
+
+        let mut expanded_exec_call_ids = self.expanded_exec_call_ids.clone();
+        expanded_exec_call_ids.insert(call_id);
+
+        let transcript = crate::transcript_render::build_wrapped_transcript_lines(
+            &self.transcript_cells,
+            self.last_transcript_width,
+            self.config.tui_verbose_tool_output,
+            &expanded_exec_call_ids,
+        );
+        let (start, end) = Self::cell_bounds_for_index(&transcript.meta, cell_index);
+
+        let Some(text) = crate::transcript_copy::selection_to_copy_text(
+            &transcript.lines,
+            &transcript.joiner_before,
+            TranscriptSelectionPoint::new(start, 0),
+            TranscriptSelectionPoint::new(end, u16::MAX),
+            0,
+            transcript.lines.len(),
+            self.last_transcript_width,
+        ) else {
+            return false;
+        };
+
+        if let Err(err) = crate::clipboard_copy::copy_text(text) {
+            tracing::error!(error = %err, "failed to copy full exec output to clipboard");
+            self.chat_widget
+                .add_error_message(format!("Failed to copy to clipboard: {err}"));
+        } else {
+            self.chat_widget
+                .add_info_message("Copied full tool output to clipboard.".to_string(), None);
+        }
+
+        true
+    }
+
+    fn toggle_exec_cell_expansion_at_selection(&mut self) -> bool {
+        if self.config.tui_verbose_tool_output {
+            return false;
+        }
+        if self.last_transcript_width == 0 {
+            return false;
+        }
+        let Some(point) = self
+            .transcript_selection
+            .head
+            .or(self.transcript_selection.anchor)
+        else {
+            return false;
+        };
+
+        let transcript = crate::transcript_render::build_wrapped_transcript_lines(
+            &self.transcript_cells,
+            self.last_transcript_width,
+            self.config.tui_verbose_tool_output,
+            &self.expanded_exec_call_ids,
+        );
+        let Some(cell_index) = Self::cell_index_for_line(&transcript.meta, point.line_index) else {
+            return false;
+        };
+        let Some(cell) = self.transcript_cells.get(cell_index) else {
+            return false;
+        };
+        let Some(exec_cell) = cell.as_any().downcast_ref::<crate::exec_cell::ExecCell>() else {
+            return false;
+        };
+        let Some(call) = exec_cell.calls.first() else {
+            return false;
+        };
+        let call_id = call.call_id.clone();
+
+        let inserted = self.expanded_exec_call_ids.insert(call_id.clone());
+        if !inserted {
+            self.expanded_exec_call_ids.remove(&call_id);
+        }
+
+        let transcript = crate::transcript_render::build_wrapped_transcript_lines(
+            &self.transcript_cells,
+            self.last_transcript_width,
+            self.config.tui_verbose_tool_output,
+            &self.expanded_exec_call_ids,
+        );
+        let (start, end) = Self::cell_bounds_for_index(&transcript.meta, cell_index);
+        self.transcript_selection = TranscriptSelection {
+            anchor: Some(TranscriptSelectionPoint::new(start, 0)),
+            head: Some(TranscriptSelectionPoint::new(end, u16::MAX)),
+        };
+
+        true
+    }
+
+    fn cell_index_for_line(
+        meta: &[crate::tui::scrolling::TranscriptLineMeta],
+        line_index: usize,
+    ) -> Option<usize> {
+        if meta.is_empty() {
+            return None;
+        }
+        let idx = line_index.min(meta.len().saturating_sub(1));
+        match meta.get(idx) {
+            Some(crate::tui::scrolling::TranscriptLineMeta::CellLine { cell_index, .. }) => {
+                Some(*cell_index)
+            }
+            _ => {
+                for prev in (0..=idx).rev() {
+                    if let crate::tui::scrolling::TranscriptLineMeta::CellLine {
+                        cell_index, ..
+                    } = meta[prev]
+                    {
+                        return Some(cell_index);
+                    }
+                }
+                for item in meta.iter().skip(idx) {
+                    if let crate::tui::scrolling::TranscriptLineMeta::CellLine {
+                        cell_index, ..
+                    } = item
+                    {
+                        return Some(*cell_index);
+                    }
+                }
+                None
+            }
+        }
+    }
+
+    fn cell_bounds_for_index(
+        meta: &[crate::tui::scrolling::TranscriptLineMeta],
+        target_cell: usize,
+    ) -> (usize, usize) {
+        let mut start = None;
+        let mut end = None;
+        for (idx, item) in meta.iter().enumerate() {
+            if matches!(
+                item,
+                crate::tui::scrolling::TranscriptLineMeta::CellLine { cell_index, .. }
+                    if *cell_index == target_cell
+            ) {
+                if start.is_none() {
+                    start = Some(idx);
+                }
+                end = Some(idx);
+            }
+        }
+        (start.unwrap_or(0), end.unwrap_or(0))
+    }
+
+    /// Map a mouse position in the transcript area to a content-relative
+    /// selection point, if there is transcript content to select.
+    fn transcript_point_from_coordinates(
+        &self,
+        transcript_area: Rect,
+        base_x: u16,
+        x: u16,
+        y: u16,
+    ) -> Option<TranscriptSelectionPoint> {
+        if self.transcript_total_lines == 0 {
+            return None;
+        }
+
+        let mut row_index = y.saturating_sub(transcript_area.y);
+        if row_index >= transcript_area.height {
+            if transcript_area.height == 0 {
+                return None;
+            }
+            row_index = transcript_area.height.saturating_sub(1);
+        }
+
+        let max_line = self.transcript_total_lines.saturating_sub(1);
+        let line_index = self
+            .transcript_view_top
+            .saturating_add(usize::from(row_index))
+            .min(max_line);
+        let column = x.saturating_sub(base_x);
+
+        Some(TranscriptSelectionPoint { line_index, column })
+    }
+
+    async fn handle_event(&mut self, tui: &mut tui::Tui, event: AppEvent) -> Result<AppRunControl> {
+        match event {
+            AppEvent::NewSession => {
+                let summary = session_summary(
+                    self.chat_widget.token_usage(),
+                    self.chat_widget.conversation_id(),
+                );
+                self.shutdown_current_conversation().await;
+                let init = crate::chatwidget::ChatWidgetInit {
+                    config: self.config.clone(),
+                    frame_requester: tui.frame_requester(),
+                    app_event_tx: self.app_event_tx.clone(),
+                    initial_prompt: None,
+                    initial_images: Vec::new(),
+                    enhanced_keys_supported: self.enhanced_keys_supported,
+                    auth_manager: self.auth_manager.clone(),
+                    models_manager: self.server.get_models_manager(),
+                    feedback: self.feedback.clone(),
+                    is_first_run: false,
+                    model: Some(self.current_model.clone()),
+                };
+                self.chat_widget = ChatWidget::new(init, self.server.clone());
+                let tx = self.app_event_tx.clone();
+                let cwd = self.config.cwd.clone();
+                tokio::spawn(async move {
+                    let branches = codex_core::git_info::local_git_branches(&cwd).await;
+                    tx.send(AppEvent::UpdateSlashCompletionBranches { branches });
+                });
+                if let Some(summary) = summary {
+                    let base_style = crate::theme::transcript_style();
+                    let usage_line = Line::from(summary.usage_line.clone()).style(base_style);
+                    let mut lines: Vec<Line<'static>> = vec![usage_line];
+                    if let Some(command) = summary.resume_command {
+                        let spans = vec![
+                            "To continue this session, run ".into(),
+                            Span::styled(command, crate::theme::accent_style()),
+                        ];
+                        let mut line: Line<'static> = spans.into();
+                        line.style = base_style;
+                        lines.push(line);
+                    }
+                    self.chat_widget.add_plain_history_lines(lines);
+                }
+                tui.frame_requester().schedule_frame();
+            }
+            AppEvent::OpenResumePicker => {
+                match crate::resume_picker::run_resume_picker(
+                    tui,
+                    &self.config.codex_home,
+                    &self.config.model_provider_id,
+                    false,
+                )
+                .await?
+                {
+                    SessionSelection::Resume(path) => {
+                        let summary = session_summary(
+                            self.chat_widget.token_usage(),
+                            self.chat_widget.conversation_id(),
+                        );
+                        match self
+                            .server
+                            .resume_thread_from_rollout(
+                                self.config.clone(),
+                                path.clone(),
+                                self.auth_manager.clone(),
+                            )
+                            .await
+                        {
+                            Ok(resumed) => {
+                                let resumed_model = resumed.session_configured.model.clone();
+                                self.shutdown_current_conversation().await;
+                                let init = crate::chatwidget::ChatWidgetInit {
+                                    config: self.config.clone(),
+                                    frame_requester: tui.frame_requester(),
+                                    app_event_tx: self.app_event_tx.clone(),
+                                    initial_prompt: None,
+                                    initial_images: Vec::new(),
+                                    enhanced_keys_supported: self.enhanced_keys_supported,
+                                    auth_manager: self.auth_manager.clone(),
+                                    models_manager: self.server.get_models_manager(),
+                                    feedback: self.feedback.clone(),
+                                    is_first_run: false,
+                                    model: Some(resumed_model.clone()),
+                                };
+                                self.chat_widget = ChatWidget::new_from_existing(
+                                    init,
+                                    resumed.thread,
+                                    resumed.session_configured,
+                                );
+                                self.current_model = resumed_model;
+                                if let Some(summary) = summary {
+                                    let base_style = crate::theme::transcript_style();
+                                    let usage_line =
+                                        Line::from(summary.usage_line.clone()).style(base_style);
+                                    let mut lines: Vec<Line<'static>> = vec![usage_line];
+                                    if let Some(command) = summary.resume_command {
+                                        let spans = vec![
+                                            "To continue this session, run ".into(),
+                                            Span::styled(command, crate::theme::accent_style()),
+                                        ];
+                                        let mut line: Line<'static> = spans.into();
+                                        line.style = base_style;
+                                        lines.push(line);
+                                    }
+                                    self.chat_widget.add_plain_history_lines(lines);
+                                }
+                            }
+                            Err(err) => {
+                                let path_display = path.display();
+                                self.chat_widget.add_error_message(format!(
+                                    "Failed to resume session from {path_display}: {err}"
+                                ));
+                            }
+                        }
+                    }
+                    SessionSelection::Exit
+                    | SessionSelection::StartFresh
+                    | SessionSelection::Fork(_) => {}
+                }
+
+                // Leaving alt-screen may blank the inline viewport; force a redraw either way.
+                tui.frame_requester().schedule_frame();
+            }
+            AppEvent::ForkCurrentSession => {
+                let summary = session_summary(
+                    self.chat_widget.token_usage(),
+                    self.chat_widget.conversation_id(),
+                );
+                if let Some(path) = self.chat_widget.rollout_path() {
+                    match self
+                        .server
+                        .fork_thread(usize::MAX, self.config.clone(), path.clone())
+                        .await
+                    {
+                        Ok(forked) => {
+                            self.shutdown_current_conversation().await;
+                            let init = crate::chatwidget::ChatWidgetInit {
+                                config: self.config.clone(),
+                                frame_requester: tui.frame_requester(),
+                                app_event_tx: self.app_event_tx.clone(),
+                                initial_prompt: None,
+                                initial_images: Vec::new(),
+                                enhanced_keys_supported: self.enhanced_keys_supported,
+                                auth_manager: self.auth_manager.clone(),
+                                models_manager: self.server.get_models_manager(),
+                                feedback: self.feedback.clone(),
+                                is_first_run: false,
+                                model: Some(self.current_model.clone()),
+                            };
+                            self.chat_widget = ChatWidget::new_from_existing(
+                                init,
+                                forked.thread,
+                                forked.session_configured,
+                            );
+                            if let Some(summary) = summary {
+                                let base_style = crate::theme::transcript_style();
+                                let usage_line =
+                                    Line::from(summary.usage_line.clone()).style(base_style);
+                                let mut lines: Vec<Line<'static>> = vec![usage_line];
+                                if let Some(command) = summary.resume_command {
+                                    let spans = vec![
+                                        "To continue this session, run ".into(),
+                                        Span::styled(command, crate::theme::accent_style()),
+                                    ];
+                                    let mut line: Line<'static> = spans.into();
+                                    line.style = base_style;
+                                    lines.push(line);
+                                }
+                                self.chat_widget.add_plain_history_lines(lines);
+                            }
+                        }
+                        Err(err) => {
+                            let path_display = path.display();
+                            self.chat_widget.add_error_message(format!(
+                                "Failed to fork current session from {path_display}: {err}"
+                            ));
+                        }
+                    }
+                } else {
+                    self.chat_widget
+                        .add_error_message("Current session is not ready to fork yet.".to_string());
+                }
+
+                tui.frame_requester().schedule_frame();
+            }
+            AppEvent::DispatchSlashCommand(cmd) => {
+                self.chat_widget.dispatch_slash_command(cmd);
+                tui.frame_requester().schedule_frame();
+            }
+            AppEvent::OpenTranscriptOverlay => {
+                let _ = tui.enter_alt_screen();
+                self.overlay = Some(Overlay::new_transcript(self.transcript_cells.clone()));
+                tui.frame_requester().schedule_frame();
+            }
+            AppEvent::InsertHistoryCell(cell) => {
+                let cell: Arc<dyn HistoryCell> = cell.into();
+                if let Some(Overlay::Transcript(transcript)) = &mut self.overlay {
+                    transcript.insert_cell(cell.clone());
+                    tui.frame_requester().schedule_frame();
+                }
+                self.transcript_cells.push(cell.clone());
+                if self.overlay.is_some() {
+                    self.deferred_history_cells.push(cell);
+                }
+            }
+            AppEvent::StartCommitAnimation => {
+                if self
+                    .commit_anim_running
+                    .compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
+                    .is_ok()
+                {
+                    let tx = self.app_event_tx.clone();
+                    let running = self.commit_anim_running.clone();
+                    thread::spawn(move || {
+                        while running.load(Ordering::Relaxed) {
+                            thread::sleep(Duration::from_millis(50));
+                            tx.send(AppEvent::CommitTick);
+                        }
+                    });
+                }
+            }
+            AppEvent::StopCommitAnimation => {
+                self.commit_anim_running.store(false, Ordering::Release);
+            }
+            AppEvent::CommitTick => {
+                self.chat_widget.on_commit_tick();
+            }
+            AppEvent::CodexEvent(event) => {
+                if self.suppress_shutdown_complete
+                    && matches!(event.msg, EventMsg::ShutdownComplete)
+                {
+                    self.suppress_shutdown_complete = false;
+                    return Ok(AppRunControl::Continue);
+                }
+                if let EventMsg::ListSkillsResponse(response) = &event.msg {
+                    let cwd = self.chat_widget.config_ref().cwd.clone();
+                    let errors = errors_for_cwd(&cwd, response);
+                    emit_skill_load_warnings(&self.app_event_tx, &errors);
+                }
+                self.chat_widget.handle_codex_event(event);
+            }
+            AppEvent::Exit(mode) => match mode {
+                ExitMode::ShutdownFirst => self.chat_widget.submit_op(Op::Shutdown),
+                ExitMode::Immediate => {
+                    return Ok(AppRunControl::Exit(ExitReason::UserRequested));
+                }
+            },
+            AppEvent::FatalExitRequest(message) => {
+                return Ok(AppRunControl::Exit(ExitReason::Fatal(message)));
+            }
+            AppEvent::CodexOp(op) => self.chat_widget.submit_op(op),
+            AppEvent::DiffResult(text) => {
+                // Clear the in-progress state in the bottom pane
+                self.chat_widget.on_diff_complete();
+                // Enter alternate screen using TUI helper and build pager lines
+                let _ = tui.enter_alt_screen();
+                let pager_lines: Vec<ratatui::text::Line<'static>> = if text.trim().is_empty() {
+                    vec!["No changes detected.".italic().into()]
+                } else {
+                    text.lines().map(ansi_escape_line).collect()
+                };
+                self.overlay = Some(Overlay::new_static_with_lines(
+                    pager_lines,
+                    "D I F F".to_string(),
+                ));
+                tui.frame_requester().schedule_frame();
+            }
+            AppEvent::UpdateStatusBarGitContext {
+                git_branch,
+                worktree_root,
+            } => {
+                self.chat_widget
+                    .set_status_bar_git_context(git_branch, worktree_root);
+                tui.frame_requester().schedule_frame();
+            }
+            AppEvent::UpdateSlashCompletionBranches { branches } => {
+                self.chat_widget.set_slash_completion_branches(branches);
+                tui.frame_requester().schedule_frame();
+            }
+            AppEvent::UpdateStatusBarGitOptions {
+                show_git_branch,
+                show_worktree,
+            } => {
+                self.config.tui_status_bar_show_git_branch = show_git_branch;
+                self.config.tui_status_bar_show_worktree = show_worktree;
+                self.chat_widget
+                    .set_status_bar_git_options(show_git_branch, show_worktree);
+                tui.frame_requester().schedule_frame();
+            }
+            AppEvent::UpdateVerboseToolOutput(verbose) => {
+                self.config.tui_verbose_tool_output = verbose;
+                self.chat_widget.set_verbose_tool_output(verbose);
+                tui.frame_requester().schedule_frame();
+            }
+            AppEvent::UpdateTranscriptDiffHighlight(enabled) => {
+                self.config.tui_transcript_diff_highlight = enabled;
+                tui.frame_requester().schedule_frame();
+            }
+            AppEvent::UpdateMinimalComposer(enabled) => {
+                self.config.tui_minimal_composer = enabled;
+                self.chat_widget.set_minimal_composer(enabled);
+                tui.frame_requester().schedule_frame();
+            }
+            AppEvent::UpdateTranscriptUserPromptHighlight(enabled) => {
+                self.config.tui_transcript_user_prompt_highlight = enabled;
+                tui.frame_requester().schedule_frame();
+            }
+            AppEvent::UpdateXtremeMode(mode) => {
+                self.config.xcodex.tui_xtreme_mode = mode;
+                self.chat_widget.set_xtreme_mode(mode);
+                tui.frame_requester().schedule_frame();
+            }
+            AppEvent::PreviewTheme { theme } => {
+                crate::xcodex_plugins::theme::preview_theme(self, tui, &theme);
+            }
+            AppEvent::CancelThemePreview => {
+                crate::xcodex_plugins::theme::cancel_theme_preview(self, tui);
+            }
+            AppEvent::PersistThemeSelection { variant, theme } => {
+                crate::xcodex_plugins::theme::persist_theme_selection(self, tui, variant, theme)
+                    .await;
+            }
+            AppEvent::OpenThemeSelector => {
+                crate::xcodex_plugins::theme::open_theme_selector(self, tui);
+            }
+            AppEvent::OpenThemeHelp => {
+                crate::xcodex_plugins::theme::open_theme_help(self, tui);
+            }
+            AppEvent::UpdateRampsConfig {
+                rotate,
+                build,
+                devops,
+            } => {
+                self.config.xcodex.tui_ramps_rotate = rotate;
+                self.config.xcodex.tui_ramps_build = build;
+                self.config.xcodex.tui_ramps_devops = devops;
+                self.chat_widget.set_ramps_config(rotate, build, devops);
+                tui.frame_requester().schedule_frame();
+            }
+            AppEvent::WorktreeListUpdated {
+                worktrees,
+                open_picker,
+            } => {
+                crate::xcodex_plugins::worktree::set_worktree_list(
+                    &mut self.chat_widget,
+                    worktrees,
+                    open_picker,
+                );
+                tui.frame_requester().schedule_frame();
+            }
+            AppEvent::WorktreeDetect { open_picker } => {
+                crate::xcodex_plugins::worktree::spawn_worktree_detection(
+                    &mut self.chat_widget,
+                    open_picker,
+                );
+                tui.frame_requester().schedule_frame();
+            }
+            AppEvent::OpenWorktreeCommandMenu => {
+                if self.chat_widget.composer_is_empty() {
+                    self.chat_widget.set_composer_text("/worktree ".to_string());
+                } else {
+                    self.chat_widget.add_info_message(
+                        "Clear the composer to open the /worktree menu.".to_string(),
+                        None,
+                    );
+                }
+                tui.frame_requester().schedule_frame();
+            }
+            AppEvent::OpenToolsCommand { command } => {
+                if self.chat_widget.composer_is_empty() {
+                    self.chat_widget.set_composer_text(command);
+                } else {
+                    self.chat_widget.add_info_message(
+                        "Clear the composer to open tools commands.".to_string(),
+                        None,
+                    );
+                }
+                tui.frame_requester().schedule_frame();
+            }
+            AppEvent::OpenWorktreesSettingsView => {
+                crate::xcodex_plugins::worktree::open_worktrees_settings_view(
+                    &mut self.chat_widget,
+                );
+                tui.frame_requester().schedule_frame();
+            }
+            AppEvent::OpenWorktreeInitWizard {
+                worktree_root,
+                workspace_root,
+                current_branch,
+                shared_dirs,
+                branches,
+            } => {
+                self.chat_widget
+                    .set_slash_completion_branches(branches.clone());
+                crate::xcodex_plugins::worktree::open_worktree_init_wizard(
+                    &mut self.chat_widget,
+                    worktree_root,
+                    workspace_root,
+                    current_branch,
+                    shared_dirs,
+                    branches,
+                );
+                tui.frame_requester().schedule_frame();
+            }
+            AppEvent::OpenRampsSettingsView => {
+                self.chat_widget.open_ramps_settings_view();
+                tui.frame_requester().schedule_frame();
+            }
+            AppEvent::WorktreeListUpdateFailed { error, open_picker } => {
+                crate::xcodex_plugins::worktree::on_worktree_list_update_failed(
+                    &mut self.chat_widget,
+                    error,
+                    open_picker,
+                );
+                tui.frame_requester().schedule_frame();
+            }
+            AppEvent::WorktreeSwitched(cwd) => {
+                let previous_cwd = self.config.cwd.clone();
+                self.config.cwd = cwd.clone();
+                self.chat_widget.set_session_cwd(cwd);
+                tui.frame_requester().schedule_frame();
+
+                let tx = self.app_event_tx.clone();
+                let branch_cwd = self.config.cwd.clone();
+                tokio::spawn(async move {
+                    let branches = codex_core::git_info::local_git_branches(&branch_cwd).await;
+                    tx.send(AppEvent::UpdateSlashCompletionBranches { branches });
+                });
+
+                let next_root = codex_core::git_info::resolve_git_worktree_head(&self.config.cwd)
+                    .map(|head| head.worktree_root);
+
+                let auto_link = self.config.xcodex.worktrees_auto_link_shared_dirs
+                    && !self.config.worktrees_shared_dirs.is_empty();
+                if auto_link
+                    && let Some(next_root) = next_root.clone()
+                    && let Some(workspace_root) =
+                        codex_core::git_info::resolve_root_git_project_for_trust(&next_root)
+                    && next_root != workspace_root
+                {
+                    let show_notice = !self.shared_dirs_write_notice_shown;
+                    self.shared_dirs_write_notice_shown = true;
+                    let shared_dirs = self.config.worktrees_shared_dirs.clone();
+                    let tx = self.app_event_tx.clone();
+                    tokio::spawn(async move {
+                        let actions = codex_core::git_info::link_worktree_shared_dirs(
+                            &next_root,
+                            &workspace_root,
+                            &shared_dirs,
+                        )
+                        .await;
+
+                        let mut linked = 0usize;
+                        let mut skipped = 0usize;
+                        let mut failed = 0usize;
+                        for action in &actions {
+                            match action.outcome {
+                                codex_core::git_info::SharedDirLinkOutcome::Linked => linked += 1,
+                                codex_core::git_info::SharedDirLinkOutcome::AlreadyLinked => {}
+                                codex_core::git_info::SharedDirLinkOutcome::Skipped(_) => {
+                                    skipped += 1;
+                                }
+                                codex_core::git_info::SharedDirLinkOutcome::Failed(_) => {
+                                    failed += 1;
+                                }
+                            }
+                        }
+
+                        if linked == 0 && skipped == 0 && failed == 0 {
+                            return;
+                        }
+
+                        let summary = format!(
+                            "Auto-linked shared dirs after worktree switch: linked={linked}, skipped={skipped}, failed={failed}."
+                        );
+                        let hint = if show_notice {
+                            Some(String::from(
+                                "Note: shared dirs are linked into the workspace root; writes under them persist across worktrees. Tip: run `/worktree doctor` for details.",
+                            ))
+                        } else {
+                            Some(String::from("Tip: run `/worktree doctor` for details."))
+                        };
+                        tx.send(AppEvent::InsertHistoryCell(Box::new(
+                            crate::history_cell::new_info_event(summary, hint),
+                        )));
+                    });
+                }
+
+                let previous_root = codex_core::git_info::resolve_git_worktree_head(&previous_cwd)
+                    .map(|head| head.worktree_root);
+
+                let Some(previous_root) = previous_root else {
+                    return Ok(AppRunControl::Continue);
+                };
+                let Some(next_root) = next_root else {
+                    return Ok(AppRunControl::Continue);
+                };
+
+                if previous_root == next_root {
+                    return Ok(AppRunControl::Continue);
+                }
+
+                if codex_core::git_info::resolve_root_git_project_for_trust(&previous_root)
+                    .is_some_and(|root| root == previous_root)
+                {
+                    return Ok(AppRunControl::Continue);
+                }
+
+                let tx = self.app_event_tx.clone();
+                tokio::spawn(async move {
+                    let Ok(summary) =
+                        codex_core::git_info::summarize_git_untracked_files(&previous_root, 5)
+                            .await
+                    else {
+                        return;
+                    };
+                    if summary.total == 0 {
+                        return;
+                    }
+
+                    tx.send(AppEvent::WorktreeUntrackedFilesDetected {
+                        previous_worktree_root: previous_root,
+                        total: summary.total,
+                        sample: summary.sample,
+                    });
+                });
+            }
+            AppEvent::WorktreeUntrackedFilesDetected {
+                previous_worktree_root,
+                total,
+                sample,
+            } => {
+                let display = crate::exec_command::relativize_to_home(&previous_worktree_root)
+                    .map(|path| {
+                        if path.as_os_str().is_empty() {
+                            String::from("~")
+                        } else {
+                            format!("~/{}", path.display())
+                        }
+                    })
+                    .unwrap_or_else(|| previous_worktree_root.display().to_string());
+
+                let sample_preview = if sample.is_empty() {
+                    String::new()
+                } else {
+                    let preview: String = sample
+                        .iter()
+                        .take(3)
+                        .map(|path| format!("\n  - {path}"))
+                        .collect();
+                    let remainder = total.saturating_sub(sample.len());
+                    if remainder > 0 {
+                        format!("{preview}\n  - … +{remainder} more")
+                    } else {
+                        preview
+                    }
+                };
+
+                self.chat_widget.add_info_message(
+                    format!(
+                        "Untracked files detected in the previous worktree ({display}). Deleting that worktree may lose them.{sample_preview}"
+                    ),
+                    Some(String::from("Tip: git stash push -u -m \"worktree scratch\"")),
+                );
+                tui.frame_requester().schedule_frame();
+            }
+            AppEvent::StartFileSearch(query) => {
+                if !query.is_empty() {
+                    self.file_search.on_user_query(query);
+                }
+            }
+            AppEvent::FileSearchResult { query, matches } => {
+                self.chat_widget.apply_file_search_result(query, matches);
+            }
+            AppEvent::RateLimitSnapshotFetched(snapshot) => {
+                self.chat_widget.on_rate_limit_snapshot(Some(snapshot));
+            }
+            AppEvent::UpdateReasoningEffort(effort) => {
+                self.on_update_reasoning_effort(effort);
+            }
+            AppEvent::UpdateModel(model) => {
+                self.chat_widget.set_model(&model);
+                self.current_model = model;
+            }
+            AppEvent::UpdateHideAgentReasoning(hide) => {
+                self.config.hide_agent_reasoning = hide;
+                self.chat_widget.set_hide_agent_reasoning(hide);
+            }
+            AppEvent::OpenReasoningPopup { model } => {
+                self.chat_widget.open_reasoning_popup(model);
+            }
+            AppEvent::OpenAllModelsPopup { models } => {
+                self.chat_widget.open_all_models_popup(models);
+            }
+            AppEvent::OpenFullAccessConfirmation { preset } => {
+                self.chat_widget.open_full_access_confirmation(preset);
+            }
+            AppEvent::OpenWorldWritableWarningConfirmation {
+                preset,
+                sample_paths,
+                extra_count,
+                failed_scan,
+            } => {
+                self.chat_widget.open_world_writable_warning_confirmation(
+                    preset,
+                    sample_paths,
+                    extra_count,
+                    failed_scan,
+                );
+            }
+            AppEvent::OpenFeedbackNote {
+                category,
+                include_logs,
+            } => {
+                self.chat_widget.open_feedback_note(category, include_logs);
+            }
+            AppEvent::OpenFeedbackConsent { category } => {
+                self.chat_widget.open_feedback_consent(category);
+            }
+            AppEvent::OpenWindowsSandboxEnablePrompt { preset } => {
+                self.chat_widget.open_windows_sandbox_enable_prompt(preset);
+            }
+            AppEvent::OpenWindowsSandboxFallbackPrompt { preset, reason } => {
+                self.chat_widget.clear_windows_sandbox_setup_status();
+                self.chat_widget
+                    .open_windows_sandbox_fallback_prompt(preset, reason);
+            }
+            AppEvent::BeginWindowsSandboxElevatedSetup { preset } => {
+                #[cfg(target_os = "windows")]
+                {
+                    let policy = preset.sandbox.clone();
+                    let policy_cwd = self.config.cwd.clone();
+                    let command_cwd = policy_cwd.clone();
+                    let env_map: std::collections::HashMap<String, String> =
+                        std::env::vars().collect();
+                    let codex_home = self.config.codex_home.clone();
+                    let tx = self.app_event_tx.clone();
+
+                    // If the elevated setup already ran on this machine, don't prompt for
+                    // elevation again - just flip the config to use the elevated path.
+                    if codex_core::windows_sandbox::sandbox_setup_is_complete(codex_home.as_path())
+                    {
+                        tx.send(AppEvent::EnableWindowsSandboxForAgentMode {
+                            preset,
+                            mode: WindowsSandboxEnableMode::Elevated,
+                        });
+                        return Ok(AppRunControl::Continue);
+                    }
+
+                    self.chat_widget.show_windows_sandbox_setup_status();
+                    tokio::task::spawn_blocking(move || {
+                        let result = codex_core::windows_sandbox::run_elevated_setup(
+                            &policy,
+                            policy_cwd.as_path(),
+                            command_cwd.as_path(),
+                            &env_map,
+                            codex_home.as_path(),
+                        );
+                        let event = match result {
+                            Ok(()) => AppEvent::EnableWindowsSandboxForAgentMode {
+                                preset: preset.clone(),
+                                mode: WindowsSandboxEnableMode::Elevated,
+                            },
+                            Err(err) => {
+                                tracing::error!(
+                                    error = %err,
+                                    "failed to run elevated Windows sandbox setup"
+                                );
+                                AppEvent::OpenWindowsSandboxFallbackPrompt {
+                                    preset,
+                                    reason: WindowsSandboxFallbackReason::ElevationFailed,
+                                }
+                            }
+                        };
+                        tx.send(event);
+                    });
+                }
+                #[cfg(not(target_os = "windows"))]
+                {
+                    let _ = preset;
+                }
+            }
+            AppEvent::EnableWindowsSandboxForAgentMode { preset, mode } => {
+                #[cfg(target_os = "windows")]
+                {
+                    self.chat_widget.clear_windows_sandbox_setup_status();
+                    let profile = self.active_profile.as_deref();
+                    let feature_key = Feature::WindowsSandbox.key();
+                    let elevated_key = Feature::WindowsSandboxElevated.key();
+                    let elevated_enabled = matches!(mode, WindowsSandboxEnableMode::Elevated);
+                    match ConfigEditsBuilder::new(&self.config.codex_home)
+                        .with_profile(profile)
+                        .set_feature_enabled(feature_key, true)
+                        .set_feature_enabled(elevated_key, elevated_enabled)
+                        .apply()
+                        .await
+                    {
+                        Ok(()) => {
+                            self.config.set_windows_sandbox_globally(true);
+                            self.config
+                                .set_windows_elevated_sandbox_globally(elevated_enabled);
+                            self.chat_widget
+                                .set_feature_enabled(Feature::WindowsSandbox, true);
+                            self.chat_widget.set_feature_enabled(
+                                Feature::WindowsSandboxElevated,
+                                elevated_enabled,
+                            );
+                            self.chat_widget.clear_forced_auto_mode_downgrade();
+                            if let Some((sample_paths, extra_count, failed_scan)) =
+                                self.chat_widget.world_writable_warning_details()
+                            {
+                                self.app_event_tx.send(
+                                    AppEvent::OpenWorldWritableWarningConfirmation {
+                                        preset: Some(preset.clone()),
+                                        sample_paths,
+                                        extra_count,
+                                        failed_scan,
+                                    },
+                                );
+                            } else {
+                                self.app_event_tx.send(AppEvent::CodexOp(
+                                    Op::OverrideTurnContext {
+                                        cwd: None,
+                                        approval_policy: Some(preset.approval),
+                                        sandbox_policy: Some(preset.sandbox.clone()),
+                                        windows_sandbox_level: None,
+                                        model: None,
+                                        effort: None,
+                                        summary: None,
+                                        collaboration_mode: None,
+                                        personality: None,
+                                    },
+                                ));
+                                self.app_event_tx
+                                    .send(AppEvent::UpdateAskForApprovalPolicy(preset.approval));
+                                self.app_event_tx
+                                    .send(AppEvent::UpdateSandboxPolicy(preset.sandbox.clone()));
+                                self.chat_widget.add_info_message(
+                                    match mode {
+                                        WindowsSandboxEnableMode::Elevated => {
+                                            "Enabled elevated agent sandbox.".to_string()
+                                        }
+                                        WindowsSandboxEnableMode::Legacy => {
+                                            "Enabled non-elevated agent sandbox.".to_string()
+                                        }
+                                    },
+                                    None,
+                                );
+                            }
+                        }
+                        Err(err) => {
+                            tracing::error!(
+                                error = %err,
+                                "failed to enable Windows sandbox feature"
+                            );
+                            self.chat_widget.add_error_message(format!(
+                                "Failed to enable the Windows sandbox feature: {err}"
+                            ));
+                        }
+                    }
+                }
+                #[cfg(not(target_os = "windows"))]
+                {
+                    let _ = (preset, mode);
+                }
+            }
+            AppEvent::PersistModelSelection { model, effort } => {
+                let profile = self.active_profile.as_deref();
+                match ConfigEditsBuilder::new(&self.config.codex_home)
+                    .with_profile(profile)
+                    .set_model(Some(model.as_str()), effort)
+                    .apply()
+                    .await
+                {
+                    Ok(()) => {
+                        let mut message = format!("Model changed to {model}");
+                        if let Some(label) = Self::reasoning_label_for(&model, effort) {
+                            message.push(' ');
+                            message.push_str(label);
+                        }
+                        if let Some(profile) = profile {
+                            message.push_str(" for ");
+                            message.push_str(profile);
+                            message.push_str(" profile");
+                        }
+                        self.chat_widget.add_info_message(message, None);
+                    }
+                    Err(err) => {
+                        tracing::error!(
+                            error = %err,
+                            "failed to persist model selection"
+                        );
+                        if let Some(profile) = profile {
+                            self.chat_widget.add_error_message(format!(
+                                "Failed to save model for profile `{profile}`: {err}"
+                            ));
+                        } else {
+                            self.chat_widget
+                                .add_error_message(format!("Failed to save default model: {err}"));
+                        }
+                    }
+                }
+            }
+            AppEvent::PersistHideAgentReasoning(hide) => {
+                let profile = self.active_profile.as_deref();
+                match ConfigEditsBuilder::new(&self.config.codex_home)
+                    .with_profile(profile)
+                    .with_edits([ConfigEdit::SetPath {
+                        segments: vec!["hide_agent_reasoning".to_string()],
+                        value: toml_edit::value(hide),
+                    }])
+                    .apply()
+                    .await
+                {
+                    Ok(()) => {}
+                    Err(err) => {
+                        tracing::error!(
+                            error = %err,
+                            "failed to persist thoughts preference"
+                        );
+                        if let Some(profile) = profile {
+                            self.chat_widget.add_error_message(format!(
+                                "Failed to save thoughts preference for profile `{profile}`: {err}"
+                            ));
+                        } else {
+                            self.chat_widget.add_error_message(format!(
+                                "Failed to save thoughts preference: {err}"
+                            ));
+                        }
+                    }
+                }
+            }
+            AppEvent::PersistStatusBarGitOptions {
+                show_git_branch,
+                show_worktree,
+            } => {
+                let profile = self.active_profile.as_deref();
+                match ConfigEditsBuilder::new(&self.config.codex_home)
+                    .with_profile(profile)
+                    .with_edits([
+                        ConfigEdit::SetPath {
+                            segments: vec![
+                                "tui".to_string(),
+                                "status_bar_show_git_branch".to_string(),
+                            ],
+                            value: toml_edit::value(show_git_branch),
+                        },
+                        ConfigEdit::SetPath {
+                            segments: vec![
+                                "tui".to_string(),
+                                "status_bar_show_worktree".to_string(),
+                            ],
+                            value: toml_edit::value(show_worktree),
+                        },
+                    ])
+                    .apply()
+                    .await
+                {
+                    Ok(()) => {}
+                    Err(err) => {
+                        tracing::error!(
+                            error = %err,
+                            "failed to persist status bar git options"
+                        );
+                        if let Some(profile) = profile {
+                            self.chat_widget.add_error_message(format!(
+                                "Failed to save status bar options for profile `{profile}`: {err}"
+                            ));
+                        } else {
+                            self.chat_widget.add_error_message(format!(
+                                "Failed to save status bar options: {err}"
+                            ));
+                        }
+                    }
+                }
+            }
+            AppEvent::PersistVerboseToolOutput(verbose) => {
+                let profile = self.active_profile.as_deref();
+                match ConfigEditsBuilder::new(&self.config.codex_home)
+                    .with_profile(profile)
+                    .with_edits([ConfigEdit::SetPath {
+                        segments: vec!["tui".to_string(), "verbose_tool_output".to_string()],
+                        value: toml_edit::value(verbose),
+                    }])
+                    .apply()
+                    .await
+                {
+                    Ok(()) => {}
+                    Err(err) => {
+                        tracing::error!(error = %err, "failed to persist tool output verbosity");
+                        if let Some(profile) = profile {
+                            self.chat_widget.add_error_message(format!(
+                                "Failed to save output verbosity for profile `{profile}`: {err}"
+                            ));
+                        } else {
+                            self.chat_widget.add_error_message(format!(
+                                "Failed to save output verbosity: {err}"
+                            ));
+                        }
+                    }
+                }
+            }
+            AppEvent::PersistTranscriptDiffHighlight(enabled) => {
+                let profile = self.active_profile.as_deref();
+                match ConfigEditsBuilder::new(&self.config.codex_home)
+                    .with_profile(profile)
+                    .with_edits([ConfigEdit::SetPath {
+                        segments: vec!["tui".to_string(), "transcript_diff_highlight".to_string()],
+                        value: toml_edit::value(enabled),
+                    }])
+                    .apply()
+                    .await
+                {
+                    Ok(()) => {}
+                    Err(err) => {
+                        tracing::error!(error = %err, "failed to persist diff highlight toggle");
+                        if let Some(profile) = profile {
+                            self.chat_widget.add_error_message(format!(
+                                "Failed to save diff highlight setting for profile `{profile}`: {err}"
+                            ));
+                        } else {
+                            self.chat_widget.add_error_message(format!(
+                                "Failed to save diff highlight setting: {err}"
+                            ));
+                        }
+                    }
+                }
+            }
+            AppEvent::PersistMinimalComposer(enabled) => {
+                let profile = self.active_profile.as_deref();
+                match ConfigEditsBuilder::new(&self.config.codex_home)
+                    .with_profile(profile)
+                    .with_edits([ConfigEdit::SetPath {
+                        segments: vec!["tui".to_string(), "minimal_composer".to_string()],
+                        value: toml_edit::value(enabled),
+                    }])
+                    .apply()
+                    .await
+                {
+                    Ok(()) => {}
+                    Err(err) => {
+                        tracing::error!(
+                            error = %err,
+                            "failed to persist minimal composer toggle"
+                        );
+                        if let Some(profile) = profile {
+                            self.chat_widget.add_error_message(format!(
+                                "Failed to save minimal composer setting for profile `{profile}`: {err}"
+                            ));
+                        } else {
+                            self.chat_widget.add_error_message(format!(
+                                "Failed to save minimal composer setting: {err}"
+                            ));
+                        }
+                    }
+                }
+            }
+            AppEvent::PersistTranscriptUserPromptHighlight(enabled) => {
+                let profile = self.active_profile.as_deref();
+                match ConfigEditsBuilder::new(&self.config.codex_home)
+                    .with_profile(profile)
+                    .with_edits([ConfigEdit::SetPath {
+                        segments: vec![
+                            "tui".to_string(),
+                            "transcript_user_prompt_highlight".to_string(),
+                        ],
+                        value: toml_edit::value(enabled),
+                    }])
+                    .apply()
+                    .await
+                {
+                    Ok(()) => {}
+                    Err(err) => {
+                        tracing::error!(
+                            error = %err,
+                            "failed to persist user prompt highlight toggle"
+                        );
+                        if let Some(profile) = profile {
+                            self.chat_widget.add_error_message(format!(
+                                "Failed to save user prompt highlight setting for profile `{profile}`: {err}"
+                            ));
+                        } else {
+                            self.chat_widget.add_error_message(format!(
+                                "Failed to save user prompt highlight setting: {err}"
+                            ));
+                        }
+                    }
+                }
+            }
+            AppEvent::PersistXtremeMode(mode) => {
+                let profile = self.active_profile.as_deref();
+                let mode_value = match mode {
+                    codex_core::config::types::XtremeMode::Auto => "auto",
+                    codex_core::config::types::XtremeMode::On => "on",
+                    codex_core::config::types::XtremeMode::Off => "off",
+                };
+                match ConfigEditsBuilder::new(&self.config.codex_home)
+                    .with_profile(profile)
+                    .with_edits([ConfigEdit::SetPath {
+                        segments: vec!["tui".to_string(), "xtreme_mode".to_string()],
+                        value: toml_edit::value(mode_value),
+                    }])
+                    .apply()
+                    .await
+                {
+                    Ok(()) => {}
+                    Err(err) => {
+                        tracing::error!(error = %err, "failed to persist xtreme mode");
+                        if let Some(profile) = profile {
+                            self.chat_widget.add_error_message(format!(
+                                "Failed to save xtreme mode for profile `{profile}`: {err}"
+                            ));
+                        } else {
+                            self.chat_widget
+                                .add_error_message(format!("Failed to save xtreme mode: {err}"));
+                        }
+                    }
+                }
+            }
+            AppEvent::PersistRampsConfig {
+                rotate,
+                build,
+                devops,
+            } => {
+                let profile = self.active_profile.as_deref();
+                match ConfigEditsBuilder::new(&self.config.codex_home)
+                    .with_profile(profile)
+                    .with_edits([
+                        ConfigEdit::SetPath {
+                            segments: vec!["tui".to_string(), "ramps_rotate".to_string()],
+                            value: toml_edit::value(rotate),
+                        },
+                        ConfigEdit::SetPath {
+                            segments: vec!["tui".to_string(), "ramps_build".to_string()],
+                            value: toml_edit::value(build),
+                        },
+                        ConfigEdit::SetPath {
+                            segments: vec!["tui".to_string(), "ramps_devops".to_string()],
+                            value: toml_edit::value(devops),
+                        },
+                    ])
+                    .apply()
+                    .await
+                {
+                    Ok(()) => {}
+                    Err(err) => {
+                        tracing::error!(error = %err, "failed to persist xcodex ramps config");
+                        if let Some(profile) = profile {
+                            self.chat_widget.add_error_message(format!(
+                                "Failed to save ramps config for profile `{profile}`: {err}"
+                            ));
+                        } else {
+                            self.chat_widget
+                                .add_error_message(format!("Failed to save ramps config: {err}"));
+                        }
+                    }
+                }
+            }
+            AppEvent::UpdateWorktreesSharedDirs { shared_dirs } => {
+                self.config.worktrees_shared_dirs = shared_dirs.clone();
+                crate::xcodex_plugins::worktree::set_worktrees_shared_dirs(
+                    &mut self.chat_widget,
+                    shared_dirs,
+                );
+            }
+            AppEvent::UpdateWorktreesPinnedPaths { pinned_paths } => {
+                self.config.worktrees_pinned_paths = pinned_paths.clone();
+                crate::xcodex_plugins::worktree::set_worktrees_pinned_paths(
+                    &mut self.chat_widget,
+                    pinned_paths,
+                );
+            }
+            AppEvent::PersistWorktreesSharedDirs { shared_dirs } => {
+                let mut shared_dirs_array = toml_edit::Array::new();
+                for dir in &shared_dirs {
+                    shared_dirs_array.push(dir.clone());
+                }
+                match ConfigEditsBuilder::new(&self.config.codex_home)
+                    .with_edits([ConfigEdit::SetPath {
+                        segments: vec!["worktrees".to_string(), "shared_dirs".to_string()],
+                        value: toml_edit::value(shared_dirs_array),
+                    }])
+                    .apply()
+                    .await
+                {
+                    Ok(()) => {}
+                    Err(err) => {
+                        tracing::error!(error = %err, "failed to persist worktree shared dirs");
+                        self.chat_widget.add_error_message(format!(
+                            "Failed to save worktree shared dirs: {err}"
+                        ));
+                    }
+                }
+            }
+            AppEvent::PersistWorktreesPinnedPaths { pinned_paths } => {
+                let mut pinned_paths_array = toml_edit::Array::new();
+                for path in &pinned_paths {
+                    pinned_paths_array.push(path.clone());
+                }
+                match ConfigEditsBuilder::new(&self.config.codex_home)
+                    .with_edits([ConfigEdit::SetPath {
+                        segments: vec!["worktrees".to_string(), "pinned_paths".to_string()],
+                        value: toml_edit::value(pinned_paths_array),
+                    }])
+                    .apply()
+                    .await
+                {
+                    Ok(()) => {}
+                    Err(err) => {
+                        tracing::error!(error = %err, "failed to persist worktree pinned paths");
+                        self.chat_widget.add_error_message(format!(
+                            "Failed to save worktree pinned paths: {err}"
+                        ));
+                    }
+                }
+            }
+            AppEvent::PersistMcpStartupTimeout {
+                server,
+                startup_timeout_sec,
+            } => {
+                let profile = self.active_profile.as_deref();
+                match ConfigEditsBuilder::new(&self.config.codex_home)
+                    .with_profile(profile)
+                    .with_edits([ConfigEdit::SetPath {
+                        segments: vec![
+                            "mcp_servers".to_string(),
+                            server.clone(),
+                            "startup_timeout_sec".to_string(),
+                        ],
+                        value: toml_edit::value(
+                            i64::try_from(startup_timeout_sec).unwrap_or(i64::MAX),
+                        ),
+                    }])
+                    .apply()
+                    .await
+                {
+                    Ok(()) => {
+                        let mut mcp_servers = self.config.mcp_servers.get().clone();
+                        if let Some(cfg) = mcp_servers.get_mut(&server) {
+                            cfg.startup_timeout_sec =
+                                Some(std::time::Duration::from_secs(startup_timeout_sec));
+                            if let Err(err) = self.config.mcp_servers.set(mcp_servers) {
+                                tracing::warn!(
+                                    %err,
+                                    "failed to update MCP startup timeout in app config"
+                                );
+                            }
+                        }
+                    }
+                    Err(err) => {
+                        tracing::error!(error = %err, "failed to persist MCP startup timeout");
+                        self.chat_widget.add_error_message(format!(
+                            "Failed to save MCP startup timeout for `{server}`: {err}"
+                        ));
+                    }
+                }
+            }
+            AppEvent::UpdateAskForApprovalPolicy(policy) => {
+                self.chat_widget.set_approval_policy(policy);
+            }
+            AppEvent::UpdateSandboxPolicy(policy) => {
+                #[cfg(target_os = "windows")]
+                let policy_is_workspace_write_or_ro = matches!(
+                    &policy,
+                    codex_core::protocol::SandboxPolicy::WorkspaceWrite { .. }
+                        | codex_core::protocol::SandboxPolicy::ReadOnly
+                );
+
+                if let Err(err) = self.config.sandbox_policy.set(policy.clone()) {
+                    tracing::warn!(%err, "failed to set sandbox policy on app config");
+                    self.chat_widget
+                        .add_error_message(format!("Failed to set sandbox policy: {err}"));
+                    return Ok(AppRunControl::Continue);
+                }
+                #[cfg(target_os = "windows")]
+                if !matches!(&policy, codex_core::protocol::SandboxPolicy::ReadOnly)
+                    || WindowsSandboxLevel::from_config(&self.config)
+                        != WindowsSandboxLevel::Disabled
+                {
+                    self.config.forced_auto_mode_downgraded_on_windows = false;
+                }
+                if let Err(err) = self.chat_widget.set_sandbox_policy(policy) {
+                    tracing::warn!(%err, "failed to set sandbox policy on chat config");
+                    self.chat_widget
+                        .add_error_message(format!("Failed to set sandbox policy: {err}"));
+                    return Ok(AppRunControl::Continue);
+                }
+
+                // If sandbox policy becomes workspace-write or read-only, run the Windows world-writable scan.
+                #[cfg(target_os = "windows")]
+                {
+                    // One-shot suppression if the user just confirmed continue.
+                    if self.skip_world_writable_scan_once {
+                        self.skip_world_writable_scan_once = false;
+                        return Ok(AppRunControl::Continue);
+                    }
+
+                    let should_check = WindowsSandboxLevel::from_config(&self.config)
+                        != WindowsSandboxLevel::Disabled
+                        && policy_is_workspace_write_or_ro
+                        && !self.chat_widget.world_writable_warning_hidden();
+                    if should_check {
+                        let cwd = self.config.cwd.clone();
+                        let env_map: std::collections::HashMap<String, String> =
+                            std::env::vars().collect();
+                        let tx = self.app_event_tx.clone();
+                        let logs_base_dir = self.config.codex_home.clone();
+                        let sandbox_policy = self.config.sandbox_policy.get().clone();
+                        Self::spawn_world_writable_scan(
+                            cwd,
+                            env_map,
+                            logs_base_dir,
+                            sandbox_policy,
+                            tx,
+                        );
+                    }
+                }
+            }
+            AppEvent::SkipNextWorldWritableScan => {
+                self.skip_world_writable_scan_once = true;
+            }
+            AppEvent::UpdateFullAccessWarningAcknowledged(ack) => {
+                self.chat_widget.set_full_access_warning_acknowledged(ack);
+            }
+            AppEvent::UpdateWorldWritableWarningAcknowledged(ack) => {
+                self.chat_widget
+                    .set_world_writable_warning_acknowledged(ack);
+            }
+            AppEvent::UpdateRateLimitSwitchPromptHidden(hidden) => {
+                self.chat_widget.set_rate_limit_switch_prompt_hidden(hidden);
+            }
+            AppEvent::PersistFullAccessWarningAcknowledged => {
+                if let Err(err) = ConfigEditsBuilder::new(&self.config.codex_home)
+                    .set_hide_full_access_warning(true)
+                    .apply()
+                    .await
+                {
+                    tracing::error!(
+                        error = %err,
+                        "failed to persist full access warning acknowledgement"
+                    );
+                    self.chat_widget.add_error_message(format!(
+                        "Failed to save full access confirmation preference: {err}"
+                    ));
+                }
+            }
+            AppEvent::PersistWorldWritableWarningAcknowledged => {
+                if let Err(err) = ConfigEditsBuilder::new(&self.config.codex_home)
+                    .set_hide_world_writable_warning(true)
+                    .apply()
+                    .await
+                {
+                    tracing::error!(
+                        error = %err,
+                        "failed to persist world-writable warning acknowledgement"
+                    );
+                    self.chat_widget.add_error_message(format!(
+                        "Failed to save Agent mode warning preference: {err}"
+                    ));
+                }
+            }
+            AppEvent::PersistRateLimitSwitchPromptHidden => {
+                if let Err(err) = ConfigEditsBuilder::new(&self.config.codex_home)
+                    .set_hide_rate_limit_model_nudge(true)
+                    .apply()
+                    .await
+                {
+                    tracing::error!(
+                        error = %err,
+                        "failed to persist rate limit switch prompt preference"
+                    );
+                    self.chat_widget.add_error_message(format!(
+                        "Failed to save rate limit reminder preference: {err}"
+                    ));
+                }
+            }
+            AppEvent::PersistModelMigrationPromptAcknowledged {
+                from_model,
+                to_model,
+            } => {
+                if let Err(err) = ConfigEditsBuilder::new(&self.config.codex_home)
+                    .record_model_migration_seen(from_model.as_str(), to_model.as_str())
+                    .apply()
+                    .await
+                {
+                    tracing::error!(
+                        error = %err,
+                        "failed to persist model migration prompt acknowledgement"
+                    );
+                    self.chat_widget.add_error_message(format!(
+                        "Failed to save model migration prompt preference: {err}"
+                    ));
+                }
+            }
+            AppEvent::OpenApprovalsPopup => {
+                self.chat_widget.open_approvals_popup();
+            }
+            AppEvent::OpenReviewBranchPicker(cwd) => {
+                self.chat_widget.show_review_branch_picker(&cwd).await;
+            }
+            AppEvent::OpenReviewCommitPicker(cwd) => {
+                self.chat_widget.show_review_commit_picker(&cwd).await;
+            }
+            AppEvent::OpenReviewCustomPrompt => {
+                self.chat_widget.show_review_custom_prompt();
+            }
+            AppEvent::FullScreenApprovalRequest(request) => match request {
+                ApprovalRequest::ApplyPatch { cwd, changes, .. } => {
+                    let _ = tui.enter_alt_screen();
+                    let diff_summary = DiffSummary::new(changes, cwd);
+                    self.overlay = Some(Overlay::new_static_with_renderables(
+                        vec![diff_summary.into()],
+                        "P A T C H".to_string(),
+                    ));
+                }
+                ApprovalRequest::Exec { command, .. } => {
+                    let _ = tui.enter_alt_screen();
+                    let full_cmd = strip_bash_lc_and_escape(&command);
+                    let full_cmd_lines = highlight_bash_to_lines(&full_cmd);
+                    self.overlay = Some(Overlay::new_static_with_lines(
+                        full_cmd_lines,
+                        "E X E C".to_string(),
+                    ));
+                }
+                ApprovalRequest::McpElicitation {
+                    server_name,
+                    message,
+                    ..
+                } => {
+                    let _ = tui.enter_alt_screen();
+                    let paragraph = Paragraph::new(vec![
+                        Line::from(vec!["Server: ".into(), server_name.bold()]),
+                        Line::from(""),
+                        Line::from(message),
+                    ])
+                    .wrap(Wrap { trim: false });
+                    self.overlay = Some(Overlay::new_static_with_renderables(
+                        vec![Box::new(paragraph)],
+                        "E L I C I T A T I O N".to_string(),
+                    ));
+                }
+            },
+        }
+        Ok(AppRunControl::Continue)
+    }
+
+    fn reasoning_label(reasoning_effort: Option<ReasoningEffortConfig>) -> &'static str {
+        match reasoning_effort {
+            Some(ReasoningEffortConfig::Minimal) => "minimal",
+            Some(ReasoningEffortConfig::Low) => "low",
+            Some(ReasoningEffortConfig::Medium) => "medium",
+            Some(ReasoningEffortConfig::High) => "high",
+            Some(ReasoningEffortConfig::XHigh) => "xhigh",
+            None | Some(ReasoningEffortConfig::None) => "default",
+        }
+    }
+
+    fn reasoning_label_for(
+        model: &str,
+        reasoning_effort: Option<ReasoningEffortConfig>,
+    ) -> Option<&'static str> {
+        (!model.starts_with("codex-auto-")).then(|| Self::reasoning_label(reasoning_effort))
+    }
+
+    pub(crate) fn token_usage(&self) -> codex_core::protocol::TokenUsage {
+        self.chat_widget.token_usage()
+    }
+
+    fn on_update_reasoning_effort(&mut self, effort: Option<ReasoningEffortConfig>) {
+        self.chat_widget.set_reasoning_effort(effort);
+        self.config.model_reasoning_effort = effort;
+    }
+
+    async fn handle_key_event(&mut self, tui: &mut tui::Tui, key_event: KeyEvent) {
+        match key_event {
+            KeyEvent {
+                code: KeyCode::Char('k'),
+                modifiers: crossterm::event::KeyModifiers::CONTROL,
+                kind: KeyEventKind::Press,
+                ..
+            } => {
+                let text = self.chat_widget.composer_text();
+                if text.trim().is_empty() {
+                    self.chat_widget
+                        .add_info_message("Composer is empty.".to_string(), None);
+                } else if let Err(err) = crate::clipboard_copy::copy_text(text) {
+                    tracing::error!(error = %err, "failed to copy composer to clipboard");
+                    self.chat_widget
+                        .add_error_message(format!("Failed to copy composer to clipboard: {err}"));
+                } else {
+                    self.chat_widget
+                        .add_info_message("Copied composer to clipboard.".to_string(), None);
+                }
+                tui.frame_requester().schedule_frame();
+            }
+            KeyEvent {
+                code: KeyCode::Char('t'),
+                modifiers: crossterm::event::KeyModifiers::CONTROL,
+                kind: KeyEventKind::Press,
+                ..
+            } => {
+                // Enter alternate screen and set viewport to full size.
+                let _ = tui.enter_alt_screen();
+                self.overlay = Some(Overlay::new_transcript(self.transcript_cells.clone()));
+                tui.frame_requester().schedule_frame();
+            }
+            KeyEvent {
+                code: KeyCode::Char('e' | 'E'),
+                modifiers: crossterm::event::KeyModifiers::ALT,
+                kind: KeyEventKind::Press,
+                ..
+            } => {
+                if self.toggle_exec_cell_expansion_at_selection() {
+                    tui.frame_requester().schedule_frame();
+                }
+            }
+            KeyEvent {
+                code: KeyCode::Char('c' | 'C'),
+                modifiers: crossterm::event::KeyModifiers::ALT,
+                kind: KeyEventKind::Press,
+                ..
+            } => {
+                if self.copy_exec_cell_full_at_cursor() {
+                    tui.frame_requester().schedule_frame();
+                }
+            }
+            // Esc primes/advances backtracking only in normal (not working) mode
+            // with the composer focused and empty. In any other state, forward
+            // Esc so the active UI (e.g. status indicator, modals, popups)
+            // handles it.
+            KeyEvent {
+                code: KeyCode::Esc,
+                kind: KeyEventKind::Press | KeyEventKind::Repeat,
+                ..
+            } => {
+                if self.chat_widget.is_normal_backtrack_mode()
+                    && self.chat_widget.composer_is_empty()
+                {
+                    self.handle_backtrack_esc_key(tui);
+                } else {
+                    self.chat_widget.handle_key_event(key_event);
+                }
+            }
+            KeyEvent {
+                code: KeyCode::Char(ch),
+                modifiers,
+                kind: KeyEventKind::Press | KeyEventKind::Repeat,
+                ..
+            } if self.transcript_copy_ui.is_copy_key(ch, modifiers) => {
+                let size = tui.terminal.last_known_screen_size;
+                let width = size.width;
+                let height = size.height;
+                if width == 0 || height == 0 {
+                    return;
+                }
+
+                let chat_height = self.chat_widget.desired_height(width);
+                if self.transcript_copy_action.copy_and_handle(
+                    tui,
+                    chat_height,
+                    &self.transcript_cells,
+                    self.transcript_selection,
+                    self.config.tui_verbose_tool_output,
+                    &self.expanded_exec_call_ids,
+                ) {
+                    self.transcript_selection = TranscriptSelection::default();
+                }
+            }
+            KeyEvent {
+                code: KeyCode::PageUp,
+                kind: KeyEventKind::Press | KeyEventKind::Repeat,
+                ..
+            } => {
+                let size = tui.terminal.last_known_screen_size;
+                let width = size.width;
+                let height = size.height;
+                if width > 0 && height > 0 {
+                    let chat_height = self.chat_widget.desired_height(width);
+                    if chat_height < height {
+                        let transcript_height = height.saturating_sub(chat_height);
+                        if transcript_height > 0 {
+                            let delta = -i32::from(transcript_height);
+                            self.scroll_transcript(
+                                tui,
+                                delta,
+                                usize::from(transcript_height),
+                                width,
+                                true,
+                            );
+                        }
+                    }
+                }
+            }
+            KeyEvent {
+                code: KeyCode::PageDown,
+                kind: KeyEventKind::Press | KeyEventKind::Repeat,
+                ..
+            } => {
+                let size = tui.terminal.last_known_screen_size;
+                let width = size.width;
+                let height = size.height;
+                if width > 0 && height > 0 {
+                    let chat_height = self.chat_widget.desired_height(width);
+                    if chat_height < height {
+                        let transcript_height = height.saturating_sub(chat_height);
+                        if transcript_height > 0 {
+                            let delta = i32::from(transcript_height);
+                            self.scroll_transcript(
+                                tui,
+                                delta,
+                                usize::from(transcript_height),
+                                width,
+                                true,
+                            );
+                        }
+                    }
+                }
+            }
+            KeyEvent {
+                code: KeyCode::Home,
+                kind: KeyEventKind::Press | KeyEventKind::Repeat,
+                ..
+            } => {
+                if !self.transcript_cells.is_empty() {
+                    self.transcript_scroll = TranscriptScroll::Scrolled {
+                        cell_index: 0,
+                        line_in_cell: 0,
+                    };
+                    tui.frame_requester().schedule_frame();
+                }
+            }
+            KeyEvent {
+                code: KeyCode::End,
+                kind: KeyEventKind::Press | KeyEventKind::Repeat,
+                ..
+            } => {
+                self.transcript_scroll = TranscriptScroll::ToBottom;
+                tui.frame_requester().schedule_frame();
+            }
+            // Enter confirms backtrack when primed + count > 0. Otherwise pass to widget.
+            KeyEvent {
+                code: KeyCode::Enter,
+                kind: KeyEventKind::Press,
+                ..
+            } if self.backtrack.primed
+                && self.backtrack.nth_user_message != usize::MAX
+                && self.chat_widget.composer_is_empty() =>
+            {
+                if let Some(selection) = self.confirm_backtrack_from_main() {
+                    self.apply_backtrack_selection(tui, selection);
+                }
+            }
+            KeyEvent {
+                kind: KeyEventKind::Press | KeyEventKind::Repeat,
+                ..
+            } => {
+                // Any non-Esc key press should cancel a primed backtrack.
+                // This avoids stale "Esc-primed" state after the user starts typing
+                // (even if they later backspace to empty).
+                if key_event.code != KeyCode::Esc && self.backtrack.primed {
+                    self.reset_backtrack_state();
+                }
+                self.chat_widget.handle_key_event(key_event);
+            }
+            _ => {
+                // Ignore Release key events.
+            }
+        };
+    }
+
+    #[cfg(target_os = "windows")]
+    fn spawn_world_writable_scan(
+        cwd: PathBuf,
+        env_map: std::collections::HashMap<String, String>,
+        logs_base_dir: PathBuf,
+        sandbox_policy: codex_core::protocol::SandboxPolicy,
+        tx: AppEventSender,
+    ) {
+        tokio::task::spawn_blocking(move || {
+            let result = codex_windows_sandbox::apply_world_writable_scan_and_denies(
+                &logs_base_dir,
+                &cwd,
+                &env_map,
+                &sandbox_policy,
+                Some(logs_base_dir.as_path()),
+            );
+            if result.is_err() {
+                // Scan failed: warn without examples.
+                tx.send(AppEvent::OpenWorldWritableWarningConfirmation {
+                    preset: None,
+                    sample_paths: Vec::new(),
+                    extra_count: 0usize,
+                    failed_scan: true,
+                });
+            }
+        });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::app_backtrack::BacktrackState;
+    use crate::app_backtrack::user_count;
+    use crate::chatwidget::tests::make_chatwidget_manual_with_sender;
+    use crate::file_search::FileSearchManager;
+    use crate::history_cell::AgentMessageCell;
+    use crate::history_cell::HistoryCell;
+    use crate::history_cell::UserHistoryCell;
+    use crate::history_cell::new_session_info;
+    use crate::transcript_copy_ui::CopySelectionShortcut;
+    use crate::tui::scrolling::TranscriptLineMeta;
+    use codex_core::AuthManager;
+    use codex_core::CodexAuth;
+    use codex_core::ThreadManager;
+    use codex_core::config::ConfigBuilder;
+    use codex_core::protocol::AskForApproval;
+    use codex_core::protocol::Event;
+    use codex_core::protocol::EventMsg;
+    use codex_core::protocol::SandboxPolicy;
+    use codex_core::protocol::SessionConfiguredEvent;
+    use codex_protocol::ThreadId;
+    use insta::assert_snapshot;
+    use pretty_assertions::assert_eq;
+    use ratatui::prelude::Line;
+    use std::path::PathBuf;
+    use std::sync::Arc;
+    use std::sync::atomic::AtomicBool;
+    use tempfile::tempdir;
+
+    async fn make_test_app() -> App {
+        let (chat_widget, app_event_tx, _rx, _op_rx) = make_chatwidget_manual_with_sender().await;
+        let config = chat_widget.config_ref().clone();
+        let current_model = "gpt-5.2-codex".to_string();
+        let server = Arc::new(ThreadManager::with_models_provider(
+            CodexAuth::from_api_key("Test API Key"),
+            config.model_provider.clone(),
+        ));
+        let auth_manager =
+            AuthManager::from_auth_for_testing(CodexAuth::from_api_key("Test API Key"));
+        let file_search = FileSearchManager::new(
+            config.cwd.clone(),
+            config.exclusion.files.clone(),
+            app_event_tx.clone(),
+        );
+
+        App {
+            server,
+            app_event_tx,
+            chat_widget,
+            auth_manager,
+            config,
+            current_model,
+            active_profile: None,
+            file_search,
+            transcript_cells: Vec::new(),
+            transcript_view_cache: TranscriptViewCache::new(),
+            transcript_scroll: TranscriptScroll::default(),
+            transcript_selection: TranscriptSelection::default(),
+            transcript_multi_click: TranscriptMultiClick::default(),
+            transcript_view_top: 0,
+            transcript_total_lines: 0,
+            transcript_copy_ui: TranscriptCopyUi::new_with_shortcut(
+                CopySelectionShortcut::CtrlShiftC,
+            ),
+            expanded_exec_call_ids: std::collections::HashSet::new(),
+            last_transcript_width: 0,
+            transcript_copy_action: TranscriptCopyAction::default(),
+            transcript_scrollbar_ui: TranscriptScrollbarUi::default(),
+            overlay: None,
+            deferred_history_cells: Vec::new(),
+            has_emitted_history_lines: false,
+            enhanced_keys_supported: false,
+            commit_anim_running: Arc::new(AtomicBool::new(false)),
+            scroll_config: ScrollConfig::default(),
+            scroll_state: MouseScrollState::default(),
+            backtrack: BacktrackState::default(),
+            feedback: codex_feedback::CodexFeedback::new(),
+            pending_update_action: None,
+            suppress_shutdown_complete: false,
+            shared_dirs_write_notice_shown: false,
+            skip_world_writable_scan_once: false,
+        }
+    }
+
+    async fn make_test_app_with_channels() -> (
+        App,
+        tokio::sync::mpsc::UnboundedReceiver<AppEvent>,
+        tokio::sync::mpsc::UnboundedReceiver<Op>,
+    ) {
+        let (chat_widget, app_event_tx, rx, op_rx) = make_chatwidget_manual_with_sender().await;
+        let config = chat_widget.config_ref().clone();
+        let current_model = "gpt-5.2-codex".to_string();
+        let server = Arc::new(ThreadManager::with_models_provider(
+            CodexAuth::from_api_key("Test API Key"),
+            config.model_provider.clone(),
+        ));
+        let auth_manager =
+            AuthManager::from_auth_for_testing(CodexAuth::from_api_key("Test API Key"));
+        let file_search = FileSearchManager::new(
+            config.cwd.clone(),
+            config.exclusion.files.clone(),
+            app_event_tx.clone(),
+        );
+
+        (
+            App {
+                server,
+                app_event_tx,
+                chat_widget,
+                auth_manager,
+                config,
+                current_model,
+                active_profile: None,
+                file_search,
+                transcript_cells: Vec::new(),
+                transcript_view_cache: TranscriptViewCache::new(),
+                transcript_scroll: TranscriptScroll::default(),
+                transcript_selection: TranscriptSelection::default(),
+                transcript_multi_click: TranscriptMultiClick::default(),
+                transcript_view_top: 0,
+                transcript_total_lines: 0,
+                transcript_copy_ui: TranscriptCopyUi::new_with_shortcut(
+                    CopySelectionShortcut::CtrlShiftC,
+                ),
+                expanded_exec_call_ids: std::collections::HashSet::new(),
+                last_transcript_width: 0,
+                transcript_copy_action: TranscriptCopyAction::default(),
+                transcript_scrollbar_ui: TranscriptScrollbarUi::default(),
+                overlay: None,
+                deferred_history_cells: Vec::new(),
+                has_emitted_history_lines: false,
+                enhanced_keys_supported: false,
+                commit_anim_running: Arc::new(AtomicBool::new(false)),
+                scroll_config: ScrollConfig::default(),
+                scroll_state: MouseScrollState::default(),
+                backtrack: BacktrackState::default(),
+                feedback: codex_feedback::CodexFeedback::new(),
+                pending_update_action: None,
+                suppress_shutdown_complete: false,
+                shared_dirs_write_notice_shown: false,
+                skip_world_writable_scan_once: false,
+            },
+            rx,
+            op_rx,
+        )
+    }
+
+    fn all_model_presets() -> Vec<ModelPreset> {
+        codex_core::models_manager::model_presets::all_model_presets().clone()
+    }
+
+    fn model_migration_copy_to_plain_text(
+        copy: &crate::model_migration::ModelMigrationCopy,
+    ) -> String {
+        if let Some(markdown) = copy.markdown.as_ref() {
+            return markdown.clone();
+        }
+        let mut s = String::new();
+        for span in &copy.heading {
+            s.push_str(&span.content);
+        }
+        s.push('\n');
+        s.push('\n');
+        for line in &copy.content {
+            for span in &line.spans {
+                s.push_str(&span.content);
+            }
+            s.push('\n');
+        }
+        s
+    }
+
+    #[tokio::test]
+    async fn model_migration_prompt_only_shows_for_deprecated_models() {
+        let seen = BTreeMap::new();
+        assert!(should_show_model_migration_prompt(
+            "gpt-5",
+            "gpt-5.1",
+            &seen,
+            &all_model_presets()
+        ));
+        assert!(should_show_model_migration_prompt(
+            "gpt-5-codex",
+            "gpt-5.1-codex",
+            &seen,
+            &all_model_presets()
+        ));
+        assert!(should_show_model_migration_prompt(
+            "gpt-5-codex-mini",
+            "gpt-5.1-codex-mini",
+            &seen,
+            &all_model_presets()
+        ));
+        assert!(should_show_model_migration_prompt(
+            "gpt-5.1-codex",
+            "gpt-5.1-codex-max",
+            &seen,
+            &all_model_presets()
+        ));
+        assert!(!should_show_model_migration_prompt(
+            "gpt-5.1-codex",
+            "gpt-5.1-codex",
+            &seen,
+            &all_model_presets()
+        ));
+    }
+
+    #[tokio::test]
+    async fn model_migration_prompt_shows_for_hidden_model() {
+        let codex_home = tempdir().expect("temp codex home");
+        let config = ConfigBuilder::default()
+            .codex_home(codex_home.path().to_path_buf())
+            .build()
+            .await
+            .expect("config");
+
+        let available_models = all_model_presets();
+        let current = available_models
+            .iter()
+            .find(|preset| preset.model == "gpt-5.1-codex")
+            .cloned()
+            .expect("gpt-5.1-codex preset present");
+        assert!(
+            !current.show_in_picker,
+            "expected gpt-5.1-codex to be hidden from picker for this test"
+        );
+
+        let upgrade = current.upgrade.as_ref().expect("upgrade configured");
+        assert!(
+            should_show_model_migration_prompt(
+                &current.model,
+                &upgrade.id,
+                &config.notices.model_migrations,
+                &available_models,
+            ),
+            "expected migration prompt to be eligible for hidden model"
+        );
+
+        let target = available_models
+            .iter()
+            .find(|preset| preset.model == upgrade.id)
+            .cloned()
+            .expect("upgrade target present");
+        let target_description =
+            (!target.description.is_empty()).then(|| target.description.clone());
+        let can_opt_out = true;
+        let copy = migration_copy_for_models(
+            &current.model,
+            &upgrade.id,
+            target.display_name,
+            target_description,
+            upgrade.migration_markdown.clone(),
+            can_opt_out,
+        );
+
+        assert_snapshot!(
+            "model_migration_prompt_shows_for_hidden_model",
+            model_migration_copy_to_plain_text(&copy)
+        );
+    }
+
+    #[tokio::test]
+    async fn transcript_selection_copy_includes_offscreen_lines() {
+        let mut app = make_test_app().await;
+        app.transcript_cells = vec![Arc::new(AgentMessageCell::new(
+            vec![
+                Line::from("one"),
+                Line::from("two"),
+                Line::from("three"),
+                Line::from("four"),
+            ],
+            true,
+        ))];
+
+        app.transcript_view_top = 2;
+        app.transcript_selection.anchor = Some(TranscriptSelectionPoint {
+            line_index: 0,
+            column: 0,
+        });
+        app.transcript_selection.head = Some(TranscriptSelectionPoint {
+            line_index: 3,
+            column: u16::MAX,
+        });
+
+        let text = crate::transcript_copy::selection_to_copy_text_for_cells(
+            &app.transcript_cells,
+            app.transcript_selection,
+            40,
+            app.config.tui_verbose_tool_output,
+            &app.expanded_exec_call_ids,
+        )
+        .expect("expected text");
+        assert_eq!(text, "one\ntwo\nthree\nfour");
+    }
+
+    #[tokio::test]
+    async fn model_migration_prompt_respects_hide_flag_and_self_target() {
+        let mut seen = BTreeMap::new();
+        seen.insert("gpt-5".to_string(), "gpt-5.1".to_string());
+        assert!(!should_show_model_migration_prompt(
+            "gpt-5",
+            "gpt-5.1",
+            &seen,
+            &all_model_presets()
+        ));
+        assert!(!should_show_model_migration_prompt(
+            "gpt-5.1",
+            "gpt-5.1",
+            &seen,
+            &all_model_presets()
+        ));
+    }
+
+    #[tokio::test]
+    async fn update_reasoning_effort_updates_config() {
+        let mut app = make_test_app().await;
+        app.config.model_reasoning_effort = Some(ReasoningEffortConfig::Medium);
+        app.chat_widget
+            .set_reasoning_effort(Some(ReasoningEffortConfig::Medium));
+
+        app.on_update_reasoning_effort(Some(ReasoningEffortConfig::High));
+
+        assert_eq!(
+            app.config.model_reasoning_effort,
+            Some(ReasoningEffortConfig::High)
+        );
+        assert_eq!(
+            app.chat_widget.config_ref().model_reasoning_effort,
+            Some(ReasoningEffortConfig::High)
+        );
+    }
+
+    #[tokio::test]
+    async fn backtrack_selection_with_duplicate_history_targets_unique_turn() {
+        let (mut app, _app_event_rx, mut op_rx) = make_test_app_with_channels().await;
+
+        let user_cell = |text: &str| -> Arc<dyn HistoryCell> {
+            Arc::new(UserHistoryCell {
+                message: text.to_string(),
+                highlight: false,
+            }) as Arc<dyn HistoryCell>
+        };
+        let agent_cell = |text: &str| -> Arc<dyn HistoryCell> {
+            Arc::new(AgentMessageCell::new(
+                vec![Line::from(text.to_string())],
+                true,
+            )) as Arc<dyn HistoryCell>
+        };
+
+        let make_header = |is_first| {
+            let event = SessionConfiguredEvent {
+                session_id: ThreadId::new(),
+                model: "gpt-test".to_string(),
+                model_provider_id: "test-provider".to_string(),
+                approval_policy: AskForApproval::Never,
+                sandbox_policy: SandboxPolicy::ReadOnly,
+                cwd: PathBuf::from("/home/user/project"),
+                reasoning_effort: None,
+                history_log_id: 0,
+                history_entry_count: 0,
+                initial_messages: None,
+                rollout_path: None,
+                forked_from_id: None,
+                thread_name: None,
+            };
+            Arc::new(new_session_info(
+                app.chat_widget.config_ref(),
+                app.current_model.as_str(),
+                event,
+                is_first,
+            )) as Arc<dyn HistoryCell>
+        };
+
+        // Simulate a transcript with duplicated history (e.g., from prior backtracks)
+        // and an edited turn appended after a session header boundary.
+        app.transcript_cells = vec![
+            make_header(true),
+            user_cell("first question"),
+            agent_cell("answer first"),
+            user_cell("follow-up"),
+            agent_cell("answer follow-up"),
+            make_header(false),
+            user_cell("first question"),
+            agent_cell("answer first"),
+            user_cell("follow-up (edited)"),
+            agent_cell("answer edited"),
+        ];
+
+        assert_eq!(user_count(&app.transcript_cells), 2);
+
+        let base_id = ThreadId::new();
+        app.chat_widget.handle_codex_event(Event {
+            id: String::new(),
+            msg: EventMsg::SessionConfigured(SessionConfiguredEvent {
+                session_id: base_id,
+                model: "gpt-test".to_string(),
+                model_provider_id: "test-provider".to_string(),
+                approval_policy: AskForApproval::Never,
+                sandbox_policy: SandboxPolicy::ReadOnly,
+                cwd: PathBuf::from("/home/user/project"),
+                reasoning_effort: None,
+                history_log_id: 0,
+                history_entry_count: 0,
+                initial_messages: None,
+                rollout_path: None,
+                forked_from_id: None,
+                thread_name: None,
+            }),
+        });
+
+        app.backtrack.base_id = Some(base_id);
+        app.backtrack.primed = true;
+        app.backtrack.nth_user_message = user_count(&app.transcript_cells).saturating_sub(1);
+
+        let selection = app
+            .confirm_backtrack_from_main()
+            .expect("backtrack selection");
+        assert_eq!(selection.nth_user_message, 1);
+        assert_eq!(selection.prefill, "follow-up (edited)");
+
+        app.apply_backtrack_rollback(selection);
+
+        let mut rollback_turns = None;
+        while let Ok(op) = op_rx.try_recv() {
+            if let Op::ThreadRollback { num_turns } = op {
+                rollback_turns = Some(num_turns);
+            }
+        }
+
+        assert_eq!(rollback_turns, Some(1));
+    }
+
+    #[tokio::test]
+    async fn transcript_selection_moves_with_scroll() {
+        use ratatui::buffer::Buffer;
+        use ratatui::layout::Rect;
+
+        let mut app = make_test_app().await;
+        app.transcript_total_lines = 3;
+
+        let area = Rect {
+            x: 0,
+            y: 0,
+            width: 10,
+            height: 2,
+        };
+
+        // Anchor selection to logical line 1, columns 2..4.
+        app.transcript_selection = TranscriptSelection {
+            anchor: Some(TranscriptSelectionPoint {
+                line_index: 1,
+                column: 2,
+            }),
+            head: Some(TranscriptSelectionPoint {
+                line_index: 1,
+                column: 4,
+            }),
+        };
+
+        // First render: top of view is line 0, so line 1 maps to the second row.
+        app.transcript_view_top = 0;
+        let mut buf = Buffer::empty(area);
+        for x in 2..area.width {
+            buf[(x, 0)].set_symbol("A");
+            buf[(x, 1)].set_symbol("B");
+        }
+
+        app.apply_transcript_selection(area, &mut buf);
+
+        // No selection should be applied to the first row when the view is anchored at the top.
+        for x in 0..area.width {
+            let cell = &buf[(x, 0)];
+            assert!(cell.style().add_modifier.is_empty());
+        }
+
+        // After scrolling down by one line, the same logical line should now be
+        // rendered on the first row, and the highlight should move with it.
+        app.transcript_view_top = 1;
+        let mut buf_scrolled = Buffer::empty(area);
+        for x in 2..area.width {
+            buf_scrolled[(x, 0)].set_symbol("B");
+            buf_scrolled[(x, 1)].set_symbol("C");
+        }
+
+        app.apply_transcript_selection(area, &mut buf_scrolled);
+
+        // After scrolling, the selection should now be applied on the first row rather than the
+        // second.
+        for x in 0..area.width {
+            let cell = &buf_scrolled[(x, 1)];
+            assert!(cell.style().add_modifier.is_empty());
+        }
+    }
+
+    #[tokio::test]
+    async fn transcript_selection_renders_copy_affordance() {
+        use ratatui::buffer::Buffer;
+        use ratatui::layout::Rect;
+
+        let mut app = make_test_app().await;
+        app.transcript_total_lines = 3;
+        app.transcript_view_top = 0;
+
+        let area = Rect {
+            x: 0,
+            y: 0,
+            width: 60,
+            height: 3,
+        };
+
+        app.transcript_selection = TranscriptSelection {
+            anchor: Some(TranscriptSelectionPoint {
+                line_index: 1,
+                column: 2,
+            }),
+            head: Some(TranscriptSelectionPoint {
+                line_index: 1,
+                column: 6,
+            }),
+        };
+
+        let mut buf = Buffer::empty(area);
+        for y in 0..area.height {
+            for x in 2..area.width.saturating_sub(1) {
+                buf[(x, y)].set_symbol("X");
+            }
+        }
+
+        app.apply_transcript_selection(area, &mut buf);
+        let anchor = app.transcript_selection.anchor.expect("anchor");
+        let head = app.transcript_selection.head.expect("head");
+        app.transcript_copy_ui.render_copy_pill(
+            area,
+            &mut buf,
+            (anchor.line_index, anchor.column),
+            (head.line_index, head.column),
+            app.transcript_view_top,
+            app.transcript_total_lines,
+        );
+
+        let mut s = String::new();
+        for y in area.y..area.bottom() {
+            for x in area.x..area.right() {
+                s.push(buf[(x, y)].symbol().chars().next().unwrap_or(' '));
+            }
+            s.push('\n');
+        }
+
+        assert!(s.contains("copy"));
+        assert!(s.contains("ctrl + shift + c"));
+        assert_eq!(
+            app.transcript_copy_ui.hit_test_action(10, 2),
+            Some(crate::transcript_copy_ui::TranscriptPillAction::CopySelection)
+        );
+    }
+
+    #[tokio::test]
+    async fn transcript_selection_renders_ctrl_y_copy_affordance_in_vscode_mode() {
+        use ratatui::buffer::Buffer;
+        use ratatui::layout::Rect;
+
+        let mut app = make_test_app().await;
+        app.transcript_copy_ui = TranscriptCopyUi::new_with_shortcut(CopySelectionShortcut::CtrlY);
+        app.transcript_total_lines = 3;
+        app.transcript_view_top = 0;
+
+        let area = Rect {
+            x: 0,
+            y: 0,
+            width: 60,
+            height: 3,
+        };
+
+        app.transcript_selection = TranscriptSelection {
+            anchor: Some(TranscriptSelectionPoint {
+                line_index: 1,
+                column: 2,
+            }),
+            head: Some(TranscriptSelectionPoint {
+                line_index: 1,
+                column: 6,
+            }),
+        };
+
+        let mut buf = Buffer::empty(area);
+        for y in 0..area.height {
+            for x in 2..area.width.saturating_sub(1) {
+                buf[(x, y)].set_symbol("X");
+            }
+        }
+
+        app.apply_transcript_selection(area, &mut buf);
+        let anchor = app.transcript_selection.anchor.expect("anchor");
+        let head = app.transcript_selection.head.expect("head");
+        app.transcript_copy_ui.render_copy_pill(
+            area,
+            &mut buf,
+            (anchor.line_index, anchor.column),
+            (head.line_index, head.column),
+            app.transcript_view_top,
+            app.transcript_total_lines,
+        );
+
+        let mut s = String::new();
+        for y in area.y..area.bottom() {
+            for x in area.x..area.right() {
+                s.push(buf[(x, y)].symbol().chars().next().unwrap_or(' '));
+            }
+            s.push('\n');
+        }
+
+        assert!(s.contains("copy"));
+        assert!(s.contains("ctrl + y"));
+        assert!(!s.contains("ctrl + shift + c"));
+        assert_eq!(
+            app.transcript_copy_ui.hit_test_action(10, 2),
+            Some(crate::transcript_copy_ui::TranscriptPillAction::CopySelection)
+        );
+    }
+
+    #[tokio::test]
+    async fn transcript_selection_hides_copy_affordance_while_dragging() {
+        use ratatui::buffer::Buffer;
+        use ratatui::layout::Rect;
+
+        let mut app = make_test_app().await;
+        app.transcript_total_lines = 3;
+        app.transcript_view_top = 0;
+        app.transcript_copy_ui.set_dragging(true);
+
+        let area = Rect {
+            x: 0,
+            y: 0,
+            width: 60,
+            height: 3,
+        };
+
+        app.transcript_selection = TranscriptSelection {
+            anchor: Some(TranscriptSelectionPoint {
+                line_index: 1,
+                column: 2,
+            }),
+            head: Some(TranscriptSelectionPoint {
+                line_index: 1,
+                column: 6,
+            }),
+        };
+
+        let mut buf = Buffer::empty(area);
+        for y in 0..area.height {
+            for x in 2..area.width.saturating_sub(1) {
+                buf[(x, y)].set_symbol("X");
+            }
+        }
+
+        let anchor = app.transcript_selection.anchor.expect("anchor");
+        let head = app.transcript_selection.head.expect("head");
+        app.transcript_copy_ui.render_copy_pill(
+            area,
+            &mut buf,
+            (anchor.line_index, anchor.column),
+            (head.line_index, head.column),
+            app.transcript_view_top,
+            app.transcript_total_lines,
+        );
+
+        let mut s = String::new();
+        for y in area.y..area.bottom() {
+            for x in area.x..area.right() {
+                s.push(buf[(x, y)].symbol().chars().next().unwrap_or(' '));
+            }
+            s.push('\n');
+        }
+
+        assert!(!s.contains("copy"));
+        assert_eq!(app.transcript_copy_ui.hit_test_action(10, 2), None);
+    }
+
+    #[tokio::test]
+    async fn new_session_requests_shutdown_for_previous_conversation() {
+        let (mut app, mut app_event_rx, mut op_rx) = make_test_app_with_channels().await;
+
+        let conversation_id = ThreadId::new();
+        let event = SessionConfiguredEvent {
+            session_id: conversation_id,
+            model: "gpt-test".to_string(),
+            model_provider_id: "test-provider".to_string(),
+            approval_policy: AskForApproval::Never,
+            sandbox_policy: SandboxPolicy::ReadOnly,
+            cwd: PathBuf::from("/home/user/project"),
+            reasoning_effort: None,
+            history_log_id: 0,
+            history_entry_count: 0,
+            initial_messages: None,
+            rollout_path: None,
+            forked_from_id: None,
+            thread_name: None,
+        };
+
+        app.chat_widget.handle_codex_event(Event {
+            id: String::new(),
+            msg: EventMsg::SessionConfigured(event),
+        });
+
+        while app_event_rx.try_recv().is_ok() {}
+        while op_rx.try_recv().is_ok() {}
+
+        app.shutdown_current_conversation().await;
+
+        match op_rx.try_recv() {
+            Ok(Op::Shutdown) => {}
+            Ok(other) => panic!("expected Op::Shutdown, got {other:?}"),
+            Err(_) => panic!("expected shutdown op to be sent"),
+        }
+    }
+
+    #[tokio::test]
+    async fn session_summary_skip_zero_usage() {
+        assert!(session_summary(TokenUsage::default(), None).is_none());
+    }
+
+    #[tokio::test]
+    async fn render_lines_to_ansi_pads_user_rows_to_full_width() {
+        let line: Line<'static> = Line::from("hi");
+        let lines = vec![line];
+        let line_meta = vec![TranscriptLineMeta::CellLine {
+            cell_index: 0,
+            line_in_cell: 0,
+        }];
+        let is_user_cell = vec![true];
+        let width: u16 = 10;
+
+        let is_user_prompt_highlight = vec![false];
+        let rendered = crate::transcript_render::render_lines_to_ansi(
+            &lines,
+            &line_meta,
+            &is_user_cell,
+            &is_user_prompt_highlight,
+            width,
+        );
+        assert_eq!(rendered.len(), 1);
+        assert!(rendered[0].contains("hi"));
+    }
+
+    #[tokio::test]
+    async fn session_summary_includes_resume_hint() {
+        let usage = TokenUsage {
+            input_tokens: 10,
+            output_tokens: 2,
+            total_tokens: 12,
+            ..Default::default()
+        };
+        let conversation = ThreadId::from_string("123e4567-e89b-12d3-a456-426614174000").unwrap();
+
+        let summary = session_summary(usage, Some(conversation)).expect("summary");
+        assert_eq!(
+            summary.usage_line,
+            "Token usage: total=12 input=10 output=2"
+        );
+        assert_eq!(
+            summary.resume_command,
+            Some("xcodex resume 123e4567-e89b-12d3-a456-426614174000".to_string())
+        );
+    }
+}
