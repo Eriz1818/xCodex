@@ -30,12 +30,12 @@
 //!
 //! For fidelity, we copy Markdown source markers even though the viewport may
 //! render content using styles instead of literal characters. Today, the copy
-//! logic derives "inline code" and "code block" boundaries from the styling we
-//! apply during rendering (currently cyan spans/lines).
+//! logic derives "inline code" and "code block" boundaries from a non-visual
+//! style marker applied during markdown rendering.
 //!
-//! If transcript styling changes (for example, if code blocks stop using cyan),
-//! update `is_code_block_line` and [`span_is_inline_code`] so clipboard output
-//! continues to match user expectations.
+//! If transcript styling changes, keep `is_code_block_line` and
+//! [`span_is_inline_code`] in sync so clipboard output continues to match user
+//! expectations.
 //!
 //! The caller can choose whether copy covers only the visible viewport range
 //! (by passing `visible_start..visible_end`) or spans the entire transcript
@@ -120,8 +120,6 @@ pub(crate) fn selection_to_copy_text(
     visible_end: usize,
     width: u16,
 ) -> Option<String> {
-    use ratatui::style::Color;
-
     if width <= TRANSCRIPT_GUTTER_COLS {
         return None;
     }
@@ -164,7 +162,7 @@ pub(crate) fn selection_to_copy_text(
         // "verbatim lines" (no inline Markdown re-encoding). This also enables special handling for
         // narrow terminals: selecting "to the right edge" should copy the full logical line, not a
         // viewport-truncated slice.
-        let is_code_block_line = line.style.fg == Some(Color::Cyan);
+        let is_code_block_line = crate::markdown_render::is_preformatted_style(&line.style);
 
         // Flatten the line to compute the rightmost non-space column. We use that to:
         // - avoid copying trailing right-margin padding
@@ -437,12 +435,11 @@ fn slice_line_by_cols(line: &Line<'static>, start_col: u16, end_col: u16) -> Lin
 
 /// Whether a span should be treated as "inline code" when reconstructing Markdown.
 ///
-/// TUI2 renders inline code using a cyan foreground. Links also use cyan, but are underlined, so we
-/// exclude underlined cyan spans to avoid wrapping links in backticks.
+/// TUI2 marks inline code spans using a non-visual marker in the style, so:
+/// - the clipboard includes source-style backticks even if themes change colors, and
+/// - link-like spans (typically underlined) are not incorrectly wrapped in backticks.
 fn span_is_inline_code(span: &Span<'_>) -> bool {
-    use ratatui::style::Color;
-
-    span.style.fg == Some(Color::Cyan)
+    crate::markdown_render::is_preformatted_style(&span.style)
         && !span
             .style
             .add_modifier
@@ -485,6 +482,13 @@ mod tests {
     use ratatui::style::Color;
     use ratatui::style::Style;
     use ratatui::style::Stylize;
+
+    fn preformatted_style() -> Style {
+        Style {
+            underline_color: Some(crate::markdown_render::PREFORMATTED_MARKER_COLOR),
+            ..Style::default()
+        }
+    }
 
     #[test]
     fn selection_to_copy_text_returns_none_for_zero_content_width() {
@@ -572,7 +576,7 @@ mod tests {
         let lines = vec![Line::from(vec![
             "• ".into(),
             "Use ".into(),
-            ratatui::text::Span::from("foo()").style(Style::new().fg(Color::Cyan)),
+            ratatui::text::Span::from("foo()").style(preformatted_style()),
             " now".into(),
         ])];
         let joiner_before = vec![None];
@@ -615,9 +619,8 @@ mod tests {
             }
         }
 
-        let style = Style::new().fg(Color::Cyan);
         let cell = FakeCell {
-            lines: vec![Line::from("•     0123456789ABCDEFGHIJ").style(style)],
+            lines: vec![Line::from("•     0123456789ABCDEFGHIJ").style(preformatted_style())],
             joiner_before: vec![None],
         };
         let cells: Vec<std::sync::Arc<dyn HistoryCell>> = vec![std::sync::Arc::new(cell)];
@@ -701,10 +704,10 @@ mod tests {
 
     #[test]
     fn span_is_inline_code_excludes_underlined_cyan() {
-        let inline_code = Span::from("x").style(Style::new().fg(Color::Cyan));
+        let inline_code = Span::from("x").style(preformatted_style());
         assert!(span_is_inline_code(&inline_code));
 
-        let link_like = Span::from("x").style(Style::new().fg(Color::Cyan).underlined());
+        let link_like = Span::from("x").style(preformatted_style().underlined());
         assert!(!span_is_inline_code(&link_like));
 
         let other = Span::from("x").style(Style::new().fg(Color::Green));
@@ -715,8 +718,8 @@ mod tests {
     fn line_to_markdown_wraps_contiguous_inline_code_spans() {
         let line = Line::from(vec![
             "Use ".into(),
-            Span::from("foo").style(Style::new().fg(Color::Cyan)),
-            Span::from("()").style(Style::new().fg(Color::Cyan)),
+            Span::from("foo").style(preformatted_style()),
+            Span::from("()").style(preformatted_style()),
             " now".into(),
         ]);
         assert_eq!(line_to_markdown(&line, false), "Use `foo()` now");
@@ -744,10 +747,9 @@ mod tests {
 
     #[test]
     fn copy_selection_wraps_code_block_in_fences_and_preserves_indent() {
-        let style = Style::new().fg(Color::Cyan);
         let lines = vec![
-            Line::from("•     fn main() {}").style(style),
-            Line::from("      println!(\"hi\");").style(style),
+            Line::from("•     fn main() {}").style(preformatted_style()),
+            Line::from("      println!(\"hi\");").style(preformatted_style()),
         ];
         let joiner_before = vec![None, None];
         let start = TranscriptSelectionPoint {
@@ -767,8 +769,7 @@ mod tests {
 
     #[test]
     fn copy_selection_code_block_end_col_at_viewport_edge_copies_full_line() {
-        let style = Style::new().fg(Color::Cyan);
-        let lines = vec![Line::from("•     0123456789ABCDEFGHIJ").style(style)];
+        let lines = vec![Line::from("•     0123456789ABCDEFGHIJ").style(preformatted_style())];
         let joiner_before = vec![None];
 
         let width: u16 = 12;
@@ -792,8 +793,7 @@ mod tests {
 
     #[test]
     fn copy_selection_code_block_end_col_before_viewport_edge_copies_partial_line() {
-        let style = Style::new().fg(Color::Cyan);
-        let lines = vec![Line::from("•     0123456789ABCDEFGHIJ").style(style)];
+        let lines = vec![Line::from("•     0123456789ABCDEFGHIJ").style(preformatted_style())];
         let joiner_before = vec![None];
 
         let width: u16 = 12;

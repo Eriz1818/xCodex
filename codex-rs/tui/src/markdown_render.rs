@@ -542,13 +542,13 @@ where
             line.style
         };
         if self.in_code_block {
-            if self.code_block_highlighting {
-                let mut code_style = self.styles.code;
+            let mut code_style = self.styles.code;
+            if self.code_block_highlighting
+                || !crate::render::highlight::syntax_highlighting_enabled()
+            {
                 code_style.fg = None;
-                style = style.patch(code_style);
-            } else {
-                style = style.patch(self.styles.code);
             }
+            style = style.patch(code_style);
         }
         let was_pending = self.pending_marker_line;
 

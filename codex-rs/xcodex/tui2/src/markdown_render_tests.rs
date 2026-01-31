@@ -1,5 +1,4 @@
 use pretty_assertions::assert_eq;
-use ratatui::style::Color;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
 use ratatui::text::Span;
@@ -7,6 +6,16 @@ use ratatui::text::Text;
 
 use crate::markdown_render::render_markdown_text;
 use insta::assert_snapshot;
+
+fn mark_preformatted_line(mut line: Line<'static>) -> Line<'static> {
+    line.style.underline_color = Some(crate::markdown_render::PREFORMATTED_MARKER_COLOR);
+    line
+}
+
+fn mark_preformatted_span(mut span: Span<'static>) -> Span<'static> {
+    span.style.underline_color = Some(crate::markdown_render::PREFORMATTED_MARKER_COLOR);
+    span
+}
 
 #[test]
 fn empty() {
@@ -388,7 +397,7 @@ fn blockquote_with_code_block() {
     let text = render_markdown_text(md);
     assert_eq!(
         text.lines,
-        [Line::from_iter(["> ", "", "code"]).cyan().dim().italic()]
+        [mark_preformatted_line(Line::from_iter(["> ", "", "code"]).cyan().dim().italic())]
     );
 }
 
@@ -399,8 +408,8 @@ fn blockquote_with_multiline_code_block() {
     assert_eq!(
         text.lines,
         [
-            Line::from_iter(["> ", "", "first"]).cyan().dim().italic(),
-            Line::from_iter(["> ", "", "second"]).cyan().dim().italic(),
+            mark_preformatted_line(Line::from_iter(["> ", "", "first"]).cyan().dim().italic()),
+            mark_preformatted_line(Line::from_iter(["> ", "", "second"]).cyan().dim().italic()),
         ]
     );
 }
@@ -450,7 +459,10 @@ fn nested_blockquote_with_inline_and_fenced_code() {
     // Fenced code inside nested blockquotes should keep code styling so copy logic can treat it as
     // preformatted.
     for idx in [4usize, 5usize] {
-        assert_eq!(text.lines[idx].style.fg, Some(Color::Cyan));
+        assert_eq!(
+            text.lines[idx].style.underline_color,
+            Some(crate::markdown_render::PREFORMATTED_MARKER_COLOR)
+        );
     }
 }
 
@@ -600,7 +612,11 @@ fn ordered_item_with_indented_continuation_is_tight() {
 #[test]
 fn inline_code() {
     let text = render_markdown_text("Example of `Inline code`");
-    let expected = Line::from_iter(["Example of ".into(), "Inline code".cyan()]).into();
+    let expected = Line::from_iter([
+        "Example of ".into(),
+        mark_preformatted_span("Inline code".cyan()),
+    ])
+    .into();
     assert_eq!(text, expected);
 }
 
@@ -653,7 +669,9 @@ fn link() {
 #[test]
 fn code_block_unhighlighted() {
     let text = render_markdown_text("```\nfn main() {}\n```\n");
-    let expected = Text::from_iter([Line::from_iter(["", "fn main() {}"]).cyan()]);
+    let expected = Text::from_iter([mark_preformatted_line(
+        Line::from_iter(["", "fn main() {}"]).cyan(),
+    )]);
     assert_eq!(text, expected);
 }
 
@@ -662,8 +680,8 @@ fn code_block_multiple_lines_root() {
     let md = "```\nfirst\nsecond\n```\n";
     let text = render_markdown_text(md);
     let expected = Text::from_iter([
-        Line::from_iter(["", "first"]).cyan(),
-        Line::from_iter(["", "second"]).cyan(),
+        mark_preformatted_line(Line::from_iter(["", "first"]).cyan()),
+        mark_preformatted_line(Line::from_iter(["", "second"]).cyan()),
     ]);
     assert_eq!(text, expected);
 }
@@ -673,9 +691,9 @@ fn code_block_indented() {
     let md = "    function greet() {\n      console.log(\"Hi\");\n    }\n";
     let text = render_markdown_text(md);
     let expected = Text::from_iter([
-        Line::from_iter(["    ", "function greet() {"]).cyan(),
-        Line::from_iter(["    ", "  console.log(\"Hi\");"]).cyan(),
-        Line::from_iter(["    ", "}"]).cyan(),
+        mark_preformatted_line(Line::from_iter(["    ", "function greet() {"]).cyan()),
+        mark_preformatted_line(Line::from_iter(["    ", "  console.log(\"Hi\");"]).cyan()),
+        mark_preformatted_line(Line::from_iter(["    ", "}"]).cyan()),
     ]);
     assert_eq!(text, expected);
 }

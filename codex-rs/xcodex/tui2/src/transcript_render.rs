@@ -195,8 +195,6 @@ pub(crate) fn append_wrapped_transcript_cell(
     expanded_exec_call_ids: &HashSet<String>,
 ) {
     use crate::render::line_utils::line_to_static;
-    use ratatui::style::Color;
-
     if width == 0 {
         return;
     }
@@ -238,7 +236,7 @@ pub(crate) fn append_wrapped_transcript_cell(
     for (base_idx, base_line) in rendered.lines.iter().enumerate() {
         // Preserve code blocks (and other preformatted text) by not applying
         // viewport wrapping, so indentation remains meaningful for copy/paste.
-        if base_line.style.fg == Some(Color::Cyan) {
+        if crate::markdown_render::is_preformatted_style(&base_line.style) {
             out.lines.push(base_line.clone());
             out.meta.push(TranscriptLineMeta::CellLine {
                 cell_index,
@@ -532,7 +530,6 @@ mod tests {
 
     #[test]
     fn append_wrapped_transcript_cell_matches_full_build() {
-        use ratatui::style::Color;
         use ratatui::style::Style;
 
         let cells: Vec<Arc<dyn HistoryCell>> = vec![
@@ -543,7 +540,10 @@ mod tests {
             }),
             // A preformatted line should not be viewport-wrapped.
             Arc::new(FakeCell {
-                lines: vec![Line::from("• 1234567890").style(Style::default().fg(Color::Cyan))],
+                lines: vec![Line::from("• 1234567890").style(Style {
+                    underline_color: Some(crate::markdown_render::PREFORMATTED_MARKER_COLOR),
+                    ..Style::default()
+                })],
                 joiner_before: vec![None],
                 is_stream_continuation: false,
             }),

@@ -470,7 +470,8 @@ impl AgentMessageCell {
             logical_lines: lines
                 .into_iter()
                 .map(|line| {
-                    let is_preformatted = line.style.fg == Some(ratatui::style::Color::Cyan);
+                    let is_preformatted =
+                        crate::markdown_render::is_preformatted_style(&line.style);
                     let line_style = line.style;
                     let content = Line {
                         style: Style::default(),

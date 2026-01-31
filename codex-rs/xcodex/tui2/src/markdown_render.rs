@@ -43,6 +43,7 @@ use pulldown_cmark::Options;
 use pulldown_cmark::Parser;
 use pulldown_cmark::Tag;
 use pulldown_cmark::TagEnd;
+use ratatui::style::Color;
 use ratatui::style::Style;
 use ratatui::text::Line;
 use ratatui::text::Span;
@@ -134,6 +135,16 @@ impl Default for MarkdownStyles {
             blockquote: crate::theme::dim_style().italic(),
         }
     }
+}
+
+pub(crate) const PREFORMATTED_MARKER_COLOR: Color = Color::Cyan;
+
+pub(crate) fn is_preformatted_style(style: &Style) -> bool {
+    style.underline_color == Some(PREFORMATTED_MARKER_COLOR)
+}
+
+fn mark_preformatted(style: &mut Style) {
+    style.underline_color = Some(PREFORMATTED_MARKER_COLOR);
 }
 
 #[derive(Clone, Debug)]
@@ -450,7 +461,9 @@ where
             self.push_line(Line::default());
             self.pending_marker_line = false;
         }
-        let span = Span::from(code.into_string()).style(self.styles.code);
+        let mut style = self.styles.code;
+        mark_preformatted(&mut style);
+        let span = Span::from(code.into_string()).style(style);
         self.push_span(span);
     }
 
@@ -681,13 +694,14 @@ where
         // This matters for copy fidelity: downstream copy logic uses code styling as a cue to
         // preserve indentation and to fence code runs with Markdown markers.
         if self.in_code_block {
-            if self.code_block_highlighting {
-                let mut code_style = self.styles.code;
+            let mut code_style = self.styles.code;
+            if self.code_block_highlighting
+                || !crate::render::highlight::syntax_highlighting_enabled()
+            {
                 code_style.fg = None;
-                style = style.patch(code_style);
-            } else {
-                style = style.patch(self.styles.code);
             }
+            style = style.patch(code_style);
+            mark_preformatted(&mut style);
         }
         let was_pending = self.pending_marker_line;
 
