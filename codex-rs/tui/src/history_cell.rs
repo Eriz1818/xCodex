@@ -35,12 +35,14 @@ use crate::wrapping::RtOptions;
 use crate::wrapping::word_wrap_line;
 use crate::wrapping::word_wrap_lines;
 use base64::Engine;
+use codex_common::format_env_display::format_env_display;
 use codex_core::config::Config;
+use codex_core::config::types::McpServerTransportConfig;
 use codex_core::protocol::FileChange;
+use codex_core::protocol::McpAuthStatus;
 use codex_core::protocol::McpInvocation;
 use codex_core::protocol::McpServerSnapshotState;
 use codex_core::protocol::McpStartupStatus;
-use codex_core::protocol::SandboxPolicy;
 use codex_core::protocol::SessionConfiguredEvent;
 use codex_core::web_search::web_search_detail;
 use codex_protocol::models::WebSearchAction;
@@ -52,7 +54,9 @@ use codex_protocol::user_input::TextElement;
 use image::DynamicImage;
 use image::ImageReader;
 use mcp_types::EmbeddedResourceResource;
+use mcp_types::Resource;
 use mcp_types::ResourceLink;
+use mcp_types::ResourceTemplate;
 use ratatui::prelude::*;
 use ratatui::style::Color;
 use ratatui::style::Modifier;
@@ -2287,7 +2291,6 @@ mod tests {
     use crate::exec_cell::ExecCall;
     use crate::exec_cell::ExecCell;
     use crate::xcodex_plugins::history_cell::BackgroundActivityEntry;
-    use crate::xcodex_plugins::history_cell::McpStartupRenderInfo;
     use crate::xcodex_plugins::history_cell::new_unified_exec_processes_output as xcodex_new_unified_exec_processes_output;
     use codex_core::config::Config;
     use codex_core::config::ConfigBuilder;
@@ -2463,7 +2466,6 @@ mod tests {
             tool_timeout_sec: None,
             enabled_tools: None,
             disabled_tools: None,
-            startup_mode: None,
             scopes: None,
             startup_mode: None,
         };
@@ -2487,7 +2489,6 @@ mod tests {
             tool_timeout_sec: None,
             enabled_tools: None,
             disabled_tools: None,
-            startup_mode: None,
             scopes: None,
             startup_mode: None,
         };
@@ -2506,6 +2507,7 @@ mod tests {
             tool_timeout_sec: None,
             enabled_tools: None,
             disabled_tools: None,
+            scopes: None,
             startup_mode: None,
         };
         servers.insert("cache".to_string(), cache_config);

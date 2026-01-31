@@ -2989,6 +2989,7 @@ mod tests {
             tool_timeout_sec: None,
             enabled_tools: None,
             disabled_tools: None,
+            scopes: None,
             startup_mode: None,
         };
         servers.insert("cache".to_string(), cache_config);

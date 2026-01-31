@@ -54,6 +54,8 @@ pub async fn list_accessible_connectors_from_mcp_tools(
             cancel_token.clone(),
             sandbox_state,
             None,
+            config.mcp_startup_mode,
+            config.codex_home.clone(),
         )
         .await;
 

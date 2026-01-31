@@ -148,59 +148,11 @@ const MCP_SUBCOMMANDS: &[SubcommandNode] = &[
     },
 ];
 
-const WORKTREE_SUBCOMMANDS: &[SubcommandNode] = &[
-    SubcommandNode {
-        token: "detect",
-        full_name: "worktree detect",
-        description: "refresh git worktree list and open picker",
-        run_on_enter: true,
-        insert_trailing_space: false,
-        children: &[],
-    },
-    SubcommandNode {
-        token: "doctor",
-        full_name: "worktree doctor",
-        description: "show shared-dir + untracked status for this worktree",
-        run_on_enter: true,
-        insert_trailing_space: false,
-        children: &[],
-    },
-    SubcommandNode {
-        token: "link-shared",
-        full_name: "worktree link-shared",
-        description: "apply shared-dir links for this worktree",
-        run_on_enter: true,
-        insert_trailing_space: false,
-        children: WORKTREE_LINK_SHARED_CHILDREN,
-    },
-    SubcommandNode {
-        token: "init",
-        full_name: "worktree init",
-        description: "create a new worktree and switch to it",
-        run_on_enter: false,
-        insert_trailing_space: true,
-        children: &[],
-    },
-    SubcommandNode {
-        token: "shared",
-        full_name: "worktree shared",
-        description: "manage `worktrees.shared_dirs` from the TUI",
-        run_on_enter: false,
-        insert_trailing_space: true,
-        children: WORKTREE_SHARED_CHILDREN,
-    },
-];
-
 const SUBCOMMAND_ROOTS: &[SubcommandRoot] = &[
     SubcommandRoot {
         root: "mcp",
         anchor: SlashCommand::Mcp,
         children: MCP_SUBCOMMANDS,
-    },
-    SubcommandRoot {
-        root: "worktree",
-        anchor: SlashCommand::Worktree,
-        children: WORKTREE_SUBCOMMANDS,
     },
     SubcommandRoot {
         root: "settings",

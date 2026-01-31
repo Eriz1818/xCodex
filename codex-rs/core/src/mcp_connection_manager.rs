@@ -1002,6 +1002,8 @@ impl McpConnectionManager {
                     server_name: server_name.clone(),
                     tool_name: tool.name.clone(),
                     tool: stub_tool_from_manifest(tool),
+                    connector_id: None,
+                    connector_name: None,
                 })
                 .collect::<Vec<_>>();
             tools.extend(qualify_tools(filter_tools(cached_tools, filter)));

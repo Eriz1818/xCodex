@@ -2599,10 +2599,10 @@ impl ChatWidget {
                     self.dispatch_command(SlashCommand::Mcp);
                 }
                 ["retry"] | ["retry", "failed"] => {
-                    if self.mcp_failed_servers.is_empty() {
+                    if self.mcp_failed_servers().is_empty() {
                         self.add_info_message("No failed MCP servers to retry.".to_string(), None);
                     } else {
-                        let servers = self.mcp_failed_servers.clone();
+                        let servers = self.mcp_failed_servers().to_vec();
                         self.set_mcp_startup_banner(None);
                         self.submit_op(Op::McpRetry { servers });
                     }

@@ -408,12 +408,12 @@ impl<'de> Deserialize<'de> for McpServerConfig {
             tool_timeout_sec,
             enabled,
             disabled_reason: None,
-        enabled_tools,
-        disabled_tools,
-        scopes,
-        startup_mode,
-    })
-}
+            enabled_tools,
+            disabled_tools,
+            scopes,
+            startup_mode,
+        })
+    }
 }
 
 const fn default_enabled() -> bool {

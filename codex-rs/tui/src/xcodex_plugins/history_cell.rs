@@ -23,6 +23,7 @@ use codex_core::config::Config;
 use codex_core::config::types::McpServerTransportConfig;
 use codex_core::protocol::AskForApproval;
 use codex_core::protocol::McpAuthStatus;
+use codex_core::protocol::McpServerSnapshotState;
 use codex_core::protocol::McpStartupStatus;
 use codex_core::protocol::SandboxPolicy;
 use codex_core::protocol::SessionConfiguredEvent;
@@ -62,6 +63,7 @@ pub(crate) struct McpStartupRenderInfo<'a> {
     pub(crate) statuses: Option<&'a HashMap<String, McpStartupStatus>>,
     pub(crate) durations: Option<&'a HashMap<String, Duration>>,
     pub(crate) ready_duration: Option<Duration>,
+    pub(crate) server_states: Option<&'a HashMap<String, McpServerSnapshotState>>,
 }
 
 pub(crate) fn user_prompt_style(highlight: bool) -> Style {
@@ -621,8 +623,11 @@ pub(crate) fn new_mcp_tools_output(
         let startup_status = startup
             .statuses
             .and_then(|statuses| statuses.get(server.as_str()))
-            .cloned()
-            .or_else(|| (!names.is_empty()).then_some(McpStartupStatus::Ready));
+            .cloned();
+        let server_state = startup
+            .server_states
+            .and_then(|states| states.get(server.as_str()))
+            .copied();
         let mut startup_spans: Vec<Span<'static>> = vec!["    • Startup: ".into()];
         let startup_duration = startup
             .durations
@@ -646,9 +651,17 @@ pub(crate) fn new_mcp_tools_output(
                 startup_spans.push("Cancelled".dim());
                 retryable = true;
             }
-            None => {
-                startup_spans.push("Unknown".dim());
-            }
+            None => match server_state {
+                Some(McpServerSnapshotState::Ready) => {
+                    startup_spans.push("Ready".green());
+                }
+                Some(McpServerSnapshotState::Cached) => {
+                    startup_spans.push("Cached".yellow());
+                }
+                None => {
+                    startup_spans.push("Unknown".dim());
+                }
+            },
         }
         if let Some(duration) = startup_duration {
             let duration_display = format_duration(duration);

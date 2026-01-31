@@ -644,6 +644,7 @@ async fn mcp_slash_command_requests_tool_list_when_servers_exist() {
         enabled_tools: None,
         disabled_tools: None,
         scopes: None,
+        startup_mode: None,
     };
     chat.config.mcp_servers = Constrained::allow_any(std::collections::HashMap::from([(
         "dummy".to_string(),
@@ -843,6 +844,7 @@ async fn mcp_tools_output_renders_startup_status_and_retry_hints() {
         enabled_tools: None,
         disabled_tools: None,
         scopes: None,
+        startup_mode: None,
     };
 
     let beta_cfg = McpServerConfig {
@@ -860,6 +862,7 @@ async fn mcp_tools_output_renders_startup_status_and_retry_hints() {
         enabled_tools: None,
         disabled_tools: None,
         scopes: None,
+        startup_mode: None,
     };
 
     let gamma_cfg = McpServerConfig {
@@ -877,6 +880,7 @@ async fn mcp_tools_output_renders_startup_status_and_retry_hints() {
         enabled_tools: None,
         disabled_tools: None,
         scopes: None,
+        startup_mode: None,
     };
 
     chat.config.mcp_servers = Constrained::allow_any(HashMap::from([
@@ -905,6 +909,7 @@ async fn mcp_tools_output_renders_startup_status_and_retry_hints() {
     chat.handle_codex_event(Event {
         id: "mcp-tools".into(),
         msg: EventMsg::McpListToolsResponse(McpListToolsResponseEvent {
+            server_states: HashMap::new(),
             tools: HashMap::new(),
             resources: HashMap::new(),
             resource_templates: HashMap::new(),
@@ -951,6 +956,7 @@ async fn mcp_tools_output_renders_tools_resources_and_templates() {
         enabled_tools: None,
         disabled_tools: None,
         scopes: None,
+        startup_mode: None,
     };
 
     chat.config.mcp_servers =
@@ -1016,6 +1022,7 @@ async fn mcp_tools_output_renders_tools_resources_and_templates() {
     chat.handle_codex_event(Event {
         id: "mcp-tools".into(),
         msg: EventMsg::McpListToolsResponse(McpListToolsResponseEvent {
+            server_states: HashMap::new(),
             tools,
             resources,
             resource_templates: templates,

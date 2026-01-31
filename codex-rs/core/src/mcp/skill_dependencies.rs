@@ -385,6 +385,7 @@ fn mcp_dependency_to_server_config(
             enabled_tools: None,
             disabled_tools: None,
             scopes: None,
+            startup_mode: None,
         });
     }
 
@@ -408,6 +409,7 @@ fn mcp_dependency_to_server_config(
             enabled_tools: None,
             disabled_tools: None,
             scopes: None,
+            startup_mode: None,
         });
     }
 
