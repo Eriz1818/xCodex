@@ -115,6 +115,11 @@ impl ModelsManager {
         refresh_strategy: RefreshStrategy,
     ) -> String {
         if let Some(model) = model.as_ref() {
+            if !matches!(refresh_strategy, RefreshStrategy::Offline) {
+                let _ = self
+                    .refresh_available_models(config, refresh_strategy)
+                    .await;
+            }
             return model.to_string();
         }
         if let Err(err) = self
