@@ -547,7 +547,9 @@ impl ThemeSelectorOverlay {
             for y in 0..cell_buf.area.height {
                 for x in 0..cell_buf.area.width {
                     let cell = &mut cell_buf[(x, y)];
-                    cell.set_style(cell.style().patch(base_style));
+                    if let Some(bg) = base_style.bg {
+                        cell.set_style(cell.style().bg(bg));
+                    }
                 }
             }
             buffer_to_lines(&cell_buf)
@@ -872,7 +874,9 @@ impl ThemeSelectorOverlay {
         for y in 0..approval_buf.area.height {
             for x in 0..approval_buf.area.width {
                 let cell = &mut approval_buf[(x, y)];
-                cell.set_style(cell.style().patch(base_style));
+                if let Some(bg) = base_style.bg {
+                    cell.set_style(cell.style().bg(bg));
+                }
             }
         }
         lines.push(Line::from(vec![
@@ -1600,6 +1604,8 @@ mod theme_preview_tests {
     use ratatui::buffer::Buffer;
     use ratatui::layout::Rect;
     use ratatui::style::Color;
+    use ratatui::style::Modifier;
+    use ratatui::style::Style;
     use std::path::PathBuf;
     use tokio::sync::mpsc::unbounded_channel;
 
@@ -1642,6 +1648,8 @@ mod theme_preview_tests {
         theme.roles.transcript_bg = Some(ThemeColor::new("#121621"));
         theme.roles.composer_bg = Some(ThemeColor::new("#1b2230"));
         theme.roles.user_prompt_highlight_bg = Some(ThemeColor::new("#2b3a67"));
+        theme.roles.status_ramp_fg = Some(ThemeColor::new("#112233"));
+        theme.roles.status_ramp_highlight = Some(ThemeColor::new("#f6d6d6"));
         theme.roles.accent = ThemeColor::new("#ff7a00");
         theme
     }
@@ -1700,9 +1708,11 @@ mod theme_preview_tests {
 
     #[tokio::test]
     async fn theme_preview_style_guardrails() {
+        let _guard = theme::test_style_guard();
         let mut config = test_config().await;
         config.tui_transcript_user_prompt_highlight = true;
         config.tui_transcript_syntax_highlight = true;
+        config.tui_transcript_diff_highlight = true;
         config.tui_minimal_composer = false;
 
         let test_theme = test_theme_definition();
@@ -1747,6 +1757,95 @@ mod theme_preview_tests {
             "feat/themes".len(),
             accent_fg,
         );
+
+        let (warn_y, warn_x) = find_row(&rows, "warning");
+        assert_span_fg(
+            &buf,
+            warn_y,
+            warn_x,
+            "warning".len(),
+            theme::warning_style().fg,
+        );
+        assert_span_modifiers_include(
+            &buf,
+            warn_y,
+            warn_x,
+            "warning".len(),
+            theme::warning_style(),
+        );
+
+        let (error_y, error_x) = find_row(&rows, "error");
+        assert_span_fg(
+            &buf,
+            error_y,
+            error_x,
+            "error".len(),
+            theme::error_style().fg,
+        );
+        assert_span_modifiers_include(
+            &buf,
+            error_y,
+            error_x,
+            "error".len(),
+            theme::error_style(),
+        );
+
+        let (success_y, success_x) = find_row(&rows, "success");
+        assert_span_fg(
+            &buf,
+            success_y,
+            success_x,
+            "success".len(),
+            theme::success_style().fg,
+        );
+        assert_span_modifiers_include(
+            &buf,
+            success_y,
+            success_x,
+            "success".len(),
+            theme::success_style(),
+        );
+
+        let (link_y, link_x) = find_row(&rows, "https://example.com");
+        assert_span_fg(
+            &buf,
+            link_y,
+            link_x,
+            "https://example.com".len(),
+            theme::link_style().fg,
+        );
+        assert_span_modifier(
+            &buf,
+            link_y,
+            link_x,
+            "https://example.com".len(),
+            Modifier::UNDERLINED,
+        );
+
+        let (del_y, del_x) = find_row(&rows, "-// Note: appease the borrow checker with snacks.");
+        assert_span_style(
+            &buf,
+            del_y,
+            del_x,
+            "-// Note: appease the borrow checker with snacks.".len(),
+            theme::diff_del_highlight_style(),
+        );
+
+        let (add_y, add_x) = find_row(
+            &rows,
+            "+// Note: appease the borrow checker with more snacks.",
+        );
+        assert_span_style(
+            &buf,
+            add_y,
+            add_x,
+            "+// Note: appease the borrow checker with more snacks.".len(),
+            theme::diff_add_highlight_style(),
+        );
+
+        let (status_base, status_highlight) = theme::status_ramp_palette();
+        assert_eq!(status_base, (0x11, 0x22, 0x33));
+        assert_eq!(status_highlight, (0xf6, 0xd6, 0xd6));
 
         theme::preview_definition(&test_theme);
         let (tx_raw, _rx) = unbounded_channel();
@@ -1804,6 +1903,8 @@ mod theme_preview_tests {
             branch_y_minimal,
             "expected minimal composer to change preview layout"
         );
+
+        theme::preview_definition(&ThemeCatalog::built_in_default());
     }
 
     fn text_has_fg(text: &ratatui::text::Text<'static>, expected: Option<Color>) -> bool {
@@ -1812,6 +1913,47 @@ mod theme_preview_tests {
                 .iter()
                 .any(|span| span.style.fg == expected)
         })
+    }
+
+    fn assert_span_style(buf: &Buffer, y: u16, x: u16, len: usize, expected: Style) {
+        for offset in 0..len {
+            let cell = &buf[(x + offset as u16, y)];
+            assert_eq!(cell.style().fg, expected.fg);
+            assert_eq!(cell.style().bg, expected.bg);
+        }
+    }
+
+    fn assert_span_modifier(
+        buf: &Buffer,
+        y: u16,
+        x: u16,
+        len: usize,
+        expected: Modifier,
+    ) {
+        let mut found = false;
+        for offset in 0..len {
+            let cell = &buf[(x + offset as u16, y)];
+            if cell.style().add_modifier.contains(expected) {
+                found = true;
+                break;
+            }
+        }
+        assert!(found, "expected modifier {expected:?} in span");
+    }
+
+    fn assert_span_modifiers_include(
+        buf: &Buffer,
+        y: u16,
+        x: u16,
+        len: usize,
+        style: Style,
+    ) {
+        for offset in 0..len {
+            let cell = &buf[(x + offset as u16, y)];
+            let cell_mods = cell.style().add_modifier;
+            assert!(cell_mods.contains(style.add_modifier));
+            assert!(cell.style().sub_modifier.contains(style.sub_modifier));
+        }
     }
 }
 enum ThemeSelectorMode {
