@@ -1330,6 +1330,23 @@ pub fn convert_upstream_yaml(src: &str) -> Result<ThemeDefinition, ThemeError> {
         diff_hunk_bg: ThemeColor::inherit(),
         badge: upstream.badge.map(ThemeColor),
         link: upstream.link.map(ThemeColor),
+        code_keyword: default_code_keyword_role(),
+        code_operator: default_code_operator_role(),
+        code_comment: default_code_comment_role(),
+        code_string: default_code_string_role(),
+        code_number: default_code_number_role(),
+        code_type: default_code_type_role(),
+        code_function: default_code_function_role(),
+        code_constant: default_code_constant_role(),
+        code_macro: default_code_macro_role(),
+        code_punctuation: default_code_punctuation_role(),
+        code_variable: default_code_variable_role(),
+        code_property: default_code_property_role(),
+        code_attribute: default_code_attribute_role(),
+        code_module: default_code_module_role(),
+        code_label: default_code_label_role(),
+        code_tag: default_code_tag_role(),
+        code_embedded: default_code_embedded_role(),
     };
 
     let background_resolved =
