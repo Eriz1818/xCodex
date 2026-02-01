@@ -4374,9 +4374,12 @@ async fn run_sampling_request(
             Err(CodexErr::Interrupted) => return Err(CodexErr::Interrupted),
             Err(CodexErr::EnvVar(var)) => return Err(CodexErr::EnvVar(var)),
             Err(e @ CodexErr::Fatal(_)) => return Err(e),
-            Err(CodexErr::ContextWindowExceeded | CodexErr::ProviderContextWindowExceeded(_)) => {
+            Err(
+                err
+                @ (CodexErr::ContextWindowExceeded | CodexErr::ProviderContextWindowExceeded(_)),
+            ) => {
                 sess.set_total_tokens_full(&turn_context).await;
-                return Err(CodexErr::ContextWindowExceeded);
+                return Err(err);
             }
             Err(CodexErr::UsageLimitReached(e)) => {
                 let rate_limits = e.rate_limits.clone();
