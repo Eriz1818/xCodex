@@ -265,6 +265,8 @@ async fn update_manifest_cache(
         .map(|tool| CachedTool {
             name: tool.tool_name.clone(),
             description: tool.tool.description.clone(),
+            connector_id: tool.connector_id.clone(),
+            connector_name: tool.connector_name.clone(),
         })
         .collect::<Vec<_>>();
     let mut cache = manifest_cache.lock().await;
@@ -527,6 +529,10 @@ struct CachedServerTools {
 struct CachedTool {
     name: String,
     description: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    connector_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    connector_name: Option<String>,
 }
 
 /// A thin wrapper around a set of running [`RmcpClient`] instances.
@@ -1002,8 +1008,8 @@ impl McpConnectionManager {
                     server_name: server_name.clone(),
                     tool_name: tool.name.clone(),
                     tool: stub_tool_from_manifest(tool),
-                    connector_id: None,
-                    connector_name: None,
+                    connector_id: tool.connector_id.clone(),
+                    connector_name: tool.connector_name.clone(),
                 })
                 .collect::<Vec<_>>();
             tools.extend(qualify_tools(filter_tools(cached_tools, filter)));
@@ -1935,6 +1941,8 @@ mod tests {
                     tools: vec![CachedTool {
                         name: "search".to_string(),
                         description: Some("Search docs".to_string()),
+                        connector_id: None,
+                        connector_name: None,
                     }],
                 },
             )]),
@@ -1981,6 +1989,8 @@ mod tests {
                     tools: vec![CachedTool {
                         name: "search".to_string(),
                         description: Some("Search docs".to_string()),
+                        connector_id: Some("docs".to_string()),
+                        connector_name: Some("Docs".to_string()),
                     }],
                 },
             )]),
@@ -1989,5 +1999,7 @@ mod tests {
         let tools = manager.list_all_tools().await;
         let tool = tools.get("mcp__docs__search").expect("cached tool");
         assert_eq!(tool.tool.description.as_deref(), Some("Search docs"));
+        assert_eq!(tool.connector_id.as_deref(), Some("docs"));
+        assert_eq!(tool.connector_name.as_deref(), Some("Docs"));
     }
 }
