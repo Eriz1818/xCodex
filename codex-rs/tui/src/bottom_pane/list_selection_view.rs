@@ -12,13 +12,13 @@ use ratatui::text::Span;
 use ratatui::widgets::Paragraph;
 use ratatui::widgets::Widget;
 
+use super::selection_popup_common::popup_surface_style;
 use super::selection_popup_common::render_menu_surface;
 use super::selection_popup_common::wrap_styled_line;
 use crate::app_event_sender::AppEventSender;
 use crate::key_hint::KeyBinding;
 use crate::render::renderable::ColumnRenderable;
 use crate::render::renderable::Renderable;
-use crate::style::user_message_style;
 
 use super::CancellationEvent;
 use super::bottom_pane_view::BottomPaneView;
@@ -530,7 +530,7 @@ impl Renderable for ListSelectionView {
                 width: rows_width.max(1),
                 height: list_area.height,
             };
-            let base_style = user_message_style().patch(crate::theme::composer_style());
+            let base_style = popup_surface_style();
             render_rows(
                 render_area,
                 buf,
@@ -589,6 +589,7 @@ mod tests {
     use crate::app_event::AppEvent;
     use crate::bottom_pane::popup_consts::standard_popup_hint_line;
     use insta::assert_snapshot;
+    use ratatui::buffer::Buffer;
     use ratatui::layout::Rect;
     use tokio::sync::mpsc::unbounded_channel;
 

@@ -11,10 +11,10 @@ use super::slash_commands;
 use super::slash_subcommands::build_subcommand_matches;
 use super::slash_subcommands::slash_command_supports_subcommands as subcommands_supported;
 use super::slash_subcommands::subcommand_list_hint;
+use crate::bottom_pane::selection_popup_common::popup_surface_style;
 use crate::render::Insets;
 use crate::render::RectExt;
 use crate::slash_command::SlashCommand;
-use crate::style::user_message_style;
 use crate::xcodex_plugins::PluginSlashCommand;
 use crate::xcodex_plugins::command_popup as xcodex_command_popup;
 use codex_protocol::custom_prompts::CustomPrompt;
@@ -447,7 +447,7 @@ impl CommandPopup {
 
 impl WidgetRef for CommandPopup {
     fn render_ref(&self, area: Rect, buf: &mut Buffer) {
-        let base_style = user_message_style().patch(crate::theme::composer_style());
+        let base_style = popup_surface_style();
         for y in area.top()..area.bottom() {
             for x in area.left()..area.right() {
                 buf[(x, y)].set_symbol(" ");
