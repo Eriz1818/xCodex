@@ -11,7 +11,11 @@ codex_rust_crate(
             "Cargo.toml",
         ],
         allow_empty = True,
-    ) + ["//codex-rs/xcodex/theme-ui:theme_selector_overlay_rs"],
+    ) + [
+        "//codex-rs/xcodex/theme-ui:theme_selector_overlay_rs",
+        "//codex-rs/xcodex:tui_theme.rs",
+        "//codex-rs/xcodex:tui_xcodex_first_run_wizard.rs",
+    ],
     test_data_extra = glob(["src/**/snapshots/**"]),
     integration_compile_data_extra = ["src/test_backend.rs"],
     extra_binaries = [

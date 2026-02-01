@@ -1,0 +1,5 @@
+exports_files([
+    "hooks_sdk_install.rs",
+    "tui_theme.rs",
+    "tui_xcodex_first_run_wizard.rs",
+])

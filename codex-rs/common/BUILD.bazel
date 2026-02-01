@@ -17,5 +17,6 @@ codex_rust_crate(
             "//codex-rs/hooks-sdk:Cargo.install.toml",
             "//codex-rs/hooks-sdk:src/generated.rs",
             "//codex-rs/hooks-sdk:src/lib.rs",
+            "//codex-rs/xcodex:hooks_sdk_install.rs",
         ],
 )
