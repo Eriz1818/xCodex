@@ -2387,7 +2387,6 @@ impl ChatWidget {
                 self.open_status_menu_view(crate::bottom_pane::StatusMenuTab::Tools);
             }
             SlashCommand::Worktree => {
-            SlashCommand::Worktree => {
                 xcodex_plugins::worktree::handle_root_command(self);
             }
             SlashCommand::Hooks => {
