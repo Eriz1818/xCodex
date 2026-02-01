@@ -298,9 +298,8 @@ impl Renderable for SkillsToggleView {
         let [content_area, footer_area] =
             Layout::vertical([Constraint::Fill(1), Constraint::Length(1)]).areas(area);
 
-        Block::default()
-            .style(user_message_style())
-            .render(content_area, buf);
+        let base_style = user_message_style().patch(crate::theme::composer_style());
+        Block::default().style(base_style).render(content_area, buf);
 
         let header_height = self
             .header
@@ -348,7 +347,6 @@ impl Renderable for SkillsToggleView {
                 width: rows_width.max(1),
                 height: list_area.height,
             };
-            let base_style = crate::theme::transcript_style();
             render_rows_single_line(
                 render_area,
                 buf,

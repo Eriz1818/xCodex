@@ -215,7 +215,7 @@ impl RequestUserInputOverlay {
             width: content_area.width,
             height: rows_height,
         };
-        let base_style = user_message_style();
+        let base_style = user_message_style().patch(crate::theme::composer_style());
         render_rows(
             rows_area,
             buf,
@@ -319,7 +319,7 @@ impl RequestUserInputOverlay {
                 // Ensure the selected option is visible in the scroll window.
                 options_state
                     .ensure_visible(option_rows.len(), sections.options_area.height as usize);
-                let base_style = crate::theme::transcript_style();
+                let base_style = user_message_style().patch(crate::theme::composer_style());
                 render_rows(
                     sections.options_area,
                     buf,

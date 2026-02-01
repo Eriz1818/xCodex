@@ -14,6 +14,7 @@ use super::selection_popup_common::render_rows_single_line;
 use crate::key_hint;
 use crate::render::Insets;
 use crate::render::RectExt;
+use crate::style::user_message_style;
 use crate::text_formatting::truncate_text;
 use codex_common::fuzzy_match::fuzzy_match;
 
@@ -177,7 +178,7 @@ impl WidgetRef for SkillPopup {
         } else {
             (area, None)
         };
-        let base_style = crate::theme::transcript_style();
+        let base_style = user_message_style().patch(crate::theme::composer_style());
         let rows = self.rows_from_matches(self.filtered());
         render_rows_single_line(
             list_area.inset(Insets::tlbr(0, 2, 0, 0)),

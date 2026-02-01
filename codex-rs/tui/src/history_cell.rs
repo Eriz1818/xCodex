@@ -58,7 +58,6 @@ use mcp_types::Resource;
 use mcp_types::ResourceLink;
 use mcp_types::ResourceTemplate;
 use ratatui::prelude::*;
-use ratatui::style::Color;
 use ratatui::style::Modifier;
 use ratatui::style::Style;
 use ratatui::style::Styled;
@@ -268,7 +267,7 @@ impl HistoryCell for UserHistoryCell {
             .max(1);
 
         let style = self.style();
-        let element_style = style.fg(Color::Cyan);
+        let element_style = style.patch(crate::theme::accent_style());
 
         let wrapped = if self.text_elements.is_empty() {
             word_wrap_lines(
@@ -2301,6 +2300,7 @@ mod tests {
     use codex_protocol::models::WebSearchAction;
 
     use codex_protocol::parse_command::ParsedCommand;
+    use codex_protocol::user_input::TextElement;
     use dirs::home_dir;
     use pretty_assertions::assert_eq;
     use serde_json::json;
@@ -2338,6 +2338,24 @@ mod tests {
 
     fn render_transcript(cell: &dyn HistoryCell) -> Vec<String> {
         render_lines(&cell.transcript_lines(u16::MAX))
+    }
+
+    #[test]
+    fn user_history_cell_image_placeholder_uses_accent() {
+        let message = "[Image #1]".to_string();
+        let element = TextElement::new((0..message.len()).into(), None);
+        let cell = new_user_prompt(message.clone(), vec![element], Vec::new(), false);
+        let lines = cell.display_lines(80);
+        let mut found = false;
+        for line in lines {
+            for span in line.spans {
+                if span.content.contains("[Image #1]") {
+                    found = true;
+                    assert_eq!(span.style.fg, crate::theme::accent_style().fg);
+                }
+            }
+        }
+        assert!(found, "expected image placeholder span");
     }
 
     #[allow(dead_code)]

@@ -5,6 +5,7 @@ use ratatui::widgets::WidgetRef;
 
 use crate::render::Insets;
 use crate::render::RectExt;
+use crate::style::user_message_style;
 
 use super::popup_consts::MAX_POPUP_ROWS;
 use super::scroll_state::ScrollState;
@@ -136,7 +137,7 @@ impl WidgetRef for &FileSearchPopup {
             "no matches"
         };
 
-        let base_style = crate::theme::transcript_style();
+        let base_style = user_message_style().patch(crate::theme::composer_style());
         render_rows(
             area.inset(Insets::tlbr(0, 2, 0, 0)),
             buf,

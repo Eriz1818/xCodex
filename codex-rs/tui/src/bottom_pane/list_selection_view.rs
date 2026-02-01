@@ -530,7 +530,7 @@ impl Renderable for ListSelectionView {
                 width: rows_width.max(1),
                 height: list_area.height,
             };
-            let base_style = user_message_style();
+            let base_style = user_message_style().patch(crate::theme::composer_style());
             render_rows(
                 render_area,
                 buf,

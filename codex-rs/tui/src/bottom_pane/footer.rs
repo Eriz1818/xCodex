@@ -636,7 +636,10 @@ fn apply_status_bar_items(lines: &mut [Line<'static>], props: FooterProps<'_>) {
     {
         line.push_span(" · ".dim());
         line.push_span("branch: ".dim());
-        line.push_span(branch.to_string().cyan());
+        line.push_span(Span::styled(
+            branch.to_string(),
+            crate::theme::accent_style(),
+        ));
     }
 
     if props.show_status_bar_worktree

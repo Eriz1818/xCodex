@@ -56,7 +56,7 @@ pub(crate) fn render_menu_surface(area: Rect, buf: &mut Buffer) -> Rect {
         return area;
     }
     Block::default()
-        .style(user_message_style())
+        .style(user_message_style().patch(crate::theme::composer_style()))
         .render(area, buf);
     menu_surface_inset(area)
 }
