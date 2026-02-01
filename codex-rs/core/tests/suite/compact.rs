@@ -1106,7 +1106,6 @@ async fn auto_compact_runs_after_token_limit_hit() {
         config.model_auto_compact_token_limit = Some(200_000);
     });
     let codex = builder.build(&server).await.unwrap().codex;
-
     codex
         .submit(Op::SetAutoCompact { enabled: true })
         .await
@@ -1300,6 +1299,10 @@ async fn auto_compact_emits_context_compaction_items() {
         config.model_auto_compact_token_limit = Some(200_000);
     });
     let codex = builder.build(&server).await.unwrap().codex;
+    codex
+        .submit(Op::SetAutoCompact { enabled: true })
+        .await
+        .unwrap();
 
     let mut started_item = None;
     let mut completed_item = None;
@@ -1383,6 +1386,10 @@ async fn auto_compact_starts_after_turn_started() {
         config.model_auto_compact_token_limit = Some(200_000);
     });
     let codex = builder.build(&server).await.unwrap().codex;
+    codex
+        .submit(Op::SetAutoCompact { enabled: true })
+        .await
+        .unwrap();
 
     codex
         .submit(Op::UserInput {
@@ -1476,6 +1483,11 @@ async fn auto_compact_runs_after_resume_when_token_usage_is_over_limit() {
         config.features.enable(Feature::RemoteCompaction);
     });
     let initial = builder.build(&server).await.unwrap();
+    initial
+        .codex
+        .submit(Op::SetAutoCompact { enabled: true })
+        .await
+        .unwrap();
     let home = initial.home.clone();
     let rollout_path = initial
         .session_configured
@@ -1506,6 +1518,11 @@ async fn auto_compact_runs_after_resume_when_token_usage_is_over_limit() {
     });
     let resumed = resume_builder
         .resume(&server, home, rollout_path)
+        .await
+        .unwrap();
+    resumed
+        .codex
+        .submit(Op::SetAutoCompact { enabled: true })
         .await
         .unwrap();
 
@@ -2437,6 +2454,10 @@ async fn auto_compact_runs_when_reasoning_header_clears_between_turns() {
         .await
         .expect("build codex")
         .codex;
+    codex
+        .submit(Op::SetAutoCompact { enabled: true })
+        .await
+        .unwrap();
 
     for user in [first_user, second_user, third_user] {
         codex

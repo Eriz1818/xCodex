@@ -73,6 +73,7 @@ async fn auto_compaction_local_emits_started_and_completed_items() -> Result<()>
         "mock_provider",
         COMPACT_PROMPT,
     )?;
+    codex_core::prefs::set_auto_compact_enabled(codex_home.path(), true).await?;
 
     let mut mcp = McpProcess::new(codex_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
@@ -149,6 +150,7 @@ async fn auto_compaction_remote_emits_started_and_completed_items() -> Result<()
         "openai",
         COMPACT_PROMPT,
     )?;
+    codex_core::prefs::set_auto_compact_enabled(codex_home.path(), true).await?;
     write_chatgpt_auth(
         codex_home.path(),
         ChatGptAuthFixture::new("access-chatgpt").plan_type("pro"),
