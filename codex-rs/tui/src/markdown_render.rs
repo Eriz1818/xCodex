@@ -466,13 +466,23 @@ where
         let code = code.strip_suffix('\n').unwrap_or(&code);
 
         let lang = self.code_block_language.take();
-        let lines = if self.code_block_highlighting {
-            crate::render::highlight::highlight_code_block_to_lines(lang.as_deref(), code)
+        let (lines, has_highlight) = if self.code_block_highlighting {
+            let lines =
+                crate::render::highlight::highlight_code_block_to_lines(lang.as_deref(), code);
+            let has_highlight = lines
+                .iter()
+                .any(|line| line.spans.iter().any(|span| span.style != Style::default()));
+            (lines, has_highlight)
         } else if code.is_empty() {
-            vec![Line::from("")]
+            (vec![Line::from("")], false)
         } else {
-            code.lines().map(|line| line.to_string().into()).collect()
+            (
+                code.lines().map(|line| line.to_string().into()).collect(),
+                false,
+            )
         };
+
+        self.code_block_highlighting = has_highlight;
 
         for line in lines {
             self.push_line(Line::default());

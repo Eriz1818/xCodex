@@ -456,6 +456,10 @@ impl ThemeSelectorOverlay {
             return 0;
         }
 
+        crate::render::highlight::set_syntax_highlighting_enabled(
+            self.config.tui_transcript_syntax_highlight,
+        );
+
         for y in area.top()..area.bottom() {
             for x in area.left()..area.right() {
                 buf[(x, y)].set_style(crate::theme::transcript_style());
@@ -529,7 +533,7 @@ impl ThemeSelectorOverlay {
         ) -> Vec<Line<'static>> {
             let width = width.max(1);
             let height = cell.desired_height(width).max(1);
-            let cell_style = base_style.patch(cell.render_style());
+            let cell_style = base_style;
             let mut cell_buf = Buffer::empty(Rect::new(0, 0, width, height));
             for y in 0..cell_buf.area.height {
                 for x in 0..cell_buf.area.width {
@@ -540,6 +544,12 @@ impl ThemeSelectorOverlay {
             Paragraph::new(Text::from(cell.transcript_lines(width)))
                 .style(cell_style)
                 .render(*cell_buf.area(), &mut cell_buf);
+            for y in 0..cell_buf.area.height {
+                for x in 0..cell_buf.area.width {
+                    let cell = &mut cell_buf[(x, y)];
+                    cell.set_style(cell.style().patch(base_style));
+                }
+            }
             buffer_to_lines(&cell_buf)
         }
 
@@ -759,10 +769,14 @@ impl ThemeSelectorOverlay {
             user_prompt.to_string(),
             self.config.tui_transcript_user_prompt_highlight,
         );
+        let mut user_prompt_style = user_message_style().patch(crate::theme::composer_style());
+        if self.config.tui_transcript_user_prompt_highlight {
+            user_prompt_style = user_prompt_style.patch(crate::theme::user_prompt_highlight_style());
+        }
         lines.extend(render_cell_to_lines(
             &user_cell,
             area.width,
-            user_message_style().patch(crate::theme::composer_style()),
+            user_prompt_style,
         ));
 
         lines.push(Line::from(""));
@@ -855,6 +869,12 @@ impl ThemeSelectorOverlay {
             }
         }
         approval.render(*approval_buf.area(), &mut approval_buf);
+        for y in 0..approval_buf.area.height {
+            for x in 0..approval_buf.area.width {
+                let cell = &mut approval_buf[(x, y)];
+                cell.set_style(cell.style().patch(base_style));
+            }
+        }
         lines.push(Line::from(vec![
             Span::from("Approval required:").set_style(crate::theme::accent_style()),
         ]));
@@ -1565,6 +1585,235 @@ impl ThemeSelectorOverlay {
     }
 }
 
+#[cfg(test)]
+mod theme_preview_tests {
+    use super::*;
+    use crate::app_event_sender::AppEventSender;
+    use crate::theme;
+    use codex_core::config::ConfigBuilder;
+    use codex_core::themes::ThemeCatalog;
+    use codex_core::themes::ThemeColor;
+    use codex_core::themes::ThemeDefinition;
+    use codex_core::themes::ThemePalette;
+    use codex_core::themes::ThemeVariant;
+    use pretty_assertions::assert_eq;
+    use ratatui::buffer::Buffer;
+    use ratatui::layout::Rect;
+    use ratatui::style::Color;
+    use std::path::PathBuf;
+    use tokio::sync::mpsc::unbounded_channel;
+
+    const PREVIEW_WIDTH: u16 = 120;
+    const PREVIEW_HEIGHT: u16 = 200;
+
+    async fn test_config() -> codex_core::config::Config {
+        let codex_home = std::env::temp_dir();
+        ConfigBuilder::default()
+            .codex_home(codex_home)
+            .build()
+            .await
+            .expect("config")
+    }
+
+    fn test_theme_definition() -> ThemeDefinition {
+        let mut theme = ThemeCatalog::built_in_default();
+        theme.name = "test-preview".to_string();
+        theme.variant = ThemeVariant::Dark;
+        theme.palette = ThemePalette {
+            black: ThemeColor::new("#0b0c10"),
+            red: ThemeColor::new("#d72638"),
+            green: ThemeColor::new("#3fbd6b"),
+            yellow: ThemeColor::new("#f2c14e"),
+            blue: ThemeColor::new("#3f8efc"),
+            magenta: ThemeColor::new("#b388ff"),
+            cyan: ThemeColor::new("#2ec4b6"),
+            white: ThemeColor::new("#e6e6e6"),
+            bright_black: ThemeColor::new("#4a4a4a"),
+            bright_red: ThemeColor::new("#ff5964"),
+            bright_green: ThemeColor::new("#8de969"),
+            bright_yellow: ThemeColor::new("#ffe066"),
+            bright_blue: ThemeColor::new("#7cb9ff"),
+            bright_magenta: ThemeColor::new("#d4a5ff"),
+            bright_cyan: ThemeColor::new("#7bdff2"),
+            bright_white: ThemeColor::new("#ffffff"),
+        };
+        theme.roles.fg = ThemeColor::new("palette.white");
+        theme.roles.bg = ThemeColor::new("palette.black");
+        theme.roles.transcript_bg = Some(ThemeColor::new("#121621"));
+        theme.roles.composer_bg = Some(ThemeColor::new("#1b2230"));
+        theme.roles.user_prompt_highlight_bg = Some(ThemeColor::new("#2b3a67"));
+        theme.roles.accent = ThemeColor::new("#ff7a00");
+        theme
+    }
+
+    fn buffer_rows(buf: &Buffer) -> Vec<String> {
+        let mut rows = Vec::new();
+        for y in 0..buf.area.height {
+            let mut row = String::new();
+            for x in 0..buf.area.width {
+                let symbol = buf[(x, y)].symbol();
+                row.push(symbol.chars().next().unwrap_or(' '));
+            }
+            rows.push(row);
+        }
+        rows
+    }
+
+    fn find_row(rows: &[String], needle: &str) -> (u16, u16) {
+        for (y, row) in rows.iter().enumerate() {
+            if let Some(x) = row.find(needle) {
+                return (y as u16, x as u16);
+            }
+        }
+        panic!("needle not found in preview: {needle}");
+    }
+
+    fn assert_span_fg(buf: &Buffer, y: u16, x: u16, len: usize, expected: Option<Color>) {
+        for offset in 0..len {
+            let cell = &buf[(x + offset as u16, y)];
+            assert_eq!(cell.style().fg, expected);
+        }
+    }
+
+    fn assert_span_bg(buf: &Buffer, y: u16, x: u16, len: usize, expected: Option<Color>) {
+        for offset in 0..len {
+            let cell = &buf[(x + offset as u16, y)];
+            assert_eq!(cell.style().bg, expected);
+        }
+    }
+
+    fn render_preview(config: codex_core::config::Config, theme: &ThemeDefinition) -> Buffer {
+        theme::preview_definition(theme);
+        let (tx_raw, _rx) = unbounded_channel();
+        let mut overlay = ThemeSelectorOverlay::new(
+            AppEventSender::new(tx_raw),
+            config.clone(),
+            None,
+        );
+        overlay.frame_requester = Some(crate::tui::FrameRequester::test_dummy());
+        overlay.ensure_preview_applied();
+        let area = Rect::new(0, 0, PREVIEW_WIDTH, PREVIEW_HEIGHT);
+        let mut buf = Buffer::empty(area);
+        overlay.render_preview(area, &mut buf, 0);
+        buf
+    }
+
+    #[tokio::test]
+    async fn theme_preview_style_guardrails() {
+        let mut config = test_config().await;
+        config.tui_transcript_user_prompt_highlight = true;
+        config.tui_transcript_syntax_highlight = true;
+        config.tui_minimal_composer = false;
+
+        let test_theme = test_theme_definition();
+        let buf = render_preview(config.clone(), &test_theme);
+        let rows = buffer_rows(&buf);
+        let accent_fg = theme::accent_style().fg;
+
+        let (prompt_y, prompt_x) = find_row(&rows, "Give me the highlight reel");
+        let expected_prompt_bg = theme::user_prompt_highlight_style().bg;
+        assert!(
+            expected_prompt_bg.is_some(),
+            "expected prompt highlight background"
+        );
+        assert_span_bg(
+            &buf,
+            prompt_y,
+            prompt_x,
+            "Give me the highlight reel".len(),
+            expected_prompt_bg,
+        );
+
+        let (approval_y, approval_x) =
+            find_row(&rows, "Would you like to run the following command?");
+        let approval_bg = user_message_style().patch(theme::composer_style()).bg;
+        assert!(
+            approval_bg.is_some(),
+            "expected approval overlay background"
+        );
+        assert_span_bg(
+            &buf,
+            approval_y,
+            approval_x,
+            "Would you like to run the following command?".len(),
+            approval_bg,
+        );
+
+        let (branch_y, branch_x) = find_row(&rows, "branch: feat/themes");
+        assert_span_fg(
+            &buf,
+            branch_y,
+            branch_x + "branch: ".len() as u16,
+            "feat/themes".len(),
+            accent_fg,
+        );
+
+        theme::preview_definition(&test_theme);
+        let (tx_raw, _rx) = unbounded_channel();
+        let mut composer = crate::bottom_pane::ChatComposer::new(
+            true,
+            AppEventSender::new(tx_raw),
+            false,
+            "Ask xcodex to do anything".to_string(),
+            false,
+        );
+        composer.attach_image(PathBuf::from("/tmp/theme-preview.png"));
+        let width = 80;
+        let height = composer.desired_height(width).max(1);
+        let area = Rect::new(0, 0, width, height);
+        let mut composer_buf = Buffer::empty(area);
+        composer.render(area, &mut composer_buf);
+        let composer_rows = buffer_rows(&composer_buf);
+        let (image_y, image_x) = find_row(&composer_rows, "[Image #1]");
+        assert_span_fg(
+            &composer_buf,
+            image_y,
+            image_x,
+            "[Image #1]".len(),
+            accent_fg,
+        );
+
+        let prev_highlight = crate::render::highlight::syntax_highlighting_enabled();
+        let sample = SAMPLE_CODE_TABS[0];
+        let markdown = format!("```{}\n{}```\n", sample.fence_lang, sample.code);
+        let keyword_fg = theme::code_keyword_style().fg;
+        assert!(keyword_fg.is_some(), "expected code keyword foreground");
+
+        crate::render::highlight::set_syntax_highlighting_enabled(true);
+        let highlighted =
+            crate::markdown_render::render_markdown_text_with_width(&markdown, Some(80));
+
+        crate::render::highlight::set_syntax_highlighting_enabled(false);
+        let plain = crate::markdown_render::render_markdown_text_with_width(&markdown, Some(80));
+
+        let highlighted_has_keyword = text_has_fg(&highlighted, keyword_fg);
+        let plain_has_keyword = text_has_fg(&plain, keyword_fg);
+        assert!(
+            highlighted_has_keyword && !plain_has_keyword,
+            "expected syntax highlighting to change code styles"
+        );
+        crate::render::highlight::set_syntax_highlighting_enabled(prev_highlight);
+
+        let mut config_minimal = config;
+        config_minimal.tui_minimal_composer = true;
+        let buf_minimal = render_preview(config_minimal, &test_theme);
+        let rows_minimal = buffer_rows(&buf_minimal);
+        let (branch_y_minimal, _) = find_row(&rows_minimal, "branch: feat/themes");
+        assert_ne!(
+            branch_y,
+            branch_y_minimal,
+            "expected minimal composer to change preview layout"
+        );
+    }
+
+    fn text_has_fg(text: &ratatui::text::Text<'static>, expected: Option<Color>) -> bool {
+        text.lines.iter().any(|line| {
+            line.spans
+                .iter()
+                .any(|span| span.style.fg == expected)
+        })
+    }
+}
 enum ThemeSelectorMode {
     Picker { preview_scroll: u16 },
 }
