@@ -2514,6 +2514,7 @@ persistence = "none"
                 verbose_tool_output: false,
                 transcript_diff_highlight: false,
                 transcript_user_prompt_highlight: false,
+                transcript_syntax_highlight: true,
                 status_bar_show_git_branch: false,
                 status_bar_show_worktree: false,
                 minimal_composer: false,
