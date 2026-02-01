@@ -1263,6 +1263,10 @@ impl McpConnectionManager {
     }
 
     pub async fn parse_tool_name(&self, tool_name: &str) -> Option<(String, String)> {
+        if let Some((server, tool)) = crate::mcp::split_qualified_tool_name(tool_name) {
+            return Some((server, tool));
+        }
+
         self.list_all_tools()
             .await
             .get(tool_name)

@@ -58,7 +58,13 @@ impl ToolRegistry {
     }
 
     pub fn handler(&self, name: &str) -> Option<Arc<dyn ToolHandler>> {
-        self.handlers.get(name).map(Arc::clone)
+        if let Some(handler) = self.handlers.get(name) {
+            return Some(Arc::clone(handler));
+        }
+        if name.starts_with("mcp__") {
+            return self.handlers.get("mcp__").cloned();
+        }
+        None
     }
 
     // TODO(jif) for dynamic tools.

@@ -1292,6 +1292,7 @@ pub(crate) fn build_specs(
     let mcp_resource_handler = Arc::new(McpResourceHandler);
     let shell_command_handler = Arc::new(ShellCommandHandler);
     let request_user_input_handler = Arc::new(RequestUserInputHandler);
+    builder.register_handler("mcp__", mcp_handler.clone());
 
     match &config.shell_type {
         ConfigShellToolType::Default => {
