@@ -38,6 +38,9 @@ Fork-specific docs live in `docs/xcodex/` (start at [`docs/xcodex/README.md`](do
 
 High-level roadmap (subject to change):
 
+- `v0.1.0` ✅: hooksv1
+- `v0.2.0` ✅: hooksv2, worktree v2
+- `v0.3.0` ✅: soft block + themes (highlight composer + diff highlight + ...)
 - `v0.3.1`: fork health (feature inventory + E2E tests + merge prep)
 - `v0.3.5`: resume/startup responsiveness + themed syntax highlighting + small QoL/bug fixes
 - `v0.4.0`: `/plan` + small feature + QoL/bug fixes
