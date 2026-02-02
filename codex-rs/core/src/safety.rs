@@ -1,6 +1,8 @@
 use std::path::Component;
 use std::path::Path;
 use std::path::PathBuf;
+#[cfg(target_os = "windows")]
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use codex_apply_patch::ApplyPatchAction;
 use codex_apply_patch::ApplyPatchFileChange;
@@ -11,6 +13,11 @@ use crate::util::resolve_path;
 use crate::protocol::AskForApproval;
 use crate::protocol::SandboxPolicy;
 use codex_protocol::config_types::WindowsSandboxLevel;
+
+#[cfg(target_os = "windows")]
+static WINDOWS_SANDBOX_ENABLED: AtomicBool = AtomicBool::new(false);
+#[cfg(target_os = "windows")]
+static WINDOWS_ELEVATED_SANDBOX_ENABLED: AtomicBool = AtomicBool::new(false);
 
 #[derive(Debug, PartialEq)]
 pub enum SafetyCheck {
@@ -99,6 +106,16 @@ pub fn get_platform_sandbox(windows_sandbox_enabled: bool) -> Option<SandboxType
     } else {
         None
     }
+}
+
+#[cfg(target_os = "windows")]
+pub fn set_windows_sandbox_enabled(enabled: bool) {
+    WINDOWS_SANDBOX_ENABLED.store(enabled, Ordering::SeqCst);
+}
+
+#[cfg(target_os = "windows")]
+pub fn set_windows_elevated_sandbox_enabled(enabled: bool) {
+    WINDOWS_ELEVATED_SANDBOX_ENABLED.store(enabled, Ordering::SeqCst);
 }
 
 fn is_write_patch_constrained_to_writable_paths(
