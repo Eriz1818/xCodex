@@ -37,7 +37,7 @@ pub struct CliConfigOverrides {
     pub raw_overrides: Vec<String>,
 
     /// Override the default MCP startup policy for this run.
-    /// Equivalent to `-c mcp_startup_mode=<mode>`.
+    /// Equivalent to `-c mcp_servers.startup_mode=<mode>`.
     #[arg(
         long = "mcp-startup-mode",
         value_name = "MODE",
@@ -56,7 +56,7 @@ impl CliConfigOverrides {
             let parsed = mode.parse::<McpStartupMode>().map_err(|_| {
                 format!("Invalid mcp startup mode '{mode}'. Use eager, lazy, or manual.")
             })?;
-            raw_overrides.push(format!("mcp_startup_mode=\"{parsed}\""));
+            raw_overrides.push(format!("mcp_servers.startup_mode=\"{parsed}\""));
         }
         raw_overrides
             .iter()
@@ -209,7 +209,7 @@ mod tests {
         assert_eq!(
             parsed,
             vec![(
-                "mcp_startup_mode".to_string(),
+                "mcp_servers.startup_mode".to_string(),
                 Value::String("lazy".to_string())
             )]
         );

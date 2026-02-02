@@ -102,6 +102,17 @@ pub(crate) const DEFAULT_AGENT_MAX_THREADS: Option<usize> = Some(6);
 
 pub const CONFIG_TOML_FILE: &str = "config.toml";
 
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq)]
+pub struct McpServersToml {
+    /// Default startup policy for all MCP servers, unless overridden by a server's `startup_mode`.
+    #[serde(default)]
+    pub startup_mode: Option<McpStartupMode>,
+
+    /// Server entries under `[mcp_servers.<name>]`.
+    #[serde(flatten, default)]
+    pub servers: HashMap<String, McpServerConfig>,
+}
+
 #[cfg(test)]
 pub(crate) fn test_config() -> Config {
     let codex_home = tempdir().expect("create temp dir");
@@ -344,8 +355,8 @@ pub struct Config {
     /// Definition for MCP servers that Codex can reach out to for tool calls.
     pub mcp_servers: Constrained<HashMap<String, McpServerConfig>>,
 
-    /// Startup policy for MCP servers (eager, lazy, manual).
-    pub mcp_startup_mode: McpStartupMode,
+    /// Default startup policy for MCP servers (eager, lazy, manual).
+    pub mcp_servers_startup_mode: McpStartupMode,
 
     /// Preferred store for MCP OAuth credentials.
     /// keyring: Use an OS-specific keyring service.
@@ -758,10 +769,11 @@ pub async fn load_global_mcp_servers(
 
     ensure_no_inline_bearer_tokens(servers_value)?;
 
-    servers_value
+    let parsed: McpServersToml = servers_value
         .clone()
         .try_into()
-        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+    Ok(parsed.servers.into_iter().collect())
 }
 
 /// We briefly allowed plain text bearer_token fields in MCP server configs.
@@ -970,11 +982,7 @@ pub struct ConfigToml {
     #[serde(default)]
     // Uses the raw MCP input shape (custom deserialization) rather than `McpServerConfig`.
     #[schemars(schema_with = "crate::config::schema::mcp_servers_schema")]
-    pub mcp_servers: HashMap<String, McpServerConfig>,
-
-    /// Startup policy for MCP servers (eager, lazy, manual).
-    #[serde(default)]
-    pub mcp_startup_mode: Option<McpStartupMode>,
+    pub mcp_servers: McpServersToml,
 
     /// Preferred backend for storing MCP OAuth credentials.
     /// keyring: Use an OS-specific keyring service.
@@ -1995,8 +2003,10 @@ impl Config {
             .set(sandbox_policy)
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, format!("{e}")))?;
 
-        let mcp_servers = constrain_mcp_servers(cfg.mcp_servers.clone(), mcp_servers.as_ref())
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, format!("{e}")))?;
+        let mcp_servers =
+            constrain_mcp_servers(cfg.mcp_servers.servers.clone(), mcp_servers.as_ref()).map_err(
+                |e| std::io::Error::new(std::io::ErrorKind::InvalidInput, format!("{e}")),
+            )?;
 
         let config = Self {
             model,
@@ -2034,7 +2044,7 @@ impl Config {
             // is important in code to differentiate the mode from the store implementation.
             mcp_oauth_credentials_store_mode: cfg.mcp_oauth_credentials_store.unwrap_or_default(),
             mcp_oauth_callback_port: cfg.mcp_oauth_callback_port,
-            mcp_startup_mode: cfg.mcp_startup_mode.unwrap_or_default(),
+            mcp_servers_startup_mode: cfg.mcp_servers.startup_mode.unwrap_or_default(),
             model_providers,
             project_doc_max_bytes: cfg.project_doc_max_bytes.unwrap_or(PROJECT_DOC_MAX_BYTES),
             project_doc_fallback_filenames: cfg
@@ -4434,7 +4444,7 @@ model_verbosity = "high"
                 worktrees_pinned_paths: Vec::new(),
                 cli_auth_credentials_store_mode: Default::default(),
                 mcp_servers: Constrained::allow_any(HashMap::new()),
-                mcp_startup_mode: McpStartupMode::default(),
+                mcp_servers_startup_mode: McpStartupMode::default(),
                 mcp_oauth_credentials_store_mode: Default::default(),
                 mcp_oauth_callback_port: None,
                 model_providers: fixture.model_provider_map.clone(),
@@ -4541,7 +4551,7 @@ model_verbosity = "high"
             worktrees_pinned_paths: Vec::new(),
             cli_auth_credentials_store_mode: Default::default(),
             mcp_servers: Constrained::allow_any(HashMap::new()),
-            mcp_startup_mode: McpStartupMode::default(),
+            mcp_servers_startup_mode: McpStartupMode::default(),
             mcp_oauth_credentials_store_mode: Default::default(),
             mcp_oauth_callback_port: None,
             model_providers: fixture.model_provider_map.clone(),
@@ -4663,7 +4673,7 @@ model_verbosity = "high"
             worktrees_pinned_paths: Vec::new(),
             cli_auth_credentials_store_mode: Default::default(),
             mcp_servers: Constrained::allow_any(HashMap::new()),
-            mcp_startup_mode: McpStartupMode::default(),
+            mcp_servers_startup_mode: McpStartupMode::default(),
             mcp_oauth_credentials_store_mode: Default::default(),
             mcp_oauth_callback_port: None,
             model_providers: fixture.model_provider_map.clone(),
@@ -4771,7 +4781,7 @@ model_verbosity = "high"
             worktrees_pinned_paths: Vec::new(),
             cli_auth_credentials_store_mode: Default::default(),
             mcp_servers: Constrained::allow_any(HashMap::new()),
-            mcp_startup_mode: McpStartupMode::default(),
+            mcp_servers_startup_mode: McpStartupMode::default(),
             mcp_oauth_credentials_store_mode: Default::default(),
             mcp_oauth_callback_port: None,
             model_providers: fixture.model_provider_map.clone(),

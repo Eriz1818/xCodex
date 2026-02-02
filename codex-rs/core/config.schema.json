@@ -2219,18 +2219,16 @@
       "additionalProperties": {
         "$ref": "#/definitions/RawMcpServerConfig"
       },
-      "default": {},
+      "default": {
+        "startup_mode": null
+      },
       "description": "Definition for MCP servers that Codex can reach out to for tool calls.",
-      "type": "object"
-    },
-    "mcp_startup_mode": {
-      "allOf": [
-        {
+      "properties": {
+        "startup_mode": {
           "$ref": "#/definitions/McpStartupMode"
         }
-      ],
-      "default": null,
-      "description": "Startup policy for MCP servers (eager, lazy, manual)."
+      },
+      "type": "object"
     },
     "model": {
       "description": "Optional override of model selection.",

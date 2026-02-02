@@ -1047,7 +1047,7 @@ impl Session {
                     &sess.conversation_id.to_string(),
                     &session_configuration.cwd,
                 )),
-                config.mcp_startup_mode,
+                config.mcp_servers_startup_mode,
                 config.codex_home.clone(),
             )
             .await;
@@ -2532,7 +2532,7 @@ impl Session {
             state
                 .session_configuration
                 .original_config_do_not_use
-                .mcp_startup_mode
+                .mcp_servers_startup_mode
         };
         let startup_mode = match startup_mode {
             McpStartupMode::Manual => McpStartupMode::Eager,

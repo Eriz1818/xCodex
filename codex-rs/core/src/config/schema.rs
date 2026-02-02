@@ -1,4 +1,5 @@
 use crate::config::ConfigToml;
+use crate::config::types::McpStartupMode;
 use crate::config::types::RawMcpServerConfig;
 use crate::features::FEATURES;
 use schemars::r#gen::SchemaGenerator;
@@ -43,10 +44,13 @@ pub(crate) fn mcp_servers_schema(schema_gen: &mut SchemaGenerator) -> Schema {
         ..Default::default()
     };
 
-    let validation = ObjectValidation {
-        additional_properties: Some(Box::new(schema_gen.subschema_for::<RawMcpServerConfig>())),
-        ..Default::default()
-    };
+    let mut validation = ObjectValidation::default();
+    validation.properties.insert(
+        "startup_mode".to_string(),
+        schema_gen.subschema_for::<McpStartupMode>(),
+    );
+    validation.additional_properties =
+        Some(Box::new(schema_gen.subschema_for::<RawMcpServerConfig>()));
     object.object = Some(Box::new(validation));
 
     Schema::Object(object)

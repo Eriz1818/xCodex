@@ -468,7 +468,7 @@ async fn lazy_startup_starts_on_tool_call() -> anyhow::Result<()> {
 
     let fixture = test_codex()
         .with_config(move |config| {
-            config.mcp_startup_mode = codex_core::config::types::McpStartupMode::Lazy;
+            config.mcp_servers_startup_mode = codex_core::config::types::McpStartupMode::Lazy;
             let mut servers = config.mcp_servers.get().clone();
             servers.insert(
                 server_name.to_string(),
