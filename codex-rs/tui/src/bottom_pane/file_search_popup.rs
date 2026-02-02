@@ -149,3 +149,19 @@ impl WidgetRef for &FileSearchPopup {
         );
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::bottom_pane::selection_popup_common::assert_popup_surface_bg;
+    use ratatui::layout::Rect;
+    use ratatui::widgets::WidgetRef;
+
+    #[test]
+    fn popup_surface_matches_shared_background() {
+        let popup = FileSearchPopup::new();
+        assert_popup_surface_bg(Rect::new(0, 0, 32, 4), |area, buf| {
+            (&popup).render_ref(area, buf);
+        });
+    }
+}

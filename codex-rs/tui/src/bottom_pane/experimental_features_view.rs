@@ -298,3 +298,30 @@ fn experimental_popup_hint_line() -> Line<'static> {
         " to save for next conversation".into(),
     ])
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::bottom_pane::selection_popup_common::assert_popup_surface_bg;
+    use crate::render::renderable::Renderable;
+    use ratatui::layout::Rect;
+    use tokio::sync::mpsc::unbounded_channel;
+
+    #[test]
+    fn popup_surface_matches_shared_background() {
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let view = ExperimentalFeaturesView::new(
+            vec![ExperimentalFeatureItem {
+                feature: Feature::UnifiedExec,
+                name: "Planning".to_string(),
+                description: "Plan implementation steps".to_string(),
+                enabled: true,
+            }],
+            tx,
+        );
+        assert_popup_surface_bg(Rect::new(0, 0, 60, view.desired_height(60)), |area, buf| {
+            view.render(area, buf);
+        });
+    }
+}

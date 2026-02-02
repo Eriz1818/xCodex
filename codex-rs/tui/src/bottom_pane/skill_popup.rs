@@ -210,3 +210,25 @@ fn skill_popup_hint_line() -> Line<'static> {
         " to close".into(),
     ])
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::bottom_pane::selection_popup_common::assert_popup_surface_bg;
+    use ratatui::layout::Rect;
+    use ratatui::widgets::WidgetRef;
+
+    #[test]
+    fn popup_surface_matches_shared_background() {
+        let popup = SkillPopup::new(vec![MentionItem {
+            display_name: "Repo Scout".to_string(),
+            description: Some("Summarize the repo layout".to_string()),
+            insert_text: "repo_scout".to_string(),
+            search_terms: vec!["repo".to_string(), "scout".to_string()],
+            path: None,
+        }]);
+        assert_popup_surface_bg(Rect::new(0, 0, 32, 5), |area, buf| {
+            popup.render_ref(area, buf);
+        });
+    }
+}

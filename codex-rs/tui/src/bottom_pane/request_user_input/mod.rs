@@ -1227,6 +1227,7 @@ impl BottomPaneView for RequestUserInputOverlay {
 mod tests {
     use super::*;
     use crate::app_event::AppEvent;
+    use crate::bottom_pane::selection_popup_common::assert_popup_surface_bg;
     use crate::bottom_pane::selection_popup_common::menu_surface_inset;
     use crate::render::renderable::Renderable;
     use codex_protocol::request_user_input::RequestUserInputQuestion;
@@ -1291,6 +1292,25 @@ mod tests {
                 },
             ]),
         }
+    }
+
+    #[test]
+    fn popup_surface_matches_shared_background() {
+        let (tx, _rx) = test_sender();
+        let overlay = RequestUserInputOverlay::new(
+            request_event("turn-1", vec![question_with_options("q1", "Heading")]),
+            tx,
+            true,
+            false,
+            false,
+        );
+
+        assert_popup_surface_bg(
+            Rect::new(0, 0, 60, overlay.desired_height(60)),
+            |area, buf| {
+                overlay.render(area, buf);
+            },
+        );
     }
 
     fn question_with_wrapped_options(id: &str, header: &str) -> RequestUserInputQuestion {

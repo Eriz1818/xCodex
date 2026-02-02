@@ -384,6 +384,8 @@ fn skills_toggle_hint_line() -> Line<'static> {
 mod tests {
     use super::*;
     use crate::app_event::AppEvent;
+    use crate::bottom_pane::selection_popup_common::assert_popup_surface_bg;
+    use crate::render::renderable::Renderable;
     use insta::assert_snapshot;
     use ratatui::layout::Rect;
     use tokio::sync::mpsc::unbounded_channel;
@@ -433,5 +435,22 @@ mod tests {
         ];
         let view = SkillsToggleView::new(items, tx);
         assert_snapshot!("skills_toggle_basic", render_lines(&view, 72));
+    }
+
+    #[test]
+    fn popup_surface_matches_shared_background() {
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let items = vec![SkillsToggleItem {
+            name: "Repo Scout".to_string(),
+            skill_name: "repo_scout".to_string(),
+            description: "Summarize the repo layout".to_string(),
+            enabled: true,
+            path: PathBuf::from("/tmp/skills/repo_scout.toml"),
+        }];
+        let view = SkillsToggleView::new(items, tx);
+        assert_popup_surface_bg(Rect::new(0, 0, 40, 6), |area, buf| {
+            view.render(area, buf);
+        });
     }
 }

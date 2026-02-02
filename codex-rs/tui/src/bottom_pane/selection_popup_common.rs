@@ -19,6 +19,15 @@ use crate::style::user_message_style;
 
 use super::scroll_state::ScrollState;
 
+#[cfg(test)]
+use codex_core::themes::ThemeCatalog;
+#[cfg(test)]
+use codex_core::themes::ThemeColor;
+#[cfg(test)]
+use codex_core::themes::ThemeDefinition;
+#[cfg(test)]
+use codex_core::themes::ThemeVariant;
+
 /// A generic representation of a display row for selection popups.
 #[derive(Default)]
 pub(crate) struct GenericDisplayRow {
@@ -64,6 +73,67 @@ pub(crate) fn render_menu_surface(area: Rect, buf: &mut Buffer) -> Rect {
         .style(popup_surface_style())
         .render(area, buf);
     menu_surface_inset(area)
+}
+
+#[cfg(test)]
+fn test_popup_surface_theme() -> ThemeDefinition {
+    let mut theme = ThemeCatalog::built_in_default();
+    theme.name = "test-popup-surface".to_string();
+    theme.variant = ThemeVariant::Dark;
+    theme.roles.transcript_bg = Some(ThemeColor::new("#121621"));
+    theme.roles.composer_bg = Some(ThemeColor::new("#1b2230"));
+    theme
+}
+
+#[cfg(test)]
+fn assert_popup_bg(
+    area: Rect,
+    render: impl FnOnce(Rect, &mut Buffer),
+    expected_bg: Option<ratatui::style::Color>,
+) {
+    let mut buf = Buffer::empty(area);
+    render(area, &mut buf);
+
+    for y in area.top()..area.bottom() {
+        for x in area.left()..area.right() {
+            let cell = &buf[(x, y)];
+            if cell.symbol().is_empty() {
+                continue;
+            }
+            pretty_assertions::assert_eq!(
+                cell.style().bg,
+                expected_bg,
+                "popup surface bg mismatch at ({x},{y})"
+            );
+        }
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn assert_popup_surface_bg(area: Rect, render: impl FnOnce(Rect, &mut Buffer)) {
+    let _guard = crate::theme::test_style_guard();
+    crate::theme::preview_definition(&test_popup_surface_theme());
+    assert_popup_bg(area, render, popup_surface_style().bg);
+}
+
+#[cfg(test)]
+pub(crate) fn assert_transcript_surface_bg(area: Rect, render: impl FnOnce(Rect, &mut Buffer)) {
+    let _guard = crate::theme::test_style_guard();
+    crate::theme::preview_definition(&test_popup_surface_theme());
+    assert_popup_bg(area, render, crate::theme::transcript_style().bg);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::theme;
+
+    #[test]
+    fn popup_surface_uses_composer_background() {
+        let _guard = theme::test_style_guard();
+        theme::preview_definition(&test_popup_surface_theme());
+        pretty_assertions::assert_eq!(popup_surface_style().bg, crate::theme::composer_style().bg);
+    }
 }
 
 pub(crate) fn wrap_styled_line<'a>(line: &'a Line<'a>, width: u16) -> Vec<Line<'a>> {

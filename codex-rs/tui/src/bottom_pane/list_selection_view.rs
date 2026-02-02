@@ -588,6 +588,7 @@ mod tests {
     use super::*;
     use crate::app_event::AppEvent;
     use crate::bottom_pane::popup_consts::standard_popup_hint_line;
+    use crate::bottom_pane::selection_popup_common::assert_popup_surface_bg;
     use insta::assert_snapshot;
     use ratatui::buffer::Buffer;
     use ratatui::layout::Rect;
@@ -727,6 +728,14 @@ mod tests {
             lines.contains("filters"),
             "expected search query line to include rendered query, got {lines:?}"
         );
+    }
+
+    #[test]
+    fn popup_surface_matches_shared_background() {
+        let view = make_selection_view(None);
+        assert_popup_surface_bg(Rect::new(0, 0, 48, view.desired_height(48)), |area, buf| {
+            view.render(area, buf);
+        });
     }
 
     #[test]
