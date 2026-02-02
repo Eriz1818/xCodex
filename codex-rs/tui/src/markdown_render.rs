@@ -553,11 +553,10 @@ where
         };
         if self.in_code_block {
             let mut code_style = self.styles.code;
-            if self.code_block_highlighting
-                || !crate::render::highlight::syntax_highlighting_enabled()
-            {
-                code_style.fg = None;
-            }
+            // Avoid coloring entire fenced code blocks with the accent color.
+            // If syntax highlighting is available, token spans will be styled individually; if
+            // it's not, fall back to the default foreground for the whole block.
+            code_style.fg = None;
             style = style.patch(code_style);
         }
         let was_pending = self.pending_marker_line;

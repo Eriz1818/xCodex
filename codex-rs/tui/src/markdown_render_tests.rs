@@ -657,7 +657,7 @@ fn link() {
 #[test]
 fn code_block_unhighlighted() {
     let text = render_markdown_text("```\nfn main() {}\n```\n");
-    let expected = Text::from_iter([Line::from_iter(["", "fn main() {}"]).cyan()]);
+    let expected = Text::from_iter([Line::from_iter(["", "fn main() {}"])]);
     assert_eq!(text, expected);
 }
 
@@ -666,8 +666,8 @@ fn code_block_multiple_lines_root() {
     let md = "```\nfirst\nsecond\n```\n";
     let text = render_markdown_text(md);
     let expected = Text::from_iter([
-        Line::from_iter(["", "first"]).cyan(),
-        Line::from_iter(["", "second"]).cyan(),
+        Line::from_iter(["", "first"]),
+        Line::from_iter(["", "second"]),
     ]);
     assert_eq!(text, expected);
 }
@@ -677,9 +677,9 @@ fn code_block_indented() {
     let md = "    function greet() {\n      console.log(\"Hi\");\n    }\n";
     let text = render_markdown_text(md);
     let expected = Text::from_iter([
-        Line::from_iter(["    ", "function greet() {"]).cyan(),
-        Line::from_iter(["    ", "  console.log(\"Hi\");"]).cyan(),
-        Line::from_iter(["    ", "}"]).cyan(),
+        Line::from_iter(["    ", "function greet() {"]),
+        Line::from_iter(["    ", "  console.log(\"Hi\");"]),
+        Line::from_iter(["    ", "}"]),
     ]);
     assert_eq!(text, expected);
 }

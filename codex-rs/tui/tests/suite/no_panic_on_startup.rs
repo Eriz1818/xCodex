@@ -12,6 +12,14 @@ async fn malformed_rules_should_not_panic() -> anyhow::Result<()> {
         return Ok(());
     }
 
+    // This test exercises the CLI startup path via the `codex` binary. When running under
+    // `cargo test -p codex-tui`, Cargo does not necessarily build `codex-cli`, so the binary
+    // may not be present. In CI (or Bazel) this is typically available; skip locally when it
+    // isn't to avoid a hard failure.
+    if codex_utils_cargo_bin::cargo_bin("codex").is_err() {
+        return Ok(());
+    }
+
     let tmp = tempfile::tempdir()?;
     let codex_home = tmp.path();
     std::fs::write(
