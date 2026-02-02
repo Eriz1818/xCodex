@@ -30,7 +30,7 @@ Control Codex’s behavior during an interactive session with slash commands.
 | `/status`       | open the status/settings menu (bottom pane)                                |
 | `/settings`     | open the status/settings menu (bottom pane)                                |
 | `/worktree`     | switch this session to a different git worktree (see also: `/worktree shared`) |
-| `/mcp`          | list configured MCP tools (use `/mcp load <server>` to start a server)      |
+| `/mcp`          | list configured MCP tools and manage servers (`load`, `retry`, `timeout`)    |
 | `/experimental` | open the experimental menu to enable features from our beta program        |
 | `/skills`       | browse and insert skills (experimental; see [docs/skills.md](./skills.md)) |
 | `/logout`       | log out of Codex                                                           |

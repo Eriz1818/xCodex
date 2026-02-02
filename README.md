@@ -29,6 +29,7 @@ When filing issues, include repro steps and attach the files printed by `/feedba
 - Automate xcodex with **three levels of hooks**: external (spawn), Python Host “py-box” (persistent), and in-proc PyO3 (advanced) (start at [`docs/xcodex/hooks.md`](docs/xcodex/hooks.md)).
 - Manage background terminals with `/ps` (list) and `/ps-kill` (terminate) (see [`docs/xcodex/background-terminals.md`](docs/xcodex/background-terminals.md)).
 - Inspect and manage MCP servers from inside the TUI with `/mcp` (including startup status, timings, and retry hints) (see [`docs/config.md#mcp_servers`](docs/config.md#mcp_servers)).
+- Speed up startup by deferring MCP server startup with lazy/manual modes (see [`docs/xcodex/lazy-mcp-loading.md`](docs/xcodex/lazy-mcp-loading.md) and [`docs/config.md#mcp_startup_mode`](docs/config.md#mcp_startup_mode)).
 - Keep sensitive paths out of AI context with ignore files (`.aiexclude` / `.xcodexignore`) (see [`docs/xcodex/ignore-files.md`](docs/xcodex/ignore-files.md) and [`docs/config.md#exclusion`](docs/config.md#exclusion-sensitive-path-controls)).
 
 **Fork-only docs**

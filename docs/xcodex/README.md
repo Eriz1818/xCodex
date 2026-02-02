@@ -23,6 +23,7 @@ xcodex (xtreme-codex) is an effort to add features to upstream Codex CLI.
 - Background terminals: `docs/xcodex/background-terminals.md`
 - Announcements (startup tips): `docs/xcodex/announcements.md`
 - Themes: `docs/xcodex/themes.md` (start here) and `docs/xcodex/themes-mbadolato.md` (built-in catalog details)
+- Lazy MCP loading: `docs/xcodex/lazy-mcp-loading.md`
 
 ## Local install (as `xcodex`)
 
