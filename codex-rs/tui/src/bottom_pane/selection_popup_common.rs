@@ -47,6 +47,11 @@ pub(crate) const fn menu_surface_padding_height() -> u16 {
     MENU_SURFACE_INSET_V * 2
 }
 
+/// Shared popup surface style (composer background + user message base).
+pub(crate) fn popup_surface_style() -> Style {
+    user_message_style().patch(crate::theme::composer_style())
+}
+
 /// Paint the shared menu background and return the inset content area.
 ///
 /// This keeps the surface treatment consistent across selection-style overlays
@@ -56,7 +61,7 @@ pub(crate) fn render_menu_surface(area: Rect, buf: &mut Buffer) -> Rect {
         return area;
     }
     Block::default()
-        .style(user_message_style().patch(crate::theme::composer_style()))
+        .style(popup_surface_style())
         .render(area, buf);
     menu_surface_inset(area)
 }

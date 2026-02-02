@@ -10,6 +10,7 @@ use ratatui::text::Line;
 use ratatui::widgets::Block;
 use ratatui::widgets::Widget;
 
+use super::selection_popup_common::popup_surface_style;
 use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
 use crate::key_hint;
@@ -17,7 +18,6 @@ use crate::render::Insets;
 use crate::render::RectExt as _;
 use crate::render::renderable::ColumnRenderable;
 use crate::render::renderable::Renderable;
-use crate::style::user_message_style;
 
 use codex_core::features::Feature;
 
@@ -218,7 +218,7 @@ impl Renderable for ExperimentalFeaturesView {
         let [content_area, footer_area] =
             Layout::vertical([Constraint::Fill(1), Constraint::Length(1)]).areas(area);
 
-        let base_style = user_message_style().patch(crate::theme::composer_style());
+        let base_style = popup_surface_style();
         Block::default().style(base_style).render(content_area, buf);
         Block::default().style(base_style).render(footer_area, buf);
 

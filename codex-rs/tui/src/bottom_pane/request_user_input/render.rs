@@ -14,11 +14,11 @@ use crate::bottom_pane::scroll_state::ScrollState;
 use crate::bottom_pane::selection_popup_common::measure_rows_height;
 use crate::bottom_pane::selection_popup_common::menu_surface_inset;
 use crate::bottom_pane::selection_popup_common::menu_surface_padding_height;
+use crate::bottom_pane::selection_popup_common::popup_surface_style;
 use crate::bottom_pane::selection_popup_common::render_menu_surface;
 use crate::bottom_pane::selection_popup_common::render_rows;
 use crate::bottom_pane::selection_popup_common::wrap_styled_line;
 use crate::render::renderable::Renderable;
-use crate::style::user_message_style;
 
 use super::DESIRED_SPACERS_BETWEEN_SECTIONS;
 use super::RequestUserInputOverlay;
@@ -215,7 +215,7 @@ impl RequestUserInputOverlay {
             width: content_area.width,
             height: rows_height,
         };
-        let base_style = user_message_style().patch(crate::theme::composer_style());
+        let base_style = popup_surface_style();
         render_rows(
             rows_area,
             buf,
@@ -319,7 +319,7 @@ impl RequestUserInputOverlay {
                 // Ensure the selected option is visible in the scroll window.
                 options_state
                     .ensure_visible(option_rows.len(), sections.options_area.height as usize);
-                let base_style = user_message_style().patch(crate::theme::composer_style());
+                let base_style = popup_surface_style();
                 render_rows(
                     sections.options_area,
                     buf,
