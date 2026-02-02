@@ -558,7 +558,7 @@ Set `project_root_markers = []` to skip searching parent directories and treat t
 
 ## MCP integration
 
-### mcp_startup_mode
+### mcp_servers.startup_mode
 
 Set the default MCP startup policy for all servers:
 
@@ -566,9 +566,17 @@ Set the default MCP startup policy for all servers:
 - `lazy`: start servers only when a tool/resource is used.
 - `manual`: never auto-start servers (use explicit load/refresh paths).
 
+Configure this in `config.toml`:
+
+```toml
+[mcp_servers]
+# eager (default) | lazy | manual
+startup_mode = "lazy"
+```
+
 You can override this per run with `xcodex --mcp-startup-mode <eager|lazy|manual>`.
 
-Individual servers can override this with `mcp_servers.<id>.startup_mode`.
+Individual servers can override this with `mcp_servers.<id>.startup_mode` (per-server wins).
 
 When running in `manual` mode, MCP servers only start after an explicit load
 action (for example, `/mcp load <server>` in the TUI).
@@ -1360,7 +1368,7 @@ Valid values:
 | `ghost_snapshot.disable_warnings`                | boolean                                                           | Disable every warnings around ghost snapshot (large files, directory, ...)                                                      |
 | `ghost_snapshot.ignore_large_untracked_files`    | number                                                            | Exclude untracked files larger than this many bytes from ghost snapshots (default: 10 MiB). Set to `0` to disable.              |
 | `ghost_snapshot.ignore_large_untracked_dirs`     | number                                                            | Ignore untracked directories with at least this many files (default: 200). Set to `0` to disable.                               |
-| `mcp_startup_mode`                               | `eager` \| `lazy` \| `manual`                                      | Default MCP startup policy (default: `eager`).                                                                                 |
+| `mcp_servers.startup_mode`                       | `eager` \| `lazy` \| `manual`                                      | Default MCP startup policy (default: `eager`).                                                                                 |
 | `mcp_servers.<id>.command`                       | string                                                            | MCP server launcher command (stdio servers only).                                                                               |
 | `mcp_servers.<id>.args`                          | array<string>                                                     | MCP server args (stdio servers only).                                                                                           |
 | `mcp_servers.<id>.env`                           | map<string,string>                                                | MCP server env vars (stdio servers only).                                                                                       |

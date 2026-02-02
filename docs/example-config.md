@@ -198,9 +198,6 @@ chatgpt_base_url = "https://chatgpt.com/backend-api/"
 # Preferred store for MCP OAuth credentials: auto (default) | file | keyring
 mcp_oauth_credentials_store = "auto"
 
-# Default MCP startup policy: eager (default) | lazy | manual
-mcp_startup_mode = "eager"
-
 ################################################################################
 # Project Documentation Controls
 ################################################################################
@@ -247,6 +244,8 @@ experimental_use_freeform_apply_patch = false
 
 # Define MCP servers under this table. Leave empty to disable.
 [mcp_servers]
+# Default MCP startup policy: eager (default) | lazy | manual
+# startup_mode = "eager"
 
 # --- Example: STDIO transport ---
 # [mcp_servers.docs]

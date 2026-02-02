@@ -10,7 +10,7 @@ This doc explains:
 - What config options are new/important
 - How to control MCP startup from the TUI (`/mcp ...`)
 
-For the full configuration reference, see `docs/config.md#mcp_startup_mode` and
+For the full configuration reference, see `docs/config.md#mcp-integration` and
 `docs/config.md#mcp_servers`.
 
 ## Startup modes
@@ -36,13 +36,14 @@ Startup mode can be set globally (default for all servers) and overridden per se
 
 ## Configuration
 
-### Global default (`mcp_startup_mode`)
+### Global default (`mcp_servers.startup_mode`)
 
 In `$CODEX_HOME/config.toml`:
 
 ```toml
+[mcp_servers]
 # eager (default) | lazy | manual
-mcp_startup_mode = "lazy"
+startup_mode = "lazy"
 ```
 
 ### Per-server overrides
@@ -115,13 +116,15 @@ When an MCP server fails to start, the UI may also suggest retrying (for example
 ### Fast startup, only load what you use
 
 ```toml
-mcp_startup_mode = "lazy"
+[mcp_servers]
+startup_mode = "lazy"
 ```
 
 ### Keep most servers eager, but defer one slow server
 
 ```toml
-mcp_startup_mode = "eager"
+[mcp_servers]
+startup_mode = "eager"
 
 [mcp_servers.big_server]
 command = "big-mcp-server"
@@ -132,7 +135,8 @@ startup_timeout_sec = 60
 ### Fully manual control
 
 ```toml
-mcp_startup_mode = "manual"
+[mcp_servers]
+startup_mode = "manual"
 ```
 
 Then use `/mcp load <name>` when you actually want a server running.
@@ -152,4 +156,3 @@ If tools are missing:
 
 - Check `enabled_tools` / `disabled_tools` in `config.toml`.
 - Remember: in `lazy`/`manual`, a server may need to be started before its tool list can be discovered.
-
