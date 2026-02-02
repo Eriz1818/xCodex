@@ -680,6 +680,7 @@ fn esc_hint_line(esc_backtrack_hint: bool) -> Line<'static> {
 
 fn shortcut_overlay_lines(state: ShortcutsState) -> Vec<Line<'static>> {
     let mut commands = Line::from("");
+    let mut tools = Line::from("");
     let mut shell_commands = Line::from("");
     let mut newline = Line::from("");
     let mut queue_message_tab = Line::from("");
@@ -695,6 +696,7 @@ fn shortcut_overlay_lines(state: ShortcutsState) -> Vec<Line<'static>> {
         if let Some(text) = descriptor.overlay_entry(state) {
             match descriptor.id {
                 ShortcutId::Commands => commands = text,
+                ShortcutId::Tools => tools = text,
                 ShortcutId::ShellCommands => shell_commands = text,
                 ShortcutId::InsertNewline => newline = text,
                 ShortcutId::QueueMessageTab => queue_message_tab = text,
@@ -711,6 +713,7 @@ fn shortcut_overlay_lines(state: ShortcutsState) -> Vec<Line<'static>> {
 
     let mut ordered = vec![
         commands,
+        tools,
         shell_commands,
         newline,
         queue_message_tab,
@@ -793,6 +796,7 @@ pub(crate) fn context_window_line(percent: Option<i64>, used_tokens: Option<i64>
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum ShortcutId {
     Commands,
+    Tools,
     ShellCommands,
     InsertNewline,
     QueueMessageTab,
@@ -880,6 +884,15 @@ const SHORTCUTS: &[ShortcutDescriptor] = &[
         }],
         prefix: "",
         label: " for commands",
+    },
+    ShortcutDescriptor {
+        id: ShortcutId::Tools,
+        bindings: &[ShortcutBinding {
+            key: key_hint::ctrl(KeyCode::Char('o')),
+            condition: DisplayCondition::Always,
+        }],
+        prefix: "",
+        label: " for ⚡Tools",
     },
     ShortcutDescriptor {
         id: ShortcutId::ShellCommands,
@@ -1410,5 +1423,25 @@ mod tests {
             .key;
 
         assert_eq!(actual_key, expected_key);
+    }
+
+    #[test]
+    fn tools_shortcut_is_ctrl_o() {
+        let descriptor = SHORTCUTS
+            .iter()
+            .find(|descriptor| descriptor.id == ShortcutId::Tools)
+            .expect("tools shortcut");
+
+        let actual_key = descriptor
+            .binding_for(ShortcutsState {
+                use_shift_enter_hint: false,
+                esc_backtrack_hint: false,
+                is_wsl: false,
+                collaboration_modes_enabled: false,
+            })
+            .expect("shortcut binding")
+            .key;
+
+        assert_eq!(actual_key, key_hint::ctrl(KeyCode::Char('o')));
     }
 }
