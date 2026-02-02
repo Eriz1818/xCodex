@@ -73,7 +73,7 @@ fn default_login() -> bool {
 }
 
 fn default_tty() -> bool {
-    false
+    true
 }
 
 #[async_trait]
@@ -356,6 +356,16 @@ mod tests {
         let command = get_command(&args, Arc::new(default_user_shell()));
 
         assert_eq!(command[2], "echo hello");
+        Ok(())
+    }
+
+    #[test]
+    fn test_exec_command_defaults_tty_enabled() -> anyhow::Result<()> {
+        let json = r#"{"cmd": "echo hello"}"#;
+
+        let args: ExecCommandArgs = parse_arguments(json)?;
+
+        assert!(args.tty);
         Ok(())
     }
 }

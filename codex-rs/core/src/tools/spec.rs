@@ -222,7 +222,7 @@ fn create_exec_command_tool(include_prefix_rule: bool) -> ToolSpec {
             "tty".to_string(),
             JsonSchema::Boolean {
                 description: Some(
-                    "Whether to allocate a TTY for the command. Defaults to false (plain pipes); set to true to open a PTY and access TTY process."
+                    "Whether to allocate a TTY for the command. Defaults to true; set to false to use plain pipes."
                         .to_string(),
                 ),
             }
