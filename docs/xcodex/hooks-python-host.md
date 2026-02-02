@@ -58,8 +58,10 @@ If you want to configure it manually, a minimal example looks like:
 ```toml
 [hooks.host]
 enabled = true
-command = ["python3", "-u", "hooks/host/python/host.py", "hooks/host/python/example_hook.py"]
+command = ["python3", "-u", "/Users/alice/.xcodex/hooks/host/python/host.py", "/Users/alice/.xcodex/hooks/host/python/example_hook.py"]
 ```
+
+Replace `/Users/alice/.xcodex` with your `CODEX_HOME` (see `xcodex hooks paths`). Relative paths also work because the host process runs with `cwd=CODEX_HOME`.
 
 3) Test the configured host without running a full session:
 
