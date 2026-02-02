@@ -137,8 +137,13 @@ cflags="-pthread"
 cxxflags="-pthread"
 if [[ "${TARGET}" == "aarch64-unknown-linux-musl" ]]; then
   # BoringSSL enables -Wframe-larger-than=25344 under clang and treats warnings as errors.
-  cflags="${cflags} -Wno-error=frame-larger-than"
-  cxxflags="${cxxflags} -Wno-error=frame-larger-than"
+  # Some musl GCC toolchains don't recognize -Wno-error=frame-larger-than, so probe support.
+  if printf 'int main(void){return 0;}\n' | "${cc}" -Wno-error=frame-larger-than -x c - -c -o /dev/null >/dev/null 2>&1; then
+    cflags="${cflags} -Wno-error=frame-larger-than"
+  fi
+  if printf 'int main(void){return 0;}\n' | "${cxx}" -Wno-error=frame-larger-than -x c++ - -c -o /dev/null >/dev/null 2>&1; then
+    cxxflags="${cxxflags} -Wno-error=frame-larger-than"
+  fi
 fi
 
 echo "CFLAGS=${cflags}" >> "$GITHUB_ENV"
