@@ -49,6 +49,35 @@ See:
 - `docs/config.md` (`[tui]`)
 - `docs/example-config.md`
 
+## Transcript rendering
+
+xcodex also exposes transcript-related rendering toggles. These affect how the transcript is *displayed* in the TUI (they do not change what is sent to the model).
+
+### Toggle via `/settings`
+
+```text
+/settings transcript diff-highlight           [on|off|toggle|status]
+/settings transcript highlight-past-prompts   [on|off|toggle|status]
+/settings transcript syntax-highlight         [on|off|toggle|status]
+```
+
+- `diff-highlight`: emphasizes added/removed lines when rendering diffs in the transcript.
+- `highlight-past-prompts`: adds a theme-derived background to past user prompts in the transcript.
+- `syntax-highlight`: syntax-highlights fenced code blocks in the transcript when supported (themeable).
+
+### Configure via `config.toml`
+
+These keys live under `[tui]`:
+
+```toml
+[tui]
+transcript_diff_highlight = true
+transcript_user_prompt_highlight = true
+transcript_syntax_highlight = true
+```
+
+For theming syntax highlighting (token colors), see `docs/xcodex/themes.md` and `docs/config.md#themes` (`roles.code_*`).
+
 ## Related
 
 - `docs/slash_commands.md`

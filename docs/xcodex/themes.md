@@ -70,6 +70,45 @@ In the `/theme` UI:
 - You can preview changes live.
 - You can edit and save a customized copy into `$CODEX_HOME/themes`.
 
+## Syntax highlighting
+
+xcodex can syntax-highlight code in the transcript (and other code-ish surfaces like diffs/commands) using your active theme.
+
+Two knobs control this:
+
+1) Enable/disable highlighting
+
+- Toggle at runtime (persists to config):
+  - `/settings transcript syntax-highlight [on|off|toggle|status]`
+- Or set it directly in `config.toml`:
+  - `tui.transcript_syntax_highlight = true` (default)
+
+2) Theme colors for highlighted tokens
+
+Theme files can define `roles.code_*` entries to control the colors used for syntax highlighting. If a role is missing, xcodex falls back to palette-derived defaults.
+
+Common `roles.code_*` keys:
+
+- `roles.code_keyword`
+- `roles.code_operator`
+- `roles.code_comment`
+- `roles.code_string`
+- `roles.code_number`
+- `roles.code_type`
+- `roles.code_function`
+- `roles.code_constant`
+- `roles.code_macro`
+- `roles.code_punctuation`
+- `roles.code_variable`
+- `roles.code_property`
+- `roles.code_attribute`
+- `roles.code_module`
+- `roles.code_label`
+- `roles.code_tag`
+- `roles.code_embedded`
+
+Tip: Use `/theme` to experiment live, then save a copy when it looks right.
+
 ## Troubleshooting
 
 If `/theme` shows only built-ins:
@@ -81,4 +120,3 @@ If colors look wrong:
 
 - Check whether your terminal theme and xcodex theme are fighting (e.g., unusual terminal background).
 - Start from `docs/themes/example-dark.yaml` / `docs/themes/example-light.yaml` and adjust incrementally.
-
