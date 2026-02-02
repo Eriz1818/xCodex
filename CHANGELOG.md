@@ -7,6 +7,15 @@ This project follows SemVer (`xcodex-vX.Y.Z` / `xcodex-vX.Y.Z-alpha.N` tags) and
 - `@eriz1818/xcodex` (CLI wrapper + native `xcodex` binaries + bundled `rg`)
 - `@eriz1818/xcodex-responses-api-proxy` (native proxy binary)
 
+## 0.3.5
+
+Syntax highlighting, lazy MCP loading, and startup responsiveness fixes.
+
+- Syntax highlighting for: Bash (bash/sh/zsh), C, C++, CSS, Go, HTML, Java, JavaScript, JSON, Python, Ruby, Rust, TypeScript, YAML (see `docs/xcodex/themes.md`).
+- Resume/startup responsiveness fixes for faster session loading.
+- Lazy MCP loading to defer server startup until needed (see `docs/xcodex/lazy-mcp-loading.md`).
+- Internal code restructure for stability and maintainability.
+
 ## 0.3.0
 
 Themes, privacy controls, and collaboration UX improvements.

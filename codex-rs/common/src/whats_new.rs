@@ -41,16 +41,15 @@ mod tests {
 
     #[test]
     fn extracts_bullets_for_matching_version() {
-        let bullets = whats_new_bullets_for_version("0.3.0").expect("expected bullets");
+        let bullets = whats_new_bullets_for_version("0.3.5").expect("expected bullets");
         assert_eq!(
             bullets,
             vec![
-                "Themes: theme picker + preview, plus a built-in theme bundle (see `docs/xcodex/themes.md`)".to_string(),
-                "Privacy: sensitive-path exclusion + redaction controls (see `docs/xcodex/ignore-files.md`)".to_string(),
-                "Collaboration modes: improved UI + presets for different coding styles".to_string(),
-                "Permissions: improved `/permissions` flow and clearer approval UX".to_string(),
-                "Config: layered config.toml support + more settings toggles".to_string(),
-                "Read more: docs/xcodex/releases/0.3.0.md".to_string(),
+                "Syntax highlighting for: Bash (bash/sh/zsh), C, C++, CSS, Go, HTML, Java, JavaScript, JSON, Python, Ruby, Rust, TypeScript, YAML (see `docs/xcodex/themes.md`)".to_string(),
+                "Resume/startup responsiveness fixes for faster session loading".to_string(),
+                "Lazy MCP loading to avoid pulling servers until needed (see `docs/xcodex/lazy-mcp-loading.md`)".to_string(),
+                "Internal code restructure for stability and maintainability".to_string(),
+                "Read more: docs/xcodex/releases/0.3.5.md".to_string(),
             ]
         );
     }

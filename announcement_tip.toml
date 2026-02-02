@@ -27,6 +27,14 @@ version_regex = "^0\\.3\\.0$"
 target_app = "cli"
 
 [[announcements]]
+# Short-lived announcement for the current fork release.
+content = "Tip: xcodex now supports syntax highlighting and lazy MCP loading. See docs/xcodex/themes.md and docs/xcodex/lazy-mcp-loading.md."
+from_date = "2026-02-02"
+to_date = "2026-02-12"
+version_regex = "^0\\.3\\.5$"
+target_app = "cli"
+
+[[announcements]]
 # Example entry that should never match (kept as a reference).
 content = "This is a test announcement"
 version_regex = "^0\\.0\\.0$"

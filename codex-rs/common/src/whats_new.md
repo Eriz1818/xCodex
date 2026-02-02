@@ -1,7 +1,6 @@
-What's new in ⚡xtreme-Codex v0.3.0
-- Themes: theme picker + preview, plus a built-in theme bundle (see `docs/xcodex/themes.md`)
-- Privacy: sensitive-path exclusion + redaction controls (see `docs/xcodex/ignore-files.md`)
-- Collaboration modes: improved UI + presets for different coding styles
-- Permissions: improved `/permissions` flow and clearer approval UX
-- Config: layered config.toml support + more settings toggles
-- Read more: docs/xcodex/releases/0.3.0.md
+What's new in ⚡xtreme-Codex v0.3.5
+- Syntax highlighting for: Bash (bash/sh/zsh), C, C++, CSS, Go, HTML, Java, JavaScript, JSON, Python, Ruby, Rust, TypeScript, YAML (see `docs/xcodex/themes.md`)
+- Resume/startup responsiveness fixes for faster session loading
+- Lazy MCP loading to avoid pulling servers until needed (see `docs/xcodex/lazy-mcp-loading.md`)
+- Internal code restructure for stability and maintainability
+- Read more: docs/xcodex/releases/0.3.5.md
