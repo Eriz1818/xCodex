@@ -8,6 +8,10 @@ use codex_core::themes::ThemeVariant;
 use ratatui::style::Color;
 use ratatui::style::Style;
 use ratatui::style::Stylize as _;
+#[cfg(test)]
+use std::sync::Mutex;
+#[cfg(test)]
+use std::sync::MutexGuard;
 use std::sync::OnceLock;
 use std::sync::RwLock;
 use std::sync::atomic::AtomicU64;
@@ -63,6 +67,8 @@ pub(crate) struct ThemeStyles {
 
 static THEME_STYLES: OnceLock<RwLock<ThemeStyles>> = OnceLock::new();
 static THEME_VERSION: AtomicU64 = AtomicU64::new(0);
+#[cfg(test)]
+static THEME_TEST_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 
 pub(crate) fn init(config: &Config, terminal_bg: Option<(u8, u8, u8)>) {
     apply_from_config(config, terminal_bg);
@@ -112,6 +118,14 @@ pub(crate) fn preview(config: &Config, terminal_bg: Option<(u8, u8, u8)>, theme_
 
 pub(crate) fn preview_definition(theme: &codex_core::themes::ThemeDefinition) {
     set_styles(styles_for(theme, None, None));
+}
+
+#[cfg(test)]
+pub(crate) fn test_style_guard() -> MutexGuard<'static, ()> {
+    THEME_TEST_LOCK
+        .get_or_init(|| Mutex::new(()))
+        .lock()
+        .unwrap_or_else(|err| err.into_inner())
 }
 
 pub(crate) fn active_variant(config: &Config, terminal_bg: Option<(u8, u8, u8)>) -> ThemeVariant {
