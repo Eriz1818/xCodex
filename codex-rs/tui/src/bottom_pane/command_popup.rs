@@ -193,6 +193,10 @@ impl CommandPopup {
     }
 
     fn should_default_select_subcommand(&self) -> bool {
+        self.is_subcommand_context()
+    }
+
+    fn is_subcommand_context(&self) -> bool {
         !build_subcommand_matches(&self.command_filter, &self.command_line).is_empty()
     }
 
@@ -447,7 +451,11 @@ impl CommandPopup {
 
 impl WidgetRef for CommandPopup {
     fn render_ref(&self, area: Rect, buf: &mut Buffer) {
-        let base_style = popup_surface_style();
+        let base_style = if self.is_subcommand_context() {
+            crate::theme::transcript_style()
+        } else {
+            popup_surface_style()
+        };
         for y in area.top()..area.bottom() {
             for x in area.left()..area.right() {
                 buf[(x, y)].set_symbol(" ");
@@ -470,7 +478,11 @@ impl WidgetRef for CommandPopup {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::bottom_pane::selection_popup_common::assert_popup_surface_bg;
+    use crate::bottom_pane::selection_popup_common::assert_transcript_surface_bg;
     use pretty_assertions::assert_eq;
+    use ratatui::layout::Rect;
+    use ratatui::widgets::WidgetRef;
 
     #[test]
     fn filter_includes_init_when_typing_prefix() {
@@ -772,5 +784,30 @@ mod tests {
             !cmds.contains(&"personality"),
             "expected '/personality' to be hidden when disabled, got {cmds:?}"
         );
+    }
+
+    #[test]
+    fn popup_surface_matches_shared_background() {
+        let popup = CommandPopup::new(
+            Vec::new(),
+            CommandPopupFlags::default(),
+            DEFAULT_SLASH_POPUP_ROWS,
+        );
+        assert_popup_surface_bg(Rect::new(0, 0, 32, 6), |area, buf| {
+            popup.render_ref(area, buf);
+        });
+    }
+
+    #[test]
+    fn subcommand_popup_uses_transcript_background() {
+        let mut popup = CommandPopup::new(
+            Vec::new(),
+            CommandPopupFlags::default(),
+            DEFAULT_SLASH_POPUP_ROWS,
+        );
+        popup.on_composer_text_change("/worktree ".to_string());
+        assert_transcript_surface_bg(Rect::new(0, 0, 32, 6), |area, buf| {
+            popup.render_ref(area, buf);
+        });
     }
 }
