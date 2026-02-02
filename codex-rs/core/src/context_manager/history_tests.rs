@@ -163,6 +163,33 @@ fn non_last_reasoning_tokens_ignore_entries_after_last_user() {
 }
 
 #[test]
+fn drop_encrypted_reasoning_after_last_user_removes_tail_reasoning_only() {
+    let mut history = create_history_with_items(vec![
+        reasoning_with_encrypted_content(900),
+        user_msg("first"),
+        reasoning_with_encrypted_content(1_000),
+        assistant_msg("keep"),
+        user_msg("second"),
+        reasoning_with_encrypted_content(2_000),
+        assistant_msg("after"),
+    ]);
+
+    history.drop_encrypted_reasoning_after_last_user();
+
+    assert_eq!(
+        history.raw_items(),
+        vec![
+            reasoning_with_encrypted_content(900),
+            user_msg("first"),
+            reasoning_with_encrypted_content(1_000),
+            assistant_msg("keep"),
+            user_msg("second"),
+            assistant_msg("after"),
+        ]
+    );
+}
+
+#[test]
 fn get_history_for_prompt_drops_ghost_commits() {
     let items = vec![ResponseItem::GhostSnapshot {
         ghost_commit: GhostCommit::new("ghost-1".to_string(), None, Vec::new(), Vec::new()),

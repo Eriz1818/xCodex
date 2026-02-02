@@ -10,7 +10,7 @@ use tempfile::TempDir;
 #[ctor]
 pub static CODEX_ALIASES_TEMP_DIR: TempDir = unsafe {
     #[allow(clippy::unwrap_used)]
-    arg0_dispatch().unwrap()
+    arg0_dispatch().unwrap_or_else(|| TempDir::new().expect("temp dir"))
 };
 
 #[cfg(not(target_os = "windows"))]

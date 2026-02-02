@@ -29,7 +29,6 @@ use core_test_support::skip_if_no_network;
 use core_test_support::stdio_server_bin;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
-use core_test_support::wait_for_event_match;
 use mcp_types::ContentBlock;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
@@ -518,33 +517,11 @@ async fn lazy_startup_starts_on_tool_call() -> anyhow::Result<()> {
         })
         .await?;
 
-    let starting = wait_for_event_match(&fixture.codex, |ev| match ev {
-        EventMsg::McpStartupUpdate(update)
-            if update.server == server_name
-                && matches!(update.status, McpStartupStatus::Starting) =>
-        {
-            Some(update.clone())
-        }
-        _ => None,
-    })
-    .await;
-    assert_eq!(starting.server, server_name);
-    assert!(matches!(starting.status, McpStartupStatus::Starting));
-
-    let ready = wait_for_event_match(&fixture.codex, |ev| match ev {
-        EventMsg::McpStartupUpdate(update)
-            if update.server == server_name && matches!(update.status, McpStartupStatus::Ready) =>
-        {
-            Some(update.clone())
-        }
-        _ => None,
-    })
-    .await;
-    assert_eq!(ready.server, server_name);
-
-    let begin_event = wait_for_event(&fixture.codex, |ev| {
-        matches!(ev, EventMsg::McpToolCallBegin(_))
-    })
+    let begin_event = core_test_support::wait_for_event_with_timeout(
+        &fixture.codex,
+        |ev| matches!(ev, EventMsg::McpToolCallBegin(_)),
+        Duration::from_secs(15),
+    )
     .await;
     let EventMsg::McpToolCallBegin(begin) = begin_event else {
         unreachable!("event guard guarantees McpToolCallBegin");
@@ -552,9 +529,48 @@ async fn lazy_startup_starts_on_tool_call() -> anyhow::Result<()> {
     assert_eq!(begin.invocation.server, server_name);
     assert_eq!(begin.invocation.tool, "echo");
 
-    let end_event = wait_for_event(&fixture.codex, |ev| {
-        matches!(ev, EventMsg::McpToolCallEnd(_))
-    })
+    let starting = core_test_support::wait_for_event_with_timeout(
+        &fixture.codex,
+        |ev| {
+            matches!(
+                ev,
+                EventMsg::McpStartupUpdate(update)
+                    if update.server == server_name
+                        && matches!(update.status, McpStartupStatus::Starting)
+            )
+        },
+        Duration::from_secs(15),
+    )
+    .await;
+    let EventMsg::McpStartupUpdate(starting) = starting else {
+        unreachable!("event guard guarantees McpStartupUpdate");
+    };
+    assert_eq!(starting.server, server_name);
+    assert!(matches!(starting.status, McpStartupStatus::Starting));
+
+    let ready = core_test_support::wait_for_event_with_timeout(
+        &fixture.codex,
+        |ev| {
+            matches!(
+                ev,
+                EventMsg::McpStartupUpdate(update)
+                    if update.server == server_name
+                        && matches!(update.status, McpStartupStatus::Ready)
+            )
+        },
+        Duration::from_secs(15),
+    )
+    .await;
+    let EventMsg::McpStartupUpdate(ready) = ready else {
+        unreachable!("event guard guarantees McpStartupUpdate");
+    };
+    assert_eq!(ready.server, server_name);
+
+    let end_event = core_test_support::wait_for_event_with_timeout(
+        &fixture.codex,
+        |ev| matches!(ev, EventMsg::McpToolCallEnd(_)),
+        Duration::from_secs(15),
+    )
     .await;
     let EventMsg::McpToolCallEnd(end) = end_event else {
         unreachable!("event guard guarantees McpToolCallEnd");
@@ -565,7 +581,12 @@ async fn lazy_startup_starts_on_tool_call() -> anyhow::Result<()> {
         .expect("rmcp echo tool should return success");
     assert_eq!(result.is_error, Some(false));
 
-    wait_for_event(&fixture.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+    core_test_support::wait_for_event_with_timeout(
+        &fixture.codex,
+        |ev| matches!(ev, EventMsg::TurnComplete(_)),
+        Duration::from_secs(15),
+    )
+    .await;
 
     server.verify().await;
 

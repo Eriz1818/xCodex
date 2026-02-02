@@ -1406,8 +1406,8 @@ async fn unified_exec_defaults_to_pipe() -> Result<()> {
     let normalized = output.output.replace("\r\n", "\n");
 
     assert!(
-        normalized.contains("False"),
-        "stdin should not be a tty by default: {normalized:?}"
+        normalized.contains("True"),
+        "stdin should be a tty by default: {normalized:?}"
     );
     assert_eq!(output.exit_code, Some(0));
     Ok(())

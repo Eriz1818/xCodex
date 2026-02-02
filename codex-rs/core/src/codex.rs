@@ -2206,6 +2206,31 @@ impl Session {
         prompt.estimate_token_count()
     }
 
+    async fn estimate_prompt_token_count_for_auto_compact<'a, I>(
+        &self,
+        turn_context: &TurnContext,
+        extra_items: I,
+    ) -> i64
+    where
+        I: IntoIterator<Item = &'a ResponseItem>,
+    {
+        let mut history = self.clone_history().await;
+        history.drop_encrypted_reasoning_after_last_user();
+        let mut input = history.for_prompt();
+        input.extend(extra_items.into_iter().cloned());
+        let base_instructions = self.get_base_instructions().await;
+        let prompt = Prompt {
+            input,
+            tools: Vec::new(),
+            parallel_tool_calls: false,
+            base_instructions,
+            personality: turn_context.client.config().model_personality,
+            output_schema: turn_context.final_output_json_schema.clone(),
+        };
+
+        prompt.estimate_token_count()
+    }
+
     pub(crate) async fn recompute_token_usage(&self, turn_context: &TurnContext) {
         let estimated_total_tokens = self
             .estimate_prompt_token_count(turn_context, std::iter::empty::<&ResponseItem>())
@@ -3975,7 +4000,7 @@ pub(crate) async fn run_turn(
 
     for _ in 0..2 {
         let prompt_tokens = if auto_compact_enabled {
-            sess.estimate_prompt_token_count(
+            sess.estimate_prompt_token_count_for_auto_compact(
                 &turn_context,
                 std::iter::once(&response_item).chain(skill_items.iter()),
             )
@@ -4039,8 +4064,11 @@ pub(crate) async fn run_turn(
 
         for _ in 0..2 {
             let prompt_tokens = if auto_compact_enabled {
-                sess.estimate_prompt_token_count(&turn_context, pending_input.iter())
-                    .await
+                sess.estimate_prompt_token_count_for_auto_compact(
+                    &turn_context,
+                    pending_input.iter(),
+                )
+                .await
             } else {
                 0
             };

@@ -248,6 +248,39 @@ impl ContextManager {
         i64::try_from(approx_tokens_from_byte_count(total_reasoning_bytes)).unwrap_or(i64::MAX)
     }
 
+    pub(crate) fn drop_encrypted_reasoning_after_last_user(&mut self) {
+        // Keep reasoning emitted before the most recent user message, but drop later
+        // encrypted reasoning to avoid over-counting in auto-compact estimates.
+        let Some(last_user_index) = self
+            .items
+            .iter()
+            .rposition(|item| matches!(item, ResponseItem::Message { role, .. } if role == "user"))
+        else {
+            return;
+        };
+
+        self.items = self
+            .items
+            .drain(..)
+            .enumerate()
+            .filter_map(|(idx, item)| {
+                if idx > last_user_index
+                    && matches!(
+                        item,
+                        ResponseItem::Reasoning {
+                            encrypted_content: Some(_),
+                            ..
+                        }
+                    )
+                {
+                    None
+                } else {
+                    Some(item)
+                }
+            })
+            .collect();
+    }
+
     /// When true, the server already accounted for past reasoning tokens and
     /// the client should not re-estimate them.
     #[allow(dead_code)]

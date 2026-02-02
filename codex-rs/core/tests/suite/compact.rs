@@ -2324,6 +2324,7 @@ async fn auto_compact_counts_encrypted_reasoning_before_last_user() {
             set_test_compact_prompt(config);
             config.model_auto_compact_token_limit = Some(300);
             config.features.enable(Feature::RemoteCompaction);
+            config.base_instructions = Some(String::new());
         })
         .build(&server)
         .await
