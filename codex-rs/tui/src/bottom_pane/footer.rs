@@ -541,7 +541,7 @@ fn footer_from_props_lines(
     show_shortcuts_hint: bool,
     show_queue_hint: bool,
 ) -> Vec<Line<'static>> {
-    let mut lines = match props.mode {
+    let lines = match props.mode {
         FooterMode::QuitShortcutReminder => {
             vec![quit_shortcut_reminder_line(props.quit_shortcut_key)]
         }
@@ -579,7 +579,6 @@ fn footer_from_props_lines(
         }
     };
 
-    apply_status_bar_items(&mut lines, props);
     lines
 }
 
@@ -622,21 +621,13 @@ fn footer_hint_items_line(items: &[(String, String)]) -> Line<'static> {
     Line::from(spans)
 }
 
-fn apply_status_bar_items(lines: &mut [Line<'static>], props: FooterProps<'_>) {
-    if matches!(props.mode, FooterMode::ShortcutOverlay) {
-        return;
-    }
-
-    let Some(line) = lines.first_mut() else {
-        return;
-    };
-
+fn status_bar_spans(props: FooterProps<'_>) -> Vec<Span<'static>> {
+    let mut spans = Vec::new();
     if props.show_status_bar_git_branch
         && let Some(branch) = props.status_bar_git_branch
     {
-        line.push_span(" · ".dim());
-        line.push_span("branch: ".dim());
-        line.push_span(Span::styled(
+        spans.push("branch: ".dim());
+        spans.push(Span::styled(
             branch.to_string(),
             crate::theme::accent_style(),
         ));
@@ -645,10 +636,14 @@ fn apply_status_bar_items(lines: &mut [Line<'static>], props: FooterProps<'_>) {
     if props.show_status_bar_worktree
         && let Some(worktree) = props.status_bar_worktree
     {
-        line.push_span(" · ".dim());
-        line.push_span("wt: ".dim());
-        line.push_span(worktree.to_string().dim());
+        if !spans.is_empty() {
+            spans.push(" · ".dim());
+        }
+        spans.push("wt: ".dim());
+        spans.push(worktree.to_string().dim());
     }
+
+    spans
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -791,6 +786,21 @@ pub(crate) fn context_window_line(percent: Option<i64>, used_tokens: Option<i64>
     }
 
     Line::from(vec![Span::from("100% context left").dim()])
+}
+
+pub(crate) fn right_side_line(props: FooterProps<'_>) -> Line<'static> {
+    let mut spans = status_bar_spans(props);
+    if !spans.is_empty() {
+        spans.push(" · ".dim());
+    }
+    spans.extend(
+        context_window_line(
+            props.context_window_percent,
+            props.context_window_used_tokens,
+        )
+        .spans,
+    );
+    Line::from(spans)
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1023,11 +1033,8 @@ mod tests {
         terminal
             .draw(|f| {
                 let area = Rect::new(0, 0, f.area().width, height);
-                let context_line = context_window_line(
-                    props.context_window_percent,
-                    props.context_window_used_tokens,
-                );
-                let context_width = context_line.width() as u16;
+                let right_side_line = right_side_line(props);
+                let right_side_width = right_side_line.width() as u16;
                 let show_cycle_hint = !props.is_task_running;
                 let show_shortcuts_hint = match props.mode {
                     FooterMode::ComposerEmpty => true,
@@ -1051,14 +1058,14 @@ mod tests {
                     show_queue_hint,
                 );
                 let can_show_left_and_context =
-                    can_show_left_with_context(area, left_width, context_width);
+                    can_show_left_with_context(area, left_width, right_side_width);
                 if matches!(
                     props.mode,
                     FooterMode::ComposerEmpty | FooterMode::ComposerHasDraft
                 ) {
                     let (summary_left, show_context) = single_line_footer_layout(
                         area,
-                        context_width,
+                        right_side_width,
                         collaboration_mode_indicator,
                         show_cycle_hint,
                         show_shortcuts_hint,
@@ -1082,7 +1089,7 @@ mod tests {
                         SummaryLeft::None => {}
                     }
                     if show_context {
-                        render_context_right(area, f.buffer_mut(), &context_line);
+                        render_context_right(area, f.buffer_mut(), &right_side_line);
                     }
                 } else {
                     render_footer_from_props(
@@ -1102,7 +1109,7 @@ mod tests {
                                 | FooterMode::ShortcutOverlay
                         );
                     if show_context {
-                        render_context_right(area, f.buffer_mut(), &context_line);
+                        render_context_right(area, f.buffer_mut(), &right_side_line);
                     }
                 }
             })

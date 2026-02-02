@@ -110,7 +110,6 @@ use super::footer::FooterMode;
 use super::footer::FooterProps;
 use super::footer::SummaryLeft;
 use super::footer::can_show_left_with_context;
-use super::footer::context_window_line;
 use super::footer::esc_hint_mode;
 use super::footer::footer_height;
 use super::footer::footer_hint_items_width;
@@ -121,6 +120,7 @@ use super::footer::render_footer_from_props;
 use super::footer::render_footer_hint_items;
 use super::footer::render_footer_line;
 use super::footer::reset_mode_after_activity;
+use super::footer::right_side_line;
 use super::footer::single_line_footer_layout;
 use super::footer::toggle_shortcut_mode;
 use super::paste_burst::CharDecision;
@@ -3193,11 +3193,8 @@ impl ChatComposer {
                     | FooterMode::ShortcutOverlay
                     | FooterMode::EscHint => false,
                 };
-                let context_line = context_window_line(
-                    footer_props.context_window_percent,
-                    footer_props.context_window_used_tokens,
-                );
-                let context_width = context_line.width() as u16;
+                let right_side_line = right_side_line(footer_props);
+                let right_side_width = right_side_line.width() as u16;
                 let custom_height = self.custom_footer_height();
                 let footer_hint_height =
                     custom_height.unwrap_or_else(|| footer_height(footer_props));
@@ -3229,7 +3226,7 @@ impl ChatComposer {
                     )
                 };
                 let can_show_left_and_context =
-                    can_show_left_with_context(hint_rect, left_width, context_width);
+                    can_show_left_with_context(hint_rect, left_width, right_side_width);
                 let has_override =
                     self.footer_flash_visible() || self.footer_hint_override.is_some();
                 let single_line_layout = if has_override {
@@ -3243,7 +3240,7 @@ impl ChatComposer {
                             // the context indicator on narrow widths.
                             Some(single_line_footer_layout(
                                 hint_rect,
-                                context_width,
+                                right_side_width,
                                 self.collaboration_mode_indicator,
                                 show_cycle_hint,
                                 show_shortcuts_hint,
@@ -3306,7 +3303,7 @@ impl ChatComposer {
                 }
 
                 if show_context {
-                    render_context_right(hint_rect, buf, &context_line);
+                    render_context_right(hint_rect, buf, &right_side_line);
                 }
             }
         }
