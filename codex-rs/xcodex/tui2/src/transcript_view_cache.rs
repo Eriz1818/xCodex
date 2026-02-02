@@ -881,7 +881,7 @@ mod tests {
             &[
                 Line::from("• hello"),
                 Line::from("world"),
-                Line::from(""),
+                Line::from("").style(crate::theme::transcript_style()),
                 Line::from("• foo"),
                 Line::from("bar")
             ]
