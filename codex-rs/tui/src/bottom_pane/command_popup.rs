@@ -11,7 +11,6 @@ use super::slash_commands;
 use super::slash_subcommands::build_subcommand_matches;
 use super::slash_subcommands::slash_command_supports_subcommands as subcommands_supported;
 use super::slash_subcommands::subcommand_list_hint;
-use crate::bottom_pane::selection_popup_common::popup_surface_style;
 use crate::render::Insets;
 use crate::render::RectExt;
 use crate::slash_command::SlashCommand;
@@ -451,11 +450,7 @@ impl CommandPopup {
 
 impl WidgetRef for CommandPopup {
     fn render_ref(&self, area: Rect, buf: &mut Buffer) {
-        let base_style = if self.is_subcommand_context() {
-            crate::theme::transcript_style()
-        } else {
-            popup_surface_style()
-        };
+        let base_style = crate::theme::transcript_style();
         for y in area.top()..area.bottom() {
             for x in area.left()..area.right() {
                 buf[(x, y)].set_symbol(" ");
@@ -478,7 +473,6 @@ impl WidgetRef for CommandPopup {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::bottom_pane::selection_popup_common::assert_popup_surface_bg;
     use crate::bottom_pane::selection_popup_common::assert_transcript_surface_bg;
     use pretty_assertions::assert_eq;
     use ratatui::layout::Rect;
@@ -787,13 +781,13 @@ mod tests {
     }
 
     #[test]
-    fn popup_surface_matches_shared_background() {
+    fn root_popup_uses_transcript_background() {
         let popup = CommandPopup::new(
             Vec::new(),
             CommandPopupFlags::default(),
             DEFAULT_SLASH_POPUP_ROWS,
         );
-        assert_popup_surface_bg(Rect::new(0, 0, 32, 6), |area, buf| {
+        assert_transcript_surface_bg(Rect::new(0, 0, 32, 6), |area, buf| {
             popup.render_ref(area, buf);
         });
     }

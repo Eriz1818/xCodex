@@ -11,7 +11,6 @@ use super::popup_consts::MAX_POPUP_ROWS;
 use super::scroll_state::ScrollState;
 use super::selection_popup_common::GenericDisplayRow;
 use super::selection_popup_common::render_rows_single_line;
-use crate::bottom_pane::selection_popup_common::popup_surface_style;
 use crate::key_hint;
 use crate::render::Insets;
 use crate::render::RectExt;
@@ -178,7 +177,7 @@ impl WidgetRef for SkillPopup {
         } else {
             (area, None)
         };
-        let base_style = popup_surface_style();
+        let base_style = crate::theme::transcript_style();
         let rows = self.rows_from_matches(self.filtered());
         render_rows_single_line(
             list_area.inset(Insets::tlbr(0, 2, 0, 0)),
@@ -214,12 +213,12 @@ fn skill_popup_hint_line() -> Line<'static> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::bottom_pane::selection_popup_common::assert_popup_surface_bg;
+    use crate::bottom_pane::selection_popup_common::assert_transcript_surface_bg;
     use ratatui::layout::Rect;
     use ratatui::widgets::WidgetRef;
 
     #[test]
-    fn popup_surface_matches_shared_background() {
+    fn popup_uses_transcript_background() {
         let popup = SkillPopup::new(vec![MentionItem {
             display_name: "Repo Scout".to_string(),
             description: Some("Summarize the repo layout".to_string()),
@@ -227,7 +226,7 @@ mod tests {
             search_terms: vec!["repo".to_string(), "scout".to_string()],
             path: None,
         }]);
-        assert_popup_surface_bg(Rect::new(0, 0, 32, 5), |area, buf| {
+        assert_transcript_surface_bg(Rect::new(0, 0, 32, 5), |area, buf| {
             popup.render_ref(area, buf);
         });
     }
