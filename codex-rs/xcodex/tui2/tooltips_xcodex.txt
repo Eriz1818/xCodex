@@ -3,3 +3,13 @@ Use /xtreme to open the ⚡Tools control panel.
 Want more power? Use /approvals to choose how much xcodex can do without asking.
 Use /review to quickly inspect what xcodex changed.
 Use /hooks to automate xcodex workflows.
+Try /themes to preview a theme and save it.
+Use /worktree to spin up a new branch session fast.
+Run /worktree doctor to check shared dir links.
+Use /xtreme to toggle xtreme mode and ramps.
+Add a .xcodexignore file to hide sensitive paths.
+Use /settings to customize the status bar and UI.
+Toggle syntax highlighting in /settings when you want a cleaner view.
+Prefer a minimal composer? Check /settings for slim modes.
+Switch branches fast with /worktree and shared-dir toggles.
+Explore docs/xcodex/ for the full feature list.
