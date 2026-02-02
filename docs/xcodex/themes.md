@@ -120,3 +120,14 @@ If colors look wrong:
 
 - Check whether your terminal theme and xcodex theme are fighting (e.g., unusual terminal background).
 - Start from `docs/themes/example-dark.yaml` / `docs/themes/example-light.yaml` and adjust incrementally.
+
+## Credits
+
+xcodex's built-in theme catalog is derived from Mark Badolato's "iTerm2 Color Schemes" collection.
+
+Links:
+
+```text
+https://iterm2colorschemes.com/
+https://github.com/mbadolato/iTerm2-Color-Schemes
+```
