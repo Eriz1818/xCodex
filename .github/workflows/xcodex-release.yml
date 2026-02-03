@@ -233,6 +233,22 @@ jobs:
           set -euo pipefail
           python -V
           echo "PYO3_PYTHON=$(python -c 'import sys; print(sys.executable)')" >> "$GITHUB_ENV"
+      - name: Force x86_64 toolchain (macOS x86_64)
+        if: ${{ matrix.target == 'x86_64-apple-darwin' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          SDKROOT="$(xcrun --sdk macosx --show-sdk-path)"
+          CC_BIN="$(xcrun --sdk macosx --find clang)"
+          AR_BIN="$(xcrun --sdk macosx --find ar)"
+          RANLIB_BIN="$(xcrun --sdk macosx --find ranlib)"
+          echo "SDKROOT=$SDKROOT" >> "$GITHUB_ENV"
+          echo "MACOSX_DEPLOYMENT_TARGET=10.13" >> "$GITHUB_ENV"
+          echo "CC_x86_64_apple_darwin=$CC_BIN" >> "$GITHUB_ENV"
+          echo "CFLAGS_x86_64_apple_darwin=-arch x86_64 -isysroot $SDKROOT" >> "$GITHUB_ENV"
+          echo "AR_x86_64_apple_darwin=$AR_BIN" >> "$GITHUB_ENV"
+          echo "RANLIB_x86_64_apple_darwin=$RANLIB_BIN" >> "$GITHUB_ENV"
+          echo "CARGO_TARGET_X86_64_APPLE_DARWIN_LINKER=$CC_BIN" >> "$GITHUB_ENV"
 
       - name: Install sccache
         uses: taiki-e/install-action@44c6d64aa62cd779e873306675c7a58e86d6d532 # v2
