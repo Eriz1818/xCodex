@@ -2477,9 +2477,9 @@ impl App {
                         .await
                     {
                         Ok(()) => {
-                            self.config.set_windows_sandbox_globally(true);
+                            self.config.set_windows_sandbox_enabled(true);
                             self.config
-                                .set_windows_elevated_sandbox_globally(elevated_enabled);
+                                .set_windows_elevated_sandbox_enabled(elevated_enabled);
                             self.chat_widget
                                 .set_feature_enabled(Feature::WindowsSandbox, true);
                             self.chat_widget.set_feature_enabled(
