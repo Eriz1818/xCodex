@@ -1017,7 +1017,6 @@ impl ThemeSelectorOverlay {
         let scroll = scroll.min(max_scroll);
 
         Paragraph::new(Text::from(lines))
-            .style(crate::theme::transcript_style())
             .scroll((scroll, 0))
             .render_ref(content_area, buf);
 
