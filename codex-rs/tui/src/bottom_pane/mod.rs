@@ -375,6 +375,11 @@ impl BottomPane {
         self.composer.set_personality_command_enabled(enabled);
     }
 
+    #[cfg(target_os = "windows")]
+    pub fn set_windows_degraded_sandbox_active(&mut self, enabled: bool) {
+        self.composer.set_windows_degraded_sandbox_active(enabled);
+    }
+
     pub fn set_collaboration_mode_indicator(
         &mut self,
         indicator: Option<CollaborationModeIndicator>,
