@@ -317,14 +317,14 @@ jobs:
           echo "RUSTFLAGS=-C linker=rust-lld -C lto=off -C codegen-units=4" >> "$GITHUB_ENV"
           echo "CARGO_INCREMENTAL=0" >> "$GITHUB_ENV"
 
-      - name: Install cargo-chef
-        if: ${{ !contains(matrix.target, 'pc-windows') && !contains(matrix.target, 'linux-musl') && !startsWith(matrix.runner, 'macos') }}
+      - name: Install cargo-chef (macOS prewarm)
+        if: ${{ startsWith(matrix.runner, 'macos') }}
         uses: taiki-e/install-action@44c6d64aa62cd779e873306675c7a58e86d6d532 # v2
         with:
           tool: cargo-chef@0.1.71
 
-      - name: Pre-warm dependency cache (cargo-chef)
-        if: ${{ !contains(matrix.target, 'pc-windows') && !contains(matrix.target, 'linux-musl') && !startsWith(matrix.runner, 'macos') }}
+      - name: Pre-warm dependency cache (cargo-chef, macOS)
+        if: ${{ startsWith(matrix.runner, 'macos') }}
         shell: bash
         run: |
           set -euo pipefail
