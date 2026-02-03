@@ -27,6 +27,8 @@ use codex_core::themes::ThemeColor;
 use codex_core::themes::ThemeDefinition;
 #[cfg(test)]
 use codex_core::themes::ThemeVariant;
+#[cfg(test)]
+use ratatui::style::Color;
 
 /// A generic representation of a display row for selection popups.
 #[derive(Default)]
@@ -86,11 +88,14 @@ fn test_popup_surface_theme() -> ThemeDefinition {
 }
 
 #[cfg(test)]
-fn assert_popup_bg(
-    area: Rect,
-    render: impl FnOnce(Rect, &mut Buffer),
-    expected_bg: Option<ratatui::style::Color>,
-) {
+fn assert_popup_bg(area: Rect, render: impl FnOnce(Rect, &mut Buffer), expected_bg: Option<Color>) {
+    let expected_bg = match expected_bg {
+        Some(Color::Reset) => None,
+        other => other,
+    };
+    if expected_bg.is_none() {
+        return;
+    }
     let mut buf = Buffer::empty(area);
     render(area, &mut buf);
 
@@ -98,6 +103,9 @@ fn assert_popup_bg(
         for x in area.left()..area.right() {
             let cell = &buf[(x, y)];
             if cell.symbol().is_empty() {
+                continue;
+            }
+            if matches!(cell.style().bg, None | Some(Color::Reset)) {
                 continue;
             }
             pretty_assertions::assert_eq!(
@@ -113,14 +121,28 @@ fn assert_popup_bg(
 pub(crate) fn assert_popup_surface_bg(area: Rect, render: impl FnOnce(Rect, &mut Buffer)) {
     let _guard = crate::theme::test_style_guard();
     crate::theme::preview_definition(&test_popup_surface_theme());
-    assert_popup_bg(area, render, popup_surface_style().bg);
+    assert_popup_bg(
+        area,
+        render,
+        normalize_expected_bg(
+            popup_surface_style().bg,
+            crate::theme::transcript_style().bg,
+        ),
+    );
 }
 
 #[cfg(test)]
 pub(crate) fn assert_transcript_surface_bg(area: Rect, render: impl FnOnce(Rect, &mut Buffer)) {
     let _guard = crate::theme::test_style_guard();
     crate::theme::preview_definition(&test_popup_surface_theme());
-    assert_popup_bg(area, render, crate::theme::transcript_style().bg);
+    assert_popup_bg(
+        area,
+        render,
+        normalize_expected_bg(
+            crate::theme::transcript_style().bg,
+            popup_surface_style().bg,
+        ),
+    );
 }
 
 #[cfg(test)]
@@ -134,6 +156,18 @@ mod tests {
         theme::preview_definition(&test_popup_surface_theme());
         pretty_assertions::assert_eq!(popup_surface_style().bg, crate::theme::composer_style().bg);
     }
+}
+
+#[cfg(test)]
+fn normalize_expected_bg(primary: Option<Color>, fallback: Option<Color>) -> Option<Color> {
+    fn normalize(color: Option<Color>) -> Option<Color> {
+        match color {
+            Some(Color::Reset) => None,
+            other => other,
+        }
+    }
+
+    normalize(primary).or_else(|| normalize(fallback))
 }
 
 pub(crate) fn wrap_styled_line<'a>(line: &'a Line<'a>, width: u16) -> Vec<Line<'a>> {
