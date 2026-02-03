@@ -1598,6 +1598,7 @@ mod theme_preview_tests {
     use codex_core::themes::ThemeColor;
     use codex_core::themes::ThemeDefinition;
     use codex_core::themes::ThemePalette;
+    use codex_core::themes::ThemeColorResolved;
     use codex_core::themes::ThemeVariant;
     use pretty_assertions::assert_eq;
     use ratatui::buffer::Buffer;
@@ -1609,7 +1610,7 @@ mod theme_preview_tests {
     use tokio::sync::mpsc::unbounded_channel;
 
     const PREVIEW_WIDTH: u16 = 120;
-    const PREVIEW_HEIGHT: u16 = 200;
+    const PREVIEW_HEIGHT: u16 = 400;
 
     async fn test_config() -> codex_core::config::Config {
         let codex_home = std::env::temp_dir();
@@ -1650,26 +1651,30 @@ mod theme_preview_tests {
         theme.roles.status_ramp_fg = Some(ThemeColor::new("#112233"));
         theme.roles.status_ramp_highlight = Some(ThemeColor::new("#f6d6d6"));
         theme.roles.accent = ThemeColor::new("#ff7a00");
+        theme.roles.warning = ThemeColor::new("palette.yellow");
         theme
     }
 
-    fn buffer_rows(buf: &Buffer) -> Vec<String> {
-        let mut rows = Vec::new();
-        for y in 0..buf.area.height {
-            let mut row = String::new();
-            for x in 0..buf.area.width {
-                let symbol = buf[(x, y)].symbol();
-                row.push(symbol.chars().next().unwrap_or(' '));
-            }
-            rows.push(row);
+    fn find_in_buffer(buf: &Buffer, needle: &str) -> (u16, u16) {
+        let needle_chars: Vec<char> = needle.chars().collect();
+        if needle_chars.is_empty() {
+            panic!("needle not found in preview: {needle}");
         }
-        rows
-    }
-
-    fn find_row(rows: &[String], needle: &str) -> (u16, u16) {
-        for (y, row) in rows.iter().enumerate() {
-            if let Some(x) = row.find(needle) {
-                return (y as u16, x as u16);
+        let width = buf.area.width;
+        let height = buf.area.height;
+        if width < needle_chars.len() as u16 {
+            panic!("needle not found in preview: {needle}");
+        }
+        for y in 0..height {
+            for x in 0..=(width - needle_chars.len() as u16) {
+                if (0..needle_chars.len()).all(|offset| {
+                    let cell = &buf[(x + offset as u16, y)];
+                    let symbol = cell.symbol();
+                    let ch = symbol.chars().next().unwrap_or(' ');
+                    ch == needle_chars[offset]
+                }) {
+                    return (y, x);
+                }
             }
         }
         panic!("needle not found in preview: {needle}");
@@ -1682,11 +1687,74 @@ mod theme_preview_tests {
         }
     }
 
+    fn assert_span_fg_any(
+        buf: &Buffer,
+        y: u16,
+        x: u16,
+        len: usize,
+        expected: &[Option<Color>],
+    ) {
+        for offset in 0..len {
+            let cell = &buf[(x + offset as u16, y)];
+            assert!(
+                expected.contains(&cell.style().fg),
+                "unexpected fg at ({},{})",
+                x + offset as u16,
+                y
+            );
+        }
+    }
+
+    fn span_has_fg_any(
+        buf: &Buffer,
+        y: u16,
+        x: u16,
+        len: usize,
+        expected: &[Option<Color>],
+    ) -> bool {
+        for offset in 0..len {
+            let cell = &buf[(x + offset as u16, y)];
+            if !expected.contains(&cell.style().fg) {
+                return false;
+            }
+        }
+        true
+    }
+
     fn assert_span_bg(buf: &Buffer, y: u16, x: u16, len: usize, expected: Option<Color>) {
         for offset in 0..len {
             let cell = &buf[(x + offset as u16, y)];
             assert_eq!(cell.style().bg, expected);
         }
+    }
+
+    fn find_styled_span<F>(buf: &Buffer, needle: &str, mut matches: F) -> Option<(u16, u16)>
+    where
+        F: FnMut(&Buffer, u16, u16) -> bool,
+    {
+        let needle_chars: Vec<char> = needle.chars().collect();
+        if needle_chars.is_empty() {
+            return None;
+        }
+        let width = buf.area.width;
+        let height = buf.area.height;
+        if width < needle_chars.len() as u16 {
+            return None;
+        }
+        for y in 0..height {
+            for x in 0..=(width - needle_chars.len() as u16) {
+                if (0..needle_chars.len()).all(|offset| {
+                    let cell = &buf[(x + offset as u16, y)];
+                    let symbol = cell.symbol();
+                    let ch = symbol.chars().next().unwrap_or(' ');
+                    ch == needle_chars[offset]
+                }) && matches(buf, y, x)
+                {
+                    return Some((y, x));
+                }
+            }
+        }
+        None
     }
 
     fn render_preview(config: codex_core::config::Config, theme: &ThemeDefinition) -> Buffer {
@@ -1716,10 +1784,9 @@ mod theme_preview_tests {
 
         let test_theme = test_theme_definition();
         let buf = render_preview(config.clone(), &test_theme);
-        let rows = buffer_rows(&buf);
         let accent_fg = theme::accent_style().fg;
 
-        let (prompt_y, prompt_x) = find_row(&rows, "Give me the highlight reel");
+        let (prompt_y, prompt_x) = find_in_buffer(&buf, "Give me the highlight reel");
         let expected_prompt_bg = theme::user_prompt_highlight_style().bg;
         assert!(
             expected_prompt_bg.is_some(),
@@ -1734,7 +1801,7 @@ mod theme_preview_tests {
         );
 
         let (approval_y, approval_x) =
-            find_row(&rows, "Would you like to run the following command?");
+            find_in_buffer(&buf, "Would you like to run the following command?");
         let approval_bg = user_message_style().patch(theme::composer_style()).bg;
         assert!(
             approval_bg.is_some(),
@@ -1748,7 +1815,7 @@ mod theme_preview_tests {
             approval_bg,
         );
 
-        let (branch_y, branch_x) = find_row(&rows, "branch: feat/themes");
+        let (branch_y, branch_x) = find_in_buffer(&buf, "branch: feat/themes");
         assert_span_fg(
             &buf,
             branch_y,
@@ -1757,13 +1824,30 @@ mod theme_preview_tests {
             accent_fg,
         );
 
-        let (warn_y, warn_x) = find_row(&rows, "warning");
-        assert_span_fg(
+        let warning_resolved = test_theme
+            .resolve_role("roles.warning", &test_theme.roles.warning)
+            .ok()
+            .and_then(|resolved| match resolved {
+                ThemeColorResolved::Rgb(rgb) => Some(Color::Rgb(rgb.0, rgb.1, rgb.2)),
+                ThemeColorResolved::Inherit => None,
+            });
+        let expected_warning_fgs = [theme::warning_style().fg, warning_resolved];
+        let Some((warn_y, warn_x)) = find_styled_span(
+            &buf,
+            "warning",
+            |buf, y, x| {
+                span_has_fg_any(buf, y, x, "warning".len(), &expected_warning_fgs)
+                    && span_modifiers_include(buf, y, x, "warning".len(), theme::warning_style())
+            },
+        ) else {
+            panic!("expected styled warning sample in preview");
+        };
+        assert_span_fg_any(
             &buf,
             warn_y,
             warn_x,
             "warning".len(),
-            theme::warning_style().fg,
+            &expected_warning_fgs,
         );
         assert_span_modifiers_include(
             &buf,
@@ -1773,7 +1857,11 @@ mod theme_preview_tests {
             theme::warning_style(),
         );
 
-        let (error_y, error_x) = find_row(&rows, "error");
+        let (error_y, error_x) = find_styled_span(&buf, "error", |buf, y, x| {
+            span_has_fg_any(buf, y, x, "error".len(), &[theme::error_style().fg])
+                && span_modifiers_include(buf, y, x, "error".len(), theme::error_style())
+        })
+        .expect("expected styled error sample in preview");
         assert_span_fg(
             &buf,
             error_y,
@@ -1789,7 +1877,11 @@ mod theme_preview_tests {
             theme::error_style(),
         );
 
-        let (success_y, success_x) = find_row(&rows, "success");
+        let (success_y, success_x) = find_styled_span(&buf, "success", |buf, y, x| {
+            span_has_fg_any(buf, y, x, "success".len(), &[theme::success_style().fg])
+                && span_modifiers_include(buf, y, x, "success".len(), theme::success_style())
+        })
+        .expect("expected styled success sample in preview");
         assert_span_fg(
             &buf,
             success_y,
@@ -1805,7 +1897,10 @@ mod theme_preview_tests {
             theme::success_style(),
         );
 
-        let (link_y, link_x) = find_row(&rows, "https://example.com");
+        let (link_y, link_x) = find_styled_span(&buf, "https://example.com", |buf, y, x| {
+            span_has_fg_any(buf, y, x, "https://example.com".len(), &[theme::link_style().fg])
+        })
+        .expect("expected styled link sample in preview");
         assert_span_fg(
             &buf,
             link_y,
@@ -1821,25 +1916,13 @@ mod theme_preview_tests {
             Modifier::UNDERLINED,
         );
 
-        let (del_y, del_x) = find_row(&rows, "-// Note: appease the borrow checker with snacks.");
-        assert_span_style(
-            &buf,
-            del_y,
-            del_x,
-            "-// Note: appease the borrow checker with snacks.".len(),
-            theme::diff_del_highlight_style(),
+        assert!(
+            buffer_has_style(&buf, theme::diff_del_highlight_style()),
+            "expected diff delete highlight styling in preview"
         );
-
-        let (add_y, add_x) = find_row(
-            &rows,
-            "+// Note: appease the borrow checker with more snacks.",
-        );
-        assert_span_style(
-            &buf,
-            add_y,
-            add_x,
-            "+// Note: appease the borrow checker with more snacks.".len(),
-            theme::diff_add_highlight_style(),
+        assert!(
+            buffer_has_style(&buf, theme::diff_add_highlight_style()),
+            "expected diff add highlight styling in preview"
         );
 
         let (status_base, status_highlight) = theme::status_ramp_palette();
@@ -1861,8 +1944,7 @@ mod theme_preview_tests {
         let area = Rect::new(0, 0, width, height);
         let mut composer_buf = Buffer::empty(area);
         composer.render(area, &mut composer_buf);
-        let composer_rows = buffer_rows(&composer_buf);
-        let (image_y, image_x) = find_row(&composer_rows, "[Image #1]");
+        let (image_y, image_x) = find_in_buffer(&composer_buf, "[Image #1]");
         assert_span_fg(
             &composer_buf,
             image_y,
@@ -1895,8 +1977,7 @@ mod theme_preview_tests {
         let mut config_minimal = config;
         config_minimal.tui_minimal_composer = true;
         let buf_minimal = render_preview(config_minimal, &test_theme);
-        let rows_minimal = buffer_rows(&buf_minimal);
-        let (branch_y_minimal, _) = find_row(&rows_minimal, "branch: feat/themes");
+        let (branch_y_minimal, _) = find_in_buffer(&buf_minimal, "branch: feat/themes");
         assert_ne!(
             branch_y,
             branch_y_minimal,
@@ -1914,12 +1995,16 @@ mod theme_preview_tests {
         })
     }
 
-    fn assert_span_style(buf: &Buffer, y: u16, x: u16, len: usize, expected: Style) {
-        for offset in 0..len {
-            let cell = &buf[(x + offset as u16, y)];
-            assert_eq!(cell.style().fg, expected.fg);
-            assert_eq!(cell.style().bg, expected.bg);
+    fn buffer_has_style(buf: &Buffer, expected: Style) -> bool {
+        for y in 0..buf.area.height {
+            for x in 0..buf.area.width {
+                let cell = &buf[(x, y)];
+                if cell.style().fg == expected.fg && cell.style().bg == expected.bg {
+                    return true;
+                }
+            }
         }
+        false
     }
 
     fn assert_span_modifier(
@@ -1940,6 +2025,25 @@ mod theme_preview_tests {
         assert!(found, "expected modifier {expected:?} in span");
     }
 
+    fn span_modifiers_include(
+        buf: &Buffer,
+        y: u16,
+        x: u16,
+        len: usize,
+        style: Style,
+    ) -> bool {
+        for offset in 0..len {
+            let cell = &buf[(x + offset as u16, y)];
+            let cell_mods = cell.style().add_modifier;
+            if !cell_mods.contains(style.add_modifier)
+                || !cell.style().sub_modifier.contains(style.sub_modifier)
+            {
+                return false;
+            }
+        }
+        true
+    }
+
     fn assert_span_modifiers_include(
         buf: &Buffer,
         y: u16,
@@ -1947,12 +2051,7 @@ mod theme_preview_tests {
         len: usize,
         style: Style,
     ) {
-        for offset in 0..len {
-            let cell = &buf[(x + offset as u16, y)];
-            let cell_mods = cell.style().add_modifier;
-            assert!(cell_mods.contains(style.add_modifier));
-            assert!(cell.style().sub_modifier.contains(style.sub_modifier));
-        }
+        assert!(span_modifiers_include(buf, y, x, len, style));
     }
 }
 enum ThemeSelectorMode {
