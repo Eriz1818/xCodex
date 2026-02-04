@@ -45,6 +45,7 @@ use serde_json::Value as JsonValue;
 use std::num::NonZeroUsize;
 
 use crate::config::HooksConfig;
+use crate::config::types::ExclusionConfig;
 use crate::protocol::AskForApproval;
 use crate::protocol::Event;
 use crate::protocol::EventMsg;
@@ -54,6 +55,7 @@ use crate::protocol::HookProcessEndEvent;
 use crate::protocol::SandboxPolicy;
 use crate::protocol::TokenUsage;
 use crate::protocol_config_types::SandboxMode;
+use crate::xcodex::hook_payload_sanitizer::HookPayloadSanitizer;
 
 mod claude_compat;
 
@@ -128,6 +130,7 @@ impl HookBus {
 #[derive(Clone)]
 pub(crate) struct UserHooks {
     bus: HookBus,
+    payload_sanitizer: Option<std::sync::Arc<HookPayloadSanitizer>>,
 }
 
 #[derive(Clone)]
@@ -1718,6 +1721,8 @@ impl UserHooks {
         tx_event: Option<Sender<Event>>,
         session_sandbox_policy: SandboxPolicy,
         codex_linux_sandbox_exe: Option<PathBuf>,
+        exclusion: ExclusionConfig,
+        cwd: PathBuf,
     ) -> Self {
         let mut providers: Vec<std::sync::Arc<dyn HookProvider>> = Vec::new();
 
@@ -1738,13 +1743,47 @@ impl UserHooks {
             providers.push(std::sync::Arc::new(host_provider));
         }
 
+        let payload_sanitizer = if hooks.sanitize_payloads {
+            HookPayloadSanitizer::new(exclusion, cwd).map(std::sync::Arc::new)
+        } else {
+            None
+        };
+
         providers.push(std::sync::Arc::new(ExternalCommandHooksProvider::new(
             codex_home, hooks, tx_event,
         )));
 
         Self {
             bus: HookBus { providers },
+            payload_sanitizer,
         }
+    }
+
+    fn sanitize_text(&self, text: String) -> String {
+        self.payload_sanitizer
+            .as_ref()
+            .map(|sanitizer| sanitizer.sanitize_text(&text))
+            .unwrap_or(text)
+    }
+
+    fn sanitize_opt_text(&self, text: Option<String>) -> Option<String> {
+        text.map(|value| self.sanitize_text(value))
+    }
+
+    fn sanitize_vec_text(&self, texts: Vec<String>) -> Vec<String> {
+        texts
+            .into_iter()
+            .map(|value| self.sanitize_text(value))
+            .collect()
+    }
+
+    fn sanitize_value(&self, value: Option<Value>) -> Option<Value> {
+        value.map(|value| {
+            self.payload_sanitizer
+                .as_ref()
+                .map(|sanitizer| sanitizer.sanitize_value(&value))
+                .unwrap_or(value)
+        })
     }
 
     pub(crate) fn agent_turn_complete(
@@ -1759,8 +1798,8 @@ impl UserHooks {
             thread_id,
             turn_id,
             cwd,
-            input_messages,
-            last_assistant_message,
+            input_messages: self.sanitize_vec_text(input_messages),
+            last_assistant_message: self.sanitize_opt_text(last_assistant_message),
         });
     }
 
@@ -1777,6 +1816,8 @@ impl UserHooks {
         reason: Option<String>,
         proposed_execpolicy_amendment: Option<ExecPolicyAmendment>,
     ) {
+        let command = self.sanitize_vec_text(command);
+        let reason = self.sanitize_opt_text(reason);
         let notification_message = command.join(" ");
         self.bus.emit(HookNotification::ApprovalRequested {
             thread_id: thread_id.clone(),
@@ -1819,6 +1860,9 @@ impl UserHooks {
         reason: Option<String>,
         grant_root: Option<String>,
     ) {
+        let paths = self.sanitize_vec_text(paths);
+        let reason = self.sanitize_opt_text(reason);
+        let grant_root = self.sanitize_opt_text(grant_root);
         let notification_message = paths.join(", ");
         self.bus.emit(HookNotification::ApprovalRequested {
             thread_id: thread_id.clone(),
@@ -1856,6 +1900,7 @@ impl UserHooks {
         request_id: String,
         message: String,
     ) {
+        let message = self.sanitize_text(message);
         let notification_message = message.clone();
         self.bus.emit(HookNotification::ApprovalRequested {
             thread_id: thread_id.clone(),
@@ -1905,7 +1950,7 @@ impl UserHooks {
         self.bus.emit(HookNotification::UserPromptSubmit {
             thread_id,
             cwd,
-            prompt,
+            prompt: self.sanitize_text(prompt),
         });
     }
 
@@ -1913,7 +1958,7 @@ impl UserHooks {
         self.bus.emit(HookNotification::PreCompact {
             thread_id,
             cwd,
-            trigger,
+            trigger: self.sanitize_text(trigger),
         });
     }
 
@@ -1929,8 +1974,8 @@ impl UserHooks {
             thread_id,
             cwd,
             notification_type,
-            message,
-            title,
+            message: self.sanitize_opt_text(message),
+            title: self.sanitize_opt_text(title),
         });
     }
 
@@ -1944,8 +1989,8 @@ impl UserHooks {
         self.bus.emit(HookNotification::SubagentStop {
             thread_id,
             cwd,
-            subagent,
-            status,
+            subagent: self.sanitize_text(subagent),
+            status: self.sanitize_text(status),
         });
     }
 
@@ -2023,7 +2068,7 @@ impl UserHooks {
             attempt,
             tool_name,
             call_id,
-            tool_input,
+            tool_input: self.sanitize_value(tool_input),
         });
     }
 
@@ -2057,9 +2102,9 @@ impl UserHooks {
             duration_ms,
             success,
             output_bytes,
-            output_preview,
-            tool_input,
-            tool_response,
+            output_preview: self.sanitize_opt_text(output_preview),
+            tool_input: self.sanitize_value(tool_input),
+            tool_response: self.sanitize_value(tool_response),
         });
     }
 }
@@ -3757,6 +3802,8 @@ pathlib.Path({path:?}).write_text("ok", encoding="utf-8")
             None,
             SandboxPolicy::DangerFullAccess,
             None,
+            ExclusionConfig::default(),
+            codex_home.path().to_path_buf(),
         );
 
         user_hooks.tool_call_finished(
@@ -3856,6 +3903,8 @@ pathlib.Path({path:?}).write_text("ok", encoding="utf-8")
             None,
             SandboxPolicy::DangerFullAccess,
             None,
+            ExclusionConfig::default(),
+            codex_home.path().to_path_buf(),
         );
 
         user_hooks.tool_call_finished(
@@ -3899,6 +3948,8 @@ pathlib.Path({path:?}).write_text("ok", encoding="utf-8")
             None,
             SandboxPolicy::DangerFullAccess,
             None,
+            ExclusionConfig::default(),
+            codex_home.path().to_path_buf(),
         );
 
         user_hooks.tool_call_finished(
@@ -3937,6 +3988,8 @@ pathlib.Path({path:?}).write_text("ok", encoding="utf-8")
             None,
             SandboxPolicy::DangerFullAccess,
             None,
+            ExclusionConfig::default(),
+            codex_home.path().to_path_buf(),
         );
 
         user_hooks.session_start(
@@ -4047,6 +4100,8 @@ done
             None,
             SandboxPolicy::DangerFullAccess,
             None,
+            ExclusionConfig::default(),
+            codex_home.path().to_path_buf(),
         );
 
         user_hooks.session_start(
@@ -4117,6 +4172,8 @@ done
             None,
             SandboxPolicy::DangerFullAccess,
             None,
+            ExclusionConfig::default(),
+            codex_home.path().to_path_buf(),
         );
 
         user_hooks.session_start(
@@ -4750,6 +4807,8 @@ done
             None,
             SandboxPolicy::DangerFullAccess,
             None,
+            ExclusionConfig::default(),
+            codex_home.path().to_path_buf(),
         );
 
         let mut expected: HashMap<(String, String), usize> = HashMap::new();
@@ -4850,6 +4909,8 @@ def on_event(event):
             None,
             SandboxPolicy::DangerFullAccess,
             None,
+            ExclusionConfig::default(),
+            codex_home.path().to_path_buf(),
         );
 
         let mut expected: HashMap<(String, String), usize> = HashMap::new();
@@ -5148,6 +5209,8 @@ def on_event(event):
             None,
             SandboxPolicy::DangerFullAccess,
             None,
+            ExclusionConfig::default(),
+            codex_home.path().to_path_buf(),
         );
 
         user_hooks.session_start(
@@ -5204,6 +5267,8 @@ def on_event(event):
             None,
             SandboxPolicy::DangerFullAccess,
             None,
+            ExclusionConfig::default(),
+            codex_home.path().to_path_buf(),
         );
 
         user_hooks.session_start(
@@ -5300,6 +5365,8 @@ def on_events(events):
             None,
             SandboxPolicy::DangerFullAccess,
             None,
+            ExclusionConfig::default(),
+            codex_home.path().to_path_buf(),
         );
 
         user_hooks.session_start(

@@ -1454,6 +1454,10 @@ pub struct HooksConfig {
     /// Keep only the most recent N payload/log files (global) under CODEX_HOME.
     #[serde(default = "HooksConfig::default_keep_last_n_payloads")]
     pub keep_last_n_payloads: usize,
+
+    /// When true, redact sensitive content in hook payloads before dispatch.
+    #[serde(default)]
+    pub sanitize_payloads: bool,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema)]
@@ -1657,6 +1661,7 @@ impl Default for HooksConfig {
             host: HookHostConfig::default(),
             max_stdin_payload_bytes: Self::default_max_stdin_payload_bytes(),
             keep_last_n_payloads: Self::default_keep_last_n_payloads(),
+            sanitize_payloads: false,
         }
     }
 }

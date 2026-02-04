@@ -802,6 +802,11 @@
           },
           "description": "Experimental PyO3 hook configuration."
         },
+        "sanitize_payloads": {
+          "default": false,
+          "description": "When true, redact sensitive content in hook payloads before dispatch.",
+          "type": "boolean"
+        },
         "session_end": {
           "default": [],
           "description": "Hooks invoked when a session is ending (best-effort during shutdown).",
@@ -2187,6 +2192,7 @@
           "script_path": null,
           "timeout_sec": null
         },
+        "sanitize_payloads": false,
         "session_end": [],
         "session_start": [],
         "subagent_stop": [],

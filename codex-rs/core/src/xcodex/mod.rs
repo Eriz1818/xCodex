@@ -12,6 +12,7 @@ use crate::user_notification::UserNotifier;
 
 pub mod config;
 pub mod git_info;
+mod hook_payload_sanitizer;
 pub mod hooks;
 pub mod themes;
 
@@ -41,6 +42,8 @@ pub(crate) fn build_user_hooks(config: &Config, tx_event: Sender<Event>) -> User
         Some(tx_event),
         config.sandbox_policy.get().clone(),
         config.codex_linux_sandbox_exe.clone(),
+        config.exclusion.clone(),
+        config.cwd.clone(),
     )
 }
 
