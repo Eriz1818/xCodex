@@ -296,6 +296,7 @@ mod tests {
     use super::*;
     use crate::markdown_render::render_markdown_text;
     use crate::test_backend::VT100Backend;
+    use codex_ansi_escape::ansi_escape_line;
     use ratatui::layout::Rect;
     use ratatui::style::Color;
 
@@ -454,6 +455,77 @@ mod tests {
                     }
                 }
             }
+        }
+    }
+
+    fn find_substring(screen: &vt100::Screen, needle: &str) -> Option<(u16, u16)> {
+        let needle_chars: Vec<char> = needle.chars().collect();
+        if needle_chars.is_empty() {
+            return None;
+        }
+        let (rows, cols) = screen.size();
+        let rows = rows as usize;
+        let cols = cols as usize;
+        if cols < needle_chars.len() {
+            return None;
+        }
+        for row in 0..rows {
+            'col: for col in 0..=(cols - needle_chars.len()) {
+                for (offset, expected) in needle_chars.iter().copied().enumerate() {
+                    let cell = screen.cell(row as u16, (col + offset) as u16)?;
+                    let actual = cell.contents().chars().next().unwrap_or(' ');
+                    if actual != expected {
+                        continue 'col;
+                    }
+                }
+                return Some((row as u16, col as u16));
+            }
+        }
+        None
+    }
+
+    #[test]
+    fn vt100_ansi_colored_tool_output_survives_render_pipeline() {
+        // This guards regressions where we accidentally strip ANSI styling out of
+        // tool outputs (e.g. `cargo test`), causing ok/error/compiling markers to
+        // lose their colors or intensity in the transcript.
+        let width: u16 = 80;
+        let height: u16 = 10;
+        let backend = VT100Backend::new(width, height);
+        let mut term = crate::custom_terminal::Terminal::with_options(backend).expect("terminal");
+        term.set_viewport_area(Rect::new(0, height - 1, width, 1));
+
+        let lines = vec![
+            ansi_escape_line("\x1b[1m\x1b[90mCompiling\x1b[0m hyper-tls v0.6.0"),
+            ansi_escape_line("test result: \x1b[32mok\x1b[0m. 1 passed; 0 failed"),
+            ansi_escape_line("\x1b[31merror\x1b[0m: test failed, to rerun pass `-p foo`"),
+        ];
+        insert_history_lines(&mut term, lines).expect("insert_history_lines");
+
+        let screen = term.backend().vt100().screen();
+
+        let (row, col) = find_substring(screen, "ok").expect("expected 'ok' on screen");
+        for offset in 0..2 {
+            let cell = screen.cell(row, col + offset).expect("cell");
+            assert_eq!(cell.fgcolor(), vt100::Color::Idx(2));
+            assert!(!cell.bold(), "expected 'ok' to not be bold");
+            assert!(!cell.dim(), "expected 'ok' to not be dim");
+        }
+
+        let (row, col) = find_substring(screen, "error").expect("expected 'error' on screen");
+        for offset in 0..5 {
+            let cell = screen.cell(row, col + offset).expect("cell");
+            assert_eq!(cell.fgcolor(), vt100::Color::Idx(1));
+            assert!(!cell.bold(), "expected 'error' to not be bold");
+            assert!(!cell.dim(), "expected 'error' to not be dim");
+        }
+
+        let (row, col) =
+            find_substring(screen, "Compiling").expect("expected 'Compiling' on screen");
+        for offset in 0.."Compiling".len() as u16 {
+            let cell = screen.cell(row, col + offset).expect("cell");
+            assert!(cell.bold(), "expected 'Compiling' to be bold");
+            assert_eq!(cell.fgcolor(), vt100::Color::Idx(8));
         }
     }
 
