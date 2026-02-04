@@ -439,7 +439,7 @@ impl From<ApprovalRequest> for ApprovalRequestState {
                     ));
                     header.push(Box::new(Line::from("")));
                 }
-                header.push(DiffSummary::new(changes, cwd, diff_highlight).into());
+                header.push(DiffSummary::new_popup(changes, cwd, diff_highlight).into());
                 Self {
                     variant: ApprovalVariant::ApplyPatch { id },
                     header: Box::new(ColumnRenderable::with(header)),

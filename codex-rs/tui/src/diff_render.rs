@@ -34,10 +34,17 @@ enum DiffLineType {
     Context,
 }
 
+#[derive(Copy, Clone, Debug)]
+enum DiffSurface {
+    Transcript,
+    Popup,
+}
+
 pub struct DiffSummary {
     changes: HashMap<PathBuf, FileChange>,
     cwd: PathBuf,
     diff_highlight: bool,
+    surface: DiffSurface,
 }
 
 impl DiffSummary {
@@ -46,6 +53,20 @@ impl DiffSummary {
             changes,
             cwd,
             diff_highlight,
+            surface: DiffSurface::Transcript,
+        }
+    }
+
+    pub fn new_popup(
+        changes: HashMap<PathBuf, FileChange>,
+        cwd: PathBuf,
+        diff_highlight: bool,
+    ) -> Self {
+        Self {
+            changes,
+            cwd,
+            diff_highlight,
+            surface: DiffSurface::Popup,
         }
     }
 }
@@ -53,13 +74,27 @@ impl DiffSummary {
 impl Renderable for FileChange {
     fn render(&self, area: Rect, buf: &mut Buffer) {
         let mut lines = vec![];
-        render_change(self, &mut lines, area.width as usize, false, None);
+        render_change(
+            self,
+            &mut lines,
+            area.width as usize,
+            false,
+            None,
+            DiffSurface::Transcript,
+        );
         Paragraph::new(lines).render(area, buf);
     }
 
     fn desired_height(&self, width: u16) -> u16 {
         let mut lines = vec![];
-        render_change(self, &mut lines, width as usize, false, None);
+        render_change(
+            self,
+            &mut lines,
+            width as usize,
+            false,
+            None,
+            DiffSurface::Transcript,
+        );
         lines.len() as u16
     }
 }
@@ -74,7 +109,12 @@ impl From<DiffSummary> for Box<dyn Renderable> {
             }
             let mut path = RtLine::from(display_path_for(&row.path, &val.cwd));
             path.push_span(" ");
-            path.extend(render_line_count_summary(row.added, row.removed, false));
+            path.extend(render_line_count_summary(
+                row.added,
+                row.removed,
+                false,
+                val.surface,
+            ));
             rows.push(Box::new(path));
             rows.push(Box::new(RtLine::from("")));
             rows.push(Box::new(InsetRenderable::new(
@@ -82,6 +122,7 @@ impl From<DiffSummary> for Box<dyn Renderable> {
                     row.change,
                     val.diff_highlight,
                     row.lang.clone(),
+                    val.surface,
                 )) as Box<dyn Renderable>,
                 Insets::tlbr(0, 2, 0, 0),
             )));
@@ -117,14 +158,21 @@ struct ChangeRenderable {
     change: FileChange,
     diff_highlight: bool,
     lang: Option<String>,
+    surface: DiffSurface,
 }
 
 impl ChangeRenderable {
-    fn new(change: FileChange, diff_highlight: bool, lang: Option<String>) -> Self {
+    fn new(
+        change: FileChange,
+        diff_highlight: bool,
+        lang: Option<String>,
+        surface: DiffSurface,
+    ) -> Self {
         Self {
             change,
             diff_highlight,
             lang,
+            surface,
         }
     }
 }
@@ -138,6 +186,7 @@ impl Renderable for ChangeRenderable {
             area.width as usize,
             self.diff_highlight,
             self.lang.as_deref(),
+            self.surface,
         );
         Paragraph::new(lines).render(area, buf);
     }
@@ -150,6 +199,7 @@ impl Renderable for ChangeRenderable {
             width as usize,
             self.diff_highlight,
             self.lang.as_deref(),
+            self.surface,
         );
         lines.len() as u16
     }
@@ -201,9 +251,10 @@ fn render_line_count_summary(
     added: usize,
     removed: usize,
     diff_highlight: bool,
+    surface: DiffSurface,
 ) -> Vec<RtSpan<'static>> {
     let mut spans = Vec::new();
-    let base = crate::theme::transcript_style();
+    let base = surface_style(surface);
     spans.push(RtSpan::styled("(", base));
     spans.push(RtSpan::styled(
         format!("+{added}"),
@@ -256,6 +307,7 @@ fn render_changes_block(
             row.added,
             row.removed,
             diff_highlight,
+            DiffSurface::Transcript,
         ));
     } else {
         header_spans.push("Edited".bold());
@@ -264,6 +316,7 @@ fn render_changes_block(
             total_added,
             total_removed,
             diff_highlight,
+            DiffSurface::Transcript,
         ));
     }
     out.push(RtLine::from(header_spans));
@@ -284,6 +337,7 @@ fn render_changes_block(
                 r.added,
                 r.removed,
                 diff_highlight,
+                DiffSurface::Transcript,
             ));
             out.push(RtLine::from(header));
         }
@@ -295,6 +349,7 @@ fn render_changes_block(
             wrap_cols - 4,
             diff_highlight,
             r.lang.as_deref(),
+            DiffSurface::Transcript,
         );
         out.extend(prefix_lines(lines, "    ".into(), "    ".into()));
     }
@@ -308,6 +363,7 @@ fn render_change(
     width: usize,
     diff_highlight: bool,
     lang: Option<&str>,
+    surface: DiffSurface,
 ) {
     let use_diff_background = diff_highlight;
     let highlight_lang = lang.filter(|value| supports_highlighting(value));
@@ -325,6 +381,7 @@ fn render_change(
                     use_diff_background,
                     use_syntax,
                     highlight_lang,
+                    surface,
                 ));
             }
         }
@@ -340,6 +397,7 @@ fn render_change(
                     use_diff_background,
                     use_syntax,
                     highlight_lang,
+                    surface,
                 ));
             }
         }
@@ -372,7 +430,7 @@ fn render_change(
                 for h in patch.hunks() {
                     if !is_first_hunk {
                         let spacer = format!("{:width$} ", "", width = line_number_width.max(1));
-                        let spacer_span = RtSpan::styled(spacer, style_gutter());
+                        let spacer_span = RtSpan::styled(spacer, style_gutter(surface));
                         out.push(RtLine::from(vec![
                             spacer_span,
                             RtSpan::styled("⋮", style_hunk(diff_highlight)),
@@ -395,6 +453,7 @@ fn render_change(
                                     use_diff_background,
                                     use_syntax,
                                     highlight_lang,
+                                    surface,
                                 ));
                                 new_ln += 1;
                             }
@@ -409,6 +468,7 @@ fn render_change(
                                     use_diff_background,
                                     use_syntax,
                                     highlight_lang,
+                                    surface,
                                 ));
                                 old_ln += 1;
                             }
@@ -423,6 +483,7 @@ fn render_change(
                                     use_diff_background,
                                     use_syntax,
                                     highlight_lang,
+                                    surface,
                                 ));
                                 old_ln += 1;
                                 new_ln += 1;
@@ -487,6 +548,7 @@ fn push_wrapped_diff_line(
     diff_highlight: bool,
     syntax_highlight: bool,
     lang: Option<&str>,
+    surface: DiffSurface,
 ) -> Vec<RtLine<'static>> {
     let ln_str = line_number.to_string();
 
@@ -504,12 +566,12 @@ fn push_wrapped_diff_line(
             '-',
             diff_sign_style(style_del(diff_highlight), syntax_highlight, diff_highlight),
         ),
-        DiffLineType::Context => (' ', style_context()),
+        DiffLineType::Context => (' ', style_context(surface)),
     };
     let content_style = match kind {
         DiffLineType::Insert => diff_content_style(style_add(diff_highlight), syntax_highlight),
         DiffLineType::Delete => diff_content_style(style_del(diff_highlight), syntax_highlight),
-        DiffLineType::Context => style_context(),
+        DiffLineType::Context => style_context(surface),
     };
 
     if !syntax_highlight {
@@ -520,6 +582,7 @@ fn push_wrapped_diff_line(
             width,
             sign_char,
             line_style,
+            surface,
         );
     }
 
@@ -540,7 +603,7 @@ fn push_wrapped_diff_line(
             let mut spans: Vec<RtSpan<'static>> = Vec::with_capacity(chunk.spans.len() + 2);
             spans.push(RtSpan::styled(
                 gutter,
-                diff_gutter_style(kind, syntax_highlight, diff_highlight),
+                diff_gutter_style(kind, syntax_highlight, diff_highlight, surface),
             ));
             spans.push(RtSpan::styled(format!("{sign}"), line_style));
             if chunk.spans.is_empty() {
@@ -560,7 +623,7 @@ fn push_wrapped_diff_line(
         out.push(RtLine::from(vec![
             RtSpan::styled(
                 gutter,
-                diff_gutter_style(kind, syntax_highlight, diff_highlight),
+                diff_gutter_style(kind, syntax_highlight, diff_highlight, surface),
             ),
             RtSpan::styled(format!("{sign_char}"), line_style),
         ]));
@@ -576,6 +639,7 @@ fn push_wrapped_diff_text_line(
     width: usize,
     sign_char: char,
     line_style: Style,
+    surface: DiffSurface,
 ) -> Vec<RtLine<'static>> {
     let prefix_cols = gutter_width + 1;
     let mut remaining_text: &str = text;
@@ -601,7 +665,7 @@ fn push_wrapped_diff_text_line(
             // Content with a sign ('+'/'-'/' ') styled per diff kind
             let content = format!("{sign_char}{chunk}");
             lines.push(RtLine::from(vec![
-                RtSpan::styled(gutter, style_gutter()),
+                RtSpan::styled(gutter, style_gutter(surface)),
                 RtSpan::styled(content, line_style),
             ]));
             first = false;
@@ -609,7 +673,7 @@ fn push_wrapped_diff_text_line(
             // Continuation lines keep a space for the sign column so content aligns
             let gutter = format!("{:gutter_width$}  ", "");
             lines.push(RtLine::from(vec![
-                RtSpan::styled(gutter, style_gutter()),
+                RtSpan::styled(gutter, style_gutter(surface)),
                 RtSpan::styled(chunk.to_string(), line_style),
             ]));
         }
@@ -628,12 +692,19 @@ fn line_number_width(max_line_number: usize) -> usize {
     }
 }
 
-fn style_gutter() -> Style {
-    crate::theme::transcript_dim_style()
+fn surface_style(surface: DiffSurface) -> Style {
+    match surface {
+        DiffSurface::Transcript => crate::theme::transcript_style(),
+        DiffSurface::Popup => crate::theme::composer_style(),
+    }
 }
 
-fn style_context() -> Style {
-    crate::theme::transcript_style()
+fn style_gutter(surface: DiffSurface) -> Style {
+    surface_style(surface).patch(crate::theme::dim_style())
+}
+
+fn style_context(surface: DiffSurface) -> Style {
+    surface_style(surface)
 }
 
 fn style_add(diff_highlight: bool) -> Style {
@@ -676,15 +747,20 @@ fn diff_sign_style(style: Style, syntax_highlight: bool, diff_highlight: bool) -
     }
 }
 
-fn diff_gutter_style(kind: DiffLineType, syntax_highlight: bool, diff_highlight: bool) -> Style {
+fn diff_gutter_style(
+    kind: DiffLineType,
+    syntax_highlight: bool,
+    diff_highlight: bool,
+    surface: DiffSurface,
+) -> Style {
     if syntax_highlight && !diff_highlight {
         match kind {
             DiffLineType::Insert => style_add(false).add_modifier(Modifier::BOLD),
             DiffLineType::Delete => style_del(false).add_modifier(Modifier::BOLD),
-            DiffLineType::Context => style_gutter(),
+            DiffLineType::Context => style_gutter(surface),
         }
     } else {
-        style_gutter()
+        style_gutter(surface)
     }
 }
 
@@ -767,6 +843,7 @@ mod tests {
             false,
             false,
             None,
+            DiffSurface::Transcript,
         );
 
         // Render into a small terminal to capture the visual layout
