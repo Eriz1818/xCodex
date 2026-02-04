@@ -599,8 +599,45 @@ fn elicitation_options() -> Vec<ApprovalOption> {
 mod tests {
     use super::*;
     use crate::app_event::AppEvent;
+    use crate::style::user_message_style;
+    use codex_core::themes::ThemeCatalog;
+    use codex_core::themes::ThemeColor;
     use pretty_assertions::assert_eq;
     use tokio::sync::mpsc::unbounded_channel;
+
+    struct ThemeReset;
+
+    impl Drop for ThemeReset {
+        fn drop(&mut self) {
+            // Avoid leaking test theme styles into other tests (especially snapshot tests).
+            crate::theme::preview_definition(&ThemeCatalog::built_in_default());
+        }
+    }
+
+    fn find_in_buffer(buf: &Buffer, needle: &str) -> Option<(u16, u16)> {
+        let needle_chars: Vec<char> = needle.chars().collect();
+        if needle_chars.is_empty() {
+            return None;
+        }
+        let width = buf.area.width;
+        let height = buf.area.height;
+        if width < needle_chars.len() as u16 {
+            return None;
+        }
+        for y in 0..height {
+            for x in 0..=(width - needle_chars.len() as u16) {
+                if (0..needle_chars.len()).all(|offset| {
+                    let cell = &buf[(x + offset as u16, y)];
+                    let symbol = cell.symbol();
+                    let ch = symbol.chars().next().unwrap_or(' ');
+                    ch == needle_chars[offset]
+                }) {
+                    return Some((y, x));
+                }
+            }
+        }
+        None
+    }
 
     fn make_exec_request() -> ApprovalRequest {
         ApprovalRequest::Exec {
@@ -702,6 +739,64 @@ mod tests {
         view.handle_key_event(KeyEvent::new(KeyCode::Char('p'), KeyModifiers::NONE));
         assert!(!view.is_complete());
         assert!(rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn patch_approval_diff_does_not_paint_transcript_background() {
+        let _guard = crate::theme::test_style_guard();
+        let _reset = ThemeReset;
+
+        let mut theme = ThemeCatalog::built_in_default();
+        theme.roles.transcript_bg = Some(ThemeColor::new("#1a1a1a"));
+        theme.roles.composer_bg = Some(ThemeColor::new("#003355"));
+        crate::theme::preview_definition(&theme);
+
+        let expected_bg = user_message_style()
+            .patch(crate::theme::composer_style())
+            .bg;
+        let transcript_bg = crate::theme::transcript_style().bg;
+        assert!(
+            matches!((expected_bg, transcript_bg), (Some(_), Some(_))),
+            "expected explicit transcript + popup backgrounds for the guardrail test"
+        );
+        assert_ne!(
+            expected_bg, transcript_bg,
+            "expected transcript and popup backgrounds to differ for the guardrail test"
+        );
+
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx);
+        let mut changes: HashMap<PathBuf, FileChange> = HashMap::new();
+        changes.insert(
+            PathBuf::from("/tmp/test.txt"),
+            FileChange::Add {
+                content: "test".to_string(),
+            },
+        );
+        let req = ApprovalRequest::ApplyPatch {
+            id: "test".to_string(),
+            reason: None,
+            cwd: PathBuf::from("/"),
+            changes,
+            diff_highlight: false,
+        };
+
+        let view = ApprovalOverlay::new(req, tx, Features::with_defaults());
+        let area = Rect::new(0, 0, 80, view.desired_height(80));
+        let mut buf = Buffer::empty(area);
+        view.render(area, &mut buf);
+
+        let (y, x) = find_in_buffer(&buf, "+test").expect("expected '+test' in approval overlay");
+        for offset in 0.."+test".len() {
+            let cell = &buf[(x + offset as u16, y)];
+            assert_eq!(
+                cell.style().bg,
+                expected_bg,
+                "expected popup background at ({}, {})",
+                x + offset as u16,
+                y
+            );
+        }
     }
 
     #[test]
