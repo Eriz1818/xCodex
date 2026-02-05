@@ -145,10 +145,6 @@ fn footer_lines(props: FooterProps<'_>) -> Vec<Line<'static>> {
     }
 
     fn apply_status_bar_items(lines: &mut [Line<'static>], props: FooterProps<'_>) {
-        if matches!(props.mode, FooterMode::ShortcutOverlay) {
-            return;
-        }
-
         let Some(line) = lines.first_mut() else {
             return;
         };
@@ -173,19 +169,24 @@ fn footer_lines(props: FooterProps<'_>) -> Vec<Line<'static>> {
         }
     }
 
+    fn base_context_line(props: FooterProps<'_>) -> Line<'static> {
+        context_window_line(
+            props.context_window_percent,
+            props.context_window_used_tokens,
+        )
+    }
+
     // Show the context indicator on the left, appended after the primary hint
     // (e.g., "? for shortcuts"). Keep it visible even when typing (i.e., when
     // the shortcut hint is hidden). Hide it only for the multi-line
     // ShortcutOverlay.
     let mut lines = match props.mode {
-        FooterMode::QuitShortcutReminder => {
-            vec![quit_shortcut_reminder_line(props.quit_shortcut_key)]
-        }
+        FooterMode::QuitShortcutReminder => vec![
+            base_context_line(props),
+            quit_shortcut_reminder_line(props.quit_shortcut_key),
+        ],
         FooterMode::ShortcutSummary => {
-            let mut line = context_window_line(
-                props.context_window_percent,
-                props.context_window_used_tokens,
-            );
+            let mut line = base_context_line(props);
             line.push_span(" · ".dim());
             line.extend(vec![
                 key_hint::plain(KeyCode::Char('?')).into(),
@@ -230,14 +231,16 @@ fn footer_lines(props: FooterProps<'_>) -> Vec<Line<'static>> {
                 esc_backtrack_hint: props.esc_backtrack_hint,
                 is_wsl,
             };
-            shortcut_overlay_lines(state)
+            let mut lines = vec![base_context_line(props)];
+            lines.extend(shortcut_overlay_lines(state));
+            lines
         }
-        FooterMode::EscHint => vec![esc_hint_line(props.esc_backtrack_hint)],
+        FooterMode::EscHint => vec![
+            base_context_line(props),
+            esc_hint_line(props.esc_backtrack_hint),
+        ],
         FooterMode::ContextOnly => {
-            let mut line = context_window_line(
-                props.context_window_percent,
-                props.context_window_used_tokens,
-            );
+            let mut line = base_context_line(props);
             if props.composer_has_text {
                 line.push_span(" · ".dim());
                 line.push_span(props.composer_copy_key);
