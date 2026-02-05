@@ -139,7 +139,7 @@ Codex applies five exclusion layers. Each layer can be toggled independently in 
 - **L4: Output scanning (response redaction)**  
   Scans generated outputs and redacts secrets before display.
 - **L5: Hook payload redaction**  
-  Redacts hook payload strings before dispatch when `hooks.sanitize_payloads = true`.
+  Redacts hook payload strings before dispatch when `hooks.sanitize_payloads = true` (default).
 
 ### Toggles and Defaults
 

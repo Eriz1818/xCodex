@@ -60,7 +60,7 @@ Defaults:
 
 - `enabled = true`
 - `path_matching = true`, `content_hashing = true`, `substring_matching = true`, `secret_patterns = true`
-- `paranoid_mode = false` (only Layer 1 + Layer 3 are enforced by default; see below)
+- `paranoid_mode = false` (only Layer 1 + Layer 3 + Layer 5 are enforced by default; see below)
 - `show_summary_banner = true`, `show_summary_history = true` (both are UI-only; no paths are ever shown)
 - `preflight_shell_paths = true` (blocks shell tool calls that reference excluded paths before executing)
 - `prompt_on_blocked = false` (prompt before allowing excluded paths or payloads)
@@ -79,7 +79,7 @@ Layer toggles:
 - Layer 2 (Output sanitization): controlled by `layer_output_sanitization` (defaults to `paranoid_mode`).
 - Layer 3 (Send firewall): controlled by `layer_send_firewall` (defaults to `true`).
 - Layer 4 (Request interceptor): controlled by `layer_request_interceptor` (defaults to `paranoid_mode`).
-- Layer 5 (Hook payload redaction): controlled by `hooks.sanitize_payloads` (defaults to `false`).
+- Layer 5 (Hook payload redaction): controlled by `hooks.sanitize_payloads` (defaults to `true`).
 
 If you set `paranoid_mode = true`, Codex enables Layer 2 and Layer 4 by default. You can still override any layer individually:
 
@@ -1363,7 +1363,7 @@ Valid values:
 | `hooks.host.filters.<event>`                     | array<table>                                                      | Optional per-event matcher filters for the hook host (same matcher semantics as `hooks.command`).                               |
 | `hooks.max_stdin_payload_bytes`                  | integer                                                           | Max payload size (bytes) to send directly via stdin (default: 16384); above this uses `payload_path` file delivery.             |
 | `hooks.keep_last_n_payloads`                     | integer                                                           | Keep only the most recent N payload/log files under CODEX_HOME (default: 50).                                                   |
-| `hooks.sanitize_payloads`                        | boolean                                                           | When true, redact sensitive content in hook payloads before dispatch (default: false).                                         |
+| `hooks.sanitize_payloads`                        | boolean                                                           | When true, redact sensitive content in hook payloads before dispatch (default: true).                                          |
 | `tui.animations`                                 | boolean                                                           | Enable terminal animations (welcome screen, shimmer, spinner). Defaults to true; set to `false` to disable visual motion.       |
 | `tui.confirm_exit_with_running_hooks`            | boolean                                                           | Confirm exit when external hooks are still running (default: true).                                                             |
 | `instructions`                                   | string                                                            | Currently ignored; use `experimental_instructions_file` or `AGENTS.md`.                                                         |

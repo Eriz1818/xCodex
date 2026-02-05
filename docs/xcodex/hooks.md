@@ -214,7 +214,7 @@ This is a quick, “everything hooks-related” cheat sheet. The canonical sourc
 - Delivery/retention:
   - `hooks.max_stdin_payload_bytes` (above this, hooks receive a `payload_path` envelope)
   - `hooks.keep_last_n_payloads` (prunes hook payload/log files under `CODEX_HOME/tmp/hooks/`)
-  - `hooks.sanitize_payloads` (redact sensitive content before hook dispatch)
+- `hooks.sanitize_payloads` (redact sensitive content before hook dispatch; default true)
 
 ## Where hook code lives
 
