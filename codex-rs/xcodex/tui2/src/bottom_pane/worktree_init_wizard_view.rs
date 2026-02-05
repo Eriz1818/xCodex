@@ -394,6 +394,7 @@ impl WorktreeInitWizardView {
             display_shortcut: None,
             match_indices: None,
             disabled_reason: None,
+            is_dimmed: false,
             wrap_indent: None,
         });
         rows.push(GenericDisplayRow {
@@ -402,6 +403,7 @@ impl WorktreeInitWizardView {
             display_shortcut: None,
             match_indices: None,
             disabled_reason: None,
+            is_dimmed: false,
             wrap_indent: None,
         });
         rows
@@ -429,6 +431,7 @@ impl WorktreeInitWizardView {
                     description,
                     display_shortcut: None,
                     disabled_reason: None,
+                    is_dimmed: false,
                     wrap_indent: None,
                 }
             })
@@ -492,6 +495,7 @@ impl WorktreeInitWizardView {
                 display_shortcut: None,
                 match_indices: None,
                 disabled_reason: None,
+                is_dimmed: false,
                 wrap_indent: None,
             });
         }
@@ -508,6 +512,7 @@ impl WorktreeInitWizardView {
             display_shortcut: None,
             match_indices: None,
             disabled_reason: None,
+            is_dimmed: false,
             wrap_indent: None,
         });
         rows

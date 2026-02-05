@@ -380,6 +380,7 @@ impl CommandPopup {
                     description: Some(description),
                     wrap_indent: None,
                     is_disabled: false,
+                    is_dimmed: false,
                     disabled_reason: None,
                 }
             })

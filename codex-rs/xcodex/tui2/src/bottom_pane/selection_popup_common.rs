@@ -22,7 +22,8 @@ pub(crate) struct GenericDisplayRow {
     pub match_indices: Option<Vec<usize>>, // indices to bold (char positions)
     pub description: Option<String>,       // optional grey text after the name
     pub disabled_reason: Option<String>,   // optional disabled message
-    pub wrap_indent: Option<usize>,        // optional indent for wrapped lines
+    pub is_dimmed: bool,
+    pub wrap_indent: Option<usize>, // optional indent for wrapped lines
 }
 
 pub(crate) fn wrap_styled_line<'a>(line: &'a Line<'a>, width: u16) -> Vec<Line<'a>> {
@@ -291,13 +292,16 @@ pub(crate) fn render_rows(
         }
 
         let mut full_line = build_full_line(row, desc_col);
-        let row_style = if row.disabled_reason.is_some() {
+        let row_is_disabled = row.disabled_reason.is_some();
+        let row_is_dimmed = row.is_dimmed && !row_is_disabled;
+        let row_style = if row_is_disabled || row_is_dimmed {
             base_style.patch(crate::theme::dim_style())
         } else {
             base_style
         };
 
-        if row.disabled_reason.is_none() && Some(i) == state.selected_idx {
+        let is_selected = !row_is_disabled && Some(i) == state.selected_idx;
+        if is_selected {
             // Keep the popup background stable and use accent color for selection.
             let style = base_style
                 .patch(crate::theme::accent_style())
@@ -306,6 +310,11 @@ pub(crate) fn render_rows(
                 .spans
                 .iter_mut()
                 .for_each(|span| span.style = style);
+        }
+        if !is_selected && (row_is_disabled || row_is_dimmed) {
+            full_line.spans.iter_mut().for_each(|span| {
+                span.style = span.style.dim();
+            });
         }
 
         // Wrap with subsequent indent aligned to the description column.
@@ -393,13 +402,16 @@ pub(crate) fn render_rows_single_line(
         }
 
         let mut full_line = build_full_line(row, desc_col);
-        let row_style = if row.disabled_reason.is_some() {
+        let row_is_disabled = row.disabled_reason.is_some();
+        let row_is_dimmed = row.is_dimmed && !row_is_disabled;
+        let row_style = if row_is_disabled || row_is_dimmed {
             base_style.patch(crate::theme::dim_style())
         } else {
             base_style
         };
 
-        if row.disabled_reason.is_none() && Some(i) == state.selected_idx {
+        let is_selected = !row_is_disabled && Some(i) == state.selected_idx;
+        if is_selected {
             let style = base_style
                 .patch(crate::theme::accent_style())
                 .add_modifier(Modifier::BOLD);
@@ -407,6 +419,11 @@ pub(crate) fn render_rows_single_line(
                 .spans
                 .iter_mut()
                 .for_each(|span| span.style = style);
+        }
+        if !is_selected && (row_is_disabled || row_is_dimmed) {
+            full_line.spans.iter_mut().for_each(|span| {
+                span.style = span.style.dim();
+            });
         }
 
         let full_line = truncate_line_with_ellipsis_if_overflow(full_line, area.width as usize);

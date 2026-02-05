@@ -320,6 +320,7 @@ impl WorktreesSettingsView {
                 match_indices: None,
                 description: None,
                 disabled_reason: None,
+                is_dimmed: false,
                 wrap_indent: None,
             });
         } else {
@@ -335,6 +336,7 @@ impl WorktreesSettingsView {
                     display_shortcut: None,
                     match_indices: None,
                     disabled_reason: None,
+                    is_dimmed: false,
                     wrap_indent: None,
                 });
             }
@@ -352,6 +354,7 @@ impl WorktreesSettingsView {
             display_shortcut: None,
             match_indices: None,
             disabled_reason: None,
+            is_dimmed: false,
             wrap_indent: None,
         });
 

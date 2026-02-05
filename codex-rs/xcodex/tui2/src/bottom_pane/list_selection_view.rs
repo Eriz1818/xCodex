@@ -41,12 +41,19 @@ pub(crate) struct SelectionItem {
     pub description: Option<String>,
     pub selected_description: Option<String>,
     pub is_current: bool,
+    pub is_dimmed: bool,
     pub is_default: bool,
     pub actions: Vec<SelectionAction>,
     pub highlight_actions: Vec<SelectionAction>,
     pub dismiss_on_select: bool,
     pub search_value: Option<String>,
     pub disabled_reason: Option<String>,
+}
+
+pub(crate) struct TabState {
+    pub current: usize,
+    pub count: usize,
+    pub on_tab: Box<dyn Fn(usize, &AppEventSender) + Send + Sync>,
 }
 
 pub(crate) struct SelectionViewParams {
@@ -60,6 +67,7 @@ pub(crate) struct SelectionViewParams {
     pub header: Box<dyn Renderable>,
     pub initial_selected_idx: Option<usize>,
     pub on_cancel: Option<SelectionAction>,
+    pub tab_state: Option<TabState>,
 }
 
 impl Default for SelectionViewParams {
@@ -75,6 +83,7 @@ impl Default for SelectionViewParams {
             header: Box::new(()),
             initial_selected_idx: None,
             on_cancel: None,
+            tab_state: None,
         }
     }
 }
@@ -95,6 +104,7 @@ pub(crate) struct ListSelectionView {
     initial_selected_idx: Option<usize>,
     on_cancel: Option<SelectionAction>,
     last_highlighted_actual_idx: Option<usize>,
+    tab_state: Option<TabState>,
 }
 
 impl ListSelectionView {
@@ -129,6 +139,7 @@ impl ListSelectionView {
             initial_selected_idx: params.initial_selected_idx,
             on_cancel: params.on_cancel,
             last_highlighted_actual_idx: None,
+            tab_state: params.tab_state,
         };
         s.apply_filter();
         s.apply_highlight();
@@ -269,6 +280,7 @@ impl ListSelectionView {
                         description,
                         disabled_reason: item.disabled_reason.clone(),
                         wrap_indent,
+                        is_dimmed: item.is_dimmed,
                     }
                 })
             })
@@ -433,9 +445,28 @@ impl ListSelectionView {
         }
         self.complete = true;
     }
+
+    fn cycle_tab(&self, forward: bool) {
+        let Some(tab_state) = &self.tab_state else {
+            return;
+        };
+        if tab_state.count == 0 {
+            return;
+        }
+        let next = if forward {
+            (tab_state.current + 1) % tab_state.count
+        } else {
+            (tab_state.current + tab_state.count - 1) % tab_state.count
+        };
+        (tab_state.on_tab)(next, &self.app_event_tx);
+    }
 }
 
 impl BottomPaneView for ListSelectionView {
+    fn view_kind(&self) -> super::bottom_pane_view::BottomPaneViewKind {
+        super::bottom_pane_view::BottomPaneViewKind::SelectionList
+    }
+
     fn handle_key_event(&mut self, key_event: KeyEvent) {
         if self.handle_display_shortcut(key_event) {
             return;
@@ -528,6 +559,18 @@ impl BottomPaneView for ListSelectionView {
                 modifiers: KeyModifiers::NONE,
                 ..
             } => self.accept(),
+            KeyEvent {
+                code: KeyCode::Char(' '),
+                modifiers: KeyModifiers::NONE,
+                ..
+            } => self.accept(),
+            KeyEvent {
+                code: KeyCode::Tab, ..
+            } => self.cycle_tab(true),
+            KeyEvent {
+                code: KeyCode::BackTab,
+                ..
+            } => self.cycle_tab(false),
             _ => {}
         }
     }

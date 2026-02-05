@@ -26,6 +26,7 @@ use crate::render::renderable::Renderable;
 use crate::render::renderable::RenderableItem;
 use crate::tui::FrameRequester;
 pub(crate) use bottom_pane_view::BottomPaneView;
+pub(crate) use bottom_pane_view::BottomPaneViewKind;
 use codex_core::features::Features;
 use codex_core::skills::model::SkillMetadata;
 use codex_file_search::FileMatch;
@@ -64,6 +65,7 @@ mod command_popup_xcodex_tests;
 pub mod custom_prompt_view;
 mod experimental_features_view;
 mod file_search_popup;
+pub(crate) use file_search_popup::FileSearchPopup;
 mod footer;
 mod list_selection_view;
 mod prompt_args;
@@ -84,6 +86,8 @@ mod queued_user_messages;
 mod scroll_state;
 mod selection_popup_common;
 mod textarea;
+pub(crate) use textarea::TextArea;
+pub(crate) use textarea::TextAreaState;
 mod unified_exec_footer;
 mod worktree_init_wizard_view;
 mod worktree_link_shared_wizard_view;
@@ -799,6 +803,22 @@ impl BottomPane {
     /// Show a generic list selection view with the provided items.
     pub(crate) fn show_selection_view(&mut self, params: list_selection_view::SelectionViewParams) {
         let view = list_selection_view::ListSelectionView::new(params, self.app_event_tx.clone());
+        self.push_view(Box::new(view));
+    }
+
+    /// Replace the active selection list if present; otherwise push a new one.
+    pub(crate) fn show_or_replace_selection_view(
+        &mut self,
+        params: list_selection_view::SelectionViewParams,
+    ) {
+        let view = list_selection_view::ListSelectionView::new(params, self.app_event_tx.clone());
+        if self
+            .view_stack
+            .last()
+            .is_some_and(|view| view.view_kind() == BottomPaneViewKind::SelectionList)
+        {
+            self.view_stack.pop();
+        }
         self.push_view(Box::new(view));
     }
 

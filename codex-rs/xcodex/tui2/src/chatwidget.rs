@@ -3389,6 +3389,11 @@ impl ChatWidget {
         self.request_redraw();
     }
 
+    pub(crate) fn show_or_replace_selection_view(&mut self, params: SelectionViewParams) {
+        self.bottom_pane.show_or_replace_selection_view(params);
+        self.request_redraw();
+    }
+
     pub(crate) fn show_view(&mut self, view: Box<dyn BottomPaneView>) {
         self.bottom_pane.show_view(view);
         self.request_redraw();

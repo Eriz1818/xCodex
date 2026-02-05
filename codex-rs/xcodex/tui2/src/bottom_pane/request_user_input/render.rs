@@ -115,6 +115,7 @@ impl RequestUserInputOverlay {
                             match_indices: None,
                             description: Some(opt.description.clone()),
                             disabled_reason: None,
+                            is_dimmed: false,
                             wrap_indent: None,
                         }
                     })

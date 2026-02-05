@@ -102,6 +102,7 @@ impl SkillPopup {
                     display_shortcut: None,
                     description: Some(description).filter(|desc| !desc.is_empty()),
                     is_disabled: false,
+                    is_dimmed: false,
                     disabled_reason: None,
                     wrap_indent: None,
                 }
