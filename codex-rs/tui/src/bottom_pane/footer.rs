@@ -541,7 +541,7 @@ fn footer_from_props_lines(
     show_shortcuts_hint: bool,
     show_queue_hint: bool,
 ) -> Vec<Line<'static>> {
-    let lines = match props.mode {
+    match props.mode {
         FooterMode::QuitShortcutReminder => {
             vec![quit_shortcut_reminder_line(props.quit_shortcut_key)]
         }
@@ -577,9 +577,7 @@ fn footer_from_props_lines(
             };
             vec![left_side_line(collaboration_mode_indicator, state)]
         }
-    };
-
-    lines
+    }
 }
 
 pub(crate) fn footer_line_width(

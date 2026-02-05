@@ -3218,6 +3218,9 @@ impl ChatWidget {
             SlashCommand::Approvals => {
                 self.open_approvals_popup();
             }
+            SlashCommand::Exclusions => {
+                crate::xcodex_plugins::exclusions::open_exclusions_menu(self);
+            }
             SlashCommand::Permissions => {
                 self.open_permissions_popup();
             }
@@ -6140,6 +6143,16 @@ impl ChatWidget {
 
     pub(crate) fn set_transcript_user_prompt_highlight(&mut self, enabled: bool) {
         self.config.tui_transcript_user_prompt_highlight = enabled;
+        self.request_redraw();
+    }
+
+    pub(crate) fn set_exclusion_settings(
+        &mut self,
+        exclusion: codex_core::config::types::ExclusionConfig,
+        hooks_sanitize_payloads: bool,
+    ) {
+        self.config.exclusion = exclusion;
+        self.config.xcodex.hooks.sanitize_payloads = hooks_sanitize_payloads;
         self.request_redraw();
     }
 
