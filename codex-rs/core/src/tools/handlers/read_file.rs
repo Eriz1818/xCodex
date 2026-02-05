@@ -5,6 +5,7 @@ use codex_utils_string::take_bytes_at_char_boundary;
 use serde::Deserialize;
 
 use crate::function_tool::FunctionCallError;
+use crate::sensitive_paths::SensitivePathDecision;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
@@ -12,6 +13,9 @@ use crate::tools::context::ToolProvenance;
 use crate::tools::handlers::parse_arguments;
 use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
+use codex_protocol::request_user_input::RequestUserInputArgs;
+use codex_protocol::request_user_input::RequestUserInputQuestion;
+use codex_protocol::request_user_input::RequestUserInputQuestionOption;
 
 pub struct ReadFileHandler;
 
@@ -103,10 +107,10 @@ impl ToolHandler for ReadFileHandler {
             turn,
             tool_name,
             ..
-        } = invocation;
+        } = &invocation;
 
         let arguments = match payload {
-            ToolPayload::Function { arguments } => arguments,
+            ToolPayload::Function { arguments } => arguments.clone(),
             _ => {
                 return Err(FunctionCallError::RespondToModel(
                     "read_file handler received unsupported payload".to_string(),
@@ -147,9 +151,13 @@ impl ToolHandler for ReadFileHandler {
         if turn
             .sensitive_paths
             .decision_discover_with_is_dir(&path, Some(false))
-            == crate::sensitive_paths::SensitivePathDecision::Deny
+            == SensitivePathDecision::Deny
         {
+            if turn.exclusion.prompt_on_blocked
+                && maybe_prompt_for_access(&invocation, "read file", &path).await?
             {
+                // Allow the access for this call only.
+            } else {
                 let mut counters = turn
                     .exclusion_counters
                     .lock()
@@ -157,14 +165,14 @@ impl ToolHandler for ReadFileHandler {
                 counters.record(
                     crate::exclusion_counters::ExclusionLayer::Layer1InputGuards,
                     crate::exclusion_counters::ExclusionSource::Filesystem,
-                    &tool_name,
+                    tool_name,
                     /* redacted */ false,
                     /* blocked */ true,
                 );
+                return Err(FunctionCallError::RespondToModel(
+                    turn.sensitive_paths.format_denied_message(),
+                ));
             }
-            return Err(FunctionCallError::RespondToModel(
-                turn.sensitive_paths.format_denied_message(),
-            ));
         }
 
         let collected = match mode {
@@ -181,6 +189,43 @@ impl ToolHandler for ReadFileHandler {
             provenance: ToolProvenance::Filesystem { path },
         })
     }
+}
+
+async fn maybe_prompt_for_access(
+    context: &ToolInvocation,
+    action: &str,
+    path: &std::path::Path,
+) -> Result<bool, FunctionCallError> {
+    let display = path.display().to_string();
+    let question = RequestUserInputQuestion {
+        header: "Exclusions".to_string(),
+        id: "exclusions_access".to_string(),
+        question: format!("Allow xcodex to {action} this excluded path?\n{display}"),
+        is_other: false,
+        is_secret: false,
+        options: Some(vec![
+            RequestUserInputQuestionOption {
+                label: "Allow once".to_string(),
+                description: "Permit this access for the current request.".to_string(),
+            },
+            RequestUserInputQuestionOption {
+                label: "Block".to_string(),
+                description: "Keep exclusions blocking this path.".to_string(),
+            },
+        ]),
+    };
+    let args = RequestUserInputArgs {
+        questions: vec![question],
+    };
+    let response = context
+        .session
+        .request_user_input(context.turn.as_ref(), context.call_id.clone(), args)
+        .await;
+    let allow = response
+        .and_then(|response| response.answers.get("exclusions_access").cloned())
+        .and_then(|answer| answer.answers.first().cloned())
+        .is_some_and(|value| value == "Allow once");
+    Ok(allow)
 }
 
 mod slice {

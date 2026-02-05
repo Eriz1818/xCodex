@@ -385,6 +385,11 @@
           "description": "When `true`, block shell tool calls that reference excluded paths before executing.",
           "type": "boolean"
         },
+        "prompt_on_blocked": {
+          "default": false,
+          "description": "When true, prompt to allow excluded paths or payloads instead of blocking immediately.",
+          "type": "boolean"
+        },
         "secret_patterns": {
           "default": true,
           "description": "Secret-pattern scanning in text (defense-in-depth redaction).",

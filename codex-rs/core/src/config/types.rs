@@ -150,6 +150,10 @@ pub struct ExclusionConfig {
     #[serde(default = "default_enabled")]
     pub show_summary_history: bool,
 
+    /// When true, prompt to allow excluded paths or payloads instead of blocking immediately.
+    #[serde(default)]
+    pub prompt_on_blocked: bool,
+
     /// When `true`, block shell tool calls that reference excluded paths before executing.
     #[serde(default = "default_enabled")]
     pub preflight_shell_paths: bool,
@@ -192,6 +196,7 @@ impl Default for ExclusionConfig {
             log_redactions_max_files: default_log_redactions_max_files(),
             show_summary_banner: default_enabled(),
             show_summary_history: default_enabled(),
+            prompt_on_blocked: false,
             preflight_shell_paths: default_enabled(),
             files: default_exclusion_files(),
         }

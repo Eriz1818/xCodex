@@ -31,6 +31,9 @@ use crate::tools::spec::JsonSchema;
 use async_trait::async_trait;
 use codex_apply_patch::ApplyPatchAction;
 use codex_apply_patch::ApplyPatchFileChange;
+use codex_protocol::request_user_input::RequestUserInputArgs;
+use codex_protocol::request_user_input::RequestUserInputQuestion;
+use codex_protocol::request_user_input::RequestUserInputQuestionOption;
 use codex_utils_absolute_path::AbsolutePathBuf;
 
 pub struct ApplyPatchHandler;
@@ -86,14 +89,14 @@ impl ToolHandler for ApplyPatchHandler {
             call_id,
             tool_name,
             payload,
-        } = invocation;
+        } = &invocation;
 
         let patch_input = match payload {
             ToolPayload::Function { arguments } => {
-                let args: ApplyPatchToolArgs = parse_arguments(&arguments)?;
+                let args: ApplyPatchToolArgs = parse_arguments(arguments)?;
                 args.input
             }
-            ToolPayload::Custom { input } => input,
+            ToolPayload::Custom { input } => input.clone(),
             _ => {
                 return Err(FunctionCallError::RespondToModel(
                     "apply_patch handler received unsupported payload".to_string(),
@@ -120,7 +123,11 @@ impl ToolHandler for ApplyPatchHandler {
                         .decision_discover_with_is_dir(path.as_path(), Some(false))
                         == SensitivePathDecision::Deny
                 }) {
+                    if turn.exclusion.prompt_on_blocked
+                        && maybe_prompt_for_access(&invocation, "apply this patch").await?
                     {
+                        // Allow this patch once.
+                    } else {
                         let mut counters = turn
                             .exclusion_counters
                             .lock()
@@ -128,14 +135,14 @@ impl ToolHandler for ApplyPatchHandler {
                         counters.record(
                             crate::exclusion_counters::ExclusionLayer::Layer1InputGuards,
                             crate::exclusion_counters::ExclusionSource::Filesystem,
-                            &tool_name,
+                            tool_name,
                             /* redacted */ false,
                             /* blocked */ true,
                         );
+                        return Err(FunctionCallError::RespondToModel(
+                            turn.sensitive_paths.format_denied_message(),
+                        ));
                     }
-                    return Err(FunctionCallError::RespondToModel(
-                        turn.sensitive_paths.format_denied_message(),
-                    ));
                 }
 
                 match apply_patch::apply_patch(turn.as_ref(), changes).await {
@@ -158,8 +165,8 @@ impl ToolHandler for ApplyPatchHandler {
                         let event_ctx = ToolEventCtx::new(
                             session.as_ref(),
                             turn.as_ref(),
-                            &call_id,
-                            Some(&tracker),
+                            call_id,
+                            Some(tracker),
                         );
                         emitter.begin(event_ctx).await;
 
@@ -181,13 +188,13 @@ impl ToolHandler for ApplyPatchHandler {
                             tool_name: tool_name.to_string(),
                         };
                         let out = orchestrator
-                            .run(&mut runtime, &req, &tool_ctx, &turn, turn.approval_policy)
+                            .run(&mut runtime, &req, &tool_ctx, turn, turn.approval_policy)
                             .await;
                         let event_ctx = ToolEventCtx::new(
                             session.as_ref(),
                             turn.as_ref(),
-                            &call_id,
-                            Some(&tracker),
+                            call_id,
+                            Some(tracker),
                         );
                         let content = emitter.finish(event_ctx, out).await?;
                         Ok(ToolOutput::Function {
@@ -219,6 +226,41 @@ impl ToolHandler for ApplyPatchHandler {
             }
         }
     }
+}
+
+async fn maybe_prompt_for_access(
+    context: &ToolInvocation,
+    action: &str,
+) -> Result<bool, FunctionCallError> {
+    let question = RequestUserInputQuestion {
+        header: "Exclusions".to_string(),
+        id: "exclusions_access".to_string(),
+        question: format!("Allow xcodex to {action} to excluded paths?"),
+        is_other: false,
+        is_secret: false,
+        options: Some(vec![
+            RequestUserInputQuestionOption {
+                label: "Allow once".to_string(),
+                description: "Permit this access for the current request.".to_string(),
+            },
+            RequestUserInputQuestionOption {
+                label: "Block".to_string(),
+                description: "Keep exclusions blocking this change.".to_string(),
+            },
+        ]),
+    };
+    let args = RequestUserInputArgs {
+        questions: vec![question],
+    };
+    let response = context
+        .session
+        .request_user_input(context.turn.as_ref(), context.call_id.clone(), args)
+        .await;
+    let allow = response
+        .and_then(|response| response.answers.get("exclusions_access").cloned())
+        .and_then(|answer| answer.answers.first().cloned())
+        .is_some_and(|value| value == "Allow once");
+    Ok(allow)
 }
 
 #[allow(clippy::too_many_arguments)]

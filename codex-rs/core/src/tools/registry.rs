@@ -14,6 +14,9 @@ use crate::tools::context::ToolProvenance;
 use async_trait::async_trait;
 use codex_protocol::models::FunctionCallOutputContentItem;
 use codex_protocol::models::ResponseInputItem;
+use codex_protocol::request_user_input::RequestUserInputArgs;
+use codex_protocol::request_user_input::RequestUserInputQuestion;
+use codex_protocol::request_user_input::RequestUserInputQuestionOption;
 use codex_utils_readiness::Readiness;
 use tracing::warn;
 
@@ -182,12 +185,16 @@ async fn enforce_sensitive_send_policy(
             content: _,
             content_items: _,
             success: _,
-            provenance: ToolProvenance::Filesystem { path },
+            provenance: ToolProvenance::Filesystem { ref path },
         } if turn.exclusion.layer_send_firewall_enabled()
-            && turn.sensitive_paths.decision_send(&path)
+            && turn.sensitive_paths.decision_send(path)
                 == crate::sensitive_paths::SensitivePathDecision::Deny =>
         {
+            if turn.exclusion.prompt_on_blocked
+                && maybe_prompt_for_send(session, turn, call_id, path).await
             {
+                output
+            } else {
                 let mut counters = turn
                     .exclusion_counters
                     .lock()
@@ -199,12 +206,12 @@ async fn enforce_sensitive_send_policy(
                     /* redacted */ false,
                     /* blocked */ true,
                 );
-            }
-            ToolOutput::Function {
-                content: turn.sensitive_paths.format_denied_message(),
-                content_items: None,
-                success: Some(false),
-                provenance: ToolProvenance::Filesystem { path },
+                ToolOutput::Function {
+                    content: turn.sensitive_paths.format_denied_message(),
+                    content_items: None,
+                    success: Some(false),
+                    provenance: ToolProvenance::Filesystem { path: path.clone() },
+                }
             }
         }
         other => other,
@@ -244,6 +251,42 @@ async fn enforce_sensitive_send_policy(
         },
     )
     .await
+}
+
+async fn maybe_prompt_for_send(
+    session: &crate::codex::Session,
+    turn: &crate::codex::TurnContext,
+    call_id: &str,
+    path: &std::path::Path,
+) -> bool {
+    let display = path.display().to_string();
+    let question = RequestUserInputQuestion {
+        header: "Exclusions".to_string(),
+        id: "exclusions_send".to_string(),
+        question: format!("Allow xcodex to send this excluded output?\n{display}"),
+        is_other: false,
+        is_secret: false,
+        options: Some(vec![
+            RequestUserInputQuestionOption {
+                label: "Allow once".to_string(),
+                description: "Permit this output for the current request.".to_string(),
+            },
+            RequestUserInputQuestionOption {
+                label: "Block".to_string(),
+                description: "Keep exclusions blocking this output.".to_string(),
+            },
+        ]),
+    };
+    let args = RequestUserInputArgs {
+        questions: vec![question],
+    };
+    let response = session
+        .request_user_input(turn, call_id.to_string(), args)
+        .await;
+    response
+        .and_then(|response| response.answers.get("exclusions_send").cloned())
+        .and_then(|answer| answer.answers.first().cloned())
+        .is_some_and(|value| value == "Allow once")
 }
 
 fn enforce_sensitive_content_gateway(

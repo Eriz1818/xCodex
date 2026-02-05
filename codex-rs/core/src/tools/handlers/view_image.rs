@@ -16,6 +16,9 @@ use crate::tools::registry::ToolKind;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::local_image_content_items_with_label_number;
+use codex_protocol::request_user_input::RequestUserInputArgs;
+use codex_protocol::request_user_input::RequestUserInputQuestion;
+use codex_protocol::request_user_input::RequestUserInputQuestionOption;
 
 pub struct ViewImageHandler;
 
@@ -38,10 +41,10 @@ impl ToolHandler for ViewImageHandler {
             payload,
             call_id,
             ..
-        } = invocation;
+        } = &invocation;
 
         let arguments = match payload {
-            ToolPayload::Function { arguments } => arguments,
+            ToolPayload::Function { arguments } => arguments.clone(),
             _ => {
                 return Err(FunctionCallError::RespondToModel(
                     "view_image handler received unsupported payload".to_string(),
@@ -58,7 +61,11 @@ impl ToolHandler for ViewImageHandler {
             .decision_discover_with_is_dir(&abs_path, Some(false))
             == SensitivePathDecision::Deny
         {
+            if turn.exclusion.prompt_on_blocked
+                && maybe_prompt_for_access(&invocation, "view this image", &abs_path).await?
             {
+                // Allow the access for this call only.
+            } else {
                 let mut counters = turn
                     .exclusion_counters
                     .lock()
@@ -66,14 +73,14 @@ impl ToolHandler for ViewImageHandler {
                 counters.record(
                     crate::exclusion_counters::ExclusionLayer::Layer1InputGuards,
                     crate::exclusion_counters::ExclusionSource::Filesystem,
-                    &tool_name,
+                    tool_name,
                     /* redacted */ false,
                     /* blocked */ true,
                 );
+                return Err(FunctionCallError::RespondToModel(
+                    turn.sensitive_paths.format_denied_message(),
+                ));
             }
-            return Err(FunctionCallError::RespondToModel(
-                turn.sensitive_paths.format_denied_message(),
-            ));
         }
 
         let metadata = fs::metadata(&abs_path).await.map_err(|error| {
@@ -111,7 +118,7 @@ impl ToolHandler for ViewImageHandler {
             .send_event(
                 turn.as_ref(),
                 EventMsg::ViewImageToolCall(ViewImageToolCallEvent {
-                    call_id,
+                    call_id: call_id.clone(),
                     path: event_path,
                 }),
             )
@@ -124,4 +131,41 @@ impl ToolHandler for ViewImageHandler {
             provenance: ToolProvenance::Filesystem { path: abs_path },
         })
     }
+}
+
+async fn maybe_prompt_for_access(
+    context: &ToolInvocation,
+    action: &str,
+    path: &std::path::Path,
+) -> Result<bool, FunctionCallError> {
+    let display = path.display().to_string();
+    let question = RequestUserInputQuestion {
+        header: "Exclusions".to_string(),
+        id: "exclusions_access".to_string(),
+        question: format!("Allow xcodex to {action}?\n{display}"),
+        is_other: false,
+        is_secret: false,
+        options: Some(vec![
+            RequestUserInputQuestionOption {
+                label: "Allow once".to_string(),
+                description: "Permit this access for the current request.".to_string(),
+            },
+            RequestUserInputQuestionOption {
+                label: "Block".to_string(),
+                description: "Keep exclusions blocking this path.".to_string(),
+            },
+        ]),
+    };
+    let args = RequestUserInputArgs {
+        questions: vec![question],
+    };
+    let response = context
+        .session
+        .request_user_input(context.turn.as_ref(), context.call_id.clone(), args)
+        .await;
+    let allow = response
+        .and_then(|response| response.answers.get("exclusions_access").cloned())
+        .and_then(|answer| answer.answers.first().cloned())
+        .is_some_and(|value| value == "Allow once");
+    Ok(allow)
 }
