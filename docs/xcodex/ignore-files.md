@@ -27,6 +27,7 @@ internal-docs/
 | `.xcodexignore` | Repository root |
 
 Both files use [gitignore-style pattern matching](https://git-scm.com/docs/gitignore#_pattern_format). To customize which filenames Codex loads, set `[exclusion].files` in `config.toml`.
+In the TUI, `/exclusion` opens an interactive editor for these settings.
 
 ## What Gets Protected
 
@@ -119,13 +120,14 @@ enabled = true                    # Master toggle
 paranoid_mode = false             # Enable all scanning layers (L2/L4)
 path_matching = true              # Block based on path patterns
 secret_patterns = true            # Redact common secrets (API keys, etc.)
+prompt_on_blocked = false         # Ask before allowing blocked paths
 on_match = "redact"               # "warn", "redact", or "block"
 files = [".aiexclude", ".xcodexignore"]  # Ignore filenames to load
 ```
 
 ## Exclusion Layers
 
-Codex applies four exclusion layers. Each layer can be toggled independently in `config.toml`.
+Codex applies five exclusion layers. Each layer can be toggled independently in `config.toml`.
 
 - **L1: Path matching (filesystem gate)**  
   Blocks file discovery and structured tool access (`read_file`, `list_dir`, `grep_files`, etc.)
@@ -136,11 +138,14 @@ Codex applies four exclusion layers. Each layer can be toggled independently in 
   Prevents excluded content from being included in prompts sent to the model.
 - **L4: Output scanning (response redaction)**  
   Scans generated outputs and redacts secrets before display.
+- **L5: Hook payload redaction**  
+  Redacts hook payload strings before dispatch when `hooks.sanitize_payloads = true`.
 
 ### Toggles and Defaults
 
 - Each layer can be toggled individually (`path_matching`, `secret_patterns`, etc.).
 - `exclusion.enabled = false` turns **L1 and L3 off**.
 - `paranoid_mode = true` turns **L2 and L4 on**.
+- `prompt_on_blocked = true` prompts before allowing excluded paths or payloads.
 
 See [config.md](../config.md) for the full `[exclusion]` schema.

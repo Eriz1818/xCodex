@@ -45,6 +45,7 @@ secret_patterns = true
 secret_patterns_builtin = true
 secret_patterns_allowlist = []
 secret_patterns_blocklist = []
+prompt_on_blocked = false
 on_match = "redact"  # warn|block|redact
 log_redactions = "off" # off|summary|raw
 log_redactions_max_bytes = 52428800
@@ -62,6 +63,7 @@ Defaults:
 - `paranoid_mode = false` (only Layer 1 + Layer 3 are enforced by default; see below)
 - `show_summary_banner = true`, `show_summary_history = true` (both are UI-only; no paths are ever shown)
 - `preflight_shell_paths = true` (blocks shell tool calls that reference excluded paths before executing)
+- `prompt_on_blocked = false` (prompt before allowing excluded paths or payloads)
 
 When `log_redactions` is enabled, Codex appends redaction details to `CODEX_HOME/log/exclusion-redactions.jsonl` (including a `reasons` array like `ignored_path`, `secret_pattern`, `fingerprint_cache`). `summary` writes redacted context only; `raw` includes original + sanitized context.
 
@@ -77,6 +79,7 @@ Layer toggles:
 - Layer 2 (Output sanitization): controlled by `layer_output_sanitization` (defaults to `paranoid_mode`).
 - Layer 3 (Send firewall): controlled by `layer_send_firewall` (defaults to `true`).
 - Layer 4 (Request interceptor): controlled by `layer_request_interceptor` (defaults to `paranoid_mode`).
+- Layer 5 (Hook payload redaction): controlled by `hooks.sanitize_payloads` (defaults to `false`).
 
 If you set `paranoid_mode = true`, Codex enables Layer 2 and Layer 4 by default. You can still override any layer individually:
 
