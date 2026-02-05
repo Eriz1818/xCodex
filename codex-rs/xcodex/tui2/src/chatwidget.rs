@@ -2296,6 +2296,9 @@ impl ChatWidget {
             SlashCommand::Approvals => {
                 self.open_approvals_popup();
             }
+            SlashCommand::Exclusions => {
+                crate::xcodex_plugins::exclusions::open_exclusions_menu(self);
+            }
             SlashCommand::ElevateSandbox => {
                 #[cfg(target_os = "windows")]
                 {
@@ -5046,6 +5049,16 @@ impl ChatWidget {
     pub(crate) fn set_minimal_composer(&mut self, enabled: bool) {
         self.config.tui_minimal_composer = enabled;
         self.bottom_pane.set_minimal_composer_borders(enabled);
+        self.request_redraw();
+    }
+
+    pub(crate) fn set_exclusion_settings(
+        &mut self,
+        exclusion: codex_core::config::types::ExclusionConfig,
+        hooks_sanitize_payloads: bool,
+    ) {
+        self.config.exclusion = exclusion;
+        self.config.xcodex.hooks.sanitize_payloads = hooks_sanitize_payloads;
         self.request_redraw();
     }
 

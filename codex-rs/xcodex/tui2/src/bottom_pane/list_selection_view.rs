@@ -1,7 +1,7 @@
+use codex_common::fuzzy_match::fuzzy_match;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyModifiers;
-use itertools::Itertools as _;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Constraint;
 use ratatui::layout::Layout;
@@ -161,16 +161,17 @@ impl ListSelectionView {
             .or_else(|| self.initial_selected_idx.take());
 
         if self.is_searchable && !self.search_query.is_empty() {
-            let query_lower = self.search_query.to_lowercase();
-            self.filtered_indices = self
+            let mut matches: Vec<(usize, i32)> = self
                 .items
                 .iter()
-                .positions(|item| {
-                    item.search_value
-                        .as_ref()
-                        .is_some_and(|v| v.to_lowercase().contains(&query_lower))
+                .enumerate()
+                .filter_map(|(idx, item)| {
+                    let haystack = item.search_value.as_deref().unwrap_or(&item.name);
+                    fuzzy_match(haystack, &self.search_query).map(|(_indices, score)| (idx, score))
                 })
                 .collect();
+            matches.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+            self.filtered_indices = matches.into_iter().map(|(idx, _)| idx).collect();
         } else {
             self.filtered_indices = (0..self.items.len()).collect();
         }
@@ -233,6 +234,25 @@ impl ListSelectionView {
                     };
                     let wrap_prefix_width = UnicodeWidthStr::width(wrap_prefix.as_str());
                     let display_name = format!("{wrap_prefix}{name_with_marker}");
+                    let match_indices = if self.is_searchable && !self.search_query.is_empty() {
+                        let haystack = item.search_value.as_deref().unwrap_or(name);
+                        fuzzy_match(haystack, &self.search_query)
+                            .map(|(indices, _score)| {
+                                indices
+                                    .into_iter()
+                                    .filter_map(|idx| {
+                                        if idx < name.len() {
+                                            Some(idx + wrap_prefix.len())
+                                        } else {
+                                            None
+                                        }
+                                    })
+                                    .collect::<Vec<usize>>()
+                            })
+                            .unwrap_or_default()
+                    } else {
+                        Vec::new()
+                    };
                     let description = is_selected
                         .then(|| item.selected_description.clone())
                         .flatten()
@@ -241,7 +261,11 @@ impl ListSelectionView {
                     GenericDisplayRow {
                         name: display_name,
                         display_shortcut: item.display_shortcut,
-                        match_indices: None,
+                        match_indices: if match_indices.is_empty() {
+                            None
+                        } else {
+                            Some(match_indices)
+                        },
                         description,
                         disabled_reason: item.disabled_reason.clone(),
                         wrap_indent,
