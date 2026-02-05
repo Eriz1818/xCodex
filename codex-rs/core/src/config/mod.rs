@@ -1661,7 +1661,7 @@ impl Default for HooksConfig {
             host: HookHostConfig::default(),
             max_stdin_payload_bytes: Self::default_max_stdin_payload_bytes(),
             keep_last_n_payloads: Self::default_keep_last_n_payloads(),
-            sanitize_payloads: false,
+            sanitize_payloads: true,
         }
     }
 }

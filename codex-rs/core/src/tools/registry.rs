@@ -218,7 +218,7 @@ async fn enforce_sensitive_send_policy(
     };
 
     let output = if turn.exclusion.layer_output_sanitization_enabled() {
-        enforce_sensitive_content_gateway(output, session, turn, tool_name)
+        enforce_sensitive_content_gateway(output, session, turn, tool_name, call_id).await
     } else {
         output
     };
@@ -289,11 +289,166 @@ async fn maybe_prompt_for_send(
         .is_some_and(|value| value == "Allow once")
 }
 
-fn enforce_sensitive_content_gateway(
+enum RedactionDecision {
+    AllowOnce,
+    Redact,
+    Block,
+    AddAllowlist(String),
+    AddBlocklist(String),
+}
+
+fn format_redaction_matches(report: &crate::content_gateway::ScanReport) -> Option<String> {
+    if report.matches.is_empty() {
+        return None;
+    }
+
+    fn redaction_reason_label(reason: crate::content_gateway::RedactionReason) -> &'static str {
+        match reason {
+            crate::content_gateway::RedactionReason::FingerprintCache => "Fingerprint cache",
+            crate::content_gateway::RedactionReason::IgnoredPath => "Ignored path",
+            crate::content_gateway::RedactionReason::SecretPattern => "Secret pattern",
+        }
+    }
+
+    let mut lines = Vec::new();
+    lines.push("Matched content:".to_string());
+    for match_info in report.matches.iter().take(3) {
+        let mut value = match_info.value.clone();
+        if value.len() > 200 {
+            value.truncate(200);
+            value.push('…');
+        }
+        let reason = redaction_reason_label(match_info.reason);
+        lines.push(format!("- {value} (reason: {reason})"));
+    }
+    if report.matches.len() > 3 {
+        lines.push(format!("…and {} more", report.matches.len() - 3));
+    }
+    Some(lines.join("\n"))
+}
+
+async fn maybe_prompt_for_redaction(
+    session: &crate::codex::Session,
+    turn: &crate::codex::TurnContext,
+    call_id: &str,
+    context_label: &str,
+    report: &crate::content_gateway::ScanReport,
+) -> Option<RedactionDecision> {
+    if !turn.exclusion.prompt_on_blocked {
+        return None;
+    }
+    if !report.redacted && !report.blocked {
+        return None;
+    }
+
+    let match_info = report.matches.first();
+    let match_value = match_info.map(|info| info.value.clone());
+    let mut question_text =
+        format!("Exclusions matched content in {context_label}. How should xcodex proceed?");
+    if let Some(summary) = format_redaction_matches(report) {
+        question_text.push_str("\n");
+        question_text.push_str(&summary);
+    }
+
+    let mut options = vec![
+        RequestUserInputQuestionOption {
+            label: "Allow once".to_string(),
+            description: "Permit this content for the current request.".to_string(),
+        },
+        RequestUserInputQuestionOption {
+            label: "Redact".to_string(),
+            description: "Redact matching content.".to_string(),
+        },
+        RequestUserInputQuestionOption {
+            label: "Block".to_string(),
+            description: "Block matching content.".to_string(),
+        },
+    ];
+
+    if matches!(
+        match_info.map(|info| info.reason),
+        Some(crate::content_gateway::RedactionReason::SecretPattern)
+    ) {
+        options.push(RequestUserInputQuestionOption {
+            label: "Add to allowlist".to_string(),
+            description: "Skip redaction for this match going forward.".to_string(),
+        });
+        options.push(RequestUserInputQuestionOption {
+            label: "Add to blocklist".to_string(),
+            description: "Always block this match going forward.".to_string(),
+        });
+    }
+
+    let question = RequestUserInputQuestion {
+        header: "Exclusions".to_string(),
+        id: "exclusions_redaction".to_string(),
+        question: question_text,
+        is_other: false,
+        is_secret: false,
+        options: Some(options),
+    };
+    let args = RequestUserInputArgs {
+        questions: vec![question],
+    };
+    let response = session
+        .request_user_input(turn, call_id.to_string(), args)
+        .await;
+    let answer = response
+        .and_then(|response| response.answers.get("exclusions_redaction").cloned())
+        .and_then(|answer| answer.answers.first().cloned())?;
+
+    match answer.as_str() {
+        "Allow once" => Some(RedactionDecision::AllowOnce),
+        "Redact" => Some(RedactionDecision::Redact),
+        "Block" => Some(RedactionDecision::Block),
+        "Add to allowlist" => match_value.map(RedactionDecision::AddAllowlist),
+        "Add to blocklist" => match_value.map(RedactionDecision::AddBlocklist),
+        _ => None,
+    }
+}
+
+async fn resolve_redaction_decision(
+    session: &crate::codex::Session,
+    turn: &crate::codex::TurnContext,
+    call_id: &str,
+    context_label: &str,
+    original: String,
+    sanitized: String,
+    mut report: crate::content_gateway::ScanReport,
+) -> (String, crate::content_gateway::ScanReport) {
+    let Some(decision) =
+        maybe_prompt_for_redaction(session, turn, call_id, context_label, &report).await
+    else {
+        return (sanitized, report);
+    };
+
+    match decision {
+        RedactionDecision::AllowOnce => (original, crate::content_gateway::ScanReport::safe()),
+        RedactionDecision::Redact => (sanitized, report),
+        RedactionDecision::Block => {
+            report.redacted = false;
+            report.blocked = true;
+            ("[BLOCKED]".to_string(), report)
+        }
+        RedactionDecision::AddAllowlist(value) => {
+            session.add_exclusion_secret_pattern(value, true).await;
+            (original, crate::content_gateway::ScanReport::safe())
+        }
+        RedactionDecision::AddBlocklist(value) => {
+            session.add_exclusion_secret_pattern(value, false).await;
+            report.redacted = false;
+            report.blocked = true;
+            ("[BLOCKED]".to_string(), report)
+        }
+    }
+}
+
+async fn enforce_sensitive_content_gateway(
     output: ToolOutput,
     session: &crate::codex::Session,
     turn: &crate::codex::TurnContext,
     tool_name: &str,
+    call_id: &str,
 ) -> ToolOutput {
     let epoch = turn.sensitive_paths.ignore_epoch();
     let gateway = crate::content_gateway::ContentGateway::new(
@@ -333,12 +488,23 @@ fn enforce_sensitive_content_gateway(
                 max_files: turn.exclusion.log_redactions_max_files,
             };
             let original_content = content;
-            let (content, report) = gateway.scan_text(
+            let (sanitized, report) = gateway.scan_text(
                 &original_content,
                 &turn.sensitive_paths,
                 &session.content_gateway_cache,
                 epoch,
             );
+            let context_label = format!("{tool_name} output");
+            let (content, report) = resolve_redaction_decision(
+                session,
+                turn,
+                call_id,
+                &context_label,
+                original_content.clone(),
+                sanitized,
+                report,
+            )
+            .await;
             if should_log && (report.redacted || report.blocked) {
                 crate::exclusion_log::log_redaction_event(
                     &log_context,
@@ -365,12 +531,22 @@ fn enforce_sensitive_content_gateway(
                 for item in items.iter_mut() {
                     if let FunctionCallOutputContentItem::InputText { text } = item {
                         let original_text = text.clone();
-                        let (next, r) = gateway.scan_text(
+                        let (sanitized, r) = gateway.scan_text(
                             &original_text,
                             &turn.sensitive_paths,
                             &session.content_gateway_cache,
                             epoch,
                         );
+                        let (next, r) = resolve_redaction_decision(
+                            session,
+                            turn,
+                            call_id,
+                            &context_label,
+                            original_text.clone(),
+                            sanitized,
+                            r,
+                        )
+                        .await;
                         *text = next;
                         if should_log && (r.redacted || r.blocked) {
                             crate::exclusion_log::log_redaction_event(
@@ -428,66 +604,355 @@ fn enforce_sensitive_content_gateway(
                 max_bytes: turn.exclusion.log_redactions_max_bytes,
                 max_files: turn.exclusion.log_redactions_max_files,
             };
-            let result = result.map(|mut ok| {
-                let mut scan_string = |s: &mut String| {
-                    let original = s.clone();
-                    let (next, r) = gateway.scan_text(
-                        &original,
-                        &turn.sensitive_paths,
-                        &session.content_gateway_cache,
-                        epoch,
-                    );
-                    *s = next;
-                    report.layers.extend(r.layers.iter().copied());
-                    report.redacted |= r.redacted;
-                    report.blocked |= r.blocked;
-                    report.reasons.extend(r.reasons.iter().copied());
-                    if should_log && (r.redacted || r.blocked) {
-                        crate::exclusion_log::log_redaction_event(
-                            &log_context,
-                            &r,
-                            &original,
-                            s.as_str(),
-                        );
-                    }
-                };
+            let context_label = format!("{tool_name} output");
+            let result = match result {
+                Ok(mut ok) => {
+                    for block in ok.content.iter_mut() {
+                        match block {
+                            mcp_types::ContentBlock::TextContent(text) => {
+                                let original = text.text.clone();
+                                let (sanitized, r) = gateway.scan_text(
+                                    &original,
+                                    &turn.sensitive_paths,
+                                    &session.content_gateway_cache,
+                                    epoch,
+                                );
+                                let (next, r) = resolve_redaction_decision(
+                                    session,
+                                    turn,
+                                    call_id,
+                                    &context_label,
+                                    original.clone(),
+                                    sanitized,
+                                    r,
+                                )
+                                .await;
+                                report.layers.extend(r.layers.iter().copied());
+                                report.redacted |= r.redacted;
+                                report.blocked |= r.blocked;
+                                report.reasons.extend(r.reasons.iter().copied());
+                                report.matches.extend(r.matches.iter().cloned());
+                                if should_log && (r.redacted || r.blocked) {
+                                    crate::exclusion_log::log_redaction_event(
+                                        &log_context,
+                                        &r,
+                                        &original,
+                                        next.as_str(),
+                                    );
+                                }
+                                text.text = next;
+                            }
+                            mcp_types::ContentBlock::ResourceLink(link) => {
+                                if let Some(desc) = &mut link.description {
+                                    let original = desc.clone();
+                                    let (sanitized, r) = gateway.scan_text(
+                                        &original,
+                                        &turn.sensitive_paths,
+                                        &session.content_gateway_cache,
+                                        epoch,
+                                    );
+                                    let (next, r) = resolve_redaction_decision(
+                                        session,
+                                        turn,
+                                        call_id,
+                                        &context_label,
+                                        original.clone(),
+                                        sanitized,
+                                        r,
+                                    )
+                                    .await;
+                                    report.layers.extend(r.layers.iter().copied());
+                                    report.redacted |= r.redacted;
+                                    report.blocked |= r.blocked;
+                                    report.reasons.extend(r.reasons.iter().copied());
+                                    report.matches.extend(r.matches.iter().cloned());
+                                    if should_log && (r.redacted || r.blocked) {
+                                        crate::exclusion_log::log_redaction_event(
+                                            &log_context,
+                                            &r,
+                                            &original,
+                                            next.as_str(),
+                                        );
+                                    }
+                                    *desc = next;
+                                }
+                                if let Some(title) = &mut link.title {
+                                    let original = title.clone();
+                                    let (sanitized, r) = gateway.scan_text(
+                                        &original,
+                                        &turn.sensitive_paths,
+                                        &session.content_gateway_cache,
+                                        epoch,
+                                    );
+                                    let (next, r) = resolve_redaction_decision(
+                                        session,
+                                        turn,
+                                        call_id,
+                                        &context_label,
+                                        original.clone(),
+                                        sanitized,
+                                        r,
+                                    )
+                                    .await;
+                                    report.layers.extend(r.layers.iter().copied());
+                                    report.redacted |= r.redacted;
+                                    report.blocked |= r.blocked;
+                                    report.reasons.extend(r.reasons.iter().copied());
+                                    report.matches.extend(r.matches.iter().cloned());
+                                    if should_log && (r.redacted || r.blocked) {
+                                        crate::exclusion_log::log_redaction_event(
+                                            &log_context,
+                                            &r,
+                                            &original,
+                                            next.as_str(),
+                                        );
+                                    }
+                                    *title = next;
+                                }
+                                let original = link.name.clone();
+                                let (sanitized, r) = gateway.scan_text(
+                                    &original,
+                                    &turn.sensitive_paths,
+                                    &session.content_gateway_cache,
+                                    epoch,
+                                );
+                                let (next, r) = resolve_redaction_decision(
+                                    session,
+                                    turn,
+                                    call_id,
+                                    &context_label,
+                                    original.clone(),
+                                    sanitized,
+                                    r,
+                                )
+                                .await;
+                                report.layers.extend(r.layers.iter().copied());
+                                report.redacted |= r.redacted;
+                                report.blocked |= r.blocked;
+                                report.reasons.extend(r.reasons.iter().copied());
+                                report.matches.extend(r.matches.iter().cloned());
+                                if should_log && (r.redacted || r.blocked) {
+                                    crate::exclusion_log::log_redaction_event(
+                                        &log_context,
+                                        &r,
+                                        &original,
+                                        next.as_str(),
+                                    );
+                                }
+                                link.name = next;
 
-                for block in ok.content.iter_mut() {
-                    match block {
-                        mcp_types::ContentBlock::TextContent(text) => scan_string(&mut text.text),
-                        mcp_types::ContentBlock::ResourceLink(link) => {
-                            if let Some(desc) = &mut link.description {
-                                scan_string(desc);
-                            }
-                            if let Some(title) = &mut link.title {
-                                scan_string(title);
-                            }
-                            scan_string(&mut link.name);
-                            scan_string(&mut link.uri);
-                        }
-                        mcp_types::ContentBlock::EmbeddedResource(resource) => {
-                            match &mut resource.resource {
-                                mcp_types::EmbeddedResourceResource::TextResourceContents(text) => {
-                                    if let Some(mime) = &mut text.mime_type {
-                                        scan_string(mime);
-                                    }
-                                    scan_string(&mut text.text);
-                                    scan_string(&mut text.uri);
+                                let original = link.uri.clone();
+                                let (sanitized, r) = gateway.scan_text(
+                                    &original,
+                                    &turn.sensitive_paths,
+                                    &session.content_gateway_cache,
+                                    epoch,
+                                );
+                                let (next, r) = resolve_redaction_decision(
+                                    session,
+                                    turn,
+                                    call_id,
+                                    &context_label,
+                                    original.clone(),
+                                    sanitized,
+                                    r,
+                                )
+                                .await;
+                                report.layers.extend(r.layers.iter().copied());
+                                report.redacted |= r.redacted;
+                                report.blocked |= r.blocked;
+                                report.reasons.extend(r.reasons.iter().copied());
+                                report.matches.extend(r.matches.iter().cloned());
+                                if should_log && (r.redacted || r.blocked) {
+                                    crate::exclusion_log::log_redaction_event(
+                                        &log_context,
+                                        &r,
+                                        &original,
+                                        next.as_str(),
+                                    );
                                 }
-                                mcp_types::EmbeddedResourceResource::BlobResourceContents(blob) => {
-                                    if let Some(mime) = &mut blob.mime_type {
-                                        scan_string(mime);
+                                link.uri = next;
+                            }
+                            mcp_types::ContentBlock::EmbeddedResource(resource) => {
+                                match &mut resource.resource {
+                                    mcp_types::EmbeddedResourceResource::TextResourceContents(
+                                        text,
+                                    ) => {
+                                        if let Some(mime) = &mut text.mime_type {
+                                            let original = mime.clone();
+                                            let (sanitized, r) = gateway.scan_text(
+                                                &original,
+                                                &turn.sensitive_paths,
+                                                &session.content_gateway_cache,
+                                                epoch,
+                                            );
+                                            let (next, r) = resolve_redaction_decision(
+                                                session,
+                                                turn,
+                                                call_id,
+                                                &context_label,
+                                                original.clone(),
+                                                sanitized,
+                                                r,
+                                            )
+                                            .await;
+                                            report.layers.extend(r.layers.iter().copied());
+                                            report.redacted |= r.redacted;
+                                            report.blocked |= r.blocked;
+                                            report.reasons.extend(r.reasons.iter().copied());
+                                            report.matches.extend(r.matches.iter().cloned());
+                                            if should_log && (r.redacted || r.blocked) {
+                                                crate::exclusion_log::log_redaction_event(
+                                                    &log_context,
+                                                    &r,
+                                                    &original,
+                                                    next.as_str(),
+                                                );
+                                            }
+                                            *mime = next;
+                                        }
+                                        let original = text.text.clone();
+                                        let (sanitized, r) = gateway.scan_text(
+                                            &original,
+                                            &turn.sensitive_paths,
+                                            &session.content_gateway_cache,
+                                            epoch,
+                                        );
+                                        let (next, r) = resolve_redaction_decision(
+                                            session,
+                                            turn,
+                                            call_id,
+                                            &context_label,
+                                            original.clone(),
+                                            sanitized,
+                                            r,
+                                        )
+                                        .await;
+                                        report.layers.extend(r.layers.iter().copied());
+                                        report.redacted |= r.redacted;
+                                        report.blocked |= r.blocked;
+                                        report.reasons.extend(r.reasons.iter().copied());
+                                        report.matches.extend(r.matches.iter().cloned());
+                                        if should_log && (r.redacted || r.blocked) {
+                                            crate::exclusion_log::log_redaction_event(
+                                                &log_context,
+                                                &r,
+                                                &original,
+                                                next.as_str(),
+                                            );
+                                        }
+                                        text.text = next;
+
+                                        let original = text.uri.clone();
+                                        let (sanitized, r) = gateway.scan_text(
+                                            &original,
+                                            &turn.sensitive_paths,
+                                            &session.content_gateway_cache,
+                                            epoch,
+                                        );
+                                        let (next, r) = resolve_redaction_decision(
+                                            session,
+                                            turn,
+                                            call_id,
+                                            &context_label,
+                                            original.clone(),
+                                            sanitized,
+                                            r,
+                                        )
+                                        .await;
+                                        report.layers.extend(r.layers.iter().copied());
+                                        report.redacted |= r.redacted;
+                                        report.blocked |= r.blocked;
+                                        report.reasons.extend(r.reasons.iter().copied());
+                                        report.matches.extend(r.matches.iter().cloned());
+                                        if should_log && (r.redacted || r.blocked) {
+                                            crate::exclusion_log::log_redaction_event(
+                                                &log_context,
+                                                &r,
+                                                &original,
+                                                next.as_str(),
+                                            );
+                                        }
+                                        text.uri = next;
                                     }
-                                    scan_string(&mut blob.uri);
+                                    mcp_types::EmbeddedResourceResource::BlobResourceContents(
+                                        blob,
+                                    ) => {
+                                        if let Some(mime) = &mut blob.mime_type {
+                                            let original = mime.clone();
+                                            let (sanitized, r) = gateway.scan_text(
+                                                &original,
+                                                &turn.sensitive_paths,
+                                                &session.content_gateway_cache,
+                                                epoch,
+                                            );
+                                            let (next, r) = resolve_redaction_decision(
+                                                session,
+                                                turn,
+                                                call_id,
+                                                &context_label,
+                                                original.clone(),
+                                                sanitized,
+                                                r,
+                                            )
+                                            .await;
+                                            report.layers.extend(r.layers.iter().copied());
+                                            report.redacted |= r.redacted;
+                                            report.blocked |= r.blocked;
+                                            report.reasons.extend(r.reasons.iter().copied());
+                                            report.matches.extend(r.matches.iter().cloned());
+                                            if should_log && (r.redacted || r.blocked) {
+                                                crate::exclusion_log::log_redaction_event(
+                                                    &log_context,
+                                                    &r,
+                                                    &original,
+                                                    next.as_str(),
+                                                );
+                                            }
+                                            *mime = next;
+                                        }
+                                        let original = blob.uri.clone();
+                                        let (sanitized, r) = gateway.scan_text(
+                                            &original,
+                                            &turn.sensitive_paths,
+                                            &session.content_gateway_cache,
+                                            epoch,
+                                        );
+                                        let (next, r) = resolve_redaction_decision(
+                                            session,
+                                            turn,
+                                            call_id,
+                                            &context_label,
+                                            original.clone(),
+                                            sanitized,
+                                            r,
+                                        )
+                                        .await;
+                                        report.layers.extend(r.layers.iter().copied());
+                                        report.redacted |= r.redacted;
+                                        report.blocked |= r.blocked;
+                                        report.reasons.extend(r.reasons.iter().copied());
+                                        report.matches.extend(r.matches.iter().cloned());
+                                        if should_log && (r.redacted || r.blocked) {
+                                            crate::exclusion_log::log_redaction_event(
+                                                &log_context,
+                                                &r,
+                                                &original,
+                                                next.as_str(),
+                                            );
+                                        }
+                                        blob.uri = next;
+                                    }
                                 }
                             }
+                            mcp_types::ContentBlock::ImageContent(_)
+                            | mcp_types::ContentBlock::AudioContent(_) => {}
                         }
-                        mcp_types::ContentBlock::ImageContent(_)
-                        | mcp_types::ContentBlock::AudioContent(_) => {}
                     }
+                    Ok(ok)
                 }
-                ok
-            });
+                Err(err) => Err(err),
+            };
             if report.redacted || report.blocked {
                 let mut counters = turn
                     .exclusion_counters

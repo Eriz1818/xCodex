@@ -332,7 +332,7 @@
           "type": "boolean"
         },
         "layer_request_interceptor": {
-          "description": "Layer 4: scan the full prompt payload right before the model request. Defaults to `true` when unset.",
+          "description": "Layer 4: scan the full prompt payload right before the model request. Defaults to `paranoid_mode` when unset.",
           "type": "boolean"
         },
         "layer_send_firewall": {
@@ -2197,7 +2197,7 @@
           "script_path": null,
           "timeout_sec": null
         },
-        "sanitize_payloads": false,
+        "sanitize_payloads": true,
         "session_end": [],
         "session_start": [],
         "subagent_stop": [],

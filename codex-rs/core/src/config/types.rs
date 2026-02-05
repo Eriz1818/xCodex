@@ -123,7 +123,7 @@ pub struct ExclusionConfig {
     pub layer_send_firewall: Option<bool>,
 
     /// Layer 4: scan the full prompt payload right before the model request.
-    /// Defaults to `true` when unset.
+    /// Defaults to `paranoid_mode` when unset.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub layer_request_interceptor: Option<bool>,
 
@@ -213,7 +213,7 @@ impl ExclusionConfig {
     }
 
     pub fn layer_request_interceptor_enabled(&self) -> bool {
-        self.layer_request_interceptor.unwrap_or(true)
+        self.layer_request_interceptor.unwrap_or(self.paranoid_mode)
     }
 
     pub fn log_redactions_mode(&self) -> LogRedactionsMode {
