@@ -4163,8 +4163,8 @@ fn set_palette_value(
 
 fn sample_code_tabs_line(active: SampleCodeTab) -> Line<'static> {
     let mut spans: Vec<Span<'static>> = vec![
-        "Sample code: ".bold().into(),
-        "(Shift+Tab)".dim().into(),
+        "Sample code: ".bold(),
+        "(Shift+Tab)".dim(),
         " ".into(),
     ];
 
