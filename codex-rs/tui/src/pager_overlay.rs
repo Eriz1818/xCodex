@@ -357,7 +357,7 @@ impl PagerView {
             }
         }
         tui.frame_requester()
-            .schedule_frame_in(Duration::from_millis(16));
+            .schedule_frame_in(crate::tui::TARGET_FRAME_INTERVAL);
         Ok(())
     }
 

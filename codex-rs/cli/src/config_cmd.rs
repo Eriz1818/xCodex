@@ -12,6 +12,7 @@ use codex_core::config::ConfigToml;
 use codex_core::config::find_codex_home;
 use codex_core::config::is_xcodex_invocation;
 use codex_core::config::schema::config_schema_json;
+use codex_core::config_loader::CloudRequirementsLoader;
 use codex_core::config_loader::ConfigLayerEntry;
 use codex_core::config_loader::ConfigLayerStackOrdering;
 use codex_core::config_loader::LoaderOverrides;
@@ -69,7 +70,7 @@ async fn run_config_path(config_overrides: CliConfigOverrides) -> Result<()> {
         Some(resolved_cwd),
         &cli_overrides,
         LoaderOverrides::default(),
-        None,
+        CloudRequirementsLoader::default(),
     )
     .await?;
 
@@ -250,7 +251,7 @@ async fn run_config_doctor(config_overrides: CliConfigOverrides) -> Result<()> {
         Some(resolved_cwd),
         &cli_overrides,
         LoaderOverrides::default(),
-        None,
+        CloudRequirementsLoader::default(),
     )
     .await
     {

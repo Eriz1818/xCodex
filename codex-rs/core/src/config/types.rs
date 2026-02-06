@@ -879,6 +879,12 @@ pub struct Tui {
     /// scrollback in terminal multiplexers like Zellij that follow the xterm spec.
     #[serde(default)]
     pub alternate_screen: AltScreenMode,
+
+    /// Ordered list of status line item identifiers.
+    ///
+    /// When set, the TUI renders the selected items as the status line.
+    #[serde(default)]
+    pub status_line: Option<Vec<String>>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema)]

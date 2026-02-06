@@ -16,11 +16,13 @@ use crate::codex::Session;
 use crate::codex::TurnContext;
 use crate::error::CodexErr;
 use crate::function_tool::FunctionCallError;
-use crate::hooks::ToolCallStatus;
 use crate::tools::context::SharedTurnDiffTracker;
 use crate::tools::context::ToolPayload;
 use crate::tools::router::ToolCall;
 use crate::tools::router::ToolRouter;
+use crate::xcodex::hooks::ToolCallStatus;
+use codex_protocol::mcp::CallToolResult;
+use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ResponseInputItem;
 
@@ -277,40 +279,16 @@ fn append_truncated(preview: &mut String, text: &str, max_bytes: usize) {
 }
 
 fn summarize_mcp_tool_output(
-    result: &mcp_types::CallToolResult,
+    result: &CallToolResult,
     max_preview_bytes: usize,
 ) -> (bool, usize, Option<String>) {
-    let mut combined_len = 0usize;
-    let mut preview = String::new();
-    let mut has_any_content = false;
-
-    for block in &result.content {
-        let mcp_types::ContentBlock::TextContent(text) = block else {
-            continue;
-        };
-
-        if has_any_content {
-            combined_len = combined_len.saturating_add(1);
-            if preview.len() < max_preview_bytes {
-                preview.push('\n');
-            }
-        }
-
-        combined_len = combined_len.saturating_add(text.text.len());
-        append_truncated(&mut preview, &text.text, max_preview_bytes);
-
-        if combined_len > 0 {
-            has_any_content = true;
-        }
-    }
-
-    let is_error = result.is_error.unwrap_or(false);
-    let preview = if combined_len == 0 {
-        None
-    } else {
-        Some(preview)
+    let payload = FunctionCallOutputPayload::from(result);
+    let success = payload.success.unwrap_or(true);
+    let Some(content) = payload.body.to_text() else {
+        return (success, 0, None);
     };
-    (!is_error, combined_len, preview)
+    let preview = truncate_preview(&content, max_preview_bytes);
+    (success, content.len(), Some(preview))
 }
 
 fn summarize_tool_output(
@@ -319,8 +297,8 @@ fn summarize_tool_output(
 ) -> (bool, usize, Option<String>) {
     match response {
         ResponseInputItem::FunctionCallOutput { output, .. } => {
-            let content = &output.content;
-            let preview = truncate_preview(content, max_preview_bytes);
+            let content = output.body.to_text().unwrap_or_default();
+            let preview = truncate_preview(&content, max_preview_bytes);
             (output.success.unwrap_or(true), content.len(), Some(preview))
         }
         ResponseInputItem::CustomToolCallOutput { output, .. } => {
@@ -352,7 +330,7 @@ impl ToolCallRuntime {
             _ => ResponseInputItem::FunctionCallOutput {
                 call_id: call.call_id.clone(),
                 output: FunctionCallOutputPayload {
-                    content: Self::abort_message(call, secs),
+                    body: FunctionCallOutputBody::Text(Self::abort_message(call, secs)),
                     ..Default::default()
                 },
             },
@@ -376,26 +354,15 @@ mod tests {
 
     #[test]
     fn summarize_mcp_tool_output_matches_combined_string_behavior() {
-        let result = mcp_types::CallToolResult {
+        let result = CallToolResult {
             content: vec![
-                mcp_types::ContentBlock::TextContent(mcp_types::TextContent {
-                    text: "hello".to_string(),
-                    annotations: None,
-                    r#type: "text".to_string(),
-                }),
-                mcp_types::ContentBlock::TextContent(mcp_types::TextContent {
-                    text: "".to_string(),
-                    annotations: None,
-                    r#type: "text".to_string(),
-                }),
-                mcp_types::ContentBlock::TextContent(mcp_types::TextContent {
-                    text: "world".to_string(),
-                    annotations: None,
-                    r#type: "text".to_string(),
-                }),
+                serde_json::json!({ "type": "text", "text": "hello" }),
+                serde_json::json!({ "type": "text", "text": "" }),
+                serde_json::json!({ "type": "text", "text": "world" }),
             ],
             is_error: Some(false),
             structured_content: None,
+            meta: None,
         };
 
         let (success, output_bytes, preview) = summarize_mcp_tool_output(&result, 512);
@@ -407,16 +374,14 @@ mod tests {
 
     #[test]
     fn summarize_mcp_tool_output_truncates_preview_without_allocating_full_string() {
-        let result = mcp_types::CallToolResult {
-            content: vec![mcp_types::ContentBlock::TextContent(
-                mcp_types::TextContent {
-                    text: "x".repeat(10_000),
-                    annotations: None,
-                    r#type: "text".to_string(),
-                },
-            )],
+        let result = CallToolResult {
+            content: vec![serde_json::json!({
+                "type": "text",
+                "text": "x".repeat(10_000),
+            })],
             is_error: Some(false),
             structured_content: None,
+            meta: None,
         };
 
         let (_success, output_bytes, preview) = summarize_mcp_tool_output(&result, 512);

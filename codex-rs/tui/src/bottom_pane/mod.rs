@@ -44,7 +44,10 @@ use std::time::Duration;
 use textwrap::wrap;
 
 mod approval_overlay;
+mod multi_select_picker;
 mod request_user_input;
+mod status_line_setup;
+pub(crate) use app_link_view::AppLinkView;
 pub(crate) use approval_overlay::ApprovalOverlay;
 pub(crate) use approval_overlay::ApprovalRequest;
 pub(crate) use request_user_input::RequestUserInputOverlay;
@@ -73,11 +76,17 @@ mod slash_arg_hints;
 mod slash_commands;
 mod slash_subcommands;
 mod status_menu_view;
+pub(crate) use footer::CollaborationModeIndicator;
+pub(crate) use list_selection_view::ColumnWidthMode;
 pub(crate) use list_selection_view::SelectionViewParams;
 mod feedback_view;
 pub(crate) use feedback_view::feedback_disabled_params;
 pub(crate) use feedback_view::feedback_selection_params;
 pub(crate) use feedback_view::feedback_upload_consent_params;
+pub(crate) use skills_toggle_view::SkillsToggleItem;
+pub(crate) use skills_toggle_view::SkillsToggleView;
+pub(crate) use status_line_setup::StatusLineItem;
+pub(crate) use status_line_setup::StatusLineSetupView;
 mod paste_burst;
 pub mod popup_consts;
 mod queued_user_messages;
@@ -127,11 +136,9 @@ pub(crate) use chat_composer::InputResult;
 use codex_protocol::custom_prompts::CustomPrompt;
 
 use crate::status_indicator_widget::StatusIndicatorWidget;
-pub(crate) use app_link_view::AppLinkView;
 pub(crate) use experimental_features_view::ExperimentalFeatureItem;
 pub(crate) use experimental_features_view::ExperimentalFeaturesView;
 pub(crate) use feedback_view::FeedbackAudience;
-pub(crate) use footer::CollaborationModeIndicator;
 pub(crate) use list_selection_view::SelectionAction;
 pub(crate) use list_selection_view::SelectionItem;
 pub(crate) use status_menu_view::StatusMenuTab;
@@ -244,9 +251,6 @@ impl Renderable for ExclusionSummaryBannerWidget {
         u16::try_from(self.display_lines(width).len()).unwrap_or(0)
     }
 }
-pub(crate) use skills_toggle_view::SkillsToggleItem;
-pub(crate) use skills_toggle_view::SkillsToggleView;
-
 /// Pane displayed in the lower half of the chat UI.
 ///
 /// This is the owning container for the prompt input (`ChatComposer`) and the view stack
@@ -350,13 +354,27 @@ impl BottomPane {
         self.request_redraw();
     }
 
-    pub fn set_connectors_snapshot(&mut self, connectors_snapshot: Option<ConnectorsSnapshot>) {
-        self.composer.set_connector_mentions(connectors_snapshot);
+    /// Update image-paste behavior for the active composer and repaint immediately.
+    ///
+    /// Callers use this to keep composer affordances aligned with model capabilities.
+    pub fn set_image_paste_enabled(&mut self, enabled: bool) {
+        self.composer.set_image_paste_enabled(enabled);
+        self.request_redraw();
+    }
+
+    pub fn set_connectors_snapshot(&mut self, snapshot: Option<ConnectorsSnapshot>) {
+        self.composer.set_connector_mentions(snapshot);
         self.request_redraw();
     }
 
     pub(crate) fn take_mention_paths(&mut self) -> HashMap<String, String> {
         self.composer.take_mention_paths()
+    }
+
+    /// Clear pending attachments and mention paths e.g. when a slash command doesn't submit text.
+    pub(crate) fn drain_pending_submission_state(&mut self) {
+        let _ = self.take_recent_submission_images_with_placeholders();
+        let _ = self.take_mention_paths();
     }
 
     pub fn set_steer_enabled(&mut self, enabled: bool) {
@@ -509,6 +527,10 @@ impl BottomPane {
     }
 
     /// Replace the composer text with `text`.
+    ///
+    /// This is intended for fresh input where mention linkage does not need to
+    /// survive; it routes to `ChatComposer::set_text_content`, which resets
+    /// `mention_paths`.
     pub(crate) fn set_composer_text(
         &mut self,
         text: String,
@@ -517,6 +539,28 @@ impl BottomPane {
     ) {
         self.composer
             .set_text_content(text, text_elements, local_image_paths);
+        self.composer.move_cursor_to_end();
+        self.request_redraw();
+    }
+
+    /// Replace the composer text while preserving mention link targets.
+    ///
+    /// Use this when rehydrating a draft after a local validation/gating
+    /// failure (for example unsupported image submit) so previously selected
+    /// mention targets remain stable across retry.
+    pub(crate) fn set_composer_text_with_mention_paths(
+        &mut self,
+        text: String,
+        text_elements: Vec<TextElement>,
+        local_image_paths: Vec<PathBuf>,
+        mention_paths: HashMap<String, String>,
+    ) {
+        self.composer.set_text_content_with_mention_paths(
+            text,
+            text_elements,
+            local_image_paths,
+            mention_paths,
+        );
         self.request_redraw();
     }
 
@@ -1020,6 +1064,13 @@ impl BottomPane {
             .take_recent_submission_images_with_placeholders()
     }
 
+    pub(crate) fn prepare_inline_args_submission(
+        &mut self,
+        record_history: bool,
+    ) -> Option<(String, Vec<TextElement>)> {
+        self.composer.prepare_inline_args_submission(record_history)
+    }
+
     fn as_renderable(&'_ self) -> RenderableItem<'_> {
         if let Some(view) = self.active_view() {
             RenderableItem::Borrowed(view)
@@ -1057,6 +1108,16 @@ impl BottomPane {
             flex2.push(0, RenderableItem::Borrowed(&self.composer));
             RenderableItem::Owned(Box::new(flex2))
         }
+    }
+
+    pub(crate) fn set_status_line(&mut self, status_line: Option<Line<'static>>) {
+        self.composer.set_status_line(status_line);
+        self.request_redraw();
+    }
+
+    pub(crate) fn set_status_line_enabled(&mut self, enabled: bool) {
+        self.composer.set_status_line_enabled(enabled);
+        self.request_redraw();
     }
 }
 

@@ -4,9 +4,9 @@ use std::process::Stdio;
 use std::time::Duration;
 use std::time::Instant;
 
-use codex_core::hooks::HookNotification;
-use codex_core::hooks::HookPayload;
-use codex_core::hooks::HookStdinEnvelope;
+use codex_core::xcodex::hooks::HookNotification;
+use codex_core::xcodex::hooks::HookPayload;
+use codex_core::xcodex::hooks::HookStdinEnvelope;
 
 #[derive(Debug, Clone, Copy)]
 struct BenchResult {
@@ -50,7 +50,7 @@ fn build_payload(payload_bytes_target: Option<usize>) -> HookPayload {
             attempt: 1,
             tool_name: "shell".to_string(),
             call_id: "call-1".to_string(),
-            status: codex_core::hooks::ToolCallStatus::Completed,
+            status: codex_core::xcodex::hooks::ToolCallStatus::Completed,
             duration_ms: 1,
             success: true,
             output_bytes: 0,
@@ -82,7 +82,7 @@ fn build_payload(payload_bytes_target: Option<usize>) -> HookPayload {
             attempt: 1,
             tool_name: "shell".to_string(),
             call_id: "call-1".to_string(),
-            status: codex_core::hooks::ToolCallStatus::Completed,
+            status: codex_core::xcodex::hooks::ToolCallStatus::Completed,
             duration_ms: 1,
             success: true,
             output_bytes: 0,

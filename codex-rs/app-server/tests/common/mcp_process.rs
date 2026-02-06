@@ -23,10 +23,12 @@ use codex_app_server_protocol::CollaborationModeListParams;
 use codex_app_server_protocol::ConfigBatchWriteParams;
 use codex_app_server_protocol::ConfigReadParams;
 use codex_app_server_protocol::ConfigValueWriteParams;
+use codex_app_server_protocol::ExperimentalFeatureListParams;
 use codex_app_server_protocol::FeedbackUploadParams;
 use codex_app_server_protocol::ForkConversationParams;
 use codex_app_server_protocol::GetAccountParams;
 use codex_app_server_protocol::GetAuthStatusParams;
+use codex_app_server_protocol::InitializeCapabilities;
 use codex_app_server_protocol::InitializeParams;
 use codex_app_server_protocol::InterruptConversationParams;
 use codex_app_server_protocol::JSONRPCError;
@@ -38,6 +40,7 @@ use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::ListConversationsParams;
 use codex_app_server_protocol::LoginAccountParams;
 use codex_app_server_protocol::LoginApiKeyParams;
+use codex_app_server_protocol::MockExperimentalMethodParams;
 use codex_app_server_protocol::ModelListParams;
 use codex_app_server_protocol::NewConversationParams;
 use codex_app_server_protocol::RemoveConversationListenerParams;
@@ -49,6 +52,7 @@ use codex_app_server_protocol::SendUserTurnParams;
 use codex_app_server_protocol::ServerRequest;
 use codex_app_server_protocol::SetDefaultModelParams;
 use codex_app_server_protocol::ThreadArchiveParams;
+use codex_app_server_protocol::ThreadCompactStartParams;
 use codex_app_server_protocol::ThreadForkParams;
 use codex_app_server_protocol::ThreadListParams;
 use codex_app_server_protocol::ThreadLoadedListParams;
@@ -197,7 +201,32 @@ impl McpProcess {
         &mut self,
         client_info: ClientInfo,
     ) -> anyhow::Result<JSONRPCMessage> {
-        let params = Some(serde_json::to_value(InitializeParams { client_info })?);
+        self.initialize_with_capabilities(
+            client_info,
+            Some(InitializeCapabilities {
+                experimental_api: true,
+            }),
+        )
+        .await
+    }
+
+    pub async fn initialize_with_capabilities(
+        &mut self,
+        client_info: ClientInfo,
+        capabilities: Option<InitializeCapabilities>,
+    ) -> anyhow::Result<JSONRPCMessage> {
+        self.initialize_with_params(InitializeParams {
+            client_info,
+            capabilities,
+        })
+        .await
+    }
+
+    async fn initialize_with_params(
+        &mut self,
+        params: InitializeParams,
+    ) -> anyhow::Result<JSONRPCMessage> {
+        let params = Some(serde_json::to_value(params)?);
         let request_id = self.send_request("initialize", params).await?;
         let message = self.read_jsonrpc_message().await?;
         match message {
@@ -427,6 +456,15 @@ impl McpProcess {
         self.send_request("thread/unarchive", params).await
     }
 
+    /// Send a `thread/compact/start` JSON-RPC request.
+    pub async fn send_thread_compact_start_request(
+        &mut self,
+        params: ThreadCompactStartParams,
+    ) -> anyhow::Result<i64> {
+        let params = Some(serde_json::to_value(params)?);
+        self.send_request("thread/compact/start", params).await
+    }
+
     /// Send a `thread/rollback` JSON-RPC request.
     pub async fn send_thread_rollback_request(
         &mut self,
@@ -472,6 +510,15 @@ impl McpProcess {
         self.send_request("model/list", params).await
     }
 
+    /// Send an `experimentalFeature/list` JSON-RPC request.
+    pub async fn send_experimental_feature_list_request(
+        &mut self,
+        params: ExperimentalFeatureListParams,
+    ) -> anyhow::Result<i64> {
+        let params = Some(serde_json::to_value(params)?);
+        self.send_request("experimentalFeature/list", params).await
+    }
+
     /// Send an `app/list` JSON-RPC request.
     pub async fn send_apps_list_request(&mut self, params: AppsListParams) -> anyhow::Result<i64> {
         let params = Some(serde_json::to_value(params)?);
@@ -485,6 +532,15 @@ impl McpProcess {
     ) -> anyhow::Result<i64> {
         let params = Some(serde_json::to_value(params)?);
         self.send_request("collaborationMode/list", params).await
+    }
+
+    /// Send a `mock/experimentalMethod` JSON-RPC request.
+    pub async fn send_mock_experimental_method_request(
+        &mut self,
+        params: MockExperimentalMethodParams,
+    ) -> anyhow::Result<i64> {
+        let params = Some(serde_json::to_value(params)?);
+        self.send_request("mock/experimentalMethod", params).await
     }
 
     /// Send a `resumeConversation` JSON-RPC request.
@@ -772,6 +828,10 @@ impl McpProcess {
             unreachable!("expected JSONRPCMessage::Notification, got {message:?}");
         };
         Ok(notification)
+    }
+
+    pub async fn read_next_message(&mut self) -> anyhow::Result<JSONRPCMessage> {
+        self.read_stream_until_message(|_| true).await
     }
 
     /// Clears any buffered messages so future reads only consider new stream items.

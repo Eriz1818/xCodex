@@ -380,8 +380,10 @@ impl ContentGateway {
                 }
             }
             ResponseItem::FunctionCallOutput { output, .. } => {
-                scan_string(&mut output.content);
-                if let Some(items) = &mut output.content_items {
+                if let Some(text) = output.text_content_mut() {
+                    scan_string(text);
+                }
+                if let Some(items) = output.content_items_mut() {
                     for c in items {
                         if let FunctionCallOutputContentItem::InputText { text } = c {
                             scan_string(text);

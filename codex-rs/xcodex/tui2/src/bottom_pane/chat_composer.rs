@@ -1126,7 +1126,7 @@ impl ChatComposer {
                     return (InputResult::None, true);
                 };
 
-                let sel_path = sel.to_string();
+                let sel_path = sel.to_string_lossy().to_string();
                 // If selected path looks like an image (png/jpeg), attach as image instead of inserting text.
                 let is_image = Self::is_image_path(&sel_path);
                 if is_image {

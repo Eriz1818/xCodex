@@ -1466,6 +1466,7 @@ fn build_hook_host_spawn_invocation(
                 wrapped,
                 sandbox_policy,
                 sandbox_policy_cwd,
+                false,
             );
             HookHostSpawnInvocation {
                 program: exe.to_string_lossy().to_string(),

@@ -26,11 +26,11 @@ use codex_core::protocol::ExecPolicyAmendment;
 use codex_core::protocol::FileChange;
 use codex_core::protocol::Op;
 use codex_core::protocol::ReviewDecision;
+use codex_protocol::mcp::RequestId;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyEventKind;
 use crossterm::event::KeyModifiers;
-use mcp_types::RequestId;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::Stylize;
@@ -601,8 +601,9 @@ mod tests {
     use crate::app_event::AppEvent;
     use crate::style::user_message_style;
     use codex_core::themes::ThemeCatalog;
-    use codex_core::themes::ThemeColor;
     use pretty_assertions::assert_eq;
+    use ratatui::style::Color;
+    use ratatui::style::Style;
     use tokio::sync::mpsc::unbounded_channel;
 
     struct ThemeReset;
@@ -746,12 +747,12 @@ mod tests {
         let _guard = crate::theme::test_style_guard();
         let _reset = ThemeReset;
 
-        // Use a theme where transcript and popup surfaces have different backgrounds so
-        // style mismatches show up as visible "holes" behind the diff text.
-        let mut theme = ThemeCatalog::built_in_default();
-        theme.roles.transcript_bg = Some(ThemeColor::new("#1a1a1a"));
-        theme.roles.composer_bg = Some(ThemeColor::new("#003355"));
-        crate::theme::preview_definition(&theme);
+        // Force distinct transcript/composer backgrounds to catch style regressions
+        // deterministically, even when terminal color probing is unavailable in tests.
+        crate::theme::set_test_surface_styles(
+            Style::default().bg(Color::Blue),
+            Style::default().bg(Color::Yellow),
+        );
 
         let expected_bg = user_message_style()
             .patch(crate::theme::composer_style())

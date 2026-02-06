@@ -14,15 +14,28 @@ use crate::metrics::validation::validate_tag_key;
 use crate::metrics::validation::validate_tag_value;
 use crate::otel_provider::OtelProvider;
 use codex_protocol::ThreadId;
+pub use codex_utils_string::sanitize_metric_tag_value;
+use opentelemetry_sdk::metrics::data::ResourceMetrics;
 use serde::Serialize;
 use std::time::Duration;
 use strum_macros::Display;
+use tracing::debug;
+
+pub use crate::metrics::runtime_metrics::RuntimeMetricTotals;
+pub use crate::metrics::runtime_metrics::RuntimeMetricsSummary;
 
 #[derive(Debug, Clone, Serialize, Display)]
 #[serde(rename_all = "snake_case")]
 pub enum ToolDecisionSource {
     Config,
     User,
+}
+
+/// Maps to core AuthMode to avoid a circular dependency on codex-core.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Display)]
+pub enum TelemetryAuthMode {
+    ApiKey,
+    Chatgpt,
 }
 
 #[derive(Debug, Clone)]
@@ -137,6 +150,39 @@ impl OtelManager {
         metrics.shutdown()
     }
 
+    pub fn snapshot_metrics(&self) -> MetricsResult<ResourceMetrics> {
+        let Some(metrics) = &self.metrics else {
+            return Err(MetricsError::ExporterDisabled);
+        };
+        metrics.snapshot()
+    }
+
+    /// Collect and discard a runtime metrics snapshot to reset delta accumulators.
+    pub fn reset_runtime_metrics(&self) {
+        if self.metrics.is_none() {
+            return;
+        }
+        if let Err(err) = self.snapshot_metrics() {
+            debug!("runtime metrics reset skipped: {err}");
+        }
+    }
+
+    /// Collect a runtime metrics summary if debug snapshots are available.
+    pub fn runtime_metrics_summary(&self) -> Option<RuntimeMetricsSummary> {
+        let snapshot = match self.snapshot_metrics() {
+            Ok(snapshot) => snapshot,
+            Err(_) => {
+                return None;
+            }
+        };
+        let summary = RuntimeMetricsSummary::from_snapshot(&snapshot);
+        if summary.is_empty() {
+            None
+        } else {
+            Some(summary)
+        }
+    }
+
     fn tags_with_metadata<'a>(
         &'a self,
         tags: &'a [(&'a str, &'a str)],
@@ -150,7 +196,7 @@ impl OtelManager {
         if !self.metrics_use_metadata_tags {
             return Ok(Vec::new());
         }
-        let mut tags = Vec::with_capacity(6);
+        let mut tags = Vec::with_capacity(5);
         Self::push_metadata_tag(&mut tags, "auth_mode", self.metadata.auth_mode.as_deref())?;
         Self::push_metadata_tag(
             &mut tags,

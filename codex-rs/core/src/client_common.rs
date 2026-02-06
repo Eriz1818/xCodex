@@ -6,6 +6,7 @@ use crate::truncate::approx_token_count;
 pub use codex_api::common::ResponseEvent;
 use codex_protocol::models::BaseInstructions;
 use codex_protocol::models::ContentItem;
+use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::models::FunctionCallOutputContentItem;
 use codex_protocol::models::LocalShellAction;
 use codex_protocol::models::ResponseItem;
@@ -116,12 +117,12 @@ impl Prompt {
                     name, arguments, ..
                 } => estimate_str_tokens(name).saturating_add(estimate_str_tokens(arguments)),
                 ResponseItem::FunctionCallOutput { output, .. } => {
-                    if let Some(items) = output.content_items.as_ref() {
+                    if let Some(items) = output.content_items() {
                         items.iter().fold(0i64, |acc, item| {
                             acc.saturating_add(estimate_fco_item_tokens(item))
                         })
                     } else {
-                        estimate_str_tokens(&output.content)
+                        estimate_str_tokens(output.text_content().unwrap_or_default())
                     }
                 }
                 ResponseItem::CustomToolCall { name, input, .. } => {
@@ -148,8 +149,15 @@ impl Prompt {
                     }
                 },
                 ResponseItem::WebSearchCall { action, .. } => match action.as_ref() {
-                    Some(WebSearchAction::Search { query }) => {
-                        query.as_ref().map_or(0, |query| estimate_str_tokens(query))
+                    Some(WebSearchAction::Search { query, queries }) => {
+                        let query_tokens =
+                            query.as_ref().map_or(0, |query| estimate_str_tokens(query));
+                        let queries_tokens = queries.as_ref().map_or(0, |queries| {
+                            queries.iter().fold(0i64, |acc, query| {
+                                acc.saturating_add(estimate_str_tokens(query))
+                            })
+                        });
+                        query_tokens.saturating_add(queries_tokens)
                     }
                     Some(WebSearchAction::OpenPage { url }) => {
                         url.as_ref().map_or(0, |url| estimate_str_tokens(url))
@@ -253,9 +261,11 @@ fn reserialize_shell_outputs(items: &mut [ResponseItem]) {
         }
         ResponseItem::FunctionCallOutput { call_id, output } => {
             if shell_call_ids.remove(call_id)
-                && let Some(structured) = parse_structured_shell_output(&output.content)
+                && let Some(structured) = output
+                    .text_content()
+                    .and_then(parse_structured_shell_output)
             {
-                output.content = structured
+                output.body = FunctionCallOutputBody::Text(structured);
             }
         }
         _ => {}

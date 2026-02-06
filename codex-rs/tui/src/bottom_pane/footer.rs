@@ -53,8 +53,8 @@ use ratatui::widgets::Widget;
 /// (`render_footer_from_props` or the single-line collapse logic). The footer
 /// treats these values as authoritative and does not attempt to infer missing
 /// state (for example, it does not query whether a task is running).
-#[derive(Clone, Copy, Debug)]
-pub(crate) struct FooterProps<'a> {
+#[derive(Clone, Debug)]
+pub(crate) struct FooterProps {
     pub(crate) mode: FooterMode,
     pub(crate) esc_backtrack_hint: bool,
     pub(crate) use_shift_enter_hint: bool,
@@ -68,21 +68,21 @@ pub(crate) struct FooterProps<'a> {
     pub(crate) quit_shortcut_key: KeyBinding,
     pub(crate) context_window_percent: Option<i64>,
     pub(crate) context_window_used_tokens: Option<i64>,
-    pub(crate) status_bar_git_branch: Option<&'a str>,
-    pub(crate) status_bar_worktree: Option<&'a str>,
-    pub(crate) show_status_bar_git_branch: bool,
-    pub(crate) show_status_bar_worktree: bool,
+    pub(crate) status_line_value: Option<Line<'static>>,
+    pub(crate) status_line_enabled: bool,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum CollaborationModeIndicator {
     Plan,
-    Code,
+    #[allow(dead_code)] // Hidden by current mode filtering; kept for future UI re-enablement.
     PairProgramming,
+    #[allow(dead_code)] // Hidden by current mode filtering; kept for future UI re-enablement.
     Execute,
 }
 
 const MODE_CYCLE_HINT: &str = "shift+tab to cycle";
+const FOOTER_CONTEXT_GAP_COLS: u16 = 1;
 
 impl CollaborationModeIndicator {
     fn label(self, show_cycle_hint: bool) -> String {
@@ -93,7 +93,6 @@ impl CollaborationModeIndicator {
         };
         match self {
             CollaborationModeIndicator::Plan => format!("Plan mode{suffix}"),
-            CollaborationModeIndicator::Code => format!("Code mode{suffix}"),
             CollaborationModeIndicator::PairProgramming => {
                 format!("Pair Programming mode{suffix}")
             }
@@ -105,7 +104,6 @@ impl CollaborationModeIndicator {
         let label = self.label(show_cycle_hint);
         match self {
             CollaborationModeIndicator::Plan => Span::from(label).magenta(),
-            CollaborationModeIndicator::Code => Span::from(label).dim(),
             CollaborationModeIndicator::PairProgramming => Span::from(label).cyan(),
             CollaborationModeIndicator::Execute => Span::from(label).dim(),
         }
@@ -172,7 +170,7 @@ pub(crate) fn reset_mode_after_activity(current: FooterMode) -> FooterMode {
     }
 }
 
-pub(crate) fn footer_height(props: FooterProps<'_>) -> u16 {
+pub(crate) fn footer_height(props: &FooterProps) -> u16 {
     let show_shortcuts_hint = match props.mode {
         FooterMode::ComposerEmpty => true,
         FooterMode::QuitShortcutReminder
@@ -210,7 +208,7 @@ pub(crate) fn render_footer_line(area: Rect, buf: &mut Buffer, line: Line<'stati
 pub(crate) fn render_footer_from_props(
     area: Rect,
     buf: &mut Buffer,
-    props: FooterProps<'_>,
+    props: &FooterProps,
     collaboration_mode_indicator: Option<CollaborationModeIndicator>,
     show_cycle_hint: bool,
     show_shortcuts_hint: bool,
@@ -452,6 +450,13 @@ pub(crate) fn single_line_footer_layout(
     (SummaryLeft::None, true)
 }
 
+pub(crate) fn mode_indicator_line(
+    indicator: Option<CollaborationModeIndicator>,
+    show_cycle_hint: bool,
+) -> Option<Line<'static>> {
+    indicator.map(|indicator| Line::from(vec![indicator.styled_span(show_cycle_hint)]))
+}
+
 fn right_aligned_x(area: Rect, content_width: u16) -> Option<u16> {
     if area.is_empty() {
         return None;
@@ -475,11 +480,28 @@ fn right_aligned_x(area: Rect, content_width: u16) -> Option<u16> {
     )
 }
 
+pub(crate) fn max_left_width_for_right(area: Rect, right_width: u16) -> Option<u16> {
+    let context_x = right_aligned_x(area, right_width)?;
+    let left_start = area.x + FOOTER_INDENT_COLS as u16;
+
+    // minimal one column gap between left and right
+    let gap = FOOTER_CONTEXT_GAP_COLS;
+
+    if context_x <= left_start + gap {
+        return Some(0);
+    }
+
+    Some(context_x.saturating_sub(left_start + gap))
+}
+
 pub(crate) fn can_show_left_with_context(area: Rect, left_width: u16, context_width: u16) -> bool {
     let Some(context_x) = right_aligned_x(area, context_width) else {
         return true;
     };
-    let left_extent = FOOTER_INDENT_COLS as u16 + left_width;
+    if left_width == 0 {
+        return true;
+    }
+    let left_extent = FOOTER_INDENT_COLS as u16 + left_width + FOOTER_CONTEXT_GAP_COLS;
     left_extent <= context_x.saturating_sub(area.x)
 }
 
@@ -535,13 +557,23 @@ pub(crate) fn render_footer_hint_items(area: Rect, buf: &mut Buffer, items: &[(S
 /// fallback decisions live in `single_line_footer_layout`; this function only
 /// formats the chosen/default content.
 fn footer_from_props_lines(
-    props: FooterProps<'_>,
+    props: &FooterProps,
     collaboration_mode_indicator: Option<CollaborationModeIndicator>,
     show_cycle_hint: bool,
     show_shortcuts_hint: bool,
     show_queue_hint: bool,
 ) -> Vec<Line<'static>> {
-    let lines = match props.mode {
+    // If status line content is present, show it for base modes.
+    if props.status_line_enabled
+        && let Some(status_line) = &props.status_line_value
+        && matches!(
+            props.mode,
+            FooterMode::ComposerEmpty | FooterMode::ComposerHasDraft
+        )
+    {
+        return vec![status_line.clone().dim()];
+    }
+    match props.mode {
         FooterMode::QuitShortcutReminder => {
             vec![quit_shortcut_reminder_line(props.quit_shortcut_key)]
         }
@@ -577,13 +609,11 @@ fn footer_from_props_lines(
             };
             vec![left_side_line(collaboration_mode_indicator, state)]
         }
-    };
-
-    lines
+    }
 }
 
 pub(crate) fn footer_line_width(
-    props: FooterProps<'_>,
+    props: &FooterProps,
     collaboration_mode_indicator: Option<CollaborationModeIndicator>,
     show_cycle_hint: bool,
     show_shortcuts_hint: bool,
@@ -621,31 +651,6 @@ fn footer_hint_items_line(items: &[(String, String)]) -> Line<'static> {
     Line::from(spans)
 }
 
-fn status_bar_spans(props: FooterProps<'_>) -> Vec<Span<'static>> {
-    let mut spans = Vec::new();
-    if props.show_status_bar_git_branch
-        && let Some(branch) = props.status_bar_git_branch
-    {
-        spans.push("branch: ".dim());
-        spans.push(Span::styled(
-            branch.to_string(),
-            crate::theme::accent_style(),
-        ));
-    }
-
-    if props.show_status_bar_worktree
-        && let Some(worktree) = props.status_bar_worktree
-    {
-        if !spans.is_empty() {
-            spans.push(" · ".dim());
-        }
-        spans.push("wt: ".dim());
-        spans.push(worktree.to_string().dim());
-    }
-
-    spans
-}
-
 #[derive(Clone, Copy, Debug)]
 struct ShortcutsState {
     use_shift_enter_hint: bool,
@@ -675,7 +680,6 @@ fn esc_hint_line(esc_backtrack_hint: bool) -> Line<'static> {
 
 fn shortcut_overlay_lines(state: ShortcutsState) -> Vec<Line<'static>> {
     let mut commands = Line::from("");
-    let mut tools = Line::from("");
     let mut shell_commands = Line::from("");
     let mut newline = Line::from("");
     let mut queue_message_tab = Line::from("");
@@ -691,7 +695,6 @@ fn shortcut_overlay_lines(state: ShortcutsState) -> Vec<Line<'static>> {
         if let Some(text) = descriptor.overlay_entry(state) {
             match descriptor.id {
                 ShortcutId::Commands => commands = text,
-                ShortcutId::Tools => tools = text,
                 ShortcutId::ShellCommands => shell_commands = text,
                 ShortcutId::InsertNewline => newline = text,
                 ShortcutId::QueueMessageTab => queue_message_tab = text,
@@ -708,7 +711,6 @@ fn shortcut_overlay_lines(state: ShortcutsState) -> Vec<Line<'static>> {
 
     let mut ordered = vec![
         commands,
-        tools,
         shell_commands,
         newline,
         queue_message_tab,
@@ -788,25 +790,9 @@ pub(crate) fn context_window_line(percent: Option<i64>, used_tokens: Option<i64>
     Line::from(vec![Span::from("100% context left").dim()])
 }
 
-pub(crate) fn right_side_line(props: FooterProps<'_>) -> Line<'static> {
-    let mut spans = status_bar_spans(props);
-    if !spans.is_empty() {
-        spans.push(" · ".dim());
-    }
-    spans.extend(
-        context_window_line(
-            props.context_window_percent,
-            props.context_window_used_tokens,
-        )
-        .spans,
-    );
-    Line::from(spans)
-}
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum ShortcutId {
     Commands,
-    Tools,
     ShellCommands,
     InsertNewline,
     QueueMessageTab,
@@ -894,15 +880,6 @@ const SHORTCUTS: &[ShortcutDescriptor] = &[
         }],
         prefix: "",
         label: " for commands",
-    },
-    ShortcutDescriptor {
-        id: ShortcutId::Tools,
-        bindings: &[ShortcutBinding {
-            key: key_hint::ctrl(KeyCode::Char('o')),
-            condition: DisplayCondition::Always,
-        }],
-        prefix: "",
-        label: " for ⚡Tools",
     },
     ShortcutDescriptor {
         id: ShortcutId::ShellCommands,
@@ -1013,28 +990,27 @@ const SHORTCUTS: &[ShortcutDescriptor] = &[
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::bottom_pane::selection_popup_common::truncate_line_with_ellipsis_if_overflow;
+    use crate::test_backend::VT100Backend;
     use insta::assert_snapshot;
     use pretty_assertions::assert_eq;
     use ratatui::Terminal;
+    use ratatui::backend::Backend;
     use ratatui::backend::TestBackend;
 
-    fn snapshot_footer(name: &str, props: FooterProps<'_>) {
-        snapshot_footer_with_mode_indicator(name, 80, props, None);
+    fn snapshot_footer(name: &str, props: FooterProps) {
+        snapshot_footer_with_mode_indicator(name, 80, &props, None);
     }
 
-    fn snapshot_footer_with_mode_indicator(
-        name: &str,
-        width: u16,
-        props: FooterProps<'_>,
+    fn draw_footer_frame<B: Backend>(
+        terminal: &mut Terminal<B>,
+        height: u16,
+        props: &FooterProps,
         collaboration_mode_indicator: Option<CollaborationModeIndicator>,
     ) {
-        let height = footer_height(props).max(1);
-        let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
         terminal
             .draw(|f| {
                 let area = Rect::new(0, 0, f.area().width, height);
-                let right_side_line = right_side_line(props);
-                let right_side_width = right_side_line.width() as u16;
                 let show_cycle_hint = !props.is_task_running;
                 let show_shortcuts_hint = match props.mode {
                     FooterMode::ComposerEmpty => true,
@@ -1050,53 +1026,118 @@ mod tests {
                     | FooterMode::ShortcutOverlay
                     | FooterMode::EscHint => false,
                 };
-                let left_width = footer_line_width(
-                    props,
-                    collaboration_mode_indicator,
-                    show_cycle_hint,
-                    show_shortcuts_hint,
-                    show_queue_hint,
-                );
+                let left_mode_indicator = if props.status_line_enabled {
+                    None
+                } else {
+                    collaboration_mode_indicator
+                };
+                let available_width = area.width.saturating_sub(FOOTER_INDENT_COLS as u16) as usize;
+                let mut truncated_status_line = if props.status_line_enabled
+                    && matches!(
+                        props.mode,
+                        FooterMode::ComposerEmpty | FooterMode::ComposerHasDraft
+                    ) {
+                    props
+                        .status_line_value
+                        .as_ref()
+                        .map(|line| line.clone().dim())
+                        .map(|line| truncate_line_with_ellipsis_if_overflow(line, available_width))
+                } else {
+                    None
+                };
+                let mut left_width = if props.status_line_enabled {
+                    truncated_status_line
+                        .as_ref()
+                        .map(|line| line.width() as u16)
+                        .unwrap_or(0)
+                } else {
+                    footer_line_width(
+                        props,
+                        left_mode_indicator,
+                        show_cycle_hint,
+                        show_shortcuts_hint,
+                        show_queue_hint,
+                    )
+                };
+                let right_line = if props.status_line_enabled {
+                    let full = mode_indicator_line(collaboration_mode_indicator, show_cycle_hint);
+                    let compact = mode_indicator_line(collaboration_mode_indicator, false);
+                    let full_width = full.as_ref().map(|line| line.width() as u16).unwrap_or(0);
+                    if can_show_left_with_context(area, left_width, full_width) {
+                        full
+                    } else {
+                        compact
+                    }
+                } else {
+                    Some(context_window_line(
+                        props.context_window_percent,
+                        props.context_window_used_tokens,
+                    ))
+                };
+                let right_width = right_line
+                    .as_ref()
+                    .map(|line| line.width() as u16)
+                    .unwrap_or(0);
+                if props.status_line_enabled
+                    && let Some(max_left) = max_left_width_for_right(area, right_width)
+                    && left_width > max_left
+                    && let Some(line) = props
+                        .status_line_value
+                        .as_ref()
+                        .map(|line| line.clone().dim())
+                        .map(|line| {
+                            truncate_line_with_ellipsis_if_overflow(line, max_left as usize)
+                        })
+                {
+                    left_width = line.width() as u16;
+                    truncated_status_line = Some(line);
+                }
                 let can_show_left_and_context =
-                    can_show_left_with_context(area, left_width, right_side_width);
+                    can_show_left_with_context(area, left_width, right_width);
                 if matches!(
                     props.mode,
                     FooterMode::ComposerEmpty | FooterMode::ComposerHasDraft
                 ) {
                     let (summary_left, show_context) = single_line_footer_layout(
                         area,
-                        right_side_width,
-                        collaboration_mode_indicator,
+                        right_width,
+                        left_mode_indicator,
                         show_cycle_hint,
                         show_shortcuts_hint,
                         show_queue_hint,
                     );
                     match summary_left {
                         SummaryLeft::Default => {
-                            render_footer_from_props(
-                                area,
-                                f.buffer_mut(),
-                                props,
-                                collaboration_mode_indicator,
-                                show_cycle_hint,
-                                show_shortcuts_hint,
-                                show_queue_hint,
-                            );
+                            if props.status_line_enabled {
+                                if let Some(line) = truncated_status_line.clone() {
+                                    render_footer_line(area, f.buffer_mut(), line);
+                                }
+                            } else {
+                                render_footer_from_props(
+                                    area,
+                                    f.buffer_mut(),
+                                    props,
+                                    left_mode_indicator,
+                                    show_cycle_hint,
+                                    show_shortcuts_hint,
+                                    show_queue_hint,
+                                );
+                            }
                         }
                         SummaryLeft::Custom(line) => {
                             render_footer_line(area, f.buffer_mut(), line);
                         }
                         SummaryLeft::None => {}
                     }
-                    if show_context {
-                        render_context_right(area, f.buffer_mut(), &right_side_line);
+                    if show_context && let Some(line) = &right_line {
+                        render_context_right(area, f.buffer_mut(), line);
                     }
                 } else {
                     render_footer_from_props(
                         area,
                         f.buffer_mut(),
                         props,
-                        collaboration_mode_indicator,
+                        left_mode_indicator,
                         show_cycle_hint,
                         show_shortcuts_hint,
                         show_queue_hint,
@@ -1108,13 +1149,35 @@ mod tests {
                                 | FooterMode::QuitShortcutReminder
                                 | FooterMode::ShortcutOverlay
                         );
-                    if show_context {
-                        render_context_right(area, f.buffer_mut(), &right_side_line);
+                    if show_context && let Some(line) = &right_line {
+                        render_context_right(area, f.buffer_mut(), line);
                     }
                 }
             })
             .unwrap();
+    }
+
+    fn snapshot_footer_with_mode_indicator(
+        name: &str,
+        width: u16,
+        props: &FooterProps,
+        collaboration_mode_indicator: Option<CollaborationModeIndicator>,
+    ) {
+        let height = footer_height(props).max(1);
+        let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+        draw_footer_frame(&mut terminal, height, props, collaboration_mode_indicator);
         assert_snapshot!(name, terminal.backend());
+    }
+
+    fn render_footer_with_mode_indicator(
+        width: u16,
+        props: &FooterProps,
+        collaboration_mode_indicator: Option<CollaborationModeIndicator>,
+    ) -> String {
+        let height = footer_height(props).max(1);
+        let mut terminal = Terminal::new(VT100Backend::new(width, height)).expect("terminal");
+        draw_footer_frame(&mut terminal, height, props, collaboration_mode_indicator);
+        terminal.backend().vt100().screen().contents()
     }
 
     #[test]
@@ -1132,10 +1195,8 @@ mod tests {
                 quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
                 context_window_percent: None,
                 context_window_used_tokens: None,
-                status_bar_git_branch: None,
-                status_bar_worktree: None,
-                show_status_bar_git_branch: false,
-                show_status_bar_worktree: false,
+                status_line_value: None,
+                status_line_enabled: false,
             },
         );
 
@@ -1152,10 +1213,8 @@ mod tests {
                 quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
                 context_window_percent: None,
                 context_window_used_tokens: None,
-                status_bar_git_branch: None,
-                status_bar_worktree: None,
-                show_status_bar_git_branch: false,
-                show_status_bar_worktree: false,
+                status_line_value: None,
+                status_line_enabled: false,
             },
         );
 
@@ -1172,10 +1231,8 @@ mod tests {
                 quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
                 context_window_percent: None,
                 context_window_used_tokens: None,
-                status_bar_git_branch: None,
-                status_bar_worktree: None,
-                show_status_bar_git_branch: false,
-                show_status_bar_worktree: false,
+                status_line_value: None,
+                status_line_enabled: false,
             },
         );
 
@@ -1192,10 +1249,8 @@ mod tests {
                 quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
                 context_window_percent: None,
                 context_window_used_tokens: None,
-                status_bar_git_branch: None,
-                status_bar_worktree: None,
-                show_status_bar_git_branch: false,
-                show_status_bar_worktree: false,
+                status_line_value: None,
+                status_line_enabled: false,
             },
         );
 
@@ -1212,10 +1267,8 @@ mod tests {
                 quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
                 context_window_percent: None,
                 context_window_used_tokens: None,
-                status_bar_git_branch: None,
-                status_bar_worktree: None,
-                show_status_bar_git_branch: false,
-                show_status_bar_worktree: false,
+                status_line_value: None,
+                status_line_enabled: false,
             },
         );
 
@@ -1232,10 +1285,8 @@ mod tests {
                 quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
                 context_window_percent: None,
                 context_window_used_tokens: None,
-                status_bar_git_branch: None,
-                status_bar_worktree: None,
-                show_status_bar_git_branch: false,
-                show_status_bar_worktree: false,
+                status_line_value: None,
+                status_line_enabled: false,
             },
         );
 
@@ -1252,10 +1303,8 @@ mod tests {
                 quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
                 context_window_percent: None,
                 context_window_used_tokens: None,
-                status_bar_git_branch: None,
-                status_bar_worktree: None,
-                show_status_bar_git_branch: false,
-                show_status_bar_worktree: false,
+                status_line_value: None,
+                status_line_enabled: false,
             },
         );
 
@@ -1272,10 +1321,8 @@ mod tests {
                 quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
                 context_window_percent: Some(72),
                 context_window_used_tokens: None,
-                status_bar_git_branch: None,
-                status_bar_worktree: None,
-                show_status_bar_git_branch: false,
-                show_status_bar_worktree: false,
+                status_line_value: None,
+                status_line_enabled: false,
             },
         );
 
@@ -1292,10 +1339,8 @@ mod tests {
                 quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
                 context_window_percent: None,
                 context_window_used_tokens: Some(123_456),
-                status_bar_git_branch: None,
-                status_bar_worktree: None,
-                show_status_bar_git_branch: false,
-                show_status_bar_worktree: false,
+                status_line_value: None,
+                status_line_enabled: false,
             },
         );
 
@@ -1312,10 +1357,8 @@ mod tests {
                 quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
                 context_window_percent: None,
                 context_window_used_tokens: None,
-                status_bar_git_branch: None,
-                status_bar_worktree: None,
-                show_status_bar_git_branch: false,
-                show_status_bar_worktree: false,
+                status_line_value: None,
+                status_line_enabled: false,
             },
         );
 
@@ -1332,10 +1375,8 @@ mod tests {
                 quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
                 context_window_percent: None,
                 context_window_used_tokens: None,
-                status_bar_git_branch: None,
-                status_bar_worktree: None,
-                show_status_bar_git_branch: false,
-                show_status_bar_worktree: false,
+                status_line_value: None,
+                status_line_enabled: false,
             },
         );
 
@@ -1350,23 +1391,21 @@ mod tests {
             quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
             context_window_percent: None,
             context_window_used_tokens: None,
-            status_bar_git_branch: None,
-            status_bar_worktree: None,
-            show_status_bar_git_branch: false,
-            show_status_bar_worktree: false,
+            status_line_value: None,
+            status_line_enabled: false,
         };
 
         snapshot_footer_with_mode_indicator(
             "footer_mode_indicator_wide",
             120,
-            props,
+            &props,
             Some(CollaborationModeIndicator::Plan),
         );
 
         snapshot_footer_with_mode_indicator(
             "footer_mode_indicator_narrow_overlap_hides",
             50,
-            props,
+            &props,
             Some(CollaborationModeIndicator::Plan),
         );
 
@@ -1381,17 +1420,160 @@ mod tests {
             quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
             context_window_percent: None,
             context_window_used_tokens: None,
-            status_bar_git_branch: None,
-            status_bar_worktree: None,
-            show_status_bar_git_branch: false,
-            show_status_bar_worktree: false,
+            status_line_value: None,
+            status_line_enabled: false,
         };
 
         snapshot_footer_with_mode_indicator(
             "footer_mode_indicator_running_hides_hint",
             120,
-            props,
+            &props,
             Some(CollaborationModeIndicator::Plan),
+        );
+
+        let props = FooterProps {
+            mode: FooterMode::ComposerEmpty,
+            esc_backtrack_hint: false,
+            use_shift_enter_hint: false,
+            is_task_running: false,
+            steer_enabled: false,
+            collaboration_modes_enabled: false,
+            is_wsl: false,
+            quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
+            context_window_percent: None,
+            context_window_used_tokens: None,
+            status_line_value: Some(Line::from("Status line content".to_string())),
+            status_line_enabled: true,
+        };
+
+        snapshot_footer("footer_status_line_overrides_shortcuts", props);
+
+        let props = FooterProps {
+            mode: FooterMode::ComposerEmpty,
+            esc_backtrack_hint: false,
+            use_shift_enter_hint: false,
+            is_task_running: false,
+            steer_enabled: false,
+            collaboration_modes_enabled: true,
+            is_wsl: false,
+            quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
+            context_window_percent: Some(50),
+            context_window_used_tokens: None,
+            status_line_value: None, // command timed out / empty
+            status_line_enabled: true,
+        };
+
+        snapshot_footer_with_mode_indicator(
+            "footer_status_line_enabled_mode_right",
+            120,
+            &props,
+            Some(CollaborationModeIndicator::Plan),
+        );
+
+        let props = FooterProps {
+            mode: FooterMode::ComposerEmpty,
+            esc_backtrack_hint: false,
+            use_shift_enter_hint: false,
+            is_task_running: false,
+            steer_enabled: false,
+            collaboration_modes_enabled: true,
+            is_wsl: false,
+            quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
+            context_window_percent: Some(50),
+            context_window_used_tokens: None,
+            status_line_value: None,
+            status_line_enabled: false,
+        };
+
+        snapshot_footer_with_mode_indicator(
+            "footer_status_line_disabled_context_right",
+            120,
+            &props,
+            Some(CollaborationModeIndicator::Plan),
+        );
+
+        let props = FooterProps {
+            mode: FooterMode::ComposerEmpty,
+            esc_backtrack_hint: false,
+            use_shift_enter_hint: false,
+            is_task_running: false,
+            steer_enabled: false,
+            collaboration_modes_enabled: false,
+            is_wsl: false,
+            quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
+            context_window_percent: Some(50),
+            context_window_used_tokens: None,
+            status_line_value: None,
+            status_line_enabled: true,
+        };
+
+        // has status line and no collaboration mode
+        snapshot_footer_with_mode_indicator(
+            "footer_status_line_enabled_no_mode_right",
+            120,
+            &props,
+            None,
+        );
+
+        let props = FooterProps {
+            mode: FooterMode::ComposerEmpty,
+            esc_backtrack_hint: false,
+            use_shift_enter_hint: false,
+            is_task_running: false,
+            steer_enabled: false,
+            collaboration_modes_enabled: true,
+            is_wsl: false,
+            quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
+            context_window_percent: Some(50),
+            context_window_used_tokens: None,
+            status_line_value: Some(Line::from(
+                "Status line content that should truncate before the mode indicator".to_string(),
+            )),
+            status_line_enabled: true,
+        };
+
+        snapshot_footer_with_mode_indicator(
+            "footer_status_line_truncated_with_gap",
+            40,
+            &props,
+            Some(CollaborationModeIndicator::Plan),
+        );
+    }
+
+    #[test]
+    fn footer_status_line_truncates_to_keep_mode_indicator() {
+        let props = FooterProps {
+            mode: FooterMode::ComposerEmpty,
+            esc_backtrack_hint: false,
+            use_shift_enter_hint: false,
+            is_task_running: false,
+            steer_enabled: false,
+            collaboration_modes_enabled: true,
+            is_wsl: false,
+            quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
+            context_window_percent: Some(50),
+            context_window_used_tokens: None,
+            status_line_value: Some(Line::from(
+                "Status line content that is definitely too long to fit alongside the mode label"
+                    .to_string(),
+            )),
+            status_line_enabled: true,
+        };
+
+        let screen =
+            render_footer_with_mode_indicator(80, &props, Some(CollaborationModeIndicator::Plan));
+        let collapsed = screen.split_whitespace().collect::<Vec<_>>().join(" ");
+        assert!(
+            collapsed.contains("Plan mode"),
+            "mode indicator should remain visible"
+        );
+        assert!(
+            !collapsed.contains("shift+tab to cycle"),
+            "compact mode indicator should be used when space is tight"
+        );
+        assert!(
+            screen.contains('…'),
+            "status line should be truncated with ellipsis to keep mode indicator"
         );
     }
 
@@ -1430,25 +1612,5 @@ mod tests {
             .key;
 
         assert_eq!(actual_key, expected_key);
-    }
-
-    #[test]
-    fn tools_shortcut_is_ctrl_o() {
-        let descriptor = SHORTCUTS
-            .iter()
-            .find(|descriptor| descriptor.id == ShortcutId::Tools)
-            .expect("tools shortcut");
-
-        let actual_key = descriptor
-            .binding_for(ShortcutsState {
-                use_shift_enter_hint: false,
-                esc_backtrack_hint: false,
-                is_wsl: false,
-                collaboration_modes_enabled: false,
-            })
-            .expect("shortcut binding")
-            .key;
-
-        assert_eq!(actual_key, key_hint::ctrl(KeyCode::Char('o')));
     }
 }

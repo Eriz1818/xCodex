@@ -29,7 +29,6 @@ use std::sync::Arc;
 use std::time::Duration;
 use std::time::Instant;
 
-use codex_app_server_protocol::AuthMode;
 use codex_backend_client::Client as BackendClient;
 use codex_core::config::Config;
 use codex_core::config::ConstraintResult;
@@ -3148,6 +3147,7 @@ impl ChatWidget {
 
         match msg {
             EventMsg::AgentMessageDelta(_)
+            | EventMsg::PlanDelta(_)
             | EventMsg::AgentReasoningDelta(_)
             | EventMsg::TerminalInteraction(_)
             | EventMsg::ExecCommandOutputDelta(_) => {}
@@ -3229,6 +3229,7 @@ impl ChatWidget {
             EventMsg::McpListToolsResponse(ev) => self.on_list_mcp_tools(ev),
             EventMsg::ListCustomPromptsResponse(ev) => self.on_list_custom_prompts(ev),
             EventMsg::ListSkillsResponse(ev) => self.on_list_skills(ev),
+            EventMsg::ListRemoteSkillsResponse(_) | EventMsg::RemoteSkillDownloaded(_) => {}
             EventMsg::SkillsUpdateAvailable => {
                 self.submit_op(Op::ListSkills {
                     cwds: Vec::new(),
@@ -3271,6 +3272,7 @@ impl ChatWidget {
             EventMsg::RawResponseItem(_)
             | EventMsg::ThreadRolledBack(_)
             | EventMsg::ThreadNameUpdated(_)
+            | EventMsg::PlanDelta(_)
             | EventMsg::ItemStarted(_)
             | EventMsg::ItemCompleted(_)
             | EventMsg::AgentMessageContentDelta(_)
@@ -3830,7 +3832,12 @@ impl ChatWidget {
     fn prefetch_rate_limits(&mut self) {
         self.stop_rate_limit_poller();
 
-        if self.auth_manager.auth_cached().map(|auth| auth.mode) != Some(AuthMode::ChatGPT) {
+        if !self
+            .auth_manager
+            .auth_cached()
+            .as_ref()
+            .is_some_and(CodexAuth::is_chatgpt_auth)
+        {
             return;
         }
 
@@ -3843,7 +3850,7 @@ impl ChatWidget {
 
             loop {
                 if let Some(auth) = auth_manager.auth().await
-                    && auth.mode == AuthMode::ChatGPT
+                    && auth.is_chatgpt_auth()
                     && let Some(snapshot) = fetch_rate_limits(base_url.clone(), auth).await
                 {
                     app_event_tx.send(AppEvent::RateLimitSnapshotFetched(snapshot));

@@ -764,21 +764,19 @@ fn rows_from_items(items: Vec<ThreadItem>) -> Vec<Row> {
 }
 
 fn head_to_row(item: &ThreadItem) -> Row {
-    let created_at = item
-        .created_at
-        .as_deref()
-        .and_then(parse_timestamp_str)
-        .or_else(|| item.head.first().and_then(extract_timestamp));
+    let created_at = item.created_at.as_deref().and_then(parse_timestamp_str);
     let updated_at = item
         .updated_at
         .as_deref()
         .and_then(parse_timestamp_str)
         .or(created_at);
 
-    let (cwd, git_branch) = extract_session_meta_from_head(&item.head);
-    let preview = preview_from_head(&item.head)
-        .map(|s| s.trim().to_string())
+    let preview = item
+        .first_user_message
+        .as_deref()
+        .map(str::trim)
         .filter(|s| !s.is_empty())
+        .map(str::to_string)
         .unwrap_or_else(|| String::from("(no message yet)"));
 
     Row {
@@ -786,8 +784,8 @@ fn head_to_row(item: &ThreadItem) -> Row {
         preview,
         created_at,
         updated_at,
-        cwd,
-        git_branch,
+        cwd: item.cwd.clone(),
+        git_branch: item.git_branch.clone(),
     }
 }
 
@@ -1339,7 +1337,15 @@ mod tests {
     fn make_item(path: &str, ts: &str, preview: &str) -> ThreadItem {
         ThreadItem {
             path: PathBuf::from(path),
-            head: head_with_ts_and_user_text(ts, &[preview]),
+            thread_id: None,
+            first_user_message: Some(preview.to_string()),
+            cwd: None,
+            git_branch: None,
+            git_sha: None,
+            git_origin_url: None,
+            source: None,
+            model_provider: None,
+            cli_version: None,
             created_at: Some(ts.to_string()),
             updated_at: Some(ts.to_string()),
         }
@@ -1416,18 +1422,8 @@ mod tests {
     #[test]
     fn rows_from_items_preserves_backend_order() {
         // Construct two items with different timestamps and real user text.
-        let a = ThreadItem {
-            path: PathBuf::from("/tmp/a.jsonl"),
-            head: head_with_ts_and_user_text("2025-01-01T00:00:00Z", &["A"]),
-            created_at: Some("2025-01-01T00:00:00Z".into()),
-            updated_at: Some("2025-01-01T00:00:00Z".into()),
-        };
-        let b = ThreadItem {
-            path: PathBuf::from("/tmp/b.jsonl"),
-            head: head_with_ts_and_user_text("2025-01-02T00:00:00Z", &["B"]),
-            created_at: Some("2025-01-02T00:00:00Z".into()),
-            updated_at: Some("2025-01-02T00:00:00Z".into()),
-        };
+        let a = make_item("/tmp/a.jsonl", "2025-01-01T00:00:00Z", "A");
+        let b = make_item("/tmp/b.jsonl", "2025-01-02T00:00:00Z", "B");
         let rows = rows_from_items(vec![a, b]);
         assert_eq!(rows.len(), 2);
         // Preserve the given order even if timestamps differ; backend already provides newest-first.
@@ -1437,10 +1433,17 @@ mod tests {
 
     #[test]
     fn row_uses_tail_timestamp_for_updated_at() {
-        let head = head_with_ts_and_user_text("2025-01-01T00:00:00Z", &["Hello"]);
         let item = ThreadItem {
             path: PathBuf::from("/tmp/a.jsonl"),
-            head,
+            thread_id: None,
+            first_user_message: Some("Hello".to_string()),
+            cwd: None,
+            git_branch: None,
+            git_sha: None,
+            git_origin_url: None,
+            source: None,
+            model_provider: None,
+            cli_version: None,
             created_at: Some("2025-01-01T00:00:00Z".into()),
             updated_at: Some("2025-01-01T01:00:00Z".into()),
         };

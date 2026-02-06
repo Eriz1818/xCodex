@@ -9,6 +9,7 @@ use crate::tools::context::ToolPayload;
 use crate::tools::context::ToolProvenance;
 use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
+use codex_protocol::models::ResponseInputItem;
 
 pub struct McpHandler;
 
@@ -58,18 +59,14 @@ impl ToolHandler for McpHandler {
         .await;
 
         match response {
-            codex_protocol::models::ResponseInputItem::McpToolCallOutput { result, .. } => {
+            ResponseInputItem::McpToolCallOutput { result, .. } => {
                 Ok(ToolOutput::Mcp { result, provenance })
             }
-            codex_protocol::models::ResponseInputItem::FunctionCallOutput { output, .. } => {
-                let codex_protocol::models::FunctionCallOutputPayload {
-                    content,
-                    content_items,
-                    success,
-                } = output;
+            ResponseInputItem::FunctionCallOutput { output, .. } => {
+                let success = output.success;
+                let body = output.body;
                 Ok(ToolOutput::Function {
-                    content,
-                    content_items,
+                    body,
                     success,
                     provenance,
                 })

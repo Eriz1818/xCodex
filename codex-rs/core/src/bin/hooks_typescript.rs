@@ -14,7 +14,7 @@ use std::fmt::Write;
 use serde_json::Value;
 
 #[cfg(feature = "hooks-schema")]
-use codex_core::hooks::HookPayload;
+use codex_core::xcodex::hooks::HookPayload;
 #[cfg(feature = "hooks-schema")]
 use schemars::schema_for;
 

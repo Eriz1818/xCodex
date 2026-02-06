@@ -128,6 +128,14 @@ pub(crate) fn test_style_guard() -> MutexGuard<'static, ()> {
         .unwrap_or_else(|err| err.into_inner())
 }
 
+#[cfg(test)]
+pub(crate) fn set_test_surface_styles(transcript: Style, composer: Style) {
+    let mut styles = fallback_styles();
+    styles.transcript = transcript;
+    styles.composer = composer;
+    set_styles(styles);
+}
+
 pub(crate) fn active_variant(config: &Config, terminal_bg: Option<(u8, u8, u8)>) -> ThemeVariant {
     let terminal_background_is_light = terminal_bg.is_some_and(is_light);
     let auto_variant = os_theme_variant();

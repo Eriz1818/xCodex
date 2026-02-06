@@ -3,12 +3,12 @@ use std::path::Path;
 use async_channel::Sender;
 
 use crate::config::Config;
-use crate::hooks::UserHooks;
 use crate::mcp_connection_manager::McpHookContext;
 use crate::protocol::DeprecationNoticeEvent;
 use crate::protocol::Event;
 use crate::protocol::EventMsg;
 use crate::user_notification::UserNotifier;
+use crate::xcodex::hooks::UserHooks;
 
 pub mod config;
 pub mod git_info;

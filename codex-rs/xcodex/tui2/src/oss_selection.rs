@@ -4,7 +4,6 @@ use std::sync::LazyLock;
 use codex_core::DEFAULT_LMSTUDIO_PORT;
 use codex_core::DEFAULT_OLLAMA_PORT;
 use codex_core::LMSTUDIO_OSS_PROVIDER_ID;
-use codex_core::OLLAMA_CHAT_PROVIDER_ID;
 use codex_core::OLLAMA_OSS_PROVIDER_ID;
 use codex_core::config::set_default_oss_provider;
 use crossterm::event::Event;
@@ -79,7 +78,7 @@ static OSS_SELECT_OPTIONS: LazyLock<Vec<SelectOption>> = LazyLock::new(|| {
             label: Line::from(vec!["Ollama (".into(), "c".underlined(), "hat)".into()]),
             description: "Local Ollama server (chat wire API, default port 11434)",
             key: KeyCode::Char('c'),
-            provider_id: OLLAMA_CHAT_PROVIDER_ID,
+            provider_id: OLLAMA_OSS_PROVIDER_ID,
         },
     ]
 });

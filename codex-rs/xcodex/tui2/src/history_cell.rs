@@ -48,16 +48,14 @@ use codex_core::protocol::McpServerSnapshotState;
 use codex_core::protocol::McpStartupStatus;
 use codex_core::protocol::SandboxPolicy;
 use codex_core::protocol::SessionConfiguredEvent;
+use codex_protocol::mcp::Resource;
+use codex_protocol::mcp::ResourceTemplate;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::plan_tool::PlanItemArg;
 use codex_protocol::plan_tool::StepStatus;
 use codex_protocol::plan_tool::UpdatePlanArgs;
 use image::DynamicImage;
 use image::ImageReader;
-use mcp_types::EmbeddedResourceResource;
-use mcp_types::Resource;
-use mcp_types::ResourceLink;
-use mcp_types::ResourceTemplate;
 use ratatui::prelude::*;
 use ratatui::style::Modifier;
 use ratatui::style::Style;
@@ -1461,7 +1459,7 @@ pub(crate) struct McpToolCallCell {
     invocation: McpInvocation,
     start_time: Instant,
     duration: Option<Duration>,
-    result: Option<Result<mcp_types::CallToolResult, String>>,
+    result: Option<Result<codex_protocol::mcp::CallToolResult, String>>,
     animations_enabled: bool,
 }
 
@@ -1488,7 +1486,7 @@ impl McpToolCallCell {
     pub(crate) fn complete(
         &mut self,
         duration: Duration,
-        result: Result<mcp_types::CallToolResult, String>,
+        result: Result<codex_protocol::mcp::CallToolResult, String>,
     ) -> Option<Box<dyn HistoryCell>> {
         let image_cell = try_new_completed_mcp_tool_call_with_image_output(&result)
             .map(|cell| Box::new(cell) as Box<dyn HistoryCell>);
@@ -1511,23 +1509,33 @@ impl McpToolCallCell {
         self.result = Some(Err("interrupted".to_string()));
     }
 
-    fn render_content_block(block: &mcp_types::ContentBlock, width: usize) -> String {
-        match block {
-            mcp_types::ContentBlock::TextContent(text) => {
-                format_and_truncate_tool_result(&text.text, TOOL_CALL_MAX_LINES, width)
+    fn render_content_block(block: &serde_json::Value, width: usize) -> String {
+        let block_type = block.get("type").and_then(serde_json::Value::as_str);
+        match block_type {
+            Some("text") => {
+                let text = block
+                    .get("text")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or_default();
+                format_and_truncate_tool_result(text, TOOL_CALL_MAX_LINES, width)
             }
-            mcp_types::ContentBlock::ImageContent(_) => "<image content>".to_string(),
-            mcp_types::ContentBlock::AudioContent(_) => "<audio content>".to_string(),
-            mcp_types::ContentBlock::EmbeddedResource(resource) => {
-                let uri = match &resource.resource {
-                    EmbeddedResourceResource::TextResourceContents(text) => text.uri.clone(),
-                    EmbeddedResourceResource::BlobResourceContents(blob) => blob.uri.clone(),
-                };
+            Some("image") => "<image content>".to_string(),
+            Some("audio") => "<audio content>".to_string(),
+            Some("resource") => {
+                let uri = block
+                    .pointer("/resource/uri")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("<unknown>");
                 format!("embedded resource: {uri}")
             }
-            mcp_types::ContentBlock::ResourceLink(ResourceLink { uri, .. }) => {
+            Some("resource_link") => {
+                let uri = block
+                    .get("uri")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("<unknown>");
                 format!("link: {uri}")
             }
+            _ => format_and_truncate_tool_result(&block.to_string(), TOOL_CALL_MAX_LINES, width),
         }
     }
 }
@@ -1576,7 +1584,7 @@ impl HistoryCell for McpToolCallCell {
 
         if let Some(result) = &self.result {
             match result {
-                Ok(mcp_types::CallToolResult { content, .. }) => {
+                Ok(codex_protocol::mcp::CallToolResult { content, .. }) => {
                     if !content.is_empty() {
                         for block in content {
                             let text = Self::render_content_block(block, detail_wrap_width);
@@ -1958,41 +1966,50 @@ pub(crate) fn new_unified_exec_processes_output(
 /// If the first content is an image, return a new cell with the image.
 /// TODO(rgwood-dd): Handle images properly even if they're not the first result.
 fn try_new_completed_mcp_tool_call_with_image_output(
-    result: &Result<mcp_types::CallToolResult, String>,
+    result: &Result<codex_protocol::mcp::CallToolResult, String>,
 ) -> Option<CompletedMcpToolCallWithImageOutput> {
-    match result {
-        Ok(mcp_types::CallToolResult { content, .. }) => {
-            if let Some(mcp_types::ContentBlock::ImageContent(image)) = content.first() {
-                let raw_data = match base64::engine::general_purpose::STANDARD.decode(&image.data) {
-                    Ok(data) => data,
-                    Err(e) => {
-                        error!("Failed to decode image data: {e}");
-                        return None;
-                    }
-                };
-                let reader = match ImageReader::new(Cursor::new(raw_data)).with_guessed_format() {
-                    Ok(reader) => reader,
-                    Err(e) => {
-                        error!("Failed to guess image format: {e}");
-                        return None;
-                    }
-                };
+    let image = result
+        .as_ref()
+        .ok()?
+        .content
+        .iter()
+        .find_map(decode_mcp_image)?;
 
-                let image = match reader.decode() {
-                    Ok(image) => image,
-                    Err(e) => {
-                        error!("Image decoding failed: {e}");
-                        return None;
-                    }
-                };
+    Some(CompletedMcpToolCallWithImageOutput { _image: image })
+}
 
-                Some(CompletedMcpToolCallWithImageOutput { _image: image })
-            } else {
-                None
-            }
-        }
-        _ => None,
+fn decode_mcp_image(block: &serde_json::Value) -> Option<DynamicImage> {
+    if block.get("type").and_then(serde_json::Value::as_str) != Some("image") {
+        return None;
     }
+    let data = block.get("data").and_then(serde_json::Value::as_str)?;
+    let base64_data = if let Some(data_url) = data.strip_prefix("data:") {
+        data_url.split_once(',')?.1
+    } else {
+        data
+    };
+    let raw_data = base64::engine::general_purpose::STANDARD
+        .decode(base64_data)
+        .map_err(|e| {
+            error!("Failed to decode image data: {e}");
+            e
+        })
+        .ok()?;
+    let reader = ImageReader::new(Cursor::new(raw_data))
+        .with_guessed_format()
+        .map_err(|e| {
+            error!("Failed to guess image format: {e}");
+            e
+        })
+        .ok()?;
+
+    reader
+        .decode()
+        .map_err(|e| {
+            error!("Image decoding failed: {e}");
+            e
+        })
+        .ok()
 }
 
 #[allow(clippy::disallowed_methods)]
@@ -2137,7 +2154,7 @@ pub(crate) fn empty_mcp_output() -> PlainHistoryCell {
 /// Render MCP tools grouped by connection using the fully-qualified tool names.
 pub(crate) fn new_mcp_tools_output(
     config: &Config,
-    tools: HashMap<String, mcp_types::Tool>,
+    tools: HashMap<String, codex_protocol::mcp::Tool>,
     resources: HashMap<String, Vec<Resource>>,
     resource_templates: HashMap<String, Vec<ResourceTemplate>>,
     auth_statuses: &HashMap<String, McpAuthStatus>,
@@ -2762,11 +2779,8 @@ mod tests {
     use std::collections::HashMap;
 
     use codex_core::protocol::ExecCommandSource;
-    use mcp_types::CallToolResult;
-    use mcp_types::ContentBlock;
-    use mcp_types::TextContent;
-    use mcp_types::Tool;
-    use mcp_types::ToolInputSchema;
+    use codex_protocol::mcp::CallToolResult;
+    use codex_protocol::mcp::Tool;
     async fn test_config() -> Config {
         let codex_home = std::env::temp_dir();
         ConfigBuilder::default()
@@ -3005,14 +3019,12 @@ mod tests {
             Tool {
                 annotations: None,
                 description: None,
-                input_schema: ToolInputSchema {
-                    properties: None,
-                    required: None,
-                    r#type: "object".to_string(),
-                },
+                input_schema: json!({"type": "object"}),
                 name: "list".to_string(),
                 output_schema: None,
                 title: None,
+                icons: None,
+                meta: None,
             },
         );
         tools.insert(
@@ -3020,14 +3032,12 @@ mod tests {
             Tool {
                 annotations: None,
                 description: None,
-                input_schema: ToolInputSchema {
-                    properties: None,
-                    required: None,
-                    r#type: "object".to_string(),
-                },
+                input_schema: json!({"type": "object"}),
                 name: "ping".to_string(),
                 output_schema: None,
                 title: None,
+                icons: None,
+                meta: None,
             },
         );
         tools.insert(
@@ -3035,14 +3045,12 @@ mod tests {
             Tool {
                 annotations: None,
                 description: None,
-                input_schema: ToolInputSchema {
-                    properties: None,
-                    required: None,
-                    r#type: "object".to_string(),
-                },
+                input_schema: json!({"type": "object"}),
                 name: "lookup".to_string(),
                 output_schema: None,
                 title: None,
+                icons: None,
+                meta: None,
             },
         );
 
@@ -3221,13 +3229,13 @@ mod tests {
         };
 
         let result = CallToolResult {
-            content: vec![ContentBlock::TextContent(TextContent {
-                annotations: None,
-                text: "Found styling guidance in styles.md".into(),
-                r#type: "text".into(),
+            content: vec![json!({
+                "type": "text",
+                "text": "Found styling guidance in styles.md"
             })],
             is_error: None,
             structured_content: None,
+            meta: None,
         };
 
         let mut cell = new_active_mcp_tool_call("call-2".into(), invocation, true);
@@ -3276,24 +3284,21 @@ mod tests {
 
         let result = CallToolResult {
             content: vec![
-                ContentBlock::TextContent(TextContent {
-                    annotations: None,
-                    text: "Found styling guidance in styles.md and additional notes in CONTRIBUTING.md.".into(),
-                    r#type: "text".into(),
+                json!({
+                    "type": "text",
+                    "text": "Found styling guidance in styles.md and additional notes in CONTRIBUTING.md."
                 }),
-                ContentBlock::ResourceLink(ResourceLink {
-                    annotations: None,
-                    description: Some("Link to styles documentation".into()),
-                    mime_type: None,
-                    name: "styles.md".into(),
-                    size: None,
-                    title: Some("Styles".into()),
-                    r#type: "resource_link".into(),
-                    uri: "file:///docs/styles.md".into(),
+                json!({
+                    "type": "resource_link",
+                    "description": "Link to styles documentation",
+                    "name": "styles.md",
+                    "title": "Styles",
+                    "uri": "file:///docs/styles.md"
                 }),
             ],
             is_error: None,
             structured_content: None,
+            meta: None,
         };
 
         let mut cell = new_active_mcp_tool_call("call-4".into(), invocation, true);
@@ -3319,13 +3324,13 @@ mod tests {
         };
 
         let result = CallToolResult {
-            content: vec![ContentBlock::TextContent(TextContent {
-                annotations: None,
-                text: "Line one of the response, which is quite long and needs wrapping.\nLine two continues the response with more detail.".into(),
-                r#type: "text".into(),
+            content: vec![json!({
+                "type": "text",
+                "text": "Line one of the response, which is quite long and needs wrapping.\nLine two continues the response with more detail."
             })],
             is_error: None,
             structured_content: None,
+            meta: None,
         };
 
         let mut cell = new_active_mcp_tool_call("call-5".into(), invocation, true);
@@ -3352,19 +3357,18 @@ mod tests {
 
         let result = CallToolResult {
             content: vec![
-                ContentBlock::TextContent(TextContent {
-                    annotations: None,
-                    text: "Latency summary: p50=120ms, p95=480ms.".into(),
-                    r#type: "text".into(),
+                json!({
+                    "type": "text",
+                    "text": "Latency summary: p50=120ms, p95=480ms."
                 }),
-                ContentBlock::TextContent(TextContent {
-                    annotations: None,
-                    text: "No anomalies detected.".into(),
-                    r#type: "text".into(),
+                json!({
+                    "type": "text",
+                    "text": "No anomalies detected."
                 }),
             ],
             is_error: None,
             structured_content: None,
+            meta: None,
         };
 
         let mut cell = new_active_mcp_tool_call("call-6".into(), invocation, true);

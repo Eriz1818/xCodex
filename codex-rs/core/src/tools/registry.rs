@@ -3,15 +3,20 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use crate::client_common::tools::ToolSpec;
+use crate::exec::SandboxType;
 use crate::function_tool::FunctionCallError;
 use crate::protocol::EventMsg;
 use crate::protocol::ReviewDecision;
+use crate::protocol::SandboxPolicy;
 use crate::protocol::WarningEvent;
+use crate::safety::get_platform_sandbox;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
 use crate::tools::context::ToolProvenance;
 use async_trait::async_trait;
+use codex_protocol::config_types::WindowsSandboxLevel;
+use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::models::FunctionCallOutputContentItem;
 use codex_protocol::models::ResponseInputItem;
 use codex_utils_readiness::Readiness;
@@ -83,22 +88,36 @@ impl ToolRegistry {
         let call_id_owned = invocation.call_id.clone();
         let session = invocation.session.clone();
         let turn = invocation.turn.clone();
-        let otel = invocation.turn.client.get_otel_manager();
+        let otel = invocation.turn.otel_manager.clone();
         let payload_for_response = invocation.payload.clone();
         let log_payload = payload_for_response.log_payload();
+        let metric_tags = [
+            (
+                "sandbox",
+                sandbox_tag(
+                    &invocation.turn.sandbox_policy,
+                    invocation.turn.windows_sandbox_level,
+                ),
+            ),
+            (
+                "sandbox_policy",
+                sandbox_policy_tag(&invocation.turn.sandbox_policy),
+            ),
+        ];
 
         let handler = match self.handler(tool_name.as_ref()) {
             Some(handler) => handler,
             None => {
                 let message =
                     unsupported_tool_call_message(&invocation.payload, tool_name.as_ref());
-                otel.tool_result(
+                otel.tool_result_with_tags(
                     tool_name.as_ref(),
                     &call_id_owned,
                     log_payload.as_ref(),
                     Duration::ZERO,
                     false,
                     &message,
+                    &metric_tags,
                 );
                 return Err(FunctionCallError::RespondToModel(message));
             }
@@ -106,13 +125,14 @@ impl ToolRegistry {
 
         if !handler.matches_kind(&invocation.payload) {
             let message = format!("tool {tool_name} invoked with incompatible payload");
-            otel.tool_result(
+            otel.tool_result_with_tags(
                 tool_name.as_ref(),
                 &call_id_owned,
                 log_payload.as_ref(),
                 Duration::ZERO,
                 false,
                 &message,
+                &metric_tags,
             );
             return Err(FunctionCallError::Fatal(message));
         }
@@ -120,10 +140,11 @@ impl ToolRegistry {
         let output_cell = tokio::sync::Mutex::new(None);
 
         let result = otel
-            .log_tool_result(
+            .log_tool_result_with_tags(
                 tool_name.as_ref(),
                 &call_id_owned,
                 log_payload.as_ref(),
+                &metric_tags,
                 || {
                     let handler = handler.clone();
                     let output_cell = &output_cell;
@@ -179,8 +200,7 @@ async fn enforce_sensitive_send_policy(
 ) -> ToolOutput {
     let output = match output {
         ToolOutput::Function {
-            content: _,
-            content_items: _,
+            body: _,
             success: _,
             provenance: ToolProvenance::Filesystem { path },
         } if turn.exclusion.layer_send_firewall_enabled()
@@ -201,8 +221,7 @@ async fn enforce_sensitive_send_policy(
                 );
             }
             ToolOutput::Function {
-                content: turn.sensitive_paths.format_denied_message(),
-                content_items: None,
+                body: FunctionCallOutputBody::Text(turn.sensitive_paths.format_denied_message()),
                 success: Some(false),
                 provenance: ToolProvenance::Filesystem { path },
             }
@@ -259,8 +278,7 @@ fn enforce_sensitive_content_gateway(
 
     match output {
         ToolOutput::Function {
-            content,
-            mut content_items,
+            body,
             mut success,
             provenance,
         } => {
@@ -289,81 +307,77 @@ fn enforce_sensitive_content_gateway(
                 max_bytes: turn.exclusion.log_redactions_max_bytes,
                 max_files: turn.exclusion.log_redactions_max_files,
             };
-            let original_content = content;
-            let (content, report) = gateway.scan_text(
-                &original_content,
-                &turn.sensitive_paths,
-                &session.content_gateway_cache,
-                epoch,
-            );
-            if should_log && (report.redacted || report.blocked) {
-                crate::exclusion_log::log_redaction_event(
-                    &log_context,
-                    &report,
-                    &original_content,
-                    &content,
-                );
-            }
-            if report.redacted || report.blocked {
-                let mut counters = turn
-                    .exclusion_counters
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner);
-                counters.record(
-                    crate::exclusion_counters::ExclusionLayer::Layer2OutputSanitization,
-                    source,
-                    tool_name,
-                    report.redacted,
-                    report.blocked,
-                );
-            }
 
-            if let Some(items) = &mut content_items {
-                for item in items.iter_mut() {
-                    if let FunctionCallOutputContentItem::InputText { text } = item {
-                        let original_text = text.clone();
-                        let (next, r) = gateway.scan_text(
-                            &original_text,
-                            &turn.sensitive_paths,
-                            &session.content_gateway_cache,
-                            epoch,
+            let record_report = |report: &crate::content_gateway::ScanReport| {
+                if report.redacted || report.blocked {
+                    let mut counters = turn
+                        .exclusion_counters
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner);
+                    counters.record(
+                        crate::exclusion_counters::ExclusionLayer::Layer2OutputSanitization,
+                        source,
+                        tool_name,
+                        report.redacted,
+                        report.blocked,
+                    );
+                }
+            };
+
+            let body = match body {
+                FunctionCallOutputBody::Text(content) => {
+                    let original_content = content;
+                    let (content, report) = gateway.scan_text(
+                        &original_content,
+                        &turn.sensitive_paths,
+                        &session.content_gateway_cache,
+                        epoch,
+                    );
+                    if should_log && (report.redacted || report.blocked) {
+                        crate::exclusion_log::log_redaction_event(
+                            &log_context,
+                            &report,
+                            &original_content,
+                            &content,
                         );
-                        *text = next;
-                        if should_log && (r.redacted || r.blocked) {
-                            crate::exclusion_log::log_redaction_event(
-                                &log_context,
-                                &r,
+                    }
+                    record_report(&report);
+                    if report.redacted {
+                        success = Some(false);
+                    }
+                    FunctionCallOutputBody::Text(content)
+                }
+                FunctionCallOutputBody::ContentItems(mut items) => {
+                    for item in &mut items {
+                        if let FunctionCallOutputContentItem::InputText { text } = item {
+                            let original_text = text.clone();
+                            let (next, report) = gateway.scan_text(
                                 &original_text,
-                                text.as_str(),
+                                &turn.sensitive_paths,
+                                &session.content_gateway_cache,
+                                epoch,
                             );
-                        }
-                        if r.redacted || r.blocked {
-                            let mut counters = turn
-                                .exclusion_counters
-                                .lock()
-                                .unwrap_or_else(std::sync::PoisonError::into_inner);
-                            counters.record(
-                                crate::exclusion_counters::ExclusionLayer::Layer2OutputSanitization,
-                                source,
-                                tool_name,
-                                r.redacted,
-                                r.blocked,
-                            );
-                        }
-                        if r.redacted {
-                            success = Some(false);
+                            *text = next;
+                            if should_log && (report.redacted || report.blocked) {
+                                crate::exclusion_log::log_redaction_event(
+                                    &log_context,
+                                    &report,
+                                    &original_text,
+                                    text.as_str(),
+                                );
+                            }
+                            record_report(&report);
+                            if report.redacted {
+                                success = Some(false);
+                            }
                         }
                     }
+                    FunctionCallOutputBody::ContentItems(items)
                 }
-            }
-
-            if report.redacted {
-                success = Some(false);
-            }
+            };
 
             ToolOutput::Function {
-                content,
-                content_items,
+                body,
                 success,
                 provenance,
             }
@@ -385,6 +399,29 @@ fn enforce_sensitive_content_gateway(
                 max_bytes: turn.exclusion.log_redactions_max_bytes,
                 max_files: turn.exclusion.log_redactions_max_files,
             };
+
+            fn scan_json_value(
+                value: &mut serde_json::Value,
+                scan_string: &mut impl FnMut(&mut String),
+            ) {
+                match value {
+                    serde_json::Value::String(s) => scan_string(s),
+                    serde_json::Value::Array(items) => {
+                        for item in items {
+                            scan_json_value(item, scan_string);
+                        }
+                    }
+                    serde_json::Value::Object(map) => {
+                        for value in map.values_mut() {
+                            scan_json_value(value, scan_string);
+                        }
+                    }
+                    serde_json::Value::Null
+                    | serde_json::Value::Bool(_)
+                    | serde_json::Value::Number(_) => {}
+                }
+            }
+
             let result = result.map(|mut ok| {
                 let mut scan_string = |s: &mut String| {
                     let original = s.clone();
@@ -409,42 +446,18 @@ fn enforce_sensitive_content_gateway(
                     }
                 };
 
-                for block in ok.content.iter_mut() {
-                    match block {
-                        mcp_types::ContentBlock::TextContent(text) => scan_string(&mut text.text),
-                        mcp_types::ContentBlock::ResourceLink(link) => {
-                            if let Some(desc) = &mut link.description {
-                                scan_string(desc);
-                            }
-                            if let Some(title) = &mut link.title {
-                                scan_string(title);
-                            }
-                            scan_string(&mut link.name);
-                            scan_string(&mut link.uri);
-                        }
-                        mcp_types::ContentBlock::EmbeddedResource(resource) => {
-                            match &mut resource.resource {
-                                mcp_types::EmbeddedResourceResource::TextResourceContents(text) => {
-                                    if let Some(mime) = &mut text.mime_type {
-                                        scan_string(mime);
-                                    }
-                                    scan_string(&mut text.text);
-                                    scan_string(&mut text.uri);
-                                }
-                                mcp_types::EmbeddedResourceResource::BlobResourceContents(blob) => {
-                                    if let Some(mime) = &mut blob.mime_type {
-                                        scan_string(mime);
-                                    }
-                                    scan_string(&mut blob.uri);
-                                }
-                            }
-                        }
-                        mcp_types::ContentBlock::ImageContent(_)
-                        | mcp_types::ContentBlock::AudioContent(_) => {}
-                    }
+                for block in &mut ok.content {
+                    scan_json_value(block, &mut scan_string);
+                }
+                if let Some(structured_content) = &mut ok.structured_content {
+                    scan_json_value(structured_content, &mut scan_string);
+                }
+                if let Some(meta) = &mut ok.meta {
+                    scan_json_value(meta, &mut scan_string);
                 }
                 ok
             });
+
             if report.redacted || report.blocked {
                 let mut counters = turn
                     .exclusion_counters
@@ -549,8 +562,7 @@ fn block_unattested_output(output: ToolOutput) -> ToolOutput {
     let message = "unattested tool output blocked by policy".to_string();
     match output {
         ToolOutput::Function { provenance, .. } => ToolOutput::Function {
-            content: message,
-            content_items: None,
+            body: FunctionCallOutputBody::Text(message),
             success: Some(false),
             provenance,
         },
@@ -569,8 +581,7 @@ mod tests {
 
     fn unattested_output() -> ToolOutput {
         ToolOutput::Function {
-            content: "payload".to_string(),
-            content_items: None,
+            body: FunctionCallOutputBody::Text("payload".to_string()),
             success: Some(true),
             provenance: ToolProvenance::Unattested {
                 origin_type: "mcp",
@@ -585,8 +596,7 @@ mod tests {
         assert_eq!(true, super::is_unattested_output(&output));
 
         let output = ToolOutput::Function {
-            content: "payload".to_string(),
-            content_items: None,
+            body: FunctionCallOutputBody::Text("payload".to_string()),
             success: Some(true),
             provenance: ToolProvenance::Filesystem {
                 path: std::path::PathBuf::from("/tmp/file"),
@@ -610,8 +620,7 @@ mod tests {
         let blocked = super::block_unattested_output(output);
         match blocked {
             ToolOutput::Function {
-                content,
-                content_items: None,
+                body: FunctionCallOutputBody::Text(content),
                 success: Some(false),
                 provenance:
                     ToolProvenance::Unattested {
@@ -662,8 +671,7 @@ mod tests {
         );
         match output {
             ToolOutput::Function {
-                content,
-                content_items: None,
+                body: FunctionCallOutputBody::Text(content),
                 success: Some(true),
                 provenance:
                     ToolProvenance::Unattested {
@@ -737,8 +745,7 @@ mod tests {
 
         match output {
             ToolOutput::Function {
-                content,
-                content_items: None,
+                body: FunctionCallOutputBody::Text(content),
                 success: Some(false),
                 provenance:
                     ToolProvenance::Unattested {
@@ -788,8 +795,7 @@ mod tests {
         );
         match output {
             ToolOutput::Function {
-                content,
-                content_items: None,
+                body: FunctionCallOutputBody::Text(content),
                 success: Some(true),
                 provenance:
                     ToolProvenance::Unattested {
@@ -885,5 +891,31 @@ fn unsupported_tool_call_message(payload: &ToolPayload, tool_name: &str) -> Stri
     match payload {
         ToolPayload::Custom { .. } => format!("unsupported custom tool call: {tool_name}"),
         _ => format!("unsupported call: {tool_name}"),
+    }
+}
+
+fn sandbox_tag(policy: &SandboxPolicy, windows_sandbox_level: WindowsSandboxLevel) -> &'static str {
+    if matches!(policy, SandboxPolicy::DangerFullAccess) {
+        return "none";
+    }
+    if matches!(policy, SandboxPolicy::ExternalSandbox { .. }) {
+        return "external";
+    }
+    if cfg!(target_os = "windows") && matches!(windows_sandbox_level, WindowsSandboxLevel::Elevated)
+    {
+        return "windows_elevated";
+    }
+
+    get_platform_sandbox(windows_sandbox_level != WindowsSandboxLevel::Disabled)
+        .map(SandboxType::as_metric_tag)
+        .unwrap_or("none")
+}
+
+fn sandbox_policy_tag(policy: &SandboxPolicy) -> &'static str {
+    match policy {
+        SandboxPolicy::ReadOnly => "read-only",
+        SandboxPolicy::WorkspaceWrite { .. } => "workspace-write",
+        SandboxPolicy::DangerFullAccess => "danger-full-access",
+        SandboxPolicy::ExternalSandbox { .. } => "external-sandbox",
     }
 }

@@ -2,6 +2,7 @@ use std::ffi::OsString;
 use std::io::ErrorKind;
 use std::path::Path;
 use std::path::PathBuf;
+use std::process::Stdio;
 use std::sync::Arc;
 use std::time::Duration;
 use std::time::SystemTime;
@@ -29,7 +30,7 @@ pub struct ShellSnapshot {
 }
 
 const SNAPSHOT_TIMEOUT: Duration = Duration::from_secs(10);
-const SNAPSHOT_RETENTION: Duration = Duration::from_secs(60 * 60 * 24 * 7); // 7 days retention.
+const SNAPSHOT_RETENTION: Duration = Duration::from_secs(60 * 60 * 24 * 3); // 3 days retention.
 const SNAPSHOT_DIR: &str = "shell_snapshots";
 const EXCLUDED_EXPORT_VARS: &[&str] = &["PWD", "OLDPWD"];
 
@@ -206,6 +207,7 @@ async fn run_script_with_timeout(
     for (key, value) in extra_env {
         handler.env(key, value);
     }
+    handler.stdin(Stdio::null());
     #[cfg(unix)]
     unsafe {
         handler.pre_exec(|| {
@@ -496,6 +498,62 @@ mod tests {
 
     use tempfile::tempdir;
 
+    #[cfg(unix)]
+    struct BlockingStdinPipe {
+        original: i32,
+        write_end: i32,
+    }
+
+    #[cfg(unix)]
+    impl BlockingStdinPipe {
+        fn install() -> Result<Self> {
+            let mut fds = [0i32; 2];
+            if unsafe { libc::pipe(fds.as_mut_ptr()) } == -1 {
+                return Err(std::io::Error::last_os_error()).context("create stdin pipe");
+            }
+
+            let original = unsafe { libc::dup(libc::STDIN_FILENO) };
+            if original == -1 {
+                let err = std::io::Error::last_os_error();
+                unsafe {
+                    libc::close(fds[0]);
+                    libc::close(fds[1]);
+                }
+                return Err(err).context("dup stdin");
+            }
+
+            if unsafe { libc::dup2(fds[0], libc::STDIN_FILENO) } == -1 {
+                let err = std::io::Error::last_os_error();
+                unsafe {
+                    libc::close(fds[0]);
+                    libc::close(fds[1]);
+                    libc::close(original);
+                }
+                return Err(err).context("replace stdin");
+            }
+
+            unsafe {
+                libc::close(fds[0]);
+            }
+
+            Ok(Self {
+                original,
+                write_end: fds[1],
+            })
+        }
+    }
+
+    #[cfg(unix)]
+    impl Drop for BlockingStdinPipe {
+        fn drop(&mut self) {
+            unsafe {
+                libc::dup2(self.original, libc::STDIN_FILENO);
+                libc::close(self.original);
+                libc::close(self.write_end);
+            }
+        }
+    }
+
     #[cfg(not(target_os = "windows"))]
     fn assert_posix_snapshot_sections(snapshot: &str) {
         assert!(snapshot.contains("# Snapshot file"));
@@ -587,6 +645,39 @@ mod tests {
         Ok(())
     }
 
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn snapshot_shell_does_not_inherit_stdin() -> Result<()> {
+        let _stdin_guard = BlockingStdinPipe::install()?;
+
+        let dir = tempdir()?;
+        let home = dir.path();
+        fs::write(home.join(".bashrc"), "read -r ignored\n").await?;
+
+        let shell = Shell {
+            shell_type: ShellType::Bash,
+            shell_path: PathBuf::from("/bin/bash"),
+            shell_snapshot: crate::shell::empty_shell_snapshot_receiver(),
+        };
+
+        let home_display = home.display();
+        let script = format!(
+            "HOME=\"{home_display}\"; export HOME; {}",
+            bash_snapshot_script()
+        );
+        let output =
+            run_script_with_timeout(&shell, &script, Duration::from_millis(500), true, &[])
+                .await
+                .context("run snapshot command")?;
+
+        assert!(
+            output.contains("# Snapshot file"),
+            "expected snapshot marker in output; output={output:?}"
+        );
+
+        Ok(())
+    }
+
     #[cfg(target_os = "linux")]
     #[tokio::test]
     async fn timed_out_snapshot_shell_is_terminated() -> Result<()> {
@@ -605,7 +696,7 @@ mod tests {
             shell_snapshot: crate::shell::empty_shell_snapshot_receiver(),
         };
 
-        let err = run_script_with_timeout(&shell, &script, Duration::from_secs(1), true)
+        let err = run_script_with_timeout(&shell, &script, Duration::from_secs(1), true, &[])
             .await
             .expect_err("snapshot shell should time out");
         assert!(

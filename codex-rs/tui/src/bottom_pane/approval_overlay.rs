@@ -26,11 +26,11 @@ use codex_core::protocol::ExecPolicyAmendment;
 use codex_core::protocol::FileChange;
 use codex_core::protocol::Op;
 use codex_core::protocol::ReviewDecision;
+use codex_protocol::mcp::RequestId;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyEventKind;
 use crossterm::event::KeyModifiers;
-use mcp_types::RequestId;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::Stylize;
@@ -749,20 +749,17 @@ mod tests {
         let mut theme = ThemeCatalog::built_in_default();
         theme.roles.transcript_bg = Some(ThemeColor::new("#1a1a1a"));
         theme.roles.composer_bg = Some(ThemeColor::new("#003355"));
+        let resolved_composer_bg = theme.resolve_composer_bg();
+        let resolved_transcript_bg = theme.resolve_transcript_bg();
+        assert_ne!(
+            resolved_composer_bg, resolved_transcript_bg,
+            "expected transcript and popup backgrounds to differ for the guardrail test"
+        );
         crate::theme::preview_definition(&theme);
 
         let expected_bg = user_message_style()
             .patch(crate::theme::composer_style())
             .bg;
-        let transcript_bg = crate::theme::transcript_style().bg;
-        assert!(
-            matches!((expected_bg, transcript_bg), (Some(_), Some(_))),
-            "expected explicit transcript + popup backgrounds for the guardrail test"
-        );
-        assert_ne!(
-            expected_bg, transcript_bg,
-            "expected transcript and popup backgrounds to differ for the guardrail test"
-        );
 
         let (tx, _rx) = unbounded_channel::<AppEvent>();
         let tx = AppEventSender::new(tx);

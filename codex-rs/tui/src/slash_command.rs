@@ -40,6 +40,8 @@ pub enum SlashCommand {
     StatusMenu,
     Worktree,
     Hooks,
+    DebugConfig,
+    Statusline,
     Mcp,
     Apps,
     Logout,
@@ -78,6 +80,8 @@ impl SlashCommand {
             SlashCommand::StatusMenu => "open the status/settings menu (alias)",
             SlashCommand::Worktree => "switch this session to a different git worktree",
             SlashCommand::Hooks => "learn how to automate xcodex with hooks",
+            SlashCommand::DebugConfig => "show config layers and requirement sources for debugging",
+            SlashCommand::Statusline => "configure which items appear in the status line",
             SlashCommand::Ps => "list background terminals",
             SlashCommand::PsKill => "terminate background terminals",
             SlashCommand::Model => "choose what model and reasoning effort to use",
@@ -103,6 +107,18 @@ impl SlashCommand {
         self.into()
     }
 
+    /// Whether this command supports inline args (for example `/review ...`).
+    pub fn supports_inline_args(self) -> bool {
+        matches!(
+            self,
+            SlashCommand::Review
+                | SlashCommand::Rename
+                | SlashCommand::Plan
+                | SlashCommand::Theme
+                | SlashCommand::Worktree
+        )
+    }
+
     /// Whether this command can be run while a task is in progress.
     pub fn available_during_task(self) -> bool {
         match self {
@@ -120,6 +136,7 @@ impl SlashCommand {
             | SlashCommand::ElevateSandbox
             | SlashCommand::Experimental
             | SlashCommand::Review
+            | SlashCommand::Plan
             | SlashCommand::Logout => false,
             SlashCommand::Diff
             | SlashCommand::Rename
@@ -132,6 +149,7 @@ impl SlashCommand {
             | SlashCommand::StatusMenu
             | SlashCommand::Worktree
             | SlashCommand::Hooks
+            | SlashCommand::DebugConfig
             | SlashCommand::Ps
             | SlashCommand::PsKill
             | SlashCommand::Mcp
@@ -141,9 +159,9 @@ impl SlashCommand {
             | SlashCommand::Exit => true,
             SlashCommand::Rollout => true,
             SlashCommand::TestApproval => true,
-            SlashCommand::Plan => true,
             SlashCommand::Collab => true,
             SlashCommand::Agent => true,
+            SlashCommand::Statusline => false,
         }
     }
 

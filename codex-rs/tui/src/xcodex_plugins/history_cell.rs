@@ -30,10 +30,11 @@ use codex_core::protocol::SessionConfiguredEvent;
 use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::Settings;
+use codex_protocol::mcp::Resource;
+use codex_protocol::mcp::ResourceTemplate;
+use codex_protocol::mcp::Tool;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
 use crossterm::event::KeyCode;
-use mcp_types::Resource;
-use mcp_types::ResourceTemplate;
 use ratatui::prelude::*;
 use ratatui::style::Styled;
 use ratatui::style::Stylize;
@@ -530,7 +531,7 @@ pub(crate) fn new_unified_exec_processes_output(
 /// Render MCP tools grouped by connection using the fully-qualified tool names.
 pub(crate) fn new_mcp_tools_output(
     config: &Config,
-    tools: HashMap<String, mcp_types::Tool>,
+    tools: HashMap<String, Tool>,
     resources: HashMap<String, Vec<Resource>>,
     resource_templates: HashMap<String, Vec<ResourceTemplate>>,
     auth_statuses: &HashMap<String, McpAuthStatus>,
@@ -966,10 +967,9 @@ impl XcodexSessionHeaderHistoryCell {
         }
         match self.collaboration_mode.mode {
             ModeKind::Plan => Some("Plan"),
-            ModeKind::Code => Some("Code"),
+            ModeKind::Default => Some("Code"),
             ModeKind::PairProgramming => Some("Pair Programming"),
             ModeKind::Execute => Some("Execute"),
-            ModeKind::Custom => None,
         }
     }
 
@@ -1339,7 +1339,7 @@ pub(crate) fn placeholder_session_header_cell(
         xtreme::xtreme_ui_enabled(config),
         false,
         CollaborationMode {
-            mode: ModeKind::Custom,
+            mode: ModeKind::Default,
             settings: Settings {
                 model: model.to_string(),
                 reasoning_effort: None,

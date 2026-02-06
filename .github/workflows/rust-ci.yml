@@ -63,7 +63,7 @@ jobs:
         with:
           components: rustfmt
       - name: cargo fmt
-        run: cargo fmt -- --check
+        run: cargo fmt -- --config imports_granularity=Item --check
       - name: Verify codegen for mcp-types
         run: ./mcp-types/check_lib_rs.py
       - name: Verify codegen for hooks schema/types
@@ -87,64 +87,6 @@ jobs:
             ../examples/hooks/xcodex_hooks_models.py \
             hooks-sdk/src/generated.rs \
             common/src/hooks_sdk_assets/go/hooksdk/types.go
-      - name: Verify codegen for hooks schema/types
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          cargo run -p codex-core --bin hooks_schema --features hooks-schema --quiet > ../docs/xcodex/hooks.schema.json
-          cargo run -p codex-core --bin hooks_typescript --features hooks-schema --quiet > common/src/hooks_sdk_assets/js/xcodex_hooks.d.ts
-          cargo run -p codex-core --bin hooks_python_types --features hooks-schema --quiet > common/src/hooks_sdk_assets/python/xcodex_hooks_types.py
-          cargo run -p codex-core --bin hooks_python_models --features hooks-schema --quiet > common/src/hooks_sdk_assets/python/xcodex_hooks_models.py
-          cargo run -p codex-core --bin hooks_python_models --features hooks-schema --quiet > ../examples/hooks/xcodex_hooks_models.py
-          cargo run -p codex-core --bin hooks_go_types --features hooks-schema --quiet > common/src/hooks_sdk_assets/go/hooksdk/types.go
-          cargo run -p codex-core --bin hooks_rust_sdk --features hooks-schema --quiet > hooks-sdk/src/generated.rs
-
-          git diff --exit-code -- \
-            ../docs/xcodex/hooks.schema.json \
-            common/src/hooks_sdk_assets/js/xcodex_hooks.d.ts \
-            common/src/hooks_sdk_assets/python/xcodex_hooks_types.py \
-            common/src/hooks_sdk_assets/python/xcodex_hooks_models.py \
-            ../examples/hooks/xcodex_hooks_models.py \
-            hooks-sdk/src/generated.rs \
-            common/src/hooks_sdk_assets/go/hooksdk/types.go
-
-
-  bazel_build:
-    name: Bazel build (cli)
-    runs-on: ubuntu-24.04
-    needs: changed
-    if: ${{ needs.changed.outputs.codex == 'true' || needs.changed.outputs.workflows == 'true' || github.event_name == 'push' }}
-    steps:
-      - uses: actions/checkout@v4
-
-      # Some builds rely on DotSlash being installed.
-      - uses: facebook/install-dotslash@v2
-
-      - name: Make DotSlash available in PATH
-        run: sudo cp "$(which dotslash)" /usr/local/bin
-
-      - name: Set Cargo version env (for Bazel)
-        shell: bash
-        run: |
-          set -euo pipefail
-          cargo_ver="$(grep -m1 '^version' codex-rs/Cargo.toml | sed -E 's/version *= *"([^"]+)".*/\1/')"
-          base_ver="${cargo_ver%%-*}"
-          IFS='.' read -r major minor patch <<<"$base_ver"
-
-          echo "CARGO_PKG_VERSION=$cargo_ver" >> "$GITHUB_ENV"
-          echo "CARGO_PKG_VERSION_MAJOR=$major" >> "$GITHUB_ENV"
-          echo "CARGO_PKG_VERSION_MINOR=$minor" >> "$GITHUB_ENV"
-          echo "CARGO_PKG_VERSION_PATCH=$patch" >> "$GITHUB_ENV"
-
-      - name: Set up Bazel
-        uses: bazelbuild/setup-bazelisk@v3
-
-      - name: bazel build //codex-rs/cli:codex (local)
-        shell: bash
-        run: |
-          set -euo pipefail
-          bazel build             --bes_backend=             --bes_results_url=             --remote_cache=             --remote_executor=             //codex-rs/cli:codex
 
   cargo_shear:
     name: cargo shear
@@ -528,6 +470,9 @@ jobs:
       USE_SCCACHE: ${{ startsWith(matrix.runner, 'windows') && 'false' || 'true' }}
       CARGO_INCREMENTAL: "0"
       SCCACHE_CACHE_SIZE: 10G
+      # Keep cargo-based CI independent of system bwrap build deps.
+      # The bwrap FFI path is validated in Bazel workflows.
+      CODEX_BWRAP_ENABLE_FFI: "0"
 
     strategy:
       fail-fast: false
@@ -908,6 +853,9 @@ jobs:
       USE_SCCACHE: ${{ startsWith(matrix.runner, 'windows') && 'false' || 'true' }}
       CARGO_INCREMENTAL: "0"
       SCCACHE_CACHE_SIZE: 10G
+      # Keep cargo-based CI independent of system bwrap build deps.
+      # The bwrap FFI path is validated in Bazel workflows.
+      CODEX_BWRAP_ENABLE_FFI: "0"
 
     strategy:
       fail-fast: false
@@ -942,8 +890,7 @@ jobs:
               labels: codex-windows-arm64
 
     steps:
-      - uses: actions/checkout@v4
-
+      - uses: actions/checkout@v6
       # Some integration tests rely on DotSlash being installed.
       # See https://github.com/openai/codex/pull/7617.
       - name: Install DotSlash

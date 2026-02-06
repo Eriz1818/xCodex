@@ -63,10 +63,12 @@ use codex_core::protocol::WarningEvent;
 use codex_core::windows_sandbox::WindowsSandboxLevelExt;
 use codex_protocol::ThreadId;
 use codex_protocol::account::PlanType;
+use codex_protocol::config_types::ModeKind;
 #[cfg(target_os = "windows")]
 use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::openai_models::ReasoningEffortPreset;
+use codex_protocol::openai_models::default_input_modalities;
 use codex_protocol::parse_command::ParsedCommand;
 use codex_protocol::plan_tool::PlanItemArg;
 use codex_protocol::plan_tool::StepStatus;
@@ -933,11 +935,10 @@ async fn mcp_tools_output_renders_startup_status_and_retry_hints() {
 #[tokio::test]
 async fn mcp_tools_output_renders_tools_resources_and_templates() {
     use codex_core::protocol::McpAuthStatus;
+    use codex_protocol::mcp::Resource;
+    use codex_protocol::mcp::ResourceTemplate;
+    use codex_protocol::mcp::Tool;
     use codex_protocol::protocol::McpListToolsResponseEvent;
-    use mcp_types::Resource;
-    use mcp_types::ResourceTemplate;
-    use mcp_types::Tool;
-    use mcp_types::ToolInputSchema;
 
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
 
@@ -972,14 +973,12 @@ async fn mcp_tools_output_renders_tools_resources_and_templates() {
         Tool {
             annotations: None,
             description: Some("list resources".to_string()),
-            input_schema: ToolInputSchema {
-                properties: None,
-                required: None,
-                r#type: "object".to_string(),
-            },
+            input_schema: serde_json::json!({"type": "object"}),
             name: "list".to_string(),
             output_schema: None,
             title: Some("List".to_string()),
+            icons: None,
+            meta: None,
         },
     )]);
 
@@ -994,6 +993,8 @@ async fn mcp_tools_output_renders_tools_resources_and_templates() {
                 size: None,
                 title: Some("Alpha resource".to_string()),
                 uri: "file:///alpha.txt".to_string(),
+                icons: None,
+                meta: None,
             },
             Resource {
                 annotations: None,
@@ -1003,6 +1004,8 @@ async fn mcp_tools_output_renders_tools_resources_and_templates() {
                 size: None,
                 title: None,
                 uri: "file:///other.txt".to_string(),
+                icons: None,
+                meta: None,
             },
         ],
     )]);
@@ -2464,6 +2467,7 @@ async fn interrupted_turn_error_message_snapshot() {
         id: "task-1".into(),
         msg: EventMsg::TurnStarted(TurnStartedEvent {
             model_context_window: None,
+            collaboration_mode_kind: ModeKind::Default,
         }),
     });
 
@@ -2636,6 +2640,7 @@ async fn model_picker_hides_show_in_picker_false_models_from_cache() {
         upgrade: None,
         show_in_picker,
         supported_in_api: true,
+        input_modalities: default_input_modalities(),
     };
 
     chat.open_model_popup_with_presets(vec![
@@ -2850,6 +2855,7 @@ async fn single_reasoning_option_skips_selection() {
         upgrade: None,
         show_in_picker: true,
         supported_in_api: true,
+        input_modalities: default_input_modalities(),
     };
     chat.open_reasoning_popup(preset);
 
@@ -3263,6 +3269,7 @@ async fn ui_snapshots_small_heights_task_running() {
         id: "task-1".into(),
         msg: EventMsg::TurnStarted(TurnStartedEvent {
             model_context_window: None,
+            collaboration_mode_kind: ModeKind::Default,
         }),
     });
     chat.handle_codex_event(Event {
@@ -3294,6 +3301,7 @@ async fn status_widget_and_approval_modal_snapshot() {
         id: "task-1".into(),
         msg: EventMsg::TurnStarted(TurnStartedEvent {
             model_context_window: None,
+            collaboration_mode_kind: ModeKind::Default,
         }),
     });
     // Provide a deterministic header for the status line.
@@ -3346,6 +3354,7 @@ async fn status_widget_active_snapshot() {
         id: "task-1".into(),
         msg: EventMsg::TurnStarted(TurnStartedEvent {
             model_context_window: None,
+            collaboration_mode_kind: ModeKind::Default,
         }),
     });
     // Provide a deterministic header via a bold reasoning chunk.
@@ -3395,6 +3404,7 @@ async fn mcp_startup_complete_does_not_clear_running_task() {
         id: "task-1".into(),
         msg: EventMsg::TurnStarted(TurnStartedEvent {
             model_context_window: None,
+            collaboration_mode_kind: ModeKind::Default,
         }),
     });
 
@@ -3949,6 +3959,7 @@ async fn stream_recovery_restores_previous_status_header() {
         id: "task".into(),
         msg: EventMsg::TurnStarted(TurnStartedEvent {
             model_context_window: None,
+            collaboration_mode_kind: ModeKind::Default,
         }),
     });
     drain_insert_history(&mut rx);
@@ -3991,6 +4002,7 @@ async fn multiple_agent_messages_in_single_turn_emit_multiple_headers() {
         id: "s1".into(),
         msg: EventMsg::TurnStarted(TurnStartedEvent {
             model_context_window: None,
+            collaboration_mode_kind: ModeKind::Default,
         }),
     });
 
@@ -4185,6 +4197,7 @@ async fn chatwidget_exec_and_status_layout_vt100_snapshot() {
         id: "t1".into(),
         msg: EventMsg::TurnStarted(TurnStartedEvent {
             model_context_window: None,
+            collaboration_mode_kind: ModeKind::Default,
         }),
     });
     chat.handle_codex_event(Event {
@@ -4229,6 +4242,7 @@ async fn chatwidget_markdown_code_blocks_vt100_snapshot() {
         id: "t1".into(),
         msg: EventMsg::TurnStarted(TurnStartedEvent {
             model_context_window: None,
+            collaboration_mode_kind: ModeKind::Default,
         }),
     });
     // Build a vt100 visual from the history insertions only (no UI overlay)
@@ -4318,6 +4332,7 @@ async fn chatwidget_tall() {
         id: "t1".into(),
         msg: EventMsg::TurnStarted(TurnStartedEvent {
             model_context_window: None,
+            collaboration_mode_kind: ModeKind::Default,
         }),
     });
     for i in 0..30 {

@@ -1,8 +1,8 @@
 [package]
-name = "codex-app-server"
-version.workspace = true
 edition.workspace = true
 license.workspace = true
+name = "codex-app-server"
+version.workspace = true
 
 [[bin]]
 name = "codex-app-server"
@@ -18,26 +18,27 @@ workspace = true
 [dependencies]
 anyhow = { workspace = true }
 async-trait = { workspace = true }
+chrono = { workspace = true }
+clap = { workspace = true, features = ["derive"] }
+codex-app-server-protocol = { workspace = true }
 codex-arg0 = { workspace = true }
+codex-backend-client = { workspace = true }
+codex-chatgpt = { workspace = true }
+codex-cloud-requirements = { workspace = true }
 codex-common = { workspace = true, features = ["cli"] }
 codex-core = { workspace = true }
-codex-backend-client = { workspace = true }
+codex-feedback = { workspace = true }
 codex-file-search = { workspace = true }
-codex-chatgpt = { workspace = true }
 codex-login = { workspace = true }
 codex-protocol = { workspace = true }
-codex-app-server-protocol = { workspace = true }
-codex-feedback = { workspace = true }
 codex-rmcp-client = { workspace = true }
 codex-utils-absolute-path = { workspace = true }
 codex-utils-json-to-toml = { workspace = true }
-chrono = { workspace = true }
+futures = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
-mcp-types = { workspace = true }
 tempfile = { workspace = true }
 time = { workspace = true }
-toml = { workspace = true }
 tokio = { workspace = true, features = [
     "io-std",
     "macros",
@@ -45,6 +46,8 @@ tokio = { workspace = true, features = [
     "rt-multi-thread",
     "signal",
 ] }
+tokio-tungstenite = { workspace = true }
+toml = { workspace = true }
 tracing = { workspace = true, features = ["log"] }
 tracing-subscriber = { workspace = true, features = ["env-filter", "fmt"] }
 uuid = { workspace = true, features = ["serde", "v7"] }
@@ -58,13 +61,15 @@ axum = { workspace = true, default-features = false, features = [
 ] }
 base64 = { workspace = true }
 codex-execpolicy = { workspace = true }
+codex-utils-cargo-bin = { workspace = true }
 core_test_support = { workspace = true }
-mcp-types = { workspace = true }
+os_info = { workspace = true }
 pretty_assertions = { workspace = true }
 rmcp = { workspace = true, default-features = false, features = [
     "server",
     "transport-streamable-http-server",
 ] }
 serial_test = { workspace = true }
-wiremock = { workspace = true }
 shlex = { workspace = true }
+tokio-tungstenite = { workspace = true }
+wiremock = { workspace = true }

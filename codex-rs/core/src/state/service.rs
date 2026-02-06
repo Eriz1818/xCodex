@@ -3,16 +3,18 @@ use std::sync::Arc;
 use crate::AuthManager;
 use crate::RolloutRecorder;
 use crate::agent::AgentControl;
+use crate::analytics_client::AnalyticsEventsClient;
+use crate::client::ModelClient;
 use crate::exec_policy::ExecPolicyManager;
-use crate::hooks::UserHooks;
+use crate::file_watcher::FileWatcher;
+use crate::hooks::Hooks;
 use crate::mcp_connection_manager::McpConnectionManager;
 use crate::models_manager::manager::ModelsManager;
 use crate::skills::SkillsManager;
 use crate::state_db::StateDbHandle;
 use crate::tools::sandboxing::ApprovalStore;
-use crate::transport_manager::TransportManager;
 use crate::unified_exec::UnifiedExecProcessManager;
-use crate::user_notification::UserNotifier;
+use crate::xcodex::hooks::UserHooks;
 use codex_otel::OtelManager;
 use tokio::sync::Mutex;
 use tokio::sync::RwLock;
@@ -23,7 +25,8 @@ pub(crate) struct SessionServices {
     pub(crate) mcp_startup_cancellation_token: Mutex<CancellationToken>,
     pub(crate) user_hooks: UserHooks,
     pub(crate) unified_exec_manager: UnifiedExecProcessManager,
-    pub(crate) notifier: UserNotifier,
+    pub(crate) analytics_events_client: AnalyticsEventsClient,
+    pub(crate) hooks: Hooks,
     pub(crate) rollout: Mutex<Option<RolloutRecorder>>,
     pub(crate) user_shell: Arc<crate::shell::Shell>,
     pub(crate) show_raw_agent_reasoning: bool,
@@ -33,7 +36,9 @@ pub(crate) struct SessionServices {
     pub(crate) otel_manager: OtelManager,
     pub(crate) tool_approvals: Mutex<ApprovalStore>,
     pub(crate) skills_manager: Arc<SkillsManager>,
+    pub(crate) file_watcher: Arc<FileWatcher>,
     pub(crate) agent_control: AgentControl,
     pub(crate) state_db: Option<StateDbHandle>,
-    pub(crate) transport_manager: TransportManager,
+    /// Session-scoped model client shared across turns.
+    pub(crate) model_client: ModelClient,
 }

@@ -1,8 +1,8 @@
 [package]
-name = "mcp_test_support"
-version.workspace = true
 edition.workspace = true
 license.workspace = true
+name = "mcp_test_support"
+version.workspace = true
 
 [lib]
 path = "lib.rs"
@@ -12,10 +12,14 @@ anyhow = { workspace = true }
 codex-core = { workspace = true }
 codex-mcp-server = { workspace = true }
 codex-utils-cargo-bin = { workspace = true }
+core_test_support = { path = "../../../core/tests/common" }
 mcp-types = { workspace = true }
+os_info = { workspace = true }
 pretty_assertions = { workspace = true }
+rmcp = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+shlex = { workspace = true }
 tokio = { workspace = true, features = [
     "io-std",
     "macros",
@@ -23,5 +27,3 @@ tokio = { workspace = true, features = [
     "rt-multi-thread",
 ] }
 wiremock = { workspace = true }
-core_test_support = { path = "../../../core/tests/common" }
-shlex = { workspace = true }

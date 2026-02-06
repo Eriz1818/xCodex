@@ -5,6 +5,7 @@
 // the TUI or the tracing stack).
 #![deny(clippy::print_stdout, clippy::print_stderr)]
 
+mod analytics_client;
 pub mod api_bridge;
 mod apply_patch;
 pub mod auth;
@@ -36,6 +37,7 @@ pub mod exec;
 pub mod exec_env;
 mod exec_policy;
 pub mod features;
+mod file_watcher;
 mod flags;
 pub mod git_info;
 pub mod hooks;
@@ -45,7 +47,6 @@ pub mod landlock;
 pub mod mcp;
 mod mcp_connection_manager;
 pub mod models_manager;
-mod transport_manager;
 pub mod xcodex;
 pub use mcp_connection_manager::MCP_SANDBOX_STATE_CAPABILITY;
 pub use mcp_connection_manager::MCP_SANDBOX_STATE_METHOD;
@@ -56,23 +57,25 @@ mod message_history;
 mod model_provider_info;
 pub mod parse_command;
 pub mod path_utils;
+pub mod personality_migration;
 pub mod powershell;
+mod proposed_plan_parser;
 pub mod sandboxing;
 pub(crate) mod sensitive_paths;
 mod session_prefix;
 mod stream_events_utils;
+mod tagged_block_parser;
 mod text_encoding;
 pub mod themes;
 pub mod token_data;
 mod truncate;
 mod unified_exec;
 pub mod windows_sandbox;
-pub use model_provider_info::CHAT_WIRE_API_DEPRECATION_SUMMARY;
+pub use client::X_RESPONSESAPI_INCLUDE_TIMING_METRICS_HEADER;
 pub use model_provider_info::DEFAULT_LMSTUDIO_PORT;
 pub use model_provider_info::DEFAULT_OLLAMA_PORT;
 pub use model_provider_info::LMSTUDIO_OSS_PROVIDER_ID;
 pub use model_provider_info::ModelProviderInfo;
-pub use model_provider_info::OLLAMA_CHAT_PROVIDER_ID;
 pub use model_provider_info::OLLAMA_OSS_PROVIDER_ID;
 pub use model_provider_info::WireApi;
 pub use model_provider_info::built_in_model_providers;
@@ -107,6 +110,7 @@ pub mod state_db;
 pub mod terminal;
 mod tools;
 pub mod turn_diff_tracker;
+mod turn_metadata;
 mod user_notification;
 pub use rollout::ARCHIVED_SESSIONS_SUBDIR;
 pub use rollout::INTERACTIVE_SESSION_SOURCES;
@@ -117,6 +121,7 @@ pub use rollout::SessionMeta;
 pub use rollout::find_archived_thread_path_by_id_str;
 #[deprecated(note = "use find_thread_path_by_id_str")]
 pub use rollout::find_conversation_path_by_id_str;
+pub use rollout::find_thread_name_by_id;
 pub use rollout::find_thread_path_by_id_str;
 pub use rollout::find_thread_path_by_name_str;
 pub use rollout::list::Cursor;
@@ -127,7 +132,7 @@ pub use rollout::list::parse_cursor;
 pub use rollout::list::read_head_for_summary;
 pub use rollout::list::read_session_meta_line;
 pub use rollout::rollout_date_parts;
-pub use transport_manager::TransportManager;
+pub use rollout::session_index::find_thread_names_by_ids;
 mod function_tool;
 pub mod prefs;
 mod state;
@@ -136,18 +141,20 @@ mod user_shell_command;
 pub mod util;
 
 pub use apply_patch::CODEX_APPLY_PATCH_ARG1;
-pub use client::WEB_SEARCH_ELIGIBLE_HEADER;
+pub use client::X_CODEX_TURN_METADATA_HEADER;
 pub use command_safety::is_dangerous_command;
 pub use command_safety::is_safe_command;
 pub use exec_policy::ExecPolicyError;
 pub use exec_policy::check_execpolicy_for_warnings;
 pub use exec_policy::load_exec_policy;
+pub use file_watcher::FileWatcherEvent;
 pub use safety::get_platform_sandbox;
 #[cfg(target_os = "windows")]
 pub use safety::set_windows_elevated_sandbox_enabled;
 #[cfg(target_os = "windows")]
 pub use safety::set_windows_sandbox_enabled;
 pub use tools::spec::parse_tool_input_schema;
+pub use turn_metadata::build_turn_metadata_header;
 // Re-export the protocol types from the standalone `codex-protocol` crate so existing
 // `codex_core::protocol::...` references continue to work across the workspace.
 pub use codex_protocol::protocol;
@@ -169,4 +176,5 @@ pub use codex_protocol::models::ResponseItem;
 pub use compact::content_items_to_text;
 pub use event_mapping::parse_turn_item;
 pub mod compact;
+pub mod memory_trace;
 pub mod otel_init;

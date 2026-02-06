@@ -588,7 +588,7 @@ impl ThemeSelectorOverlay {
         session_help_lines.extend(command_lines);
 
         let collaboration_mode = codex_protocol::config_types::CollaborationMode {
-            mode: codex_protocol::config_types::ModeKind::Custom,
+            mode: codex_protocol::config_types::ModeKind::Default,
             settings: codex_protocol::config_types::Settings {
                 model: "gpt-5.2 medium".to_string(),
                 reasoning_effort: None,
@@ -708,16 +708,14 @@ impl ThemeSelectorOverlay {
             );
             let image_cell = tool_call.complete(
                 Duration::from_millis(312),
-                Ok(mcp_types::CallToolResult {
-                    content: vec![mcp_types::ContentBlock::TextContent(
-                        mcp_types::TextContent {
-                            annotations: None,
-                            text: "Found 1 file: README.md".to_string(),
-                            r#type: "text".to_string(),
-                        },
-                    )],
+                Ok(codex_protocol::mcp::CallToolResult {
+                    content: vec![serde_json::json!({
+                        "type": "text",
+                        "text": "Found 1 file: README.md"
+                    })],
                     is_error: Some(false),
                     structured_content: None,
+                    meta: None,
                 }),
             );
             lines.extend(tool_call.display_lines(area.width));
