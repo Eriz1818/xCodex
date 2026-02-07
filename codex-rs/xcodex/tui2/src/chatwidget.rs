@@ -750,6 +750,9 @@ impl ChatWidget {
         self.flush_answer_stream_with_separator();
         self.last_turn_completion_label =
             xcodex_plugins::ramps::completion_label(&self.ramp_status);
+        if self.maybe_insert_final_message_separator() {
+            self.request_redraw();
+        }
         // Mark task stopped and request redraw now that all content is in history.
         self.agent_turn_running = false;
         self.update_task_running_state();
@@ -1406,7 +1409,7 @@ impl ChatWidget {
     #[inline]
     fn handle_streaming_delta(&mut self, delta: String) {
         // Before streaming agent content, flush any active exec cell group.
-        let mut needs_redraw = self.active_cell.is_some();
+        let needs_redraw = self.active_cell.is_some();
         self.flush_active_cell();
 
         if self.ramp_status.stage() == crate::ramps::RampStage::Waiting
@@ -1420,11 +1423,6 @@ impl ChatWidget {
         }
 
         if self.stream_controller.is_none() {
-            // If the previous turn inserted non-stream history (exec output, patch status, MCP
-            // calls), render a separator before starting the next streamed assistant message.
-            if self.maybe_insert_final_message_separator() {
-                needs_redraw = true;
-            }
             // Streaming must not capture the current viewport width: width-derived wraps are
             // applied later, at render time, so the transcript can reflow on resize.
             self.stream_controller = Some(StreamController::new());

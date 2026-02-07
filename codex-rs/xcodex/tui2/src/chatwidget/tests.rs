@@ -2000,6 +2000,100 @@ async fn exec_end_without_begin_uses_event_command() {
 }
 
 #[tokio::test]
+async fn final_message_separator_is_emitted_only_on_turn_complete() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.handle_codex_event(Event {
+        id: "turn-start".to_string(),
+        msg: EventMsg::TurnStarted(TurnStartedEvent {
+            model_context_window: None,
+            collaboration_mode_kind: ModeKind::Default,
+        }),
+    });
+
+    let command = vec![
+        "bash".to_string(),
+        "-lc".to_string(),
+        "echo orphaned".to_string(),
+    ];
+    let parsed_cmd = codex_core::parse_command::parse_command(&command);
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    chat.handle_codex_event(Event {
+        id: "call-orphan-sep".to_string(),
+        msg: EventMsg::ExecCommandEnd(ExecCommandEndEvent {
+            call_id: "call-orphan-sep".to_string(),
+            process_id: None,
+            turn_id: "turn-1".to_string(),
+            command,
+            cwd,
+            parsed_cmd,
+            source: ExecCommandSource::Agent,
+            interaction_input: None,
+            stdout: "done".to_string(),
+            stderr: String::new(),
+            aggregated_output: "done".to_string(),
+            exit_code: 0,
+            duration: std::time::Duration::from_millis(5),
+            formatted_output: "done".to_string(),
+        }),
+    });
+
+    let cells = drain_insert_history(&mut rx);
+    assert_eq!(cells.len(), 1, "expected orphaned exec cell to flush");
+
+    chat.handle_codex_event(Event {
+        id: "agent-delta".to_string(),
+        msg: EventMsg::AgentMessageDelta(AgentMessageDeltaEvent {
+            delta: "hello".to_string(),
+        }),
+    });
+    assert!(
+        drain_insert_history(&mut rx).is_empty(),
+        "separator should not be emitted while the turn is still running"
+    );
+
+    chat.handle_codex_event(Event {
+        id: "agent-final".to_string(),
+        msg: EventMsg::AgentMessage(AgentMessageEvent {
+            message: "hello".to_string(),
+        }),
+    });
+    let cells = drain_insert_history(&mut rx);
+    assert_eq!(
+        cells.len(),
+        1,
+        "expected only the assistant message before turn completion"
+    );
+    let msg = lines_to_single_string(&cells[0]);
+    assert!(
+        msg.contains("hello"),
+        "expected agent message to render, got: {msg:?}"
+    );
+    assert!(
+        !msg.trim_start().starts_with('─'),
+        "unexpected separator before turn completion: {msg:?}"
+    );
+
+    chat.handle_codex_event(Event {
+        id: "turn-complete".to_string(),
+        msg: EventMsg::TurnComplete(TurnCompleteEvent {
+            last_agent_message: None,
+        }),
+    });
+
+    let cells = drain_insert_history(&mut rx);
+    assert_eq!(
+        cells.len(),
+        1,
+        "expected separator to be emitted exactly when the turn completes"
+    );
+    let separator = lines_to_single_string(&cells[0]);
+    assert!(
+        separator.trim_start().starts_with('─'),
+        "expected separator cell on turn completion, got: {separator:?}"
+    );
+}
+
+#[tokio::test]
 async fn exec_history_shows_unified_exec_startup_commands() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
 
