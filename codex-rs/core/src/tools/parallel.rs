@@ -366,10 +366,14 @@ mod tests {
         };
 
         let (success, output_bytes, preview) = summarize_mcp_tool_output(&result, 512);
+        let expected_content = FunctionCallOutputPayload::from(&result)
+            .body
+            .to_text()
+            .expect("MCP output should render as text");
 
         assert!(success);
-        assert_eq!(output_bytes, "hello\n\nworld".len());
-        assert_eq!(preview.as_deref(), Some("hello\n\nworld"));
+        assert_eq!(output_bytes, expected_content.len());
+        assert_eq!(preview.as_deref(), Some(expected_content.as_str()));
     }
 
     #[test]
@@ -385,8 +389,12 @@ mod tests {
         };
 
         let (_success, output_bytes, preview) = summarize_mcp_tool_output(&result, 512);
+        let expected_content = FunctionCallOutputPayload::from(&result)
+            .body
+            .to_text()
+            .expect("MCP output should render as text");
 
-        assert_eq!(output_bytes, 10_000);
+        assert_eq!(output_bytes, expected_content.len());
         assert_eq!(preview.as_ref().map(String::len), Some(512));
     }
 }

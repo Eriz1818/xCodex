@@ -1,4 +1,6 @@
 use crate::auth::AuthProvider;
+use crate::endpoint::client_version::append_client_version_query;
+use crate::endpoint::client_version::set_upstream_version_header_for_openai_or_chatgpt;
 use crate::endpoint::session::EndpointSession;
 use crate::error::ApiError;
 use crate::provider::Provider;
@@ -32,11 +34,6 @@ impl<T: HttpTransport, A: AuthProvider> ModelsClient<T, A> {
         "models"
     }
 
-    fn append_client_version_query(req: &mut codex_client::Request, client_version: &str) {
-        let separator = if req.url.contains('?') { '&' } else { '?' };
-        req.url = format!("{}{}client_version={client_version}", req.url, separator);
-    }
-
     pub async fn list_models(
         &self,
         client_version: &str,
@@ -45,7 +42,11 @@ impl<T: HttpTransport, A: AuthProvider> ModelsClient<T, A> {
         let resp = self
             .session
             .execute_with(Method::GET, Self::path(), extra_headers, None, |req| {
-                Self::append_client_version_query(req, client_version);
+                append_client_version_query(req, client_version);
+                set_upstream_version_header_for_openai_or_chatgpt(
+                    req,
+                    &self.session.provider().base_url,
+                );
             })
             .await?;
 
@@ -183,6 +184,47 @@ mod tests {
             url,
             "https://example.com/api/codex/models?client_version=0.99.0"
         );
+        let version_header = transport
+            .last_request
+            .lock()
+            .unwrap()
+            .as_ref()
+            .and_then(|request| request.headers.get("version"))
+            .and_then(|value| value.to_str().ok())
+            .map(ToString::to_string);
+        assert_eq!(version_header, None);
+    }
+
+    #[tokio::test]
+    async fn pins_version_header_for_chatgpt_backend() {
+        let response = ModelsResponse { models: Vec::new() };
+
+        let transport = CapturingTransport {
+            last_request: Arc::new(Mutex::new(None)),
+            body: Arc::new(response),
+            etag: None,
+        };
+
+        let client = ModelsClient::new(
+            transport.clone(),
+            provider("https://chatgpt.com/backend-api/codex"),
+            DummyAuth,
+        );
+
+        let _ = client
+            .list_models("0.98.0", HeaderMap::new())
+            .await
+            .expect("request should succeed");
+
+        let version_header = transport
+            .last_request
+            .lock()
+            .unwrap()
+            .as_ref()
+            .and_then(|request| request.headers.get("version"))
+            .and_then(|value| value.to_str().ok())
+            .map(ToString::to_string);
+        assert_eq!(version_header, Some("0.98.0".to_string()));
     }
 
     #[tokio::test]

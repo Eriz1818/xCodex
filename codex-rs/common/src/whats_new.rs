@@ -41,15 +41,16 @@ mod tests {
 
     #[test]
     fn extracts_bullets_for_matching_version() {
-        let bullets = whats_new_bullets_for_version("0.3.5").expect("expected bullets");
+        let bullets = whats_new_bullets_for_version("0.3.6").expect("expected bullets");
         assert_eq!(
             bullets,
             vec![
-                "Syntax highlighting for: Bash (bash/sh/zsh), C, C++, CSS, Go, HTML, Java, JavaScript, JSON, Python, Ruby, Rust, TypeScript, YAML (see `docs/xcodex/themes.md`)".to_string(),
-                "Resume/startup responsiveness fixes for faster session loading".to_string(),
-                "Lazy MCP loading to avoid pulling servers until needed (see `docs/xcodex/lazy-mcp-loading.md`)".to_string(),
-                "Internal code restructure for stability and maintainability".to_string(),
-                "Read more: docs/xcodex/releases/0.3.5.md".to_string(),
+                "New `/exclusion` command for managing exclusions directly from the TUI."
+                    .to_string(),
+                "Fixed theme-related transcript rendering gaps.".to_string(),
+                "OpenAI `gpt-5.3-codex` is now available in xcodex.".to_string(),
+                "Upstream sync with additional stability and infrastructure fixes across core, TUI, and app-server.".to_string(),
+                "Read more: docs/xcodex/releases/0.3.6.md".to_string(),
             ]
         );
     }

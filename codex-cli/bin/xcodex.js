@@ -11,6 +11,8 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const { platform, arch } = process;
+const vendorRoot = path.join(__dirname, "..", "vendor");
+const xcodexBinaryName = process.platform === "win32" ? "xcodex.exe" : "xcodex";
 
 let targetTriple = null;
 switch (platform) {
@@ -59,10 +61,24 @@ if (!targetTriple) {
   throw new Error(`Unsupported platform: ${platform} (${arch})`);
 }
 
-const vendorRoot = path.join(__dirname, "..", "vendor");
-const archRoot = path.join(vendorRoot, targetTriple);
-const xcodexBinaryName = process.platform === "win32" ? "xcodex.exe" : "xcodex";
-const binaryPath = path.join(archRoot, "xcodex", xcodexBinaryName);
+let archRoot = path.join(vendorRoot, targetTriple);
+let binaryPath = path.join(archRoot, "xcodex", xcodexBinaryName);
+if ((platform === "linux" || platform === "android") && !existsSync(binaryPath)) {
+  const gnuFallbackByArch = {
+    x64: "x86_64-unknown-linux-gnu",
+    arm64: "aarch64-unknown-linux-gnu",
+  };
+  const fallbackTarget = gnuFallbackByArch[arch];
+  if (fallbackTarget) {
+    const fallbackRoot = path.join(vendorRoot, fallbackTarget);
+    const fallbackPath = path.join(fallbackRoot, "xcodex", xcodexBinaryName);
+    if (existsSync(fallbackPath)) {
+      targetTriple = fallbackTarget;
+      archRoot = fallbackRoot;
+      binaryPath = fallbackPath;
+    }
+  }
+}
 
 // Use an asynchronous spawn instead of spawnSync so that Node is able to
 // respond to signals (e.g. Ctrl-C / SIGINT) while the native binary is

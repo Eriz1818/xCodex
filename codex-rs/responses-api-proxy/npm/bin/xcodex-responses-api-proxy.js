@@ -2,6 +2,7 @@
 // Entry point for the xCodex responses API proxy binary.
 
 import { spawn } from "node:child_process";
+import { existsSync } from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
 
@@ -49,13 +50,27 @@ if (!targetTriple) {
 }
 
 const vendorRoot = path.join(__dirname, "..", "vendor");
-const archRoot = path.join(vendorRoot, targetTriple);
 const binaryBaseName = "xcodex-responses-api-proxy";
-const binaryPath = path.join(
-  archRoot,
-  binaryBaseName,
-  process.platform === "win32" ? `${binaryBaseName}.exe` : binaryBaseName,
-);
+const binaryName =
+  process.platform === "win32" ? `${binaryBaseName}.exe` : binaryBaseName;
+
+let binaryPath = path.join(vendorRoot, targetTriple, binaryBaseName, binaryName);
+if (
+  (process.platform === "linux" || process.platform === "android") &&
+  !existsSync(binaryPath)
+) {
+  const gnuFallbackByArch = {
+    x64: "x86_64-unknown-linux-gnu",
+    arm64: "aarch64-unknown-linux-gnu",
+  };
+  const fallbackTarget = gnuFallbackByArch[process.arch];
+  if (fallbackTarget) {
+    const fallbackPath = path.join(vendorRoot, fallbackTarget, binaryBaseName, binaryName);
+    if (existsSync(fallbackPath)) {
+      binaryPath = fallbackPath;
+    }
+  }
+}
 
 const child = spawn(binaryPath, process.argv.slice(2), {
   stdio: "inherit",

@@ -118,9 +118,13 @@ impl AuthProvider for StaticAuth {
 }
 
 fn provider(name: &str) -> Provider {
+    provider_with_base_url(name, "https://example.com/v1")
+}
+
+fn provider_with_base_url(name: &str, base_url: &str) -> Provider {
     Provider {
         name: name.to_string(),
-        base_url: "https://example.com/v1".to_string(),
+        base_url: base_url.to_string(),
         query_params: None,
         headers: HeaderMap::new(),
         retry: codex_api::provider::RetryConfig {
@@ -205,6 +209,90 @@ async fn responses_client_uses_responses_path() -> Result<()> {
 
     let requests = state.take_stream_requests();
     assert_path_ends_with(&requests, "/responses");
+    Ok(())
+}
+
+#[tokio::test]
+async fn responses_client_pins_client_version_for_chatgpt_backend() -> Result<()> {
+    let state = RecordingState::default();
+    let transport = RecordingTransport::new(state.clone());
+    let client = ResponsesClient::new(
+        transport,
+        provider_with_base_url("chatgpt", "https://chatgpt.com/backend-api/codex"),
+        NoAuth,
+    );
+
+    let body = serde_json::json!({ "echo": true });
+    let _stream = client
+        .stream(body, HeaderMap::new(), Compression::None, None)
+        .await?;
+
+    let requests = state.take_stream_requests();
+    assert_eq!(requests.len(), 1);
+    assert_eq!(
+        requests[0].url,
+        "https://chatgpt.com/backend-api/codex/responses?client_version=0.98.0"
+    );
+    assert_eq!(
+        requests[0]
+            .headers
+            .get("version")
+            .and_then(|value| value.to_str().ok()),
+        Some("0.98.0")
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn responses_client_pins_client_version_for_openai_backend() -> Result<()> {
+    let state = RecordingState::default();
+    let transport = RecordingTransport::new(state.clone());
+    let client = ResponsesClient::new(
+        transport,
+        provider_with_base_url("openai", "https://api.openai.com/v1"),
+        NoAuth,
+    );
+
+    let body = serde_json::json!({ "echo": true });
+    let _stream = client
+        .stream(body, HeaderMap::new(), Compression::None, None)
+        .await?;
+
+    let requests = state.take_stream_requests();
+    assert_eq!(requests.len(), 1);
+    assert_eq!(
+        requests[0].url,
+        "https://api.openai.com/v1/responses?client_version=0.98.0"
+    );
+    assert_eq!(
+        requests[0]
+            .headers
+            .get("version")
+            .and_then(|value| value.to_str().ok()),
+        Some("0.98.0")
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn responses_client_does_not_pin_client_version_for_custom_backend() -> Result<()> {
+    let state = RecordingState::default();
+    let transport = RecordingTransport::new(state.clone());
+    let client = ResponsesClient::new(
+        transport,
+        provider_with_base_url("local", "http://127.0.0.1:1234/v1"),
+        NoAuth,
+    );
+
+    let body = serde_json::json!({ "echo": true });
+    let _stream = client
+        .stream(body, HeaderMap::new(), Compression::None, None)
+        .await?;
+
+    let requests = state.take_stream_requests();
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].url, "http://127.0.0.1:1234/v1/responses");
+    assert_eq!(requests[0].headers.get("version"), None);
     Ok(())
 }
 

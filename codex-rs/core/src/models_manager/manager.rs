@@ -215,7 +215,7 @@ impl ModelsManager {
         let transport = ReqwestTransport::new(build_reqwest_client());
         let client = ModelsClient::new(transport, api_provider, api_auth);
 
-        let client_version = crate::models_manager::client_version_to_whole();
+        let client_version = self.models_client_version(auth_mode);
         let (models, etag) = timeout(
             MODELS_REFRESH_TIMEOUT,
             client.list_models(&client_version, HeaderMap::new()),
@@ -262,7 +262,7 @@ impl ModelsManager {
     async fn try_load_cache(&self) -> bool {
         let _timer =
             codex_otel::start_global_timer("codex.remote_models.load_cache.duration_ms", &[]);
-        let client_version = crate::models_manager::client_version_to_whole();
+        let client_version = self.models_client_version(self.auth_manager.auth_mode());
         let cache = match self.cache_manager.load_fresh(&client_version).await {
             Some(cache) => cache,
             None => return false,
@@ -271,6 +271,17 @@ impl ModelsManager {
         *self.etag.write().await = cache.etag.clone();
         self.apply_remote_models(models.clone()).await;
         true
+    }
+
+    fn models_client_version(&self, auth_mode: Option<AuthMode>) -> String {
+        let base_url = self.provider.base_url.clone().unwrap_or_else(|| {
+            if matches!(auth_mode, Some(AuthMode::Chatgpt)) {
+                "https://chatgpt.com/backend-api/codex".to_string()
+            } else {
+                "https://api.openai.com/v1".to_string()
+            }
+        });
+        crate::models_manager::models_client_version(&base_url)
     }
 
     /// Merge remote model metadata into picker-ready presets, preserving existing entries.
@@ -417,9 +428,17 @@ mod tests {
     }
 
     fn provider_for(base_url: String) -> ModelProviderInfo {
+        provider_with_base_url(Some(base_url))
+    }
+
+    fn provider_without_base_url() -> ModelProviderInfo {
+        provider_with_base_url(None)
+    }
+
+    fn provider_with_base_url(base_url: Option<String>) -> ModelProviderInfo {
         ModelProviderInfo {
             name: "mock".into(),
-            base_url: Some(base_url),
+            base_url,
             env_key: None,
             env_key_instructions: None,
             experimental_bearer_token: None,
@@ -644,7 +663,8 @@ mod tests {
         manager
             .cache_manager
             .mutate_cache_for_test(|cache| {
-                let client_version = crate::models_manager::client_version_to_whole();
+                let client_version =
+                    manager.models_client_version(manager.auth_manager.auth_mode());
                 cache.client_version = Some(format!("{client_version}-mismatch"));
             })
             .await
@@ -766,6 +786,46 @@ mod tests {
         let available = manager.build_available_models(vec![hidden_model, visible_model]);
 
         assert_eq!(available, vec![expected_hidden, expected_visible]);
+    }
+
+    #[test]
+    fn manager_models_client_version_uses_upstream_for_default_chatgpt_endpoint() {
+        let codex_home = tempdir().expect("temp dir");
+        let auth_manager =
+            AuthManager::from_auth_for_testing(CodexAuth::create_dummy_chatgpt_auth_for_testing());
+        let manager = ModelsManager::with_provider(
+            codex_home.path().to_path_buf(),
+            auth_manager,
+            provider_without_base_url(),
+        );
+
+        assert_eq!(
+            "0.98.0".to_string(),
+            manager.models_client_version(manager.auth_manager.auth_mode())
+        );
+    }
+
+    #[test]
+    fn manager_models_client_version_uses_package_version_for_custom_endpoint() {
+        let codex_home = tempdir().expect("temp dir");
+        let auth_manager = Arc::new(AuthManager::new(
+            codex_home.path().to_path_buf(),
+            false,
+            AuthCredentialsStoreMode::File,
+        ));
+        let manager = ModelsManager::with_provider(
+            codex_home.path().to_path_buf(),
+            auth_manager,
+            provider_for("http://127.0.0.1:12345/v1".to_string()),
+        );
+
+        let expected = format!(
+            "{}.{}.{}",
+            env!("CARGO_PKG_VERSION_MAJOR"),
+            env!("CARGO_PKG_VERSION_MINOR"),
+            env!("CARGO_PKG_VERSION_PATCH")
+        );
+        assert_eq!(expected, manager.models_client_version(None));
     }
 
     #[test]

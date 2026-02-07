@@ -77,7 +77,10 @@ pub fn write_models_cache_with_models(
     let cache_path = codex_home.join("models_cache.json");
     // DateTime<Utc> serializes to RFC3339 format by default with serde
     let fetched_at: DateTime<Utc> = Utc::now();
-    let client_version = codex_core::models_manager::client_version_to_whole();
+    // App-server tests run against the default OpenAI provider, so caches should
+    // use the same endpoint-aware version key as production models fetches.
+    let client_version =
+        codex_core::models_manager::models_client_version("https://api.openai.com/v1");
     let cache = json!({
         "fetched_at": fetched_at,
         "etag": null,

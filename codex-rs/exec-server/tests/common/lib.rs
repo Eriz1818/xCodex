@@ -154,6 +154,7 @@ where
 
 pub struct InteractiveClient {
     pub elicitations_to_accept: HashSet<String>,
+    pub accept_all_elicitations: bool,
     pub elicitation_requests: Arc<Mutex<Vec<CreateElicitationRequestParam>>>,
 }
 
@@ -177,7 +178,8 @@ impl ClientHandler for InteractiveClient {
             .unwrap()
             .push(request.clone());
 
-        let accept = self.elicitations_to_accept.contains(&request.message);
+        let accept =
+            self.accept_all_elicitations || self.elicitations_to_accept.contains(&request.message);
         async move {
             if accept {
                 Ok(CreateElicitationResult {

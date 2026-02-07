@@ -35,6 +35,7 @@ BINARY_TARGETS = (
     "x86_64-pc-windows-msvc",
     "aarch64-pc-windows-msvc",
 )
+MUSL_TARGETS = tuple(target for target in BINARY_TARGETS if "linux-musl" in target)
 
 
 @dataclass(frozen=True)
@@ -90,6 +91,16 @@ DEFAULT_RG_TARGETS = [target for target, _ in RG_TARGET_PLATFORM_PAIRS]
 
 # urllib.request.urlopen() defaults to no timeout (can hang indefinitely), which is painful in CI.
 DOWNLOAD_TIMEOUT_SECS = 60
+
+
+def _allow_musl_omission() -> bool:
+    return os.environ.get("XCODEX_ALLOW_MUSL_OMISSION") == "1"
+
+
+def _resolved_binary_targets() -> tuple[str, ...]:
+    if _allow_musl_omission():
+        return tuple(target for target in BINARY_TARGETS if target not in MUSL_TARGETS)
+    return BINARY_TARGETS
 
 
 def _gha_enabled() -> bool:
@@ -194,9 +205,12 @@ def main() -> int:
         "codex-command-runner",
         "rg",
     ]
+    resolved_targets = _resolved_binary_targets()
 
     workflow_id = workflow_url.rstrip("/").split("/")[-1]
     print(f"Downloading native artifacts from workflow {workflow_id}...")
+    if _allow_musl_omission():
+        print("Skipping linux-musl targets because XCODEX_ALLOW_MUSL_OMISSION=1")
 
     with _gha_group(f"Download native artifacts from workflow {workflow_id}"):
         with tempfile.TemporaryDirectory(prefix="codex-native-artifacts-") as artifacts_dir_str:
@@ -206,12 +220,14 @@ def main() -> int:
                 artifacts_dir,
                 vendor_dir,
                 [BINARY_COMPONENTS[name] for name in components if name in BINARY_COMPONENTS],
+                resolved_targets,
             )
 
     if "rg" in components:
         with _gha_group("Fetch ripgrep binaries"):
             print("Fetching ripgrep binaries...")
-            fetch_rg(vendor_dir, DEFAULT_RG_TARGETS, manifest_path=RG_MANIFEST)
+            rg_targets = [target for target in DEFAULT_RG_TARGETS if target in resolved_targets]
+            fetch_rg(vendor_dir, rg_targets, manifest_path=RG_MANIFEST)
 
     print(f"Installed native dependencies into {vendor_dir}")
     return 0
@@ -303,12 +319,13 @@ def install_binary_components(
     artifacts_dir: Path,
     vendor_dir: Path,
     selected_components: Sequence[BinaryComponent],
+    resolved_targets: Sequence[str],
 ) -> None:
     if not selected_components:
         return
 
     for component in selected_components:
-        component_targets = list(component.targets or BINARY_TARGETS)
+        component_targets = list(component.targets or resolved_targets)
 
         print(
             f"Installing {component.binary_basename} binaries for targets: "

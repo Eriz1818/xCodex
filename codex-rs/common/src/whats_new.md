@@ -1,6 +1,6 @@
-What's new in ⚡xtreme-Codex v0.3.5
-- Syntax highlighting for: Bash (bash/sh/zsh), C, C++, CSS, Go, HTML, Java, JavaScript, JSON, Python, Ruby, Rust, TypeScript, YAML (see `docs/xcodex/themes.md`)
-- Resume/startup responsiveness fixes for faster session loading
-- Lazy MCP loading to avoid pulling servers until needed (see `docs/xcodex/lazy-mcp-loading.md`)
-- Internal code restructure for stability and maintainability
-- Read more: docs/xcodex/releases/0.3.5.md
+What's new in ⚡xtreme-Codex v0.3.6
+- New `/exclusion` command for managing exclusions directly from the TUI.
+- Fixed theme-related transcript rendering gaps.
+- OpenAI `gpt-5.3-codex` is now available in xcodex.
+- Upstream sync with additional stability and infrastructure fixes across core, TUI, and app-server.
+- Read more: docs/xcodex/releases/0.3.6.md

@@ -405,11 +405,11 @@ impl ExclusionsSettingsView {
                 label: (*label).to_string(),
                 hint: (*hint).to_string(),
                 action: (!disabled).then_some(ExclusionAction::Toggle(*toggle)),
-                checked: Some(
-                    (!disabled)
-                        .then(|| toggle.is_enabled(&self.exclusion, self.hooks_sanitize_payloads))
-                        .unwrap_or(false),
-                ),
+                checked: Some(if !disabled {
+                    toggle.is_enabled(&self.exclusion, self.hooks_sanitize_payloads)
+                } else {
+                    false
+                }),
                 is_dimmed: *disabled,
             })
             .collect()
@@ -909,14 +909,13 @@ impl BottomPaneView for ExclusionsSettingsView {
                     modifiers: KeyModifiers::NONE,
                     ..
                 } => {
-                    if self.file_search_active {
-                        if let Some(file_search) = self.file_search.as_ref()
-                            && let Some(path) = file_search.selected_match()
-                        {
-                            self.insert_selected_path(&path);
-                            self.update_file_search();
-                            return;
-                        }
+                    if self.file_search_active
+                        && let Some(file_search) = self.file_search.as_ref()
+                        && let Some(path) = file_search.selected_match()
+                    {
+                        self.insert_selected_path(&path);
+                        self.update_file_search();
+                        return;
                     }
                     self.commit_edit();
                 }
@@ -1057,12 +1056,12 @@ impl Renderable for ExclusionsSettingsView {
             let block = Block::default().style(base_style);
             block.render(body_area, buf);
             let mut popup_height = 0;
-            if self.file_search_active {
-                if let Some(file_search) = self.file_search.as_ref() {
-                    file_search.with_popup(|popup| {
-                        popup_height = popup.calculate_required_height();
-                    });
-                }
+            if self.file_search_active
+                && let Some(file_search) = self.file_search.as_ref()
+            {
+                file_search.with_popup(|popup| {
+                    popup_height = popup.calculate_required_height();
+                });
             }
             let [input_area, popup_area] = if popup_height > 0 {
                 Layout::vertical([Constraint::Min(3), Constraint::Length(popup_height)])
@@ -1076,12 +1075,12 @@ impl Renderable for ExclusionsSettingsView {
                 buf,
                 &mut self.textarea_state.borrow_mut(),
             );
-            if popup_height > 0 {
-                if let Some(file_search) = self.file_search.as_ref() {
-                    file_search.with_popup(|popup| {
-                        popup.render_ref(popup_area, buf);
-                    });
-                }
+            if popup_height > 0
+                && let Some(file_search) = self.file_search.as_ref()
+            {
+                file_search.with_popup(|popup| {
+                    popup.render_ref(popup_area, buf);
+                });
             }
         } else {
             let header_lines = self.header_lines();
@@ -1301,11 +1300,7 @@ fn apply_toggle_rules(
                 };
             }
             exclusion.path_matching = !exclusion.path_matching;
-            if exclusion.path_matching {
-                exclusion.preflight_shell_paths = true;
-            } else {
-                exclusion.preflight_shell_paths = false;
-            }
+            exclusion.preflight_shell_paths = exclusion.path_matching;
         }
         Toggle::LayerOutput | Toggle::LayerSend | Toggle::LayerRequest | Toggle::HooksPayloads => {
             if !exclusion.enabled {

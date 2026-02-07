@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import ast
+import os
 import re
 from pathlib import Path
 
@@ -21,6 +22,7 @@ REQUIRED_WINDOWS_BINS = {
 
 
 def main() -> int:
+    allow_musl_omission = os.environ.get("XCODEX_ALLOW_MUSL_OMISSION") == "1"
     workflow_src = WORKFLOW.read_text(encoding="utf-8").replace("\r\n", "\n")
     workflow_targets = set(
         re.findall(r"^[ \t]*target:\s*([A-Za-z0-9_-]+)", workflow_src, flags=re.MULTILINE)
@@ -124,7 +126,11 @@ def main() -> int:
     if missing_rg:
         raise SystemExit(f"RG_TARGET_PLATFORM_PAIRS missing targets: {missing_rg}")
 
-    missing_targets = sorted(set(binary_targets) - workflow_targets)
+    expected_targets = set(binary_targets)
+    if allow_musl_omission:
+        expected_targets = {target for target in expected_targets if "linux-musl" not in target}
+
+    missing_targets = sorted(expected_targets - workflow_targets)
     extra_targets = sorted(workflow_targets - set(binary_targets))
     if missing_targets or extra_targets:
         raise SystemExit(

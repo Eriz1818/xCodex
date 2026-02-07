@@ -3,6 +3,7 @@ use crate::common::Prompt as ApiPrompt;
 use crate::common::Reasoning;
 use crate::common::ResponseStream;
 use crate::common::TextControls;
+use crate::endpoint::client_version::append_upstream_client_version_for_openai_or_chatgpt;
 use crate::endpoint::session::EndpointSession;
 use crate::error::ApiError;
 use crate::provider::Provider;
@@ -136,6 +137,10 @@ impl<T: HttpTransport, A: AuthProvider> ResponsesClient<T, A> {
                 extra_headers,
                 Some(body),
                 |req| {
+                    append_upstream_client_version_for_openai_or_chatgpt(
+                        req,
+                        &self.session.provider().base_url,
+                    );
                     req.headers.insert(
                         http::header::ACCEPT,
                         HeaderValue::from_static("text/event-stream"),

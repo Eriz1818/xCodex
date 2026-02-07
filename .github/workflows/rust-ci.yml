@@ -1026,10 +1026,45 @@ jobs:
           echo "Tests failed. See logs for details."
           exit 1
 
+  auto_compact_regressions:
+    name: Auto-compact regressions
+    runs-on: ubuntu-24.04
+    needs: changed
+    if: ${{ needs.changed.outputs.codex == 'true' || needs.changed.outputs.workflows == 'true' || github.event_name == 'push' }}
+    defaults:
+      run:
+        working-directory: codex-rs
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@1.93
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Pin PyO3 interpreter
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -V
+          echo "PYO3_PYTHON=$(python -c 'import sys; print(sys.executable)')" >> "$GITHUB_ENV"
+      - name: Auto-compact disabled regression tests
+        run: |
+          cargo test -p codex-core --test all \
+            suite::compact_remote::auto_remote_compact_disabled_skips_follow_up_compaction \
+            suite::compact_remote::auto_remote_compact_disabled_skips_pre_turn_compaction
+
   # --- Gatherer job that you mark as the ONLY required status -----------------
   results:
     name: CI results (required)
-    needs: [changed, general, cargo_shear, lint_build, tests]
+    needs:
+      [
+        changed,
+        general,
+        cargo_shear,
+        lint_build,
+        tests,
+        auto_compact_regressions,
+      ]
     if: always()
     runs-on: ubuntu-24.04
     steps:
@@ -1040,6 +1075,7 @@ jobs:
           echo "shear  : ${{ needs.cargo_shear.result }}"
           echo "lint   : ${{ needs.lint_build.result }}"
           echo "tests  : ${{ needs.tests.result }}"
+          echo "acompact: ${{ needs.auto_compact_regressions.result }}"
 
           # If nothing relevant changed (PR touching only root README, etc.),
           # declare success regardless of other jobs.
@@ -1053,6 +1089,7 @@ jobs:
           [[ '${{ needs.cargo_shear.result }}' == 'success' ]] || { echo 'cargo_shear failed'; exit 1; }
           [[ '${{ needs.lint_build.result }}' == 'success' ]] || { echo 'lint_build failed'; exit 1; }
           [[ '${{ needs.tests.result }}' == 'success' ]] || { echo 'tests failed'; exit 1; }
+          [[ '${{ needs.auto_compact_regressions.result }}' == 'success' ]] || { echo 'auto_compact_regressions failed'; exit 1; }
 
       - name: sccache summary note
         if: always()

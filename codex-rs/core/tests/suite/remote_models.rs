@@ -730,6 +730,93 @@ async fn remote_models_hide_picker_only_models() -> Result<()> {
     Ok(())
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn remote_models_chatgpt_keeps_models_not_supported_in_api() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    skip_if_sandbox!(Ok(()));
+
+    let server = MockServer::start().await;
+    let slug = "remote-chatgpt-only";
+    let mut remote_model = test_remote_model(slug, ModelVisibility::List, 0);
+    remote_model.supported_in_api = false;
+    mount_models_once(
+        &server,
+        ModelsResponse {
+            models: vec![remote_model],
+        },
+    )
+    .await;
+
+    let codex_home = TempDir::new()?;
+    let mut config = load_default_config_for_test(&codex_home).await;
+    config.features.enable(Feature::RemoteModels);
+
+    let auth = CodexAuth::create_dummy_chatgpt_auth_for_testing();
+    let provider = ModelProviderInfo {
+        base_url: Some(format!("{}/v1", server.uri())),
+        ..built_in_model_providers()["openai"].clone()
+    };
+    let manager = ModelsManager::with_provider(
+        codex_home.path().to_path_buf(),
+        codex_core::auth::AuthManager::from_auth_for_testing(auth),
+        provider,
+    );
+
+    let available = manager
+        .list_models(&config, RefreshStrategy::OnlineIfUncached)
+        .await;
+    let model = available
+        .iter()
+        .find(|model| model.model == slug)
+        .expect("chatgpt auth should keep models not supported in API mode");
+    assert!(!model.supported_in_api);
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn remote_models_api_key_hides_models_not_supported_in_api() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    skip_if_sandbox!(Ok(()));
+
+    let server = MockServer::start().await;
+    let slug = "remote-api-hidden";
+    let mut remote_model = test_remote_model(slug, ModelVisibility::List, 0);
+    remote_model.supported_in_api = false;
+    mount_models_once(
+        &server,
+        ModelsResponse {
+            models: vec![remote_model],
+        },
+    )
+    .await;
+
+    let codex_home = TempDir::new()?;
+    let mut config = load_default_config_for_test(&codex_home).await;
+    config.features.enable(Feature::RemoteModels);
+
+    let auth = CodexAuth::from_api_key("sk-test");
+    let provider = ModelProviderInfo {
+        base_url: Some(format!("{}/v1", server.uri())),
+        ..built_in_model_providers()["openai"].clone()
+    };
+    let manager = ModelsManager::with_provider(
+        codex_home.path().to_path_buf(),
+        codex_core::auth::AuthManager::from_auth_for_testing(auth),
+        provider,
+    );
+
+    let available = manager
+        .list_models(&config, RefreshStrategy::OnlineIfUncached)
+        .await;
+    assert!(
+        !available.iter().any(|model| model.model == slug),
+        "api-key auth should hide models not supported in API mode"
+    );
+
+    Ok(())
+}
+
 async fn wait_for_model_available(
     manager: &Arc<ModelsManager>,
     slug: &str,

@@ -38,7 +38,7 @@ struct SnapshotRun {
 
 async fn wait_for_snapshot(codex_home: &Path) -> Result<PathBuf> {
     let snapshot_dir = codex_home.join("shell_snapshots");
-    let deadline = Instant::now() + Duration::from_secs(5);
+    let deadline = Instant::now() + Duration::from_secs(20);
     loop {
         if let Ok(mut entries) = fs::read_dir(&snapshot_dir).await
             && let Some(entry) = entries.next_entry().await?

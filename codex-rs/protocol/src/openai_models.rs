@@ -662,4 +662,94 @@ mod tests {
         );
         assert_eq!(personality_variables.get_personality_message(None), None);
     }
+
+    #[test]
+    fn filter_by_auth_keeps_all_models_in_chatgpt_mode() {
+        let models = vec![
+            ModelPreset {
+                id: "supported".to_string(),
+                model: "supported".to_string(),
+                display_name: "supported".to_string(),
+                description: String::new(),
+                default_reasoning_effort: ReasoningEffort::Medium,
+                supported_reasoning_efforts: Vec::new(),
+                supports_personality: false,
+                is_default: false,
+                upgrade: None,
+                show_in_picker: true,
+                supported_in_api: true,
+                input_modalities: default_input_modalities(),
+            },
+            ModelPreset {
+                id: "unsupported".to_string(),
+                model: "unsupported".to_string(),
+                display_name: "unsupported".to_string(),
+                description: String::new(),
+                default_reasoning_effort: ReasoningEffort::Medium,
+                supported_reasoning_efforts: Vec::new(),
+                supports_personality: false,
+                is_default: false,
+                upgrade: None,
+                show_in_picker: true,
+                supported_in_api: false,
+                input_modalities: default_input_modalities(),
+            },
+        ];
+
+        let filtered = ModelPreset::filter_by_auth(models, true);
+        assert_eq!(filtered.len(), 2);
+    }
+
+    #[test]
+    fn filter_by_auth_hides_models_not_supported_in_api_in_api_mode() {
+        let models = vec![
+            ModelPreset {
+                id: "supported".to_string(),
+                model: "supported".to_string(),
+                display_name: "supported".to_string(),
+                description: String::new(),
+                default_reasoning_effort: ReasoningEffort::Medium,
+                supported_reasoning_efforts: Vec::new(),
+                supports_personality: false,
+                is_default: false,
+                upgrade: None,
+                show_in_picker: true,
+                supported_in_api: true,
+                input_modalities: default_input_modalities(),
+            },
+            ModelPreset {
+                id: "unsupported".to_string(),
+                model: "unsupported".to_string(),
+                display_name: "unsupported".to_string(),
+                description: String::new(),
+                default_reasoning_effort: ReasoningEffort::Medium,
+                supported_reasoning_efforts: Vec::new(),
+                supports_personality: false,
+                is_default: false,
+                upgrade: None,
+                show_in_picker: true,
+                supported_in_api: false,
+                input_modalities: default_input_modalities(),
+            },
+        ];
+
+        let filtered = ModelPreset::filter_by_auth(models, false);
+        assert_eq!(
+            filtered,
+            vec![ModelPreset {
+                id: "supported".to_string(),
+                model: "supported".to_string(),
+                display_name: "supported".to_string(),
+                description: String::new(),
+                default_reasoning_effort: ReasoningEffort::Medium,
+                supported_reasoning_efforts: Vec::new(),
+                supports_personality: false,
+                is_default: false,
+                upgrade: None,
+                show_in_picker: true,
+                supported_in_api: true,
+                input_modalities: default_input_modalities(),
+            }]
+        );
+    }
 }

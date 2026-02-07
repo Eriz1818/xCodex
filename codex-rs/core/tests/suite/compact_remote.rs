@@ -230,6 +230,155 @@ async fn remote_compact_runs_automatically() -> Result<()> {
     Ok(())
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn auto_remote_compact_disabled_skips_follow_up_compaction() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let harness = TestCodexHarness::with_builder(
+        test_codex()
+            .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+            .with_config(|config| {
+                config.model_auto_compact_token_limit = Some(120);
+            }),
+    )
+    .await?;
+    let codex = harness.test().codex.clone();
+    codex.submit(Op::SetAutoCompact { enabled: true }).await?;
+    codex.submit(Op::SetAutoCompact { enabled: false }).await?;
+
+    let responses_mock = responses::mount_sse_sequence(
+        harness.server(),
+        vec![
+            sse(vec![
+                responses::ev_shell_command_call("call-1", "echo 'hi'"),
+                responses::ev_completed_with_tokens("resp-1", 500_000),
+            ]),
+            sse(vec![
+                responses::ev_assistant_message("m2", "AFTER_TOOL_REPLY"),
+                responses::ev_completed("resp-2"),
+            ]),
+        ],
+    )
+    .await;
+    let compact_mock =
+        responses::mount_compact_json_once(harness.server(), serde_json::json!({ "output": [] }))
+            .await;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "trigger follow-up without compact".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+        })
+        .await?;
+    wait_for_event(&codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
+
+    assert!(
+        compact_mock.requests().is_empty(),
+        "expected no remote compact request when auto-compact is disabled"
+    );
+
+    let requests = responses_mock.requests();
+    assert_eq!(
+        requests.len(),
+        2,
+        "expected tool turn and follow-up requests"
+    );
+    let follow_up_body = requests
+        .last()
+        .expect("follow-up request missing")
+        .body_json()
+        .to_string();
+    assert!(
+        follow_up_body.contains("function_call_output"),
+        "expected follow-up request to continue with tool output when compact is disabled"
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn auto_remote_compact_disabled_skips_pre_turn_compaction() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let harness = TestCodexHarness::with_builder(
+        test_codex()
+            .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+            .with_config(|config| {
+                config.model_auto_compact_token_limit = Some(120);
+            }),
+    )
+    .await?;
+    let codex = harness.test().codex.clone();
+    codex.submit(Op::SetAutoCompact { enabled: true }).await?;
+    codex.submit(Op::SetAutoCompact { enabled: false }).await?;
+
+    let responses_mock = responses::mount_sse_sequence(
+        harness.server(),
+        vec![
+            sse(vec![
+                responses::ev_assistant_message("m1", "OVER_LIMIT_REPLY"),
+                responses::ev_completed_with_tokens("resp-1", 500_000),
+            ]),
+            sse(vec![
+                responses::ev_assistant_message("m2", "SECOND_TURN_REPLY"),
+                responses::ev_completed("resp-2"),
+            ]),
+        ],
+    )
+    .await;
+    let compact_mock =
+        responses::mount_compact_json_once(harness.server(), serde_json::json!({ "output": [] }))
+            .await;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "first turn over limit".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+        })
+        .await?;
+    wait_for_event(&codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "second turn should not compact".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+        })
+        .await?;
+    wait_for_event(&codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
+
+    assert!(
+        compact_mock.requests().is_empty(),
+        "expected no pre-turn compact request when auto-compact is disabled"
+    );
+
+    let requests = responses_mock.requests();
+    assert_eq!(
+        requests.len(),
+        2,
+        "expected both user turns to hit /responses"
+    );
+    let second_turn_body = requests
+        .last()
+        .expect("second request missing")
+        .body_json()
+        .to_string();
+    assert!(
+        second_turn_body.contains("second turn should not compact"),
+        "expected second user turn to proceed without remote compact"
+    );
+
+    Ok(())
+}
+
 #[cfg_attr(target_os = "windows", ignore)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn remote_compact_trims_function_call_history_to_fit_context_window() -> Result<()> {
@@ -367,6 +516,7 @@ async fn auto_remote_compact_trims_function_call_history_to_fit_context_window()
     )
     .await?;
     let codex = harness.test().codex.clone();
+    codex.submit(Op::SetAutoCompact { enabled: true }).await?;
 
     responses::mount_sse_sequence(
         harness.server(),
@@ -494,6 +644,7 @@ async fn auto_remote_compact_failure_stops_agent_loop() -> Result<()> {
     )
     .await?;
     let codex = harness.test().codex.clone();
+    codex.submit(Op::SetAutoCompact { enabled: true }).await?;
 
     mount_sse_once(
         harness.server(),

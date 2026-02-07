@@ -93,7 +93,23 @@ impl ShellSnapshot {
                     "Failed to create shell snapshot for {}: {err:?}",
                     shell.name()
                 );
-                None
+                match write_fallback_snapshot(&path, shell.shell_type.clone()).await {
+                    Ok(path) => {
+                        tracing::warn!(
+                            "Using fallback shell snapshot for {}: {}",
+                            shell.name(),
+                            path.display()
+                        );
+                        Some(Self { path })
+                    }
+                    Err(fallback_err) => {
+                        tracing::warn!(
+                            "Failed to create fallback shell snapshot for {}: {fallback_err:?}",
+                            shell.name()
+                        );
+                        None
+                    }
+                }
             }
         };
 
@@ -121,6 +137,36 @@ impl Drop for ShellSnapshot {
 
 pub async fn write_shell_snapshot(shell_type: ShellType, output_path: &Path) -> Result<PathBuf> {
     write_shell_snapshot_with_env(shell_type, output_path, &[]).await
+}
+
+async fn write_fallback_snapshot(output_path: &Path, shell_type: ShellType) -> Result<PathBuf> {
+    if let Some(parent) = output_path.parent() {
+        fs::create_dir_all(parent).await.with_context(|| {
+            format!(
+                "Failed to create fallback snapshot parent {}",
+                parent.display()
+            )
+        })?;
+    }
+
+    let path_value = std::env::var("PATH").unwrap_or_default();
+    let contents = match shell_type {
+        ShellType::PowerShell => format!(
+            "# Snapshot file\n# setopts 0\n# aliases 0\n# exports 1\n$env:PATH = \"{}\"\n",
+            path_value.replace('"', "`\"")
+        ),
+        _ => format!(
+            "# Snapshot file\n# setopts 0\n# aliases 0\n# exports 1\nexport PATH='{}'\n",
+            path_value.replace('\'', "'\"'\"'")
+        ),
+    };
+    fs::write(output_path, contents).await.with_context(|| {
+        format!(
+            "Failed to write fallback snapshot to {}",
+            output_path.display()
+        )
+    })?;
+    Ok(output_path.to_path_buf())
 }
 
 pub async fn write_shell_snapshot_with_env(
@@ -241,7 +287,7 @@ fn zsh_snapshot_script() -> String {
 else
   rc="$HOME/.zshrc"
 fi
-[[ -r "$rc" ]] && . "$rc"
+[[ -r "$rc" ]] && { . "$rc" || true; }
 print '# Snapshot file'
 print '# Unset all aliases to avoid conflicts with functions'
 print 'unalias -a 2>/dev/null || true'
@@ -281,7 +327,7 @@ fi
 fn bash_snapshot_script() -> String {
     let excluded = excluded_exports_regex();
     let script = r##"if [ -z "$BASH_ENV" ] && [ -r "$HOME/.bashrc" ]; then
-  . "$HOME/.bashrc"
+  . "$HOME/.bashrc" || true
 fi
 echo '# Snapshot file'
 echo '# Unset all aliases to avoid conflicts with functions'
@@ -325,7 +371,7 @@ fi
 fn sh_snapshot_script() -> String {
     let excluded = excluded_exports_regex();
     let script = r##"if [ -n "$ENV" ] && [ -r "$ENV" ]; then
-  . "$ENV"
+  . "$ENV" || true
 fi
 echo '# Snapshot file'
 echo '# Unset all aliases to avoid conflicts with functions'
@@ -598,6 +644,18 @@ mod tests {
         assert!(result.is_err());
     }
 
+    #[test]
+    fn snapshot_scripts_ignore_rc_source_failures() {
+        let zsh_script = zsh_snapshot_script();
+        assert!(zsh_script.contains("[[ -r \"$rc\" ]] && { . \"$rc\" || true; }"));
+
+        let bash_script = bash_snapshot_script();
+        assert!(bash_script.contains(". \"$HOME/.bashrc\" || true"));
+
+        let sh_script = sh_snapshot_script();
+        assert!(sh_script.contains(". \"$ENV\" || true"));
+    }
+
     #[cfg(unix)]
     #[test]
     fn bash_snapshot_filters_invalid_exports() -> Result<()> {
@@ -619,6 +677,17 @@ mod tests {
         assert!(!stdout.contains("NEXTEST_BIN_EXE_codex-write-config-schema"));
         assert!(!stdout.contains("BAD-NAME"));
 
+        Ok(())
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    #[tokio::test]
+    async fn fallback_snapshot_includes_required_sections() -> Result<()> {
+        let dir = tempdir()?;
+        let path = dir.path().join("fallback.sh");
+        write_fallback_snapshot(&path, ShellType::Bash).await?;
+        let snapshot = fs::read_to_string(path).await?;
+        assert_posix_snapshot_sections(&snapshot);
         Ok(())
     }
 

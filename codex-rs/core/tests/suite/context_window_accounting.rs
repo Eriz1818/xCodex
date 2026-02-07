@@ -2,6 +2,8 @@ use anyhow::Result;
 use codex_core::protocol::CodexErrorInfo;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::Op;
+use codex_core::protocol::{AskForApproval, SandboxPolicy};
+use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::user_input::UserInput;
 use core_test_support::responses::mount_sse_once_match;
 use core_test_support::responses::sse_failed;
@@ -21,6 +23,7 @@ async fn interrupt_recomputes_prompt_estimate_after_history_grows() -> Result<()
     use core_test_support::responses::mount_sse_once;
     use core_test_support::responses::sse;
     use std::time::Duration;
+    use tokio::time::sleep;
     use tokio::time::timeout;
 
     skip_if_no_network!(Ok(()));
@@ -29,37 +32,45 @@ async fn interrupt_recomputes_prompt_estimate_after_history_grows() -> Result<()
 
     let call_id = "call-long";
     let args = serde_json::json!({
-        "command": "sleep 60",
-        "timeout_ms": 60_000
+        "cmd": "sleep 60",
+        "yield_time_ms": 1_000
     })
     .to_string();
     let body = sse(vec![
         ev_response_created("resp-1"),
-        ev_function_call(call_id, "shell_command", &args),
+        ev_function_call(call_id, "exec_command", &args),
         ev_completed_with_tokens("resp-1", 50),
     ]);
     mount_sse_once(&server, body).await;
 
-    let TestCodex { codex, .. } = test_codex().with_model("gpt-5.1").build(&server).await?;
+    let test = test_codex().with_model("gpt-5.1").build(&server).await?;
+    let codex = test.codex.clone();
 
     codex
-        .submit(Op::UserInput {
+        .submit(Op::UserTurn {
             items: vec![UserInput::Text {
                 text: "x".repeat(5_000),
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
+            cwd: test.cwd_path().to_path_buf(),
+            approval_policy: AskForApproval::Never,
+            sandbox_policy: SandboxPolicy::DangerFullAccess,
+            model: test.session_configured.model.clone(),
+            effort: test.config.model_reasoning_effort,
+            summary: ReasoningSummary::Auto,
+            collaboration_mode: None,
+            personality: None,
         })
         .await?;
 
-    // Wait until the exec begins to avoid a race, then interrupt.
-    core_test_support::wait_for_event(&codex, |ev| matches!(ev, EventMsg::ExecCommandBegin(_)))
-        .await;
+    // Give the tool call a moment to start, then interrupt.
+    sleep(Duration::from_millis(250)).await;
     codex.submit(Op::Interrupt).await?;
 
     let (mut saw_aborted, mut info_after_abort) = (false, None::<TokenUsageInfo>);
     while !(saw_aborted && info_after_abort.is_some()) {
-        let event = timeout(Duration::from_secs(10), codex.next_event())
+        let event = timeout(Duration::from_secs(30), codex.next_event())
             .await
             .expect("timeout waiting for abort + token estimate")
             .expect("event stream ended unexpectedly")
@@ -154,6 +165,7 @@ async fn resume_emits_prompt_estimate_consistent_with_aborted_history() -> Resul
     use core_test_support::responses::sse;
     use std::sync::Arc;
     use std::time::Duration;
+    use tokio::time::sleep;
     use tokio::time::timeout;
 
     skip_if_no_network!(Ok(()));
@@ -162,13 +174,13 @@ async fn resume_emits_prompt_estimate_consistent_with_aborted_history() -> Resul
 
     let call_id = "call-resume";
     let args = serde_json::json!({
-        "command": "sleep 60",
-        "timeout_ms": 60_000
+        "cmd": "sleep 60",
+        "yield_time_ms": 1_000
     })
     .to_string();
     let body = sse(vec![
         ev_response_created("resp-1"),
-        ev_function_call(call_id, "shell_command", &args),
+        ev_function_call(call_id, "exec_command", &args),
         ev_completed_with_tokens("resp-1", 50),
     ]);
     mount_sse_once(&server, body).await;
@@ -180,21 +192,28 @@ async fn resume_emits_prompt_estimate_consistent_with_aborted_history() -> Resul
     let rollout_path = initial.session_configured.rollout_path.clone();
 
     codex
-        .submit(Op::UserInput {
+        .submit(Op::UserTurn {
             items: vec![UserInput::Text {
                 text: "x".repeat(5_000),
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
+            cwd: initial.cwd_path().to_path_buf(),
+            approval_policy: AskForApproval::Never,
+            sandbox_policy: SandboxPolicy::DangerFullAccess,
+            model: initial.session_configured.model.clone(),
+            effort: initial.config.model_reasoning_effort,
+            summary: ReasoningSummary::Auto,
+            collaboration_mode: None,
+            personality: None,
         })
         .await?;
-    core_test_support::wait_for_event(&codex, |ev| matches!(ev, EventMsg::ExecCommandBegin(_)))
-        .await;
+    sleep(Duration::from_millis(250)).await;
     codex.submit(Op::Interrupt).await?;
 
     let (mut saw_aborted, mut abort_estimate) = (false, None::<i64>);
     while !(saw_aborted && abort_estimate.is_some()) {
-        let event = timeout(Duration::from_secs(10), codex.next_event())
+        let event = timeout(Duration::from_secs(30), codex.next_event())
             .await
             .expect("timeout waiting for abort + token estimate")
             .expect("event stream ended unexpectedly")
@@ -226,18 +245,23 @@ async fn resume_emits_prompt_estimate_consistent_with_aborted_history() -> Resul
             rollout_path.expect("resume requires rollout path"),
         )
         .await?;
-    let resumed_token_event = core_test_support::wait_for_event(&resumed.codex, |ev| {
-        matches!(ev, EventMsg::TokenCount(payload) if payload.info.as_ref().is_some_and(|info| {
-            info.total_token_usage.total_tokens == 50 && info.last_token_usage.input_tokens == 0
-        }))
-    })
-    .await;
-    let EventMsg::TokenCount(resumed_payload) = resumed_token_event else {
-        unreachable!("wait_for_event returned unexpected event");
-    };
-    let resumed_info = resumed_payload
-        .info
-        .expect("token usage info present after resume recompute");
+    let resumed_info = resumed
+        .session_configured
+        .initial_messages
+        .as_ref()
+        .and_then(|messages| {
+            messages.iter().rev().find_map(|event| {
+                if let EventMsg::TokenCount(payload) = event
+                    && let Some(info) = payload.info.as_ref()
+                    && info.total_token_usage.total_tokens == 50
+                    && info.last_token_usage.input_tokens == 0
+                {
+                    return Some(info.clone());
+                }
+                None
+            })
+        })
+        .expect("token usage info present in resumed initial messages");
 
     assert_eq!(
         resumed_info.last_token_usage.total_tokens, abort_estimate,

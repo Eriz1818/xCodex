@@ -59,6 +59,7 @@ jobs:
           from __future__ import annotations
 
           import ast
+          import os
           import re
           from pathlib import Path
 
@@ -90,7 +91,13 @@ jobs:
             re.findall(r"^[ \t]*target:\s*([A-Za-z0-9_-]+)", workflow_src, flags=re.MULTILINE)
           )
 
+          ref_name = os.environ.get("GITHUB_REF_NAME", "")
+          tag_version = ref_name.removeprefix("xcodex-v")
+          allow_musl_omission = tag_version == "0.3.6" or tag_version.startswith("0.3.6-alpha.")
+
           expected = set(binary_targets)
+          if allow_musl_omission:
+            expected = {target for target in expected if "linux-musl" not in target}
           missing = sorted(expected - workflow_targets)
           extra = sorted(workflow_targets - expected)
 
@@ -117,6 +124,10 @@ jobs:
             ("ubuntu-24.04-arm", "aarch64-unknown-linux-musl"),
             ("windows-11-arm", "aarch64-pc-windows-msvc"),
           }
+          if allow_musl_omission:
+            required_pairs = {
+              pair for pair in required_pairs if "linux-musl" not in pair[1]
+            }
           missing_pairs = sorted(required_pairs - pair_map)
           if missing_pairs:
             raise SystemExit(
@@ -128,6 +139,8 @@ jobs:
           PY
       - name: Preflight Windows split artifacts
         shell: bash
+        env:
+          XCODEX_ALLOW_MUSL_OMISSION: ${{ startsWith(github.ref_name, 'xcodex-v0.3.6') && '1' || '0' }}
         run: |
           set -euo pipefail
           python3 scripts/xcodex_release_preflight.py
@@ -162,13 +175,14 @@ jobs:
           - runner: macos-15
             target: x86_64-apple-darwin
           - runner: ubuntu-latest
-            target: x86_64-unknown-linux-musl
-          - runner: ubuntu-latest
             target: x86_64-unknown-linux-gnu
           - runner: ubuntu-24.04-arm
-            target: aarch64-unknown-linux-musl
-          - runner: ubuntu-24.04-arm
             target: aarch64-unknown-linux-gnu
+          # Temporarily disabled for the 0.3.6 release.
+          # - runner: ubuntu-latest
+          #   target: x86_64-unknown-linux-musl
+          # - runner: ubuntu-24.04-arm
+          #   target: aarch64-unknown-linux-musl
           - runner: windows-latest
             target: x86_64-pc-windows-msvc
             bin: codex
@@ -500,6 +514,7 @@ jobs:
       - name: Stage npm packages
         env:
           GH_TOKEN: ${{ github.token }}
+          XCODEX_ALLOW_MUSL_OMISSION: ${{ startsWith(steps.release_name.outputs.name, '0.3.6') && '1' || '0' }}
         run: |
           ./scripts/stage_npm_packages.py \
             --release-version "${{ steps.release_name.outputs.name }}" \

@@ -1033,7 +1033,7 @@ fn draw_picker(tui: &mut Tui, state: &PickerState) -> std::io::Result<()> {
             Line::from(format!("Search: {}", state.query))
         };
         frame.render_widget_ref(search_line.style(base_style), search);
-        let dim_style = crate::theme::dim_style();
+        let _dim_style = crate::theme::dim_style();
 
         let metrics = calculate_column_metrics(&state.filtered_rows, state.show_all);
 

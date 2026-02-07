@@ -307,6 +307,27 @@ impl Codex {
             .map_err(|err| CodexErr::Fatal(format!("failed to load rules: {err}")))?;
 
         let config = Arc::new(config);
+        let refresh_strategy = match &conversation_history {
+            InitialHistory::Resumed(_) => crate::models_manager::manager::RefreshStrategy::Offline,
+            InitialHistory::New | InitialHistory::Forked(_) => {
+                crate::models_manager::manager::RefreshStrategy::OnlineIfUncached
+            }
+        };
+        let model = models_manager
+            .get_default_model(&config.model, &config, refresh_strategy)
+            .await;
+
+        // Resolve base instructions for the session. Priority order:
+        // 1. config.base_instructions override
+        // 2. conversation history => session_meta.base_instructions
+        // 3. base_intructions for current model
+        let model_info = models_manager.get_model_info(model.as_str(), &config).await;
+        let base_instructions = config
+            .base_instructions
+            .clone()
+            .or_else(|| conversation_history.get_base_instructions().map(|s| s.text))
+            .unwrap_or_else(|| model_info.get_model_instructions(config.personality));
+
         // Refreshing remote model metadata can be slow and is not required to
         // start a session (especially on resume). Kick it off in the
         // background and let the TUI update model lists later.
@@ -330,26 +351,6 @@ impl Codex {
                 );
             });
         }
-        let refresh_strategy = match &conversation_history {
-            InitialHistory::Resumed(_) => crate::models_manager::manager::RefreshStrategy::Offline,
-            InitialHistory::New | InitialHistory::Forked(_) => {
-                crate::models_manager::manager::RefreshStrategy::OnlineIfUncached
-            }
-        };
-        let model = models_manager
-            .get_default_model(&config.model, &config, refresh_strategy)
-            .await;
-
-        // Resolve base instructions for the session. Priority order:
-        // 1. config.base_instructions override
-        // 2. conversation history => session_meta.base_instructions
-        // 3. base_intructions for current model
-        let model_info = models_manager.get_model_info(model.as_str(), &config).await;
-        let base_instructions = config
-            .base_instructions
-            .clone()
-            .or_else(|| conversation_history.get_base_instructions().map(|s| s.text))
-            .unwrap_or_else(|| model_info.get_model_instructions(config.personality));
 
         // Respect thread-start tools. When missing (resumed/forked threads), read from the db
         // first, then fall back to rollout-file tools.
@@ -700,7 +701,7 @@ async fn maybe_prompt_for_exclusion_redaction(
     let mut question_text =
         format!("Exclusions matched content in {context_label}. How should xcodex proceed?");
     if let Some(summary) = format_exclusion_matches(report) {
-        question_text.push_str("\n");
+        question_text.push('\n');
         question_text.push_str(&summary);
     }
 
@@ -1032,7 +1033,7 @@ impl Session {
                 session_config.codex_home.clone(),
                 session_config
                     .active_profile()
-                    .map(|profile| profile.to_string()),
+                    .map(std::string::ToString::to_string),
                 allowlist,
                 blocklist,
                 true,
@@ -3504,7 +3505,7 @@ mod handlers {
         op: Op,
         previous_context: &mut Option<Arc<TurnContext>>,
     ) {
-        let (mut items, updates) = match op {
+        let (items, updates) = match op {
             Op::UserTurn {
                 cwd,
                 approval_policy,
@@ -4540,7 +4541,8 @@ pub(crate) async fn run_turn(
         collaboration_mode_kind: turn_context.collaboration_mode.mode,
     });
     sess.send_event(&turn_context, event).await;
-    if total_usage_tokens >= auto_compact_limit
+    if sess.auto_compact_enabled().await
+        && total_usage_tokens >= auto_compact_limit
         && run_auto_compact(&sess, &turn_context).await.is_err()
     {
         return None;
@@ -4723,7 +4725,7 @@ pub(crate) async fn run_turn(
                 );
 
                 // as long as compaction works well in getting us way below the token limit, we shouldn't worry about being in an infinite loop.
-                if token_limit_reached && needs_follow_up {
+                if token_limit_reached && needs_follow_up && sess.auto_compact_enabled().await {
                     if run_auto_compact(&sess, &turn_context).await.is_err() {
                         return None;
                     }
@@ -6311,6 +6313,9 @@ mod tests {
             .estimate_token_count(&turn_context)
             .expect("estimate with model instructions");
         assert_ne!(expected_tokens, model_estimated_tokens);
+        let expected_prompt_tokens = session
+            .estimate_prompt_token_count(&turn_context, std::iter::empty::<&ResponseItem>())
+            .await;
 
         session.recompute_token_usage(&turn_context).await;
 
@@ -6322,7 +6327,7 @@ mod tests {
             .expect("token info")
             .last_token_usage
             .total_tokens;
-        assert_eq!(actual_tokens, expected_tokens.max(0));
+        assert_eq!(actual_tokens, expected_prompt_tokens.max(0));
     }
 
     #[tokio::test]

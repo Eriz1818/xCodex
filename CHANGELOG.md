@@ -7,6 +7,15 @@ This project follows SemVer (`xcodex-vX.Y.Z` / `xcodex-vX.Y.Z-alpha.N` tags) and
 - `@eriz1818/xcodex` (CLI wrapper + native `xcodex` binaries + bundled `rg`)
 - `@eriz1818/xcodex-responses-api-proxy` (native proxy binary)
 
+## 0.3.6
+
+TUI exclusion management, transcript rendering reliability fixes, and GPT-5.3 Codex availability.
+
+- Added a new `/exclusion` command for managing exclusions directly from the TUI.
+- Fixed theme-related transcript rendering gaps.
+- OpenAI `gpt-5.3-codex` is now available in xcodex.
+- Upstream sync with additional stability and infrastructure fixes across core, TUI, and app-server.
+
 ## 0.3.5
 
 Syntax highlighting, lazy MCP loading, and startup responsiveness fixes.
