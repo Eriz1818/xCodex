@@ -20,22 +20,22 @@ When filing issues, include repro steps and attach the files printed by `/feedba
 
 **New in xCodex**
 
-- **Context Control**: Keep context under control with `/compact` and `/autocompact` (see [`docs/xcodex/compact.md`](docs/xcodex/compact.md)).
-- **Agent Thoughts**: Hide/show agent thoughts in the TUI with `/thoughts` (see [`docs/xcodex/thoughts.md`](docs/xcodex/thoughts.md)).
-- **Git Worktrees**: Switch a session between git worktrees with `/worktree` and manage shared dirs (see [`docs/xcodex/worktrees.md`](docs/xcodex/worktrees.md)).
-- **⚡Tools**: Open ⚡Tools with `Ctrl+O` (or `/xtreme`) and customize the status bar with `/settings` (see [`docs/xcodex/settings.md`](docs/xcodex/settings.md)).
-- **UI Theme**: Customize the UI theme with `/theme` and `$CODEX_HOME/themes` (including themed syntax highlighting for code) (see [`docs/xcodex/themes.md`](docs/xcodex/themes.md) and [`docs/config.md#themes`](docs/config.md#themes)).
-- **Transcript Rendering**: Toggle transcript rendering features like diff highlighting, highlighting past prompts, and syntax highlighting for fenced code blocks (see [`docs/xcodex/settings.md`](docs/xcodex/settings.md)).
-- **Hooks**: Automate xcodex with **three levels of hooks**: external (spawn), Python Host “py-box” (persistent), and in-proc PyO3 (advanced) (start at [`docs/xcodex/hooks.md`](docs/xcodex/hooks.md)).
-- **Background Terminals**: Manage background terminals with `/ps` (list) and `/ps-kill` (terminate) (see [`docs/xcodex/background-terminals.md`](docs/xcodex/background-terminals.md)).
-- **MCP Servers**: Inspect and manage MCP servers from inside the TUI with `/mcp` (including startup status, timings, and retry hints) (see [`docs/config.md#mcp_servers`](docs/config.md#mcp_servers)).
-- **Lazy MCP Loading**: Speed up startup by deferring MCP server startup with lazy/manual modes (see [`docs/xcodex/lazy-mcp-loading.md`](docs/xcodex/lazy-mcp-loading.md) and [`docs/config.md#mcp-integration`](docs/config.md#mcp-integration)).
-- **Ignore Files**: Keep sensitive paths out of AI context with ignore files (`.aiexclude` / `.xcodexignore`) and control exclusion behavior with `/exclusion` (see [`docs/xcodex/ignore-files.md`](docs/xcodex/ignore-files.md) and [`docs/config.md#exclusion`](docs/config.md#exclusion-sensitive-path-controls)).
+- **Context Control**: Keep context under control with `/compact` and `/autocompact` (see the [Context control guide](docs/xcodex/compact.md)).
+- **Agent Thoughts**: Hide/show agent thoughts in the TUI with `/thoughts` (see the [Thoughts guide](docs/xcodex/thoughts.md)).
+- **Git Worktrees**: Switch a session between git worktrees with `/worktree` and manage shared dirs (see the [Worktrees guide](docs/xcodex/worktrees.md)).
+- **⚡Tools**: Open ⚡Tools with `Ctrl+O` (or `/xtreme`) and customize the status bar with `/settings` (see the [Settings guide](docs/xcodex/settings.md)).
+- **UI Theme**: Customize the UI theme with `/theme` and `$CODEX_HOME/themes` (including themed syntax highlighting for code) (see the [Theme guide](docs/xcodex/themes.md) and [theme config reference](docs/config.md#themes)).
+- **Transcript Rendering**: Toggle transcript rendering features like diff highlighting, highlighting past prompts, and syntax highlighting for fenced code blocks (see the [Settings guide](docs/xcodex/settings.md)).
+- **Hooks**: Automate xcodex with **three levels of hooks**: external (spawn), Python Host “py-box” (persistent), and in-proc PyO3 (advanced) (start with the [Hooks guide](docs/xcodex/hooks.md)).
+- **Background Terminals**: Manage background terminals with `/ps` (list) and `/ps-kill` (terminate) (see the [Background terminals guide](docs/xcodex/background-terminals.md)).
+- **MCP Servers**: Inspect and manage MCP servers from inside the TUI with `/mcp` (including startup status, timings, and retry hints) (see the [MCP config reference](docs/config.md#mcp_servers)).
+- **Lazy MCP Loading**: Speed up startup by deferring MCP server startup with lazy/manual modes (see the [Lazy MCP loading guide](docs/xcodex/lazy-mcp-loading.md) and [MCP integration config reference](docs/config.md#mcp-integration)).
+- **Ignore Files**: Keep sensitive paths out of AI context with ignore files (`.aiexclude` / `.xcodexignore`) and control exclusion behavior with `/exclusion` (see the [Ignore files guide](docs/xcodex/ignore-files.md) and [Exclusion config reference](docs/config.md#exclusion-sensitive-path-controls)).
 - **TUI2**: TUI2 still lives :)
 
 **Fork-only docs**
 
-Fork-specific docs live in `docs/xcodex/` (start at [`docs/xcodex/README.md`](docs/xcodex/README.md)).
+Fork-specific docs live in `docs/xcodex/` (start at the [xCodex docs index](docs/xcodex/README.md)).
 
 ## Roadmap
 
