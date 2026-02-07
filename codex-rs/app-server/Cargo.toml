@@ -35,6 +35,7 @@ codex-rmcp-client = { workspace = true }
 codex-utils-absolute-path = { workspace = true }
 codex-utils-json-to-toml = { workspace = true }
 futures = { workspace = true }
+owo-colors = { workspace = true, features = ["supports-colors"] }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 tempfile = { workspace = true }

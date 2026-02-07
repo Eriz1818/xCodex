@@ -39,6 +39,7 @@ use crate::stream_events_utils::last_assistant_message_from_item;
 use crate::terminal;
 use crate::truncate::TruncationPolicy;
 use crate::turn_metadata::build_turn_metadata_header;
+use crate::turn_metadata::resolve_turn_metadata_header_with_timeout;
 use crate::util::error_or_panic;
 use crate::xcodex::hooks::UserHooks;
 use async_channel::Receiver;
@@ -127,6 +128,13 @@ use crate::error::CodexErr;
 use crate::error::Result as CodexResult;
 #[cfg(test)]
 use crate::exec::StreamOutput;
+
+#[derive(Debug, PartialEq)]
+pub enum SteerInputError {
+    NoActiveTurn(Vec<UserInput>),
+    ExpectedTurnMismatch { expected: String, actual: String },
+    EmptyInput,
+}
 use crate::exec_policy::ExecPolicyUpdateError;
 use crate::feedback_tags;
 use crate::file_watcher::FileWatcher;
@@ -294,7 +302,7 @@ impl Codex {
         let enabled_skills = loaded_skills.enabled_skills();
         let user_instructions = get_user_instructions(&config, Some(&enabled_skills)).await;
 
-        let exec_policy = ExecPolicyManager::load(&config.features, &config.config_layer_stack)
+        let exec_policy = ExecPolicyManager::load(&config.config_layer_stack)
             .await
             .map_err(|err| CodexErr::Fatal(format!("failed to load rules: {err}")))?;
 
@@ -486,6 +494,14 @@ impl Codex {
         Ok(event)
     }
 
+    pub async fn steer_input(
+        &self,
+        input: Vec<UserInput>,
+        expected_turn_id: Option<&str>,
+    ) -> Result<String, SteerInputError> {
+        self.session.steer_input(input, expected_turn_id).await
+    }
+
     pub(crate) async fn agent_status(&self) -> AgentStatus {
         self.agent_status.borrow().clone()
     }
@@ -602,22 +618,22 @@ impl TurnContext {
             .clone()
     }
 
+    /// Resolves the per-turn metadata header under a shared timeout policy.
+    ///
+    /// This uses the same timeout helper as websocket startup preconnect so both turn execution
+    /// and background preconnect observe identical "timeout means best-effort fallback" behavior.
     pub async fn resolve_turn_metadata_header(&self) -> Option<String> {
-        const TURN_METADATA_HEADER_TIMEOUT_MS: u64 = 250;
-        match tokio::time::timeout(
-            std::time::Duration::from_millis(TURN_METADATA_HEADER_TIMEOUT_MS),
+        resolve_turn_metadata_header_with_timeout(
             self.build_turn_metadata_header(),
+            self.turn_metadata_header.get().cloned().flatten(),
         )
         .await
-        {
-            Ok(header) => header,
-            Err(_) => {
-                warn!("timed out after 250ms while building turn metadata header");
-                self.turn_metadata_header.get().cloned().flatten()
-            }
-        }
     }
 
+    /// Starts best-effort background computation of turn metadata.
+    ///
+    /// This warms the cached value used by [`TurnContext::resolve_turn_metadata_header`] so turns
+    /// and websocket preconnect are less likely to pay metadata construction latency on demand.
     pub fn spawn_turn_metadata_header_task(self: &Arc<Self>) {
         let context = Arc::clone(self);
         tokio::spawn(async move {
@@ -920,11 +936,22 @@ impl Session {
             session_configuration.collaboration_mode.reasoning_effort();
         per_turn_config.model_reasoning_summary = session_configuration.model_reasoning_summary;
         per_turn_config.personality = session_configuration.personality;
-        per_turn_config.web_search_mode = Some(resolve_web_search_mode_for_turn(
-            per_turn_config.web_search_mode,
-            session_configuration.provider.is_azure_responses_endpoint(),
+        let resolved_web_search_mode = resolve_web_search_mode_for_turn(
+            &per_turn_config.web_search_mode,
             session_configuration.sandbox_policy.get(),
-        ));
+        );
+        if let Err(err) = per_turn_config
+            .web_search_mode
+            .set(resolved_web_search_mode)
+        {
+            let fallback_value = per_turn_config.web_search_mode.value();
+            tracing::warn!(
+                error = %err,
+                ?resolved_web_search_mode,
+                ?fallback_value,
+                "resolved web_search_mode is disallowed by requirements; keeping constrained value"
+            );
+        }
         per_turn_config.features = config.features.clone();
         if !session_configuration.exclusion_secret_allowlist.is_empty() {
             per_turn_config.exclusion.secret_patterns_allowlist.extend(
@@ -1076,7 +1103,7 @@ impl Session {
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
             model_info: &model_info,
             features: &per_turn_config.features,
-            web_search_mode: per_turn_config.web_search_mode,
+            web_search_mode: Some(per_turn_config.web_search_mode.value()),
         });
 
         let cwd = session_configuration.cwd.clone();
@@ -1263,6 +1290,14 @@ impl Session {
             &config,
             &mut post_session_configured_events,
         );
+        for message in &config.startup_warnings {
+            post_session_configured_events.push(Event {
+                id: "".to_owned(),
+                msg: EventMsg::Warning(WarningEvent {
+                    message: message.clone(),
+                }),
+            });
+        }
         maybe_push_unstable_features_warning(&config, &mut post_session_configured_events);
 
         let auth = auth.as_ref();
@@ -1274,6 +1309,7 @@ impl Session {
             auth.and_then(CodexAuth::get_account_id),
             auth.and_then(CodexAuth::get_account_email),
             auth_mode,
+            crate::default_client::originator().value,
             config.otel.log_user_prompt,
             terminal::user_agent(),
             session_configuration.session_source.clone(),
@@ -1356,7 +1392,9 @@ impl Session {
                 session_configuration.provider.clone(),
                 session_configuration.session_source.clone(),
                 config.model_verbosity,
-                config.features.enabled(Feature::ResponsesWebsockets),
+                config.features.enabled(Feature::ResponsesWebsockets)
+                    || config.features.enabled(Feature::ResponsesWebsocketsV2),
+                config.features.enabled(Feature::ResponsesWebsocketsV2),
                 config.features.enabled(Feature::EnableRequestCompression),
                 config.features.enabled(Feature::RuntimeMetrics),
                 Self::build_model_client_beta_features_header(config.as_ref()),
@@ -1375,6 +1413,14 @@ impl Session {
             content_gateway_cache: crate::content_gateway::GatewayCache::new(),
             next_internal_sub_id: AtomicU64::new(0),
         });
+
+        // Warm a websocket in the background so the first turn can reuse it.
+        // This performs only connection setup; user input is still sent later via response.create
+        // when submit_turn() runs.
+        sess.services.model_client.pre_establish_connection(
+            sess.services.otel_manager.clone(),
+            session_configuration.cwd.clone(),
+        );
 
         // Dispatch the SessionConfiguredEvent first and then report any errors.
         // If resuming, include converted initial messages in the payload so UIs can render them immediately.
@@ -1413,6 +1459,12 @@ impl Session {
             sandbox_cwd: session_configuration.cwd.clone(),
             use_linux_sandbox_bwrap: config.features.enabled(Feature::UseLinuxSandboxBwrap),
         };
+        let mut required_mcp_servers: Vec<String> = mcp_servers
+            .iter()
+            .filter(|(_, server)| server.enabled && server.required)
+            .map(|(name, _)| name.clone())
+            .collect();
+        required_mcp_servers.sort();
         let cancel_token = sess.mcp_startup_cancellation_token().await;
 
         sess.services
@@ -1435,6 +1487,25 @@ impl Session {
                 config.codex_home.clone(),
             )
             .await;
+        if !required_mcp_servers.is_empty() {
+            let failures = sess
+                .services
+                .mcp_connection_manager
+                .read()
+                .await
+                .required_startup_failures(&required_mcp_servers)
+                .await;
+            if !failures.is_empty() {
+                let details = failures
+                    .iter()
+                    .map(|failure| format!("{}: {}", failure.server, failure.error))
+                    .collect::<Vec<_>>()
+                    .join("; ");
+                return Err(anyhow::anyhow!(
+                    "required MCP servers failed to initialize: {details}"
+                ));
+            }
+        }
 
         // record_initial_history can emit events. We record only after the SessionConfiguredEvent is emitted.
         sess.record_initial_history(initial_history).await;
@@ -2003,7 +2074,6 @@ impl Session {
         &self,
         amendment: &ExecPolicyAmendment,
     ) -> Result<(), ExecPolicyUpdateError> {
-        let features = self.features.clone();
         let codex_home = self
             .state
             .lock()
@@ -2011,11 +2081,6 @@ impl Session {
             .session_configuration
             .codex_home()
             .clone();
-
-        if !features.enabled(Feature::ExecPolicy) {
-            error!("attempted to append execpolicy rule while execpolicy feature is disabled");
-            return Err(ExecPolicyUpdateError::FeatureDisabled);
-        }
 
         self.services
             .exec_policy
@@ -2347,6 +2412,15 @@ impl Session {
             }
         }
         history.raw_items().to_vec()
+    }
+
+    pub(crate) async fn process_compacted_history(
+        &self,
+        turn_context: &TurnContext,
+        compacted_history: Vec<ResponseItem>,
+    ) -> Vec<ResponseItem> {
+        let initial_context = self.build_initial_context(turn_context).await;
+        compact::process_compacted_history(compacted_history, &initial_context)
     }
 
     /// Append ResponseItems to the in-memory conversation history only.
@@ -2837,17 +2911,39 @@ impl Session {
             .await;
     }
 
-    /// Returns the input if there was no task running to inject into
-    pub async fn inject_input(&self, input: Vec<UserInput>) -> Result<(), Vec<UserInput>> {
-        let mut active = self.active_turn.lock().await;
-        match active.as_mut() {
-            Some(at) => {
-                let mut ts = at.turn_state.lock().await;
-                ts.push_pending_input(input.into());
-                Ok(())
-            }
-            None => Err(input),
+    /// Inject additional user input into the currently active turn.
+    ///
+    /// Returns the active turn id when accepted.
+    pub async fn steer_input(
+        &self,
+        input: Vec<UserInput>,
+        expected_turn_id: Option<&str>,
+    ) -> Result<String, SteerInputError> {
+        if input.is_empty() {
+            return Err(SteerInputError::EmptyInput);
         }
+
+        let mut active = self.active_turn.lock().await;
+        let Some(active_turn) = active.as_mut() else {
+            return Err(SteerInputError::NoActiveTurn(input));
+        };
+
+        let Some((active_turn_id, _)) = active_turn.tasks.first() else {
+            return Err(SteerInputError::NoActiveTurn(input));
+        };
+
+        if let Some(expected_turn_id) = expected_turn_id
+            && expected_turn_id != active_turn_id
+        {
+            return Err(SteerInputError::ExpectedTurnMismatch {
+                expected: expected_turn_id.to_string(),
+                actual: active_turn_id.clone(),
+            });
+        }
+
+        let mut turn_state = active_turn.turn_state.lock().await;
+        turn_state.push_pending_input(input.into());
+        Ok(active_turn_id.clone())
     }
 
     /// Returns the input if there was no task running to inject into
@@ -3275,6 +3371,7 @@ async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiv
 mod handlers {
     use crate::codex::Session;
     use crate::codex::SessionSettingsUpdate;
+    use crate::codex::SteerInputError;
     use crate::codex::TurnContext;
 
     use crate::SandboxState;
@@ -3479,8 +3576,8 @@ mod handlers {
             );
         }
 
-        // Attempt to inject input into current task
-        if let Err(items) = sess.inject_input(items).await {
+        // Attempt to inject input into current task.
+        if let Err(SteerInputError::NoActiveTurn(items)) = sess.steer_input(items, None).await {
             sess.seed_initial_context_if_needed(&current_context).await;
             let resumed_model = sess.take_pending_resume_previous_model().await;
             let update_items = sess.build_settings_update_items(
@@ -4261,7 +4358,15 @@ async fn spawn_review_thread(
     let mut per_turn_config = (*config).clone();
     per_turn_config.model = Some(model.clone());
     per_turn_config.features = review_features.clone();
-    per_turn_config.web_search_mode = Some(review_web_search_mode);
+    if let Err(err) = per_turn_config.web_search_mode.set(review_web_search_mode) {
+        let fallback_value = per_turn_config.web_search_mode.value();
+        tracing::warn!(
+            error = %err,
+            ?review_web_search_mode,
+            ?fallback_value,
+            "review web_search_mode is disallowed by requirements; keeping constrained value"
+        );
+    }
 
     let otel_manager = parent_turn_context
         .otel_manager
@@ -4415,9 +4520,8 @@ pub(crate) async fn run_turn(
         return None;
     }
 
-    let auto_compact_enabled = sess.auto_compact_enabled().await;
-    let context_window = turn_context.model_context_window();
     let model_info = turn_context.model_info.clone();
+    let context_window = turn_context.model_context_window();
     let auto_compact_limit = model_info.auto_compact_token_limit().unwrap_or_else(|| {
         turn_context
             .config
@@ -4436,8 +4540,10 @@ pub(crate) async fn run_turn(
         collaboration_mode_kind: turn_context.collaboration_mode.mode,
     });
     sess.send_event(&turn_context, event).await;
-    if auto_compact_enabled && total_usage_tokens >= auto_compact_limit {
-        run_auto_compact(&sess, &turn_context).await;
+    if total_usage_tokens >= auto_compact_limit
+        && run_auto_compact(&sess, &turn_context).await.is_err()
+    {
+        return None;
     }
 
     let skills_outcome = Some(
@@ -4511,46 +4617,12 @@ pub(crate) async fn run_turn(
     )
     .await;
 
-    let initial_input_for_turn: ResponseInputItem = ResponseInputItem::from(input.clone());
-    let response_item: ResponseItem = initial_input_for_turn.clone().into();
-
-    for _ in 0..2 {
-        let prompt_tokens = if auto_compact_enabled {
-            sess.estimate_prompt_token_count_for_auto_compact(
-                &turn_context,
-                std::iter::once(&response_item).chain(skill_items.iter()),
-            )
-            .await
-        } else {
-            0
-        };
-        let tokens_for_auto_compact = {
-            let state = sess.state.lock().await;
-            state
-                .latest_api_token_usage
-                .as_ref()
-                .map(|usage| usage.total_tokens)
-                .unwrap_or(0)
-                .saturating_add(state.history.non_last_encrypted_reasoning_tokens())
-                .max(prompt_tokens)
-        };
-
-        if auto_compact_enabled && tokens_for_auto_compact >= auto_compact_limit {
-            run_auto_compact(&sess, &turn_context).await;
-            continue;
-        }
-        break;
-    }
-    let event = EventMsg::TurnStarted(TurnStartedEvent {
-        model_context_window: context_window,
-        collaboration_mode_kind: turn_context.collaboration_mode.mode,
-    });
-    sess.send_event(&turn_context, event).await;
-
     for message in skill_warnings {
         sess.send_event(&turn_context, EventMsg::Warning(WarningEvent { message }))
             .await;
     }
+    let initial_input_for_turn: ResponseInputItem = ResponseInputItem::from(input.clone());
+    let response_item: ResponseItem = initial_input_for_turn.clone().into();
     sess.record_user_prompt_and_emit_turn_item(turn_context.as_ref(), &input, response_item)
         .await;
 
@@ -4581,34 +4653,6 @@ pub(crate) async fn run_turn(
             .into_iter()
             .map(ResponseItem::from)
             .collect::<Vec<ResponseItem>>();
-
-        for _ in 0..2 {
-            let prompt_tokens = if auto_compact_enabled {
-                sess.estimate_prompt_token_count_for_auto_compact(
-                    &turn_context,
-                    pending_response_items.iter(),
-                )
-                .await
-            } else {
-                0
-            };
-            let tokens_for_auto_compact = {
-                let state = sess.state.lock().await;
-                state
-                    .latest_api_token_usage
-                    .as_ref()
-                    .map(|usage| usage.total_tokens)
-                    .unwrap_or(0)
-                    .saturating_add(state.history.non_last_encrypted_reasoning_tokens())
-                    .max(prompt_tokens)
-            };
-
-            if auto_compact_enabled && tokens_for_auto_compact >= auto_compact_limit {
-                run_auto_compact(&sess, &turn_context).await;
-                continue;
-            }
-            break;
-        }
 
         if !pending_response_items.is_empty() {
             for response_item in pending_response_items {
@@ -4662,16 +4706,8 @@ pub(crate) async fn run_turn(
                     needs_follow_up,
                     last_agent_message: sampling_request_last_agent_message,
                 } = sampling_request_output;
-                let token_limit_reached = {
-                    let state = sess.state.lock().await;
-                    state
-                        .latest_api_token_usage
-                        .as_ref()
-                        .map(|usage| usage.total_tokens)
-                        .unwrap_or(0)
-                        .saturating_add(state.history.non_last_encrypted_reasoning_tokens())
-                        >= auto_compact_limit
-                };
+                let total_usage_tokens = sess.get_total_token_usage().await;
+                let token_limit_reached = total_usage_tokens >= auto_compact_limit;
 
                 let estimated_token_count =
                     sess.get_estimated_token_count(turn_context.as_ref()).await;
@@ -4687,8 +4723,10 @@ pub(crate) async fn run_turn(
                 );
 
                 // as long as compaction works well in getting us way below the token limit, we shouldn't worry about being in an infinite loop.
-                if auto_compact_enabled && token_limit_reached && needs_follow_up {
-                    run_auto_compact(&sess, &turn_context).await;
+                if token_limit_reached && needs_follow_up {
+                    if run_auto_compact(&sess, &turn_context).await.is_err() {
+                        return None;
+                    }
                     continue;
                 }
 
@@ -4758,17 +4796,18 @@ pub(crate) async fn run_turn(
     last_agent_message
 }
 
-async fn run_auto_compact(sess: &Arc<Session>, turn_context: &Arc<TurnContext>) {
+async fn run_auto_compact(sess: &Arc<Session>, turn_context: &Arc<TurnContext>) -> CodexResult<()> {
     sess.user_hooks().pre_compact(
         sess.conversation_id.to_string(),
         turn_context.cwd.display().to_string(),
         "auto".to_string(),
     );
-    if should_use_remote_compact_task(sess.as_ref(), &turn_context.provider) {
-        run_inline_remote_auto_compact_task(Arc::clone(sess), Arc::clone(turn_context)).await;
+    if should_use_remote_compact_task(&turn_context.provider) {
+        run_inline_remote_auto_compact_task(Arc::clone(sess), Arc::clone(turn_context)).await?;
     } else {
-        run_inline_auto_compact_task(Arc::clone(sess), Arc::clone(turn_context)).await;
+        run_inline_auto_compact_task(Arc::clone(sess), Arc::clone(turn_context)).await?;
     }
+    Ok(())
 }
 
 fn filter_connectors_for_input(
@@ -5340,6 +5379,7 @@ async fn emit_agent_message_in_plan_mode(
                 TurnItem::AgentMessage(codex_protocol::items::AgentMessageItem {
                     id: agent_message_id.clone(),
                     content: Vec::new(),
+                    phase: None,
                 })
             });
         sess.emit_turn_item_started(turn_context, &start_item).await;
@@ -6078,6 +6118,42 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn reconstruct_history_uses_replacement_history_verbatim() {
+        let (session, turn_context) = make_session_and_context().await;
+        let summary_item = ResponseItem::Message {
+            id: None,
+            role: "user".to_string(),
+            content: vec![ContentItem::InputText {
+                text: "summary".to_string(),
+            }],
+            end_turn: None,
+            phase: None,
+        };
+        let replacement_history = vec![
+            summary_item.clone(),
+            ResponseItem::Message {
+                id: None,
+                role: "developer".to_string(),
+                content: vec![ContentItem::InputText {
+                    text: "stale developer instructions".to_string(),
+                }],
+                end_turn: None,
+                phase: None,
+            },
+        ];
+        let rollout_items = vec![RolloutItem::Compacted(CompactedItem {
+            message: String::new(),
+            replacement_history: Some(replacement_history.clone()),
+        })];
+
+        let reconstructed = session
+            .reconstruct_history_from_rollout(&turn_context, &rollout_items)
+            .await;
+
+        assert_eq!(reconstructed, replacement_history);
+    }
+
+    #[tokio::test]
     async fn record_initial_history_reconstructs_resumed_transcript() {
         let (session, turn_context) = make_session_and_context().await;
         let (rollout_items, expected) = sample_rollout(&session, &turn_context).await;
@@ -6742,6 +6818,7 @@ mod tests {
             None,
             Some("test@test.com".to_string()),
             Some(TelemetryAuthMode::Chatgpt),
+            "test_originator".to_string(),
             false,
             "test".to_string(),
             session_source,
@@ -6851,7 +6928,9 @@ mod tests {
                 session_configuration.provider.clone(),
                 session_configuration.session_source.clone(),
                 config.model_verbosity,
-                config.features.enabled(Feature::ResponsesWebsockets),
+                config.features.enabled(Feature::ResponsesWebsockets)
+                    || config.features.enabled(Feature::ResponsesWebsocketsV2),
+                config.features.enabled(Feature::ResponsesWebsocketsV2),
                 config.features.enabled(Feature::EnableRequestCompression),
                 config.features.enabled(Feature::RuntimeMetrics),
                 Session::build_model_client_beta_features_header(config.as_ref()),
@@ -6993,7 +7072,9 @@ mod tests {
                 session_configuration.provider.clone(),
                 session_configuration.session_source.clone(),
                 config.model_verbosity,
-                config.features.enabled(Feature::ResponsesWebsockets),
+                config.features.enabled(Feature::ResponsesWebsockets)
+                    || config.features.enabled(Feature::ResponsesWebsocketsV2),
+                config.features.enabled(Feature::ResponsesWebsocketsV2),
                 config.features.enabled(Feature::EnableRequestCompression),
                 config.features.enabled(Feature::RuntimeMetrics),
                 Session::build_model_client_beta_features_header(config.as_ref()),
@@ -7238,6 +7319,89 @@ mod tests {
             history.raw_items().iter().any(|item| item == &expected),
             "expected pending input to be persisted into history on turn completion"
         );
+    }
+
+    #[tokio::test]
+    async fn steer_input_requires_active_turn() {
+        let (sess, _tc, _rx) = make_session_and_context_with_rx().await;
+        let input = vec![UserInput::Text {
+            text: "steer".to_string(),
+            text_elements: Vec::new(),
+        }];
+
+        let err = sess
+            .steer_input(input, None)
+            .await
+            .expect_err("steering without active turn should fail");
+
+        assert!(matches!(err, SteerInputError::NoActiveTurn(_)));
+    }
+
+    #[tokio::test]
+    async fn steer_input_enforces_expected_turn_id() {
+        let (sess, tc, _rx) = make_session_and_context_with_rx().await;
+        let input = vec![UserInput::Text {
+            text: "hello".to_string(),
+            text_elements: Vec::new(),
+        }];
+        sess.spawn_task(
+            Arc::clone(&tc),
+            input,
+            NeverEndingTask {
+                kind: TaskKind::Regular,
+                listen_to_cancellation_token: false,
+            },
+        )
+        .await;
+
+        let steer_input = vec![UserInput::Text {
+            text: "steer".to_string(),
+            text_elements: Vec::new(),
+        }];
+        let err = sess
+            .steer_input(steer_input, Some("different-turn-id"))
+            .await
+            .expect_err("mismatched expected turn id should fail");
+
+        match err {
+            SteerInputError::ExpectedTurnMismatch { expected, actual } => {
+                assert_eq!(
+                    (expected, actual),
+                    ("different-turn-id".to_string(), tc.sub_id.clone())
+                );
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn steer_input_returns_active_turn_id() {
+        let (sess, tc, _rx) = make_session_and_context_with_rx().await;
+        let input = vec![UserInput::Text {
+            text: "hello".to_string(),
+            text_elements: Vec::new(),
+        }];
+        sess.spawn_task(
+            Arc::clone(&tc),
+            input,
+            NeverEndingTask {
+                kind: TaskKind::Regular,
+                listen_to_cancellation_token: false,
+            },
+        )
+        .await;
+
+        let steer_input = vec![UserInput::Text {
+            text: "steer".to_string(),
+            text_elements: Vec::new(),
+        }];
+        let turn_id = sess
+            .steer_input(steer_input, Some(&tc.sub_id))
+            .await
+            .expect("steering with matching expected turn id should succeed");
+
+        assert_eq!(turn_id, tc.sub_id);
+        assert!(sess.has_pending_input().await);
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

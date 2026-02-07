@@ -519,7 +519,7 @@ fn exec_options(
     .into_iter()
     .chain(
         proposed_execpolicy_amendment
-            .filter(|_| features.enabled(Feature::ExecPolicy))
+            .filter(|_| features.enabled(Feature::RequestRule))
             .and_then(|prefix| {
                 let rendered_prefix = strip_bash_lc_and_escape(prefix.command());
                 if rendered_prefix.contains('\n') || rendered_prefix.contains('\r') {
@@ -600,6 +600,7 @@ mod tests {
     use super::*;
     use crate::app_event::AppEvent;
     use crate::style::user_message_style;
+    use codex_core::features::Feature;
     use codex_core::themes::ThemeCatalog;
     use codex_core::themes::ThemeColor;
     use pretty_assertions::assert_eq;
@@ -731,7 +732,7 @@ mod tests {
             tx,
             {
                 let mut features = Features::with_defaults();
-                features.disable(Feature::ExecPolicy);
+                features.disable(Feature::RequestRule);
                 features
             },
         );

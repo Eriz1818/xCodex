@@ -294,6 +294,7 @@ impl ListSelectionView {
                             Some(match_indices)
                         },
                         description,
+                        category_tag: None,
                         wrap_indent,
                         is_disabled,
                         disabled_reason: item.disabled_reason.clone(),

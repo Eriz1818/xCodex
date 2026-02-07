@@ -41,6 +41,7 @@ pub(crate) struct GenericDisplayRow {
     pub display_shortcut: Option<KeyBinding>,
     pub match_indices: Option<Vec<usize>>, // indices to bold (char positions)
     pub description: Option<String>,       // optional grey text after the name
+    pub category_tag: Option<String>,      // optional right-side category label
     pub disabled_reason: Option<String>,   // optional disabled message
     pub is_disabled: bool,
     pub is_dimmed: bool,
@@ -441,6 +442,10 @@ fn build_full_line(row: &GenericDisplayRow, desc_col: usize) -> Line<'static> {
             full_spans.push(" ".repeat(gap).into());
         }
         full_spans.push(desc.clone().dim());
+    }
+    if let Some(tag) = row.category_tag.as_deref().filter(|tag| !tag.is_empty()) {
+        full_spans.push("  ".into());
+        full_spans.push(tag.to_string().dim());
     }
     Line::from(full_spans)
 }
