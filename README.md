@@ -46,8 +46,8 @@ High-level roadmap (subject to change):
 - `v0.3.0` ✅: soft block + themes (highlight composer + diff highlight + ...)
 - `v0.3.1` ✅: fork health (feature inventory + E2E tests + merge prep)
 - `v0.3.5` ✅: resume/startup responsiveness + themed syntax highlighting + small QoL/bug fixes
-- `v0.3.6` ✅: TUI exclusion controls, transcript rendering fixes, and GPT-5.3 Codex support
-- `v0.4.0`: plan mode + small feature + QoL/bug fixes + exclusion QoL (`/exclusion` command)
+- `v0.3.6` ✅: TUI exclusion controls(`/exclusion` command), transcript rendering fixes, and GPT-5.3 Codex support
+- `v0.4.0`: plan mode + small feature + QoL/bug fixes + split diff mode
 - `v0.5.0`: observer-only sub-agents
 - `v0.6.0`: infinite mode (built on `/plan`)
 - `v0.7.0`: hooks expansion (beyond observer-only)
