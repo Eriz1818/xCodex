@@ -70,6 +70,8 @@ use codex_protocol::protocol::TurnAbortReason;
 use codex_protocol::protocol::TurnContextItem;
 use codex_protocol::protocol::TurnStartedEvent;
 use codex_protocol::request_user_input::RequestUserInputArgs;
+use codex_protocol::request_user_input::RequestUserInputQuestion;
+use codex_protocol::request_user_input::RequestUserInputQuestionOption;
 use codex_protocol::request_user_input::RequestUserInputResponse;
 use codex_rmcp_client::ElicitationResponse;
 use codex_rmcp_client::OAuthCredentialsStoreMode;
@@ -112,6 +114,8 @@ use crate::config::Config;
 use crate::config::Constrained;
 use crate::config::ConstraintResult;
 use crate::config::GhostSnapshotConfig;
+use crate::config::edit::ConfigEdit;
+use crate::config::edit::ConfigEditsBuilder;
 use crate::config::resolve_web_search_mode_for_turn;
 use crate::config::types::McpServerConfig;
 use crate::config::types::McpStartupMode;
@@ -219,6 +223,7 @@ use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
 use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::DeveloperInstructions;
+use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
@@ -397,6 +402,8 @@ impl Codex {
             codex_home: config.codex_home.clone(),
             thread_name: None,
             original_config_do_not_use: Arc::clone(&config),
+            exclusion_secret_allowlist: Vec::new(),
+            exclusion_secret_blocklist: Vec::new(),
             session_source,
             dynamic_tools,
         };
@@ -621,6 +628,143 @@ impl TurnContext {
     }
 }
 
+enum ExclusionRedactionDecision {
+    AllowOnce,
+    Redact,
+    Block,
+    AddAllowlist(String),
+    AddBlocklist(String),
+}
+
+fn format_exclusion_matches(report: &crate::content_gateway::ScanReport) -> Option<String> {
+    if report.matches.is_empty() {
+        return None;
+    }
+
+    fn redaction_reason_label(reason: crate::content_gateway::RedactionReason) -> &'static str {
+        match reason {
+            crate::content_gateway::RedactionReason::FingerprintCache => "Fingerprint cache",
+            crate::content_gateway::RedactionReason::IgnoredPath => "Ignored path",
+            crate::content_gateway::RedactionReason::SecretPattern => "Secret pattern",
+        }
+    }
+
+    let mut lines = Vec::new();
+    lines.push("Matched content:".to_string());
+    for match_info in report.matches.iter().take(3) {
+        let mut value = match_info.value.clone();
+        if value.len() > 200 {
+            value.truncate(200);
+            value.push('…');
+        }
+        let reason = redaction_reason_label(match_info.reason);
+        lines.push(format!("- {value} (reason: {reason})"));
+    }
+    if report.matches.len() > 3 {
+        lines.push(format!("…and {} more", report.matches.len() - 3));
+    }
+    Some(lines.join("\n"))
+}
+
+async fn maybe_prompt_for_exclusion_redaction(
+    sess: &Session,
+    turn_context: &TurnContext,
+    report: &crate::content_gateway::ScanReport,
+    context_label: &str,
+) -> Option<ExclusionRedactionDecision> {
+    if !turn_context.exclusion.prompt_on_blocked {
+        return None;
+    }
+    if !report.redacted && !report.blocked {
+        return None;
+    }
+
+    let match_info = report.matches.first();
+    let match_value = match_info.map(|info| info.value.clone());
+    let mut question_text =
+        format!("Exclusions matched content in {context_label}. How should xcodex proceed?");
+    if let Some(summary) = format_exclusion_matches(report) {
+        question_text.push_str("\n");
+        question_text.push_str(&summary);
+    }
+
+    let mut options = vec![
+        RequestUserInputQuestionOption {
+            label: "Allow once".to_string(),
+            description: "Permit this content for the current request.".to_string(),
+        },
+        RequestUserInputQuestionOption {
+            label: "Redact".to_string(),
+            description: "Redact matching content.".to_string(),
+        },
+        RequestUserInputQuestionOption {
+            label: "Block".to_string(),
+            description: "Block matching content.".to_string(),
+        },
+    ];
+
+    if matches!(
+        match_info.map(|info| info.reason),
+        Some(crate::content_gateway::RedactionReason::SecretPattern)
+    ) {
+        options.push(RequestUserInputQuestionOption {
+            label: "Add to allowlist".to_string(),
+            description: "Skip redaction for this match going forward.".to_string(),
+        });
+        options.push(RequestUserInputQuestionOption {
+            label: "Add to blocklist".to_string(),
+            description: "Always block this match going forward.".to_string(),
+        });
+    }
+
+    let question = RequestUserInputQuestion {
+        header: "Exclusions".to_string(),
+        id: "exclusions_redaction".to_string(),
+        question: question_text,
+        is_other: false,
+        is_secret: false,
+        options: Some(options),
+    };
+    let args = RequestUserInputArgs {
+        questions: vec![question],
+    };
+
+    let response = sess
+        .request_user_input(turn_context, turn_context.sub_id.clone(), args)
+        .await;
+    let answer = response
+        .and_then(|response| response.answers.get("exclusions_redaction").cloned())
+        .and_then(|answer| answer.answers.first().cloned())?;
+
+    match answer.as_str() {
+        "Allow once" => Some(ExclusionRedactionDecision::AllowOnce),
+        "Redact" => Some(ExclusionRedactionDecision::Redact),
+        "Block" => Some(ExclusionRedactionDecision::Block),
+        "Add to allowlist" => match_value.map(ExclusionRedactionDecision::AddAllowlist),
+        "Add to blocklist" => match_value.map(ExclusionRedactionDecision::AddBlocklist),
+        _ => None,
+    }
+}
+
+fn block_response_item(item: &mut ResponseItem) {
+    match item {
+        ResponseItem::Message { content, .. } => {
+            for c in content.iter_mut() {
+                if let ContentItem::InputText { text } | ContentItem::OutputText { text } = c {
+                    *text = "[BLOCKED]".to_string();
+                }
+            }
+        }
+        ResponseItem::FunctionCallOutput { output, .. } => {
+            output.body = FunctionCallOutputBody::Text("[BLOCKED]".to_string());
+        }
+        ResponseItem::CustomToolCallOutput { output, .. } => {
+            *output = "[BLOCKED]".to_string();
+        }
+        _ => {}
+    }
+}
+
 #[derive(Clone)]
 pub(crate) struct SessionConfiguration {
     /// Provider identifier ("openai", "openrouter", ...).
@@ -665,6 +809,10 @@ pub(crate) struct SessionConfiguration {
 
     // TODO(pakrym): Remove config from here
     original_config_do_not_use: Arc<Config>,
+    /// Session-scoped secret pattern allowlist additions (approval-driven).
+    exclusion_secret_allowlist: Vec<String>,
+    /// Session-scoped secret pattern blocklist additions (approval-driven).
+    exclusion_secret_blocklist: Vec<String>,
     /// Source of the session (cli, vscode, exec, mcp, ...)
     session_source: SessionSource,
     dynamic_tools: Vec<DynamicToolSpec>,
@@ -673,6 +821,10 @@ pub(crate) struct SessionConfiguration {
 impl SessionConfiguration {
     pub(crate) fn codex_home(&self) -> &PathBuf {
         &self.codex_home
+    }
+
+    pub(crate) fn active_profile(&self) -> Option<&str> {
+        self.original_config_do_not_use.active_profile.as_deref()
     }
 
     fn thread_config_snapshot(&self) -> ThreadConfigSnapshot {
@@ -774,6 +926,22 @@ impl Session {
             session_configuration.sandbox_policy.get(),
         ));
         per_turn_config.features = config.features.clone();
+        if !session_configuration.exclusion_secret_allowlist.is_empty() {
+            per_turn_config.exclusion.secret_patterns_allowlist.extend(
+                session_configuration
+                    .exclusion_secret_allowlist
+                    .iter()
+                    .cloned(),
+            );
+        }
+        if !session_configuration.exclusion_secret_blocklist.is_empty() {
+            per_turn_config.exclusion.secret_patterns_blocklist.extend(
+                session_configuration
+                    .exclusion_secret_blocklist
+                    .iter()
+                    .cloned(),
+            );
+        }
         per_turn_config
     }
 
@@ -803,6 +971,84 @@ impl Session {
                 }
             }
         });
+    }
+
+    pub(crate) async fn add_exclusion_secret_pattern(&self, pattern: String, allow: bool) {
+        let (codex_home, profile, allowlist, blocklist, added) = {
+            let mut state = self.state.lock().await;
+            let session_config = &mut state.session_configuration;
+            let target = if allow {
+                &mut session_config.exclusion_secret_allowlist
+            } else {
+                &mut session_config.exclusion_secret_blocklist
+            };
+            if target.contains(&pattern) {
+                return;
+            }
+            target.push(pattern.clone());
+
+            let mut allowlist = session_config
+                .original_config_do_not_use
+                .exclusion
+                .secret_patterns_allowlist
+                .clone();
+            allowlist.extend(session_config.exclusion_secret_allowlist.iter().cloned());
+
+            let mut blocklist = session_config
+                .original_config_do_not_use
+                .exclusion
+                .secret_patterns_blocklist
+                .clone();
+            blocklist.extend(session_config.exclusion_secret_blocklist.iter().cloned());
+
+            (
+                session_config.codex_home.clone(),
+                session_config
+                    .active_profile()
+                    .map(|profile| profile.to_string()),
+                allowlist,
+                blocklist,
+                true,
+            )
+        };
+
+        if !added {
+            return;
+        }
+
+        let mut allowlist_array = toml_edit::Array::new();
+        for item in allowlist {
+            allowlist_array.push(item);
+        }
+
+        let mut blocklist_array = toml_edit::Array::new();
+        for item in blocklist {
+            blocklist_array.push(item);
+        }
+
+        if let Err(err) = ConfigEditsBuilder::new(&codex_home)
+            .with_profile(profile.as_deref())
+            .with_edits([
+                ConfigEdit::SetPath {
+                    segments: vec![
+                        "exclusion".to_string(),
+                        "secret_patterns_allowlist".to_string(),
+                    ],
+                    value: toml_edit::value(allowlist_array),
+                },
+                ConfigEdit::SetPath {
+                    segments: vec![
+                        "exclusion".to_string(),
+                        "secret_patterns_blocklist".to_string(),
+                    ],
+                    value: toml_edit::value(blocklist_array),
+                },
+            ])
+            .apply()
+            .await
+        {
+            tracing::error!(error = %err, "failed to persist exclusion secret patterns");
+        }
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -5271,14 +5517,52 @@ async fn try_run_sampling_request(
                     sanitized,
                 );
             };
-        for item in prompt_to_send.input.iter_mut() {
-            let report = gateway.scan_response_item_text_fields(
+        for (idx, item) in prompt_to_send.input.iter_mut().enumerate() {
+            let mut report = gateway.scan_response_item_text_fields(
                 item,
                 &turn_context.sensitive_paths,
                 &sess.content_gateway_cache,
                 epoch,
                 should_log.then_some(&mut log_redaction),
             );
+
+            if let Some(decision) = maybe_prompt_for_exclusion_redaction(
+                sess.as_ref(),
+                turn_context.as_ref(),
+                &report,
+                "prompt payload",
+            )
+            .await
+            {
+                match decision {
+                    ExclusionRedactionDecision::AllowOnce => {
+                        if let Some(original) = prompt.input.get(idx).cloned() {
+                            *item = original;
+                        }
+                        report = crate::content_gateway::ScanReport::safe();
+                    }
+                    ExclusionRedactionDecision::Redact => {}
+                    ExclusionRedactionDecision::Block => {
+                        block_response_item(item);
+                        report.redacted = false;
+                        report.blocked = true;
+                    }
+                    ExclusionRedactionDecision::AddAllowlist(value) => {
+                        sess.add_exclusion_secret_pattern(value, true).await;
+                        if let Some(original) = prompt.input.get(idx).cloned() {
+                            *item = original;
+                        }
+                        report = crate::content_gateway::ScanReport::safe();
+                    }
+                    ExclusionRedactionDecision::AddBlocklist(value) => {
+                        sess.add_exclusion_secret_pattern(value, false).await;
+                        block_response_item(item);
+                        report.redacted = false;
+                        report.blocked = true;
+                    }
+                }
+            }
+
             if report.redacted || report.blocked {
                 let mut counters = turn_context
                     .exclusion_counters
@@ -6149,6 +6433,8 @@ mod tests {
             codex_home: config.codex_home.clone(),
             thread_name: None,
             original_config_do_not_use: Arc::clone(&config),
+            exclusion_secret_allowlist: Vec::new(),
+            exclusion_secret_blocklist: Vec::new(),
             session_source: SessionSource::Exec,
             dynamic_tools: Vec::new(),
         };
@@ -6232,6 +6518,8 @@ mod tests {
             codex_home: config.codex_home.clone(),
             thread_name: None,
             original_config_do_not_use: Arc::clone(&config),
+            exclusion_secret_allowlist: Vec::new(),
+            exclusion_secret_blocklist: Vec::new(),
             session_source: SessionSource::Exec,
             dynamic_tools: Vec::new(),
         };
@@ -6505,6 +6793,8 @@ mod tests {
             codex_home: config.codex_home.clone(),
             thread_name: None,
             original_config_do_not_use: Arc::clone(&config),
+            exclusion_secret_allowlist: Vec::new(),
+            exclusion_secret_blocklist: Vec::new(),
             session_source: SessionSource::Exec,
             dynamic_tools: Vec::new(),
         };
@@ -6645,6 +6935,8 @@ mod tests {
             codex_home: config.codex_home.clone(),
             thread_name: None,
             original_config_do_not_use: Arc::clone(&config),
+            exclusion_secret_allowlist: Vec::new(),
+            exclusion_secret_blocklist: Vec::new(),
             session_source: SessionSource::Exec,
             dynamic_tools: Vec::new(),
         };

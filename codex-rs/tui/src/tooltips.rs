@@ -59,10 +59,6 @@ pub(crate) fn random_tooltip() -> Option<String> {
 pub(crate) fn get_tooltip(plan: Option<PlanType>) -> Option<String> {
     let mut rng = rand::rng();
 
-    if let Some(announcement) = announcement::fetch_announcement_tip() {
-        return Some(announcement);
-    }
-
     // Leave small chance for a random tooltip to be shown.
     if rng.random_ratio(8, 10) {
         match plan {
@@ -84,11 +80,32 @@ pub(crate) fn get_tooltip(plan: Option<PlanType>) -> Option<String> {
 }
 
 pub(crate) fn random_xcodex_tooltip() -> Option<String> {
-    if let Some(announcement) = announcement::fetch_announcement_tip() {
-        return Some(normalize_tip_text(&announcement));
-    }
     let mut rng = rand::rng();
-    pick_tooltip(&mut rng, XCODEX_TOOLTIPS.as_slice()).map(str::to_string)
+    let announcement = announcement::fetch_xcodex_announcement_tip()
+        .map(|announcement| normalize_tip_text(&announcement));
+    pick_xcodex_tooltip(
+        &mut rng,
+        XCODEX_TOOLTIPS.as_slice(),
+        announcement.as_deref(),
+    )
+}
+
+fn pick_xcodex_tooltip<R: Rng + ?Sized>(
+    rng: &mut R,
+    tooltips: &[&'static str],
+    announcement: Option<&str>,
+) -> Option<String> {
+    let total = tooltips.len() + usize::from(announcement.is_some());
+    if total == 0 {
+        return None;
+    }
+
+    let idx = rng.random_range(0..total);
+    if idx < tooltips.len() {
+        Some(tooltips[idx].to_string())
+    } else {
+        announcement.map(str::to_string)
+    }
 }
 
 fn pick_tooltip<R: Rng + ?Sized>(rng: &mut R, tooltips: &[&'static str]) -> Option<&'static str> {
@@ -117,13 +134,12 @@ pub(crate) mod announcement {
         let _ = thread::spawn(|| ANNOUNCEMENT_TIP.get_or_init(init_announcement_tip_in_thread));
     }
 
-    /// Fetch the announcement tip, return None if the prewarm is not done yet.
-    pub(crate) fn fetch_announcement_tip() -> Option<String> {
+    pub(crate) fn fetch_xcodex_announcement_tip() -> Option<String> {
         ANNOUNCEMENT_TIP
             .get()
             .cloned()
             .flatten()
-            .and_then(|raw| parse_announcement_tip_toml(&raw))
+            .and_then(|raw| parse_announcement_tip_toml_for_target(&raw, "xcodex"))
     }
 
     #[derive(Debug, Deserialize)]
@@ -171,6 +187,13 @@ pub(crate) mod announcement {
     }
 
     pub(crate) fn parse_announcement_tip_toml(text: &str) -> Option<String> {
+        parse_announcement_tip_toml_for_target(text, "cli")
+    }
+
+    pub(crate) fn parse_announcement_tip_toml_for_target(
+        text: &str,
+        target_app: &str,
+    ) -> Option<String> {
         let announcements = toml::from_str::<AnnouncementTipDocument>(text)
             .map(|doc| doc.announcements)
             .or_else(|_| toml::from_str::<Vec<AnnouncementTipRaw>>(text))
@@ -184,7 +207,7 @@ pub(crate) mod announcement {
             };
             if tip.version_matches(CODEX_CLI_VERSION)
                 && tip.date_matches(today)
-                && tip.target_app == "cli"
+                && tip.target_app == target_app
             {
                 latest_match = Some(tip.content);
             }
@@ -247,6 +270,7 @@ pub(crate) mod announcement {
 mod tests {
     use super::*;
     use crate::tooltips::announcement::parse_announcement_tip_toml;
+    use crate::tooltips::announcement::parse_announcement_tip_toml_for_target;
     use rand::SeedableRng;
     use rand::rngs::StdRng;
 
@@ -274,6 +298,25 @@ mod tests {
     fn random_xcodex_tooltip_returns_some_tip_when_available() {
         let mut rng = StdRng::seed_from_u64(42);
         assert!(pick_tooltip(&mut rng, XCODEX_TOOLTIPS.as_slice()).is_some());
+    }
+
+    #[test]
+    fn random_xcodex_tooltip_rotates_with_announcement() {
+        let mut saw_local_tip = false;
+        let mut saw_announcement = false;
+
+        for seed in 0..64 {
+            let mut rng = StdRng::seed_from_u64(seed);
+            match pick_xcodex_tooltip(&mut rng, &["local tip"], Some("xcodex announcement tip")) {
+                Some(tip) if tip == "local tip" => saw_local_tip = true,
+                Some(tip) if tip == "xcodex announcement tip" => saw_announcement = true,
+                Some(other) => panic!("unexpected tooltip selected: {other}"),
+                None => panic!("expected a tooltip to be selected"),
+            }
+        }
+
+        assert!(saw_local_tip);
+        assert!(saw_announcement);
     }
 
     #[test]
@@ -337,6 +380,28 @@ target_app = "vsce"
         "#;
 
         assert_eq!(None, parse_announcement_tip_toml(toml));
+    }
+
+    #[test]
+    fn announcement_tip_toml_target_app_filters_cli_vs_xcodex() {
+        let toml = r#"
+[[announcements]]
+content = "codex cli announcement"
+target_app = "cli"
+
+[[announcements]]
+content = "xcodex announcement"
+target_app = "xcodex"
+        "#;
+
+        assert_eq!(
+            Some("codex cli announcement".to_string()),
+            parse_announcement_tip_toml_for_target(toml, "cli")
+        );
+        assert_eq!(
+            Some("xcodex announcement".to_string()),
+            parse_announcement_tip_toml_for_target(toml, "xcodex")
+        );
     }
 
     #[test]

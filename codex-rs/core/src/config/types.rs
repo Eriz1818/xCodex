@@ -123,7 +123,7 @@ pub struct ExclusionConfig {
     pub layer_send_firewall: Option<bool>,
 
     /// Layer 4: scan the full prompt payload right before the model request.
-    /// Defaults to `true` when unset.
+    /// Defaults to `paranoid_mode` when unset.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub layer_request_interceptor: Option<bool>,
 
@@ -149,6 +149,10 @@ pub struct ExclusionConfig {
     /// When `false`, clients should not add the exclusion summary to transcript/history.
     #[serde(default = "default_enabled")]
     pub show_summary_history: bool,
+
+    /// When true, prompt to allow excluded paths or payloads instead of blocking immediately.
+    #[serde(default)]
+    pub prompt_on_blocked: bool,
 
     /// When `true`, block shell tool calls that reference excluded paths before executing.
     #[serde(default = "default_enabled")]
@@ -192,6 +196,7 @@ impl Default for ExclusionConfig {
             log_redactions_max_files: default_log_redactions_max_files(),
             show_summary_banner: default_enabled(),
             show_summary_history: default_enabled(),
+            prompt_on_blocked: false,
             preflight_shell_paths: default_enabled(),
             files: default_exclusion_files(),
         }
@@ -208,7 +213,7 @@ impl ExclusionConfig {
     }
 
     pub fn layer_request_interceptor_enabled(&self) -> bool {
-        self.layer_request_interceptor.unwrap_or(true)
+        self.layer_request_interceptor.unwrap_or(self.paranoid_mode)
     }
 
     pub fn log_redactions_mode(&self) -> LogRedactionsMode {

@@ -19,6 +19,9 @@ use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::models::FunctionCallOutputContentItem;
 use codex_protocol::models::ResponseInputItem;
+use codex_protocol::request_user_input::RequestUserInputArgs;
+use codex_protocol::request_user_input::RequestUserInputQuestion;
+use codex_protocol::request_user_input::RequestUserInputQuestionOption;
 use codex_utils_readiness::Readiness;
 use tracing::warn;
 
@@ -200,14 +203,22 @@ async fn enforce_sensitive_send_policy(
 ) -> ToolOutput {
     let output = match output {
         ToolOutput::Function {
-            body: _,
-            success: _,
+            body,
+            success,
             provenance: ToolProvenance::Filesystem { path },
         } if turn.exclusion.layer_send_firewall_enabled()
             && turn.sensitive_paths.decision_send(&path)
                 == crate::sensitive_paths::SensitivePathDecision::Deny =>
         {
+            if turn.exclusion.prompt_on_blocked
+                && maybe_prompt_for_send(session, turn, call_id, &path).await
             {
+                ToolOutput::Function {
+                    body,
+                    success,
+                    provenance: ToolProvenance::Filesystem { path },
+                }
+            } else {
                 let mut counters = turn
                     .exclusion_counters
                     .lock()
@@ -219,18 +230,20 @@ async fn enforce_sensitive_send_policy(
                     /* redacted */ false,
                     /* blocked */ true,
                 );
-            }
-            ToolOutput::Function {
-                body: FunctionCallOutputBody::Text(turn.sensitive_paths.format_denied_message()),
-                success: Some(false),
-                provenance: ToolProvenance::Filesystem { path },
+                ToolOutput::Function {
+                    body: FunctionCallOutputBody::Text(
+                        turn.sensitive_paths.format_denied_message(),
+                    ),
+                    success: Some(false),
+                    provenance: ToolProvenance::Filesystem { path },
+                }
             }
         }
         other => other,
     };
 
     let output = if turn.exclusion.layer_output_sanitization_enabled() {
-        enforce_sensitive_content_gateway(output, session, turn, tool_name)
+        enforce_sensitive_content_gateway(output, session, turn, tool_name, call_id).await
     } else {
         output
     };
@@ -265,11 +278,206 @@ async fn enforce_sensitive_send_policy(
     .await
 }
 
-fn enforce_sensitive_content_gateway(
+async fn maybe_prompt_for_send(
+    session: &crate::codex::Session,
+    turn: &crate::codex::TurnContext,
+    call_id: &str,
+    path: &std::path::Path,
+) -> bool {
+    let display = path.display().to_string();
+    let question = RequestUserInputQuestion {
+        header: "Exclusions".to_string(),
+        id: "exclusions_send".to_string(),
+        question: format!("Allow xcodex to send this excluded output?\n{display}"),
+        is_other: false,
+        is_secret: false,
+        options: Some(vec![
+            RequestUserInputQuestionOption {
+                label: "Allow once".to_string(),
+                description: "Permit this output for the current request.".to_string(),
+            },
+            RequestUserInputQuestionOption {
+                label: "Block".to_string(),
+                description: "Keep exclusions blocking this output.".to_string(),
+            },
+        ]),
+    };
+    let args = RequestUserInputArgs {
+        questions: vec![question],
+    };
+    let response = session
+        .request_user_input(turn, call_id.to_string(), args)
+        .await;
+    response
+        .and_then(|response| response.answers.get("exclusions_send").cloned())
+        .and_then(|answer| answer.answers.first().cloned())
+        .is_some_and(|value| value == "Allow once")
+}
+
+enum RedactionDecision {
+    AllowOnce,
+    Redact,
+    Block,
+    AddAllowlist(String),
+    AddBlocklist(String),
+}
+
+fn format_redaction_matches(report: &crate::content_gateway::ScanReport) -> Option<String> {
+    if report.matches.is_empty() {
+        return None;
+    }
+
+    fn redaction_reason_label(reason: crate::content_gateway::RedactionReason) -> &'static str {
+        match reason {
+            crate::content_gateway::RedactionReason::FingerprintCache => "Fingerprint cache",
+            crate::content_gateway::RedactionReason::IgnoredPath => "Ignored path",
+            crate::content_gateway::RedactionReason::SecretPattern => "Secret pattern",
+        }
+    }
+
+    let mut lines = Vec::new();
+    lines.push("Matched content:".to_string());
+    for match_info in report.matches.iter().take(3) {
+        let mut value = match_info.value.clone();
+        if value.len() > 200 {
+            value.truncate(200);
+            value.push_str("...");
+        }
+        let reason = redaction_reason_label(match_info.reason);
+        lines.push(format!("- {value} (reason: {reason})"));
+    }
+    if report.matches.len() > 3 {
+        lines.push(format!("...and {} more", report.matches.len() - 3));
+    }
+    Some(lines.join("\n"))
+}
+
+fn parse_redaction_decision(
+    answer: &str,
+    match_value: Option<String>,
+) -> Option<RedactionDecision> {
+    match answer {
+        "Allow once" => Some(RedactionDecision::AllowOnce),
+        "Redact" => Some(RedactionDecision::Redact),
+        "Block" => Some(RedactionDecision::Block),
+        "Add to allowlist" => match_value.map(RedactionDecision::AddAllowlist),
+        "Add to blocklist" => match_value.map(RedactionDecision::AddBlocklist),
+        _ => None,
+    }
+}
+
+async fn maybe_prompt_for_redaction(
+    session: &crate::codex::Session,
+    turn: &crate::codex::TurnContext,
+    call_id: &str,
+    context_label: &str,
+    report: &crate::content_gateway::ScanReport,
+) -> Option<RedactionDecision> {
+    if !turn.exclusion.prompt_on_blocked || (!report.redacted && !report.blocked) {
+        return None;
+    }
+
+    let match_info = report.matches.first();
+    let match_value = match_info.map(|info| info.value.clone());
+    let mut question_text =
+        format!("Exclusions matched content in {context_label}. How should xcodex proceed?");
+    if let Some(summary) = format_redaction_matches(report) {
+        question_text.push('\n');
+        question_text.push_str(&summary);
+    }
+
+    let mut options = vec![
+        RequestUserInputQuestionOption {
+            label: "Allow once".to_string(),
+            description: "Permit this content for the current request.".to_string(),
+        },
+        RequestUserInputQuestionOption {
+            label: "Redact".to_string(),
+            description: "Redact matching content.".to_string(),
+        },
+        RequestUserInputQuestionOption {
+            label: "Block".to_string(),
+            description: "Block matching content.".to_string(),
+        },
+    ];
+
+    if matches!(
+        match_info.map(|info| info.reason),
+        Some(crate::content_gateway::RedactionReason::SecretPattern)
+    ) {
+        options.push(RequestUserInputQuestionOption {
+            label: "Add to allowlist".to_string(),
+            description: "Skip redaction for this match going forward.".to_string(),
+        });
+        options.push(RequestUserInputQuestionOption {
+            label: "Add to blocklist".to_string(),
+            description: "Always block this match going forward.".to_string(),
+        });
+    }
+
+    let question = RequestUserInputQuestion {
+        header: "Exclusions".to_string(),
+        id: "exclusions_redaction".to_string(),
+        question: question_text,
+        is_other: false,
+        is_secret: false,
+        options: Some(options),
+    };
+    let args = RequestUserInputArgs {
+        questions: vec![question],
+    };
+    let response = session
+        .request_user_input(turn, call_id.to_string(), args)
+        .await;
+    let answer = response
+        .and_then(|response| response.answers.get("exclusions_redaction").cloned())
+        .and_then(|answer| answer.answers.first().cloned())?;
+
+    parse_redaction_decision(&answer, match_value)
+}
+
+async fn resolve_redaction_decision(
+    session: &crate::codex::Session,
+    turn: &crate::codex::TurnContext,
+    call_id: &str,
+    context_label: &str,
+    original: String,
+    sanitized: String,
+    mut report: crate::content_gateway::ScanReport,
+) -> (String, crate::content_gateway::ScanReport) {
+    let Some(decision) =
+        maybe_prompt_for_redaction(session, turn, call_id, context_label, &report).await
+    else {
+        return (sanitized, report);
+    };
+
+    match decision {
+        RedactionDecision::AllowOnce => (original, crate::content_gateway::ScanReport::safe()),
+        RedactionDecision::Redact => (sanitized, report),
+        RedactionDecision::Block => {
+            report.redacted = false;
+            report.blocked = true;
+            ("[BLOCKED]".to_string(), report)
+        }
+        RedactionDecision::AddAllowlist(value) => {
+            session.add_exclusion_secret_pattern(value, true).await;
+            (original, crate::content_gateway::ScanReport::safe())
+        }
+        RedactionDecision::AddBlocklist(value) => {
+            session.add_exclusion_secret_pattern(value, false).await;
+            report.redacted = false;
+            report.blocked = true;
+            ("[BLOCKED]".to_string(), report)
+        }
+    }
+}
+
+async fn enforce_sensitive_content_gateway(
     output: ToolOutput,
     session: &crate::codex::Session,
     turn: &crate::codex::TurnContext,
     tool_name: &str,
+    call_id: &str,
 ) -> ToolOutput {
     let epoch = turn.sensitive_paths.ignore_epoch();
     let gateway = crate::content_gateway::ContentGateway::new(
@@ -307,6 +515,7 @@ fn enforce_sensitive_content_gateway(
                 max_bytes: turn.exclusion.log_redactions_max_bytes,
                 max_files: turn.exclusion.log_redactions_max_files,
             };
+            let context_label = format!("{tool_name} output");
 
             let record_report = |report: &crate::content_gateway::ScanReport| {
                 if report.redacted || report.blocked {
@@ -327,12 +536,22 @@ fn enforce_sensitive_content_gateway(
             let body = match body {
                 FunctionCallOutputBody::Text(content) => {
                     let original_content = content;
-                    let (content, report) = gateway.scan_text(
+                    let (sanitized, report) = gateway.scan_text(
                         &original_content,
                         &turn.sensitive_paths,
                         &session.content_gateway_cache,
                         epoch,
                     );
+                    let (content, report) = resolve_redaction_decision(
+                        session,
+                        turn,
+                        call_id,
+                        &context_label,
+                        original_content.clone(),
+                        sanitized,
+                        report,
+                    )
+                    .await;
                     if should_log && (report.redacted || report.blocked) {
                         crate::exclusion_log::log_redaction_event(
                             &log_context,
@@ -351,12 +570,22 @@ fn enforce_sensitive_content_gateway(
                     for item in &mut items {
                         if let FunctionCallOutputContentItem::InputText { text } = item {
                             let original_text = text.clone();
-                            let (next, report) = gateway.scan_text(
+                            let (sanitized, report) = gateway.scan_text(
                                 &original_text,
                                 &turn.sensitive_paths,
                                 &session.content_gateway_cache,
                                 epoch,
                             );
+                            let (next, report) = resolve_redaction_decision(
+                                session,
+                                turn,
+                                call_id,
+                                &context_label,
+                                original_text.clone(),
+                                sanitized,
+                                report,
+                            )
+                            .await;
                             *text = next;
                             if should_log && (report.redacted || report.blocked) {
                                 crate::exclusion_log::log_redaction_event(
@@ -808,6 +1037,54 @@ mod tests {
             }
             _ => panic!("unexpected output variant"),
         }
+    }
+
+    #[test]
+    fn parse_redaction_decision_maps_answers() {
+        assert!(matches!(
+            super::parse_redaction_decision("Allow once", None),
+            Some(super::RedactionDecision::AllowOnce)
+        ));
+        assert!(matches!(
+            super::parse_redaction_decision("Redact", None),
+            Some(super::RedactionDecision::Redact)
+        ));
+        assert!(matches!(
+            super::parse_redaction_decision("Block", None),
+            Some(super::RedactionDecision::Block)
+        ));
+        assert!(matches!(
+            super::parse_redaction_decision("Add to allowlist", Some("secret".to_string())),
+            Some(super::RedactionDecision::AddAllowlist(value)) if value == "secret"
+        ));
+        assert!(matches!(
+            super::parse_redaction_decision("Add to blocklist", Some("secret".to_string())),
+            Some(super::RedactionDecision::AddBlocklist(value)) if value == "secret"
+        ));
+        assert_eq!(
+            super::parse_redaction_decision("unknown", None).is_none(),
+            true
+        );
+    }
+
+    #[test]
+    fn format_redaction_matches_returns_summary() {
+        let report = crate::content_gateway::ScanReport {
+            layers: Vec::new(),
+            redacted: true,
+            blocked: false,
+            reasons: vec![crate::content_gateway::RedactionReason::SecretPattern],
+            matches: vec![crate::content_gateway::RedactionMatch {
+                reason: crate::content_gateway::RedactionReason::SecretPattern,
+                value: "token_abc123".to_string(),
+            }],
+        };
+
+        let summary = super::format_redaction_matches(&report);
+        assert_eq!(
+            summary,
+            Some("Matched content:\n- token_abc123 (reason: Secret pattern)".to_string())
+        );
     }
 }
 

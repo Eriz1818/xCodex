@@ -109,6 +109,7 @@ pub struct ScanReport {
     pub redacted: bool,
     pub blocked: bool,
     pub reasons: Vec<RedactionReason>,
+    pub matches: Vec<RedactionMatch>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -116,6 +117,12 @@ pub enum RedactionReason {
     FingerprintCache,
     IgnoredPath,
     SecretPattern,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RedactionMatch {
+    pub reason: RedactionReason,
+    pub value: String,
 }
 
 type RedactionCallback<'a> = Option<&'a mut dyn FnMut(&str, &str, &ScanReport)>;
@@ -127,6 +134,7 @@ impl ScanReport {
             redacted: false,
             blocked: false,
             reasons: Vec::new(),
+            matches: Vec::new(),
         }
     }
 }
@@ -223,6 +231,7 @@ impl ContentGateway {
                                 redacted: true,
                                 blocked: false,
                                 reasons: vec![RedactionReason::FingerprintCache],
+                                matches: Vec::new(),
                             },
                         );
                     }
@@ -234,6 +243,7 @@ impl ContentGateway {
                                 redacted: false,
                                 blocked: true,
                                 reasons: vec![RedactionReason::FingerprintCache],
+                                matches: Vec::new(),
                             },
                         );
                     }
@@ -296,6 +306,10 @@ impl ContentGateway {
                 if is_candidate_ignored(&candidate, sensitive_paths) {
                     matched_any = true;
                     matched_path = true;
+                    report.matches.push(RedactionMatch {
+                        reason: RedactionReason::IgnoredPath,
+                        value: candidate.clone(),
+                    });
                     if self.cfg.on_match == ExclusionOnMatch::Redact {
                         out = out.replace(&candidate, "[IGNORED-PATH: redacted]");
                     }
@@ -305,8 +319,17 @@ impl ContentGateway {
 
         if self.cfg.secret_patterns {
             for re in self.secret_patterns.iter() {
-                let has_unblocked_match =
-                    re.find_iter(&out).any(|m| !self.is_blocklisted(m.as_str()));
+                let mut has_unblocked_match = false;
+                for m in re.find_iter(&out) {
+                    if self.is_blocklisted(m.as_str()) {
+                        continue;
+                    }
+                    has_unblocked_match = true;
+                    report.matches.push(RedactionMatch {
+                        reason: RedactionReason::SecretPattern,
+                        value: m.as_str().to_string(),
+                    });
+                }
                 if has_unblocked_match {
                     matched_any = true;
                     matched_secret = true;
@@ -369,6 +392,7 @@ impl ContentGateway {
             combined.redacted |= report.redacted;
             combined.blocked |= report.blocked;
             combined.reasons.extend(report.reasons);
+            combined.matches.extend(report.matches);
         };
 
         match item {

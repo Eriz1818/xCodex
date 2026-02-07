@@ -1,12 +1,14 @@
 ---
-source: tui2/src/bottom_pane/status_menu_view.rs
+source: xcodex/tui2/src/bottom_pane/status_menu_view.rs
 expression: "render_lines(&view, 60)"
 ---
                                                             
   [ Status ]  [ Settings ]  [ ⚡ Tools ]  (bottom-pane)      
                                                             
   ⚡ Tools                                                   
-  Toggles and shortcuts.                                    
+  Toggles, shortcuts, and search.                           
+                                                            
+  Search: type to filter tools                              
                                                             
   › [x] Xtreme mode (on)                                    
     [ ] Verbose tool output                                 
@@ -14,6 +16,7 @@ expression: "render_lines(&view, 60)"
     Model…                                                  
     Approvals…                                              
     Worktrees…                                              
+    Exclusions…                                             
     Hooks…                                                  
     Transcript…                                             
     Resume…                                                 

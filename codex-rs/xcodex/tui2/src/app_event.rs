@@ -22,6 +22,7 @@ use crate::bottom_pane::ApprovalRequest;
 use crate::history_cell::HistoryCell;
 use crate::slash_command::SlashCommand;
 
+use codex_core::config::types::ExclusionConfig;
 use codex_core::config::types::XtremeMode;
 use codex_core::protocol::AskForApproval;
 use codex_core::protocol::SandboxPolicy;
@@ -146,6 +147,12 @@ pub(crate) enum AppEvent {
         pinned_paths: Vec<String>,
     },
 
+    /// Update exclusion + hooks payload sanitization settings for the current session.
+    UpdateExclusionSettings {
+        exclusion: ExclusionConfig,
+        hooks_sanitize_payloads: bool,
+    },
+
     /// Replace the cached git worktree list.
     WorktreeListUpdated {
         worktrees: Vec<GitWorktreeEntry>,
@@ -240,6 +247,12 @@ pub(crate) enum AppEvent {
 
     /// Persist whether user prompts are highlighted in the transcript.
     PersistTranscriptUserPromptHighlight(bool),
+
+    /// Persist exclusion + hooks payload sanitization settings.
+    PersistExclusionSettings {
+        exclusion: ExclusionConfig,
+        hooks_sanitize_payloads: bool,
+    },
 
     /// Persist whether xtreme mode styling is enabled.
     PersistXtremeMode(XtremeMode),

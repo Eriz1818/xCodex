@@ -546,8 +546,8 @@ pub const FEATURES: &[FeatureSpec] = &[
         key: "collab",
         stage: Stage::Experimental {
             name: "Sub-agents",
-            menu_description: "Ask Codex to spawn multiple agents to parallelize the work and win in efficiency.",
-            announcement: "NEW: Sub-agents can now be spawned by Codex. Enable in /experimental and restart Codex!",
+            menu_description: "Ask xCodex to spawn multiple agents to parallelize the work and win in efficiency.",
+            announcement: "NEW: Sub-agents can now be spawned by xCodex. Enable in /experimental and restart xCodex!",
         },
         default_enabled: false,
     },
@@ -556,8 +556,8 @@ pub const FEATURES: &[FeatureSpec] = &[
         key: "apps",
         stage: Stage::Experimental {
             name: "Apps",
-            menu_description: "Use a connected ChatGPT App using \"$\". Install Apps via /apps command. Restart Codex after enabling.",
-            announcement: "NEW: Use ChatGPT Apps (Connectors) in Codex via $ mentions. Enable in /experimental and restart Codex!",
+            menu_description: "Use a connected ChatGPT App using \"$\". Install Apps via /apps command. Restart xCodex after enabling.",
+            announcement: "NEW: Use ChatGPT Apps (Connectors) in xCodex via $ mentions. Enable in /experimental and restart xCodex!",
         },
         default_enabled: false,
     },

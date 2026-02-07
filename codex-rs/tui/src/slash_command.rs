@@ -39,6 +39,8 @@ pub enum SlashCommand {
     Theme,
     StatusMenu,
     Worktree,
+    #[strum(serialize = "exclusion")]
+    Exclusions,
     Hooks,
     DebugConfig,
     Statusline,
@@ -79,6 +81,7 @@ impl SlashCommand {
             SlashCommand::Theme => "choose a theme (persists)",
             SlashCommand::StatusMenu => "open the status/settings menu (alias)",
             SlashCommand::Worktree => "switch this session to a different git worktree",
+            SlashCommand::Exclusions => "review and update exclusions for this session",
             SlashCommand::Hooks => "learn how to automate xcodex with hooks",
             SlashCommand::DebugConfig => "show config layers and requirement sources for debugging",
             SlashCommand::Statusline => "configure which items appear in the status line",
@@ -148,6 +151,7 @@ impl SlashCommand {
             | SlashCommand::Theme
             | SlashCommand::StatusMenu
             | SlashCommand::Worktree
+            | SlashCommand::Exclusions
             | SlashCommand::Hooks
             | SlashCommand::DebugConfig
             | SlashCommand::Ps

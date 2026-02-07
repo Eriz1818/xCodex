@@ -13,6 +13,7 @@ use ratatui::widgets::Block;
 use ratatui::widgets::Paragraph;
 use ratatui::widgets::Widget;
 
+use codex_common::fuzzy_match::fuzzy_match;
 use codex_core::config::types::XtremeMode;
 
 use crate::app_event::AppEvent;
@@ -48,6 +49,7 @@ pub(crate) struct StatusMenuView {
     status_scroll_y: u16,
     selected_settings_row: usize,
     selected_tools_row: usize,
+    tools_search_query: String,
     app_event_tx: AppEventSender,
     status_cell: Box<dyn HistoryCell>,
 }
@@ -86,6 +88,7 @@ impl StatusMenuView {
             status_scroll_y: 0,
             selected_settings_row: 0,
             selected_tools_row: 0,
+            tools_search_query: String::new(),
             app_event_tx,
             status_cell,
         }
@@ -149,11 +152,12 @@ impl StatusMenuView {
     }
 
     fn tools_row_count(&self) -> usize {
-        if codex_core::config::is_xcodex_invocation() {
-            10
-        } else {
-            9
+        if !self.tools_search_query.is_empty() {
+            let actions = tools_quick_actions(codex_core::config::is_xcodex_invocation());
+            return self.filtered_quick_action_indices(&actions).len();
         }
+
+        2 + tools_quick_actions(codex_core::config::is_xcodex_invocation()).len()
     }
 
     fn clamp_selected_row(&mut self) {
@@ -211,10 +215,12 @@ impl StatusMenuView {
                     .into(),
                 );
                 lines.push(
-                    Span::from("Toggles and shortcuts.")
+                    Span::from("Toggles, shortcuts, and search.")
                         .set_style(crate::theme::dim_style())
                         .into(),
                 );
+                lines.push(Line::from(""));
+                lines.push(self.tools_search_line());
                 lines.push(Line::from(""));
                 lines.extend(self.build_tools_rows());
                 lines.push(Line::from(""));
@@ -383,52 +389,52 @@ impl StatusMenuView {
             XtremeMode::Off => "off",
         };
 
-        // Row 0: toggle xtreme mode.
-        {
-            let selected = self.selected_tools_row == 0;
-            lines.push(
-                vec![
-                    selected_prefix(selected),
-                    checkbox(self.xtreme_ui_enabled),
-                    "Xtreme mode ".into(),
-                    Span::from(format!("({xtreme_mode_label})"))
-                        .set_style(crate::theme::dim_style()),
-                ]
-                .into(),
-            );
+        let actions = tools_quick_actions(codex_core::config::is_xcodex_invocation());
+        let filtered = self.filtered_quick_action_indices(&actions);
+
+        if self.tools_search_query.is_empty() {
+            // Row 0: toggle xtreme mode.
+            {
+                let selected = self.selected_tools_row == 0;
+                lines.push(
+                    vec![
+                        selected_prefix(selected),
+                        checkbox(self.xtreme_ui_enabled),
+                        "Xtreme mode ".into(),
+                        Span::from(format!("({xtreme_mode_label})"))
+                            .set_style(crate::theme::dim_style()),
+                    ]
+                    .into(),
+                );
+            }
+
+            // Row 1: toggle verbose tool output.
+            {
+                let selected = self.selected_tools_row == 1;
+                lines.push(
+                    vec![
+                        selected_prefix(selected),
+                        checkbox(self.verbose_tool_output),
+                        "Verbose tool output".into(),
+                    ]
+                    .into(),
+                );
+            }
         }
 
-        // Row 1: toggle verbose tool output.
-        {
-            let selected = self.selected_tools_row == 1;
-            lines.push(
-                vec![
-                    selected_prefix(selected),
-                    checkbox(self.verbose_tool_output),
-                    "Verbose tool output".into(),
-                ]
-                .into(),
-            );
-        }
-
-        // Rows 2+: quick actions.
-        let ramps_supported = codex_core::config::is_xcodex_invocation();
-        let mut items = vec![
-            "Review…",
-            "Model…",
-            "Approvals…",
-            "Worktrees…",
-            "Hooks…",
-            "Transcript…",
-            "Resume…",
-        ];
-        if ramps_supported {
-            items.insert(3, "Ramps…");
-        }
-        for (idx, label) in items.iter().enumerate() {
-            let row = idx + 2;
+        let base_row = if self.tools_search_query.is_empty() {
+            2
+        } else {
+            0
+        };
+        for (visible_idx, action_idx) in filtered.iter().enumerate() {
+            let label = actions
+                .get(*action_idx)
+                .map(|item| item.label)
+                .unwrap_or("Unknown");
+            let row = base_row + visible_idx;
             let selected = self.selected_tools_row == row;
-            lines.push(vec![selected_prefix(selected), (*label).into()].into());
+            lines.push(vec![selected_prefix(selected), label.into()].into());
         }
 
         lines
@@ -436,21 +442,95 @@ impl StatusMenuView {
 
     fn selected_tool_hint_lines(&self) -> Vec<Line<'static>> {
         let ramps_supported = codex_core::config::is_xcodex_invocation();
-        let hint = match (ramps_supported, self.selected_tools_row) {
-            (true, 0) | (false, 0) => "Toggle xtreme UI styling (persists).",
-            (true, 1) | (false, 1) => "Toggle verbose tool output in the transcript (persists).",
-            (true, 2) | (false, 2) => "Review your changes and spot issues fast.",
-            (true, 3) | (false, 3) => "Pick a model and reasoning effort.",
-            (true, 4) | (false, 4) => "Review and adjust approval/sandbox presets.",
-            (true, 5) => "Customize xcodex’s per-turn ramp rotation.",
-            (true, 6) | (false, 5) => "Switch worktrees and manage shared dirs.",
-            (true, 7) | (false, 6) => "Automate xcodex with hooks.",
-            (true, 8) | (false, 7) => "Open the full transcript in a scrollable view.",
-            (true, 9) | (false, 8) => "Pick a previous session to continue.",
-            _ => return Vec::new(),
-        };
+        let actions = tools_quick_actions(ramps_supported);
+        let filtered = self.filtered_quick_action_indices(&actions);
+        if self.tools_search_query.is_empty() {
+            let hint = match (ramps_supported, self.selected_tools_row) {
+                (true, 0) | (false, 0) => "Toggle xtreme UI styling (persists).",
+                (true, 1) | (false, 1) => {
+                    "Toggle verbose tool output in the transcript (persists)."
+                }
+                (true, 2) | (false, 2) => "Review your changes and spot issues fast.",
+                (true, 3) | (false, 3) => "Pick a model and reasoning effort.",
+                (true, 4) | (false, 4) => "Review and adjust approval/sandbox presets.",
+                (true, 5) => "Customize xcodex’s per-turn ramp rotation.",
+                (true, 6) | (false, 5) => "Switch worktrees and manage shared dirs.",
+                (true, 7) | (false, 6) => "Review and update exclusions for this session.",
+                (true, 8) | (false, 7) => "Automate xcodex with hooks.",
+                (true, 9) | (false, 8) => "Open the full transcript in a scrollable view.",
+                (true, 10) | (false, 9) => "Pick a previous session to continue.",
+                _ => return Vec::new(),
+            };
+            return vec![vec![Span::from(hint).set_style(crate::theme::dim_style())].into()];
+        }
 
+        let selected_idx = self.selected_tools_row;
+        let action_idx = filtered.get(selected_idx).copied();
+        let hint = action_idx
+            .and_then(|idx| actions.get(idx))
+            .map(|item| item.hint)
+            .unwrap_or("Type to search tools.");
         vec![vec![Span::from(hint).set_style(crate::theme::dim_style())].into()]
+    }
+
+    fn tools_search_line(&self) -> Line<'static> {
+        let label = Span::from("Search: ").set_style(crate::theme::dim_style());
+        if self.tools_search_query.is_empty() {
+            vec![
+                label,
+                Span::from("type to filter tools").set_style(crate::theme::dim_style()),
+            ]
+            .into()
+        } else {
+            vec![label, Span::from(self.tools_search_query.clone())].into()
+        }
+    }
+
+    fn filtered_quick_action_indices(&self, actions: &[ToolsQuickAction]) -> Vec<usize> {
+        if self.tools_search_query.is_empty() {
+            return (0..actions.len()).collect();
+        }
+        let mut matches: Vec<(usize, i32)> = actions
+            .iter()
+            .enumerate()
+            .filter_map(|(idx, item)| {
+                fuzzy_match(item.label, &self.tools_search_query)
+                    .map(|(_indices, score)| (idx, score))
+            })
+            .collect();
+        matches.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+        matches.into_iter().map(|(idx, _)| idx).collect()
+    }
+
+    fn toggle_selected_search(&mut self) {
+        let actions = tools_quick_actions(codex_core::config::is_xcodex_invocation());
+        let filtered = self.filtered_quick_action_indices(&actions);
+        let selected = filtered.get(self.selected_tools_row).copied();
+        let Some(action) = selected.and_then(|idx| actions.get(idx).map(|item| item.action)) else {
+            return;
+        };
+        match action {
+            ToolsAction::Review => self.app_event_tx.send(AppEvent::DispatchSlashCommand(
+                crate::slash_command::SlashCommand::Review,
+            )),
+            ToolsAction::Model => self.app_event_tx.send(AppEvent::DispatchSlashCommand(
+                crate::slash_command::SlashCommand::Model,
+            )),
+            ToolsAction::Approvals => self.app_event_tx.send(AppEvent::OpenApprovalsPopup),
+            ToolsAction::Ramps => self.app_event_tx.send(AppEvent::OpenRampsSettingsView),
+            ToolsAction::Worktrees => self
+                .app_event_tx
+                .send(AppEvent::WorktreeDetect { open_picker: true }),
+            ToolsAction::Exclusions => self.app_event_tx.send(AppEvent::DispatchSlashCommand(
+                crate::slash_command::SlashCommand::Exclusions,
+            )),
+            ToolsAction::Hooks => self.app_event_tx.send(AppEvent::DispatchSlashCommand(
+                crate::slash_command::SlashCommand::Hooks,
+            )),
+            ToolsAction::Transcript => self.app_event_tx.send(AppEvent::OpenTranscriptOverlay),
+            ToolsAction::Resume => self.app_event_tx.send(AppEvent::OpenResumePicker),
+        }
+        self.complete = true;
     }
 
     fn switch_tab(&mut self) {
@@ -471,6 +551,10 @@ impl StatusMenuView {
             }
             StatusMenuTab::Tools => {
                 let max = self.tools_row_count().saturating_sub(1);
+                if max == 0 {
+                    self.selected_tools_row = 0;
+                    return;
+                }
                 if self.selected_tools_row == 0 {
                     self.selected_tools_row = max;
                 } else {
@@ -491,6 +575,10 @@ impl StatusMenuView {
             }
             StatusMenuTab::Tools => {
                 let max = self.tools_row_count().saturating_sub(1);
+                if max == 0 {
+                    self.selected_tools_row = 0;
+                    return;
+                }
                 if self.selected_tools_row >= max {
                     self.selected_tools_row = 0;
                 } else {
@@ -584,12 +672,17 @@ impl StatusMenuView {
                 _ => {}
             },
             StatusMenuTab::Tools => {
+                if !self.tools_search_query.is_empty() {
+                    self.toggle_selected_search();
+                    return;
+                }
                 let ramps_supported = codex_core::config::is_xcodex_invocation();
                 let ramps_row = ramps_supported.then_some(5);
                 let worktrees_row = if ramps_supported { 6 } else { 5 };
-                let hooks_row = if ramps_supported { 7 } else { 6 };
-                let transcript_row = if ramps_supported { 8 } else { 7 };
-                let resume_row = if ramps_supported { 9 } else { 8 };
+                let exclusions_row = if ramps_supported { 7 } else { 6 };
+                let hooks_row = if ramps_supported { 8 } else { 7 };
+                let transcript_row = if ramps_supported { 9 } else { 8 };
+                let resume_row = if ramps_supported { 10 } else { 9 };
 
                 match self.selected_tools_row {
                     0 => {
@@ -624,6 +717,11 @@ impl StatusMenuView {
                     row if row == worktrees_row => self
                         .app_event_tx
                         .send(AppEvent::WorktreeDetect { open_picker: true }),
+                    row if row == exclusions_row => {
+                        self.app_event_tx.send(AppEvent::DispatchSlashCommand(
+                            crate::slash_command::SlashCommand::Exclusions,
+                        ))
+                    }
                     row if row == hooks_row => self.app_event_tx.send(
                         AppEvent::DispatchSlashCommand(crate::slash_command::SlashCommand::Hooks),
                     ),
@@ -650,6 +748,24 @@ impl BottomPaneView for StatusMenuView {
                 code: KeyCode::Esc, ..
             } => {
                 self.complete = true;
+            }
+            KeyEvent {
+                code: KeyCode::Backspace,
+                modifiers: KeyModifiers::NONE,
+                ..
+            } if matches!(self.tab, StatusMenuTab::Tools) => {
+                self.tools_search_query.pop();
+                self.selected_tools_row = 0;
+                self.clamp_selected_row();
+            }
+            KeyEvent {
+                code: KeyCode::Char(ch),
+                modifiers: KeyModifiers::NONE | KeyModifiers::SHIFT,
+                ..
+            } if matches!(self.tab, StatusMenuTab::Tools) => {
+                self.tools_search_query.push(ch);
+                self.selected_tools_row = 0;
+                self.clamp_selected_row();
             }
             KeyEvent {
                 code: KeyCode::Tab,
@@ -807,6 +923,82 @@ impl Renderable for StatusMenuView {
 
         ideal_height.min(max_height).max(3)
     }
+}
+
+#[derive(Clone, Copy)]
+enum ToolsAction {
+    Review,
+    Model,
+    Approvals,
+    Ramps,
+    Worktrees,
+    Exclusions,
+    Hooks,
+    Transcript,
+    Resume,
+}
+
+#[derive(Clone, Copy)]
+struct ToolsQuickAction {
+    label: &'static str,
+    hint: &'static str,
+    action: ToolsAction,
+}
+
+fn tools_quick_actions(ramps_supported: bool) -> Vec<ToolsQuickAction> {
+    let mut items = vec![
+        ToolsQuickAction {
+            label: "Review…",
+            hint: "Review your changes and spot issues fast.",
+            action: ToolsAction::Review,
+        },
+        ToolsQuickAction {
+            label: "Model…",
+            hint: "Pick a model and reasoning effort.",
+            action: ToolsAction::Model,
+        },
+        ToolsQuickAction {
+            label: "Approvals…",
+            hint: "Review and adjust approval/sandbox presets.",
+            action: ToolsAction::Approvals,
+        },
+        ToolsQuickAction {
+            label: "Worktrees…",
+            hint: "Switch worktrees and manage shared dirs.",
+            action: ToolsAction::Worktrees,
+        },
+        ToolsQuickAction {
+            label: "Exclusions…",
+            hint: "Review and update exclusions for this session.",
+            action: ToolsAction::Exclusions,
+        },
+        ToolsQuickAction {
+            label: "Hooks…",
+            hint: "Automate xcodex with hooks.",
+            action: ToolsAction::Hooks,
+        },
+        ToolsQuickAction {
+            label: "Transcript…",
+            hint: "Open the full transcript in a scrollable view.",
+            action: ToolsAction::Transcript,
+        },
+        ToolsQuickAction {
+            label: "Resume…",
+            hint: "Pick a previous session to continue.",
+            action: ToolsAction::Resume,
+        },
+    ];
+    if ramps_supported {
+        items.insert(
+            3,
+            ToolsQuickAction {
+                label: "Ramps…",
+                hint: "Customize xcodex’s per-turn ramp rotation.",
+                action: ToolsAction::Ramps,
+            },
+        );
+    }
+    items
 }
 
 #[cfg(test)]

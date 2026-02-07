@@ -1,7 +1,7 @@
+use codex_common::fuzzy_match::fuzzy_match;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyModifiers;
-use itertools::Itertools as _;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Constraint;
 use ratatui::layout::Layout;
@@ -51,6 +51,7 @@ pub(crate) struct SelectionItem {
     pub description: Option<String>,
     pub selected_description: Option<String>,
     pub is_current: bool,
+    pub is_dimmed: bool,
     pub is_default: bool,
     pub is_disabled: bool,
     pub actions: Vec<SelectionAction>,
@@ -69,6 +70,11 @@ pub(crate) struct SelectionItem {
 /// `AutoVisible` (default) measures only rows visible in the viewport
 /// `AutoAllRows` measures all rows to ensure stable column widths as the user scrolls
 /// `Fixed` used a fixed 30/70  split between columns
+pub(crate) struct TabState {
+    pub current: usize,
+    pub count: usize,
+    pub on_tab: Box<dyn Fn(usize, &AppEventSender) + Send + Sync>,
+}
 pub(crate) struct SelectionViewParams {
     pub title: Option<String>,
     pub subtitle: Option<String>,
@@ -80,6 +86,7 @@ pub(crate) struct SelectionViewParams {
     pub col_width_mode: ColumnWidthMode,
     pub header: Box<dyn Renderable>,
     pub initial_selected_idx: Option<usize>,
+    pub tab_state: Option<TabState>,
 }
 
 impl Default for SelectionViewParams {
@@ -95,6 +102,7 @@ impl Default for SelectionViewParams {
             col_width_mode: ColumnWidthMode::AutoVisible,
             header: Box::new(()),
             initial_selected_idx: None,
+            tab_state: None,
         }
     }
 }
@@ -119,6 +127,7 @@ pub(crate) struct ListSelectionView {
     last_selected_actual_idx: Option<usize>,
     header: Box<dyn Renderable>,
     initial_selected_idx: Option<usize>,
+    tab_state: Option<TabState>,
 }
 
 impl ListSelectionView {
@@ -159,6 +168,7 @@ impl ListSelectionView {
             last_selected_actual_idx: None,
             header,
             initial_selected_idx: params.initial_selected_idx,
+            tab_state: params.tab_state,
         };
         s.apply_filter();
         s
@@ -185,16 +195,17 @@ impl ListSelectionView {
             .or_else(|| self.initial_selected_idx.take());
 
         if self.is_searchable && !self.search_query.is_empty() {
-            let query_lower = self.search_query.to_lowercase();
-            self.filtered_indices = self
+            let mut matches: Vec<(usize, i32)> = self
                 .items
                 .iter()
-                .positions(|item| {
-                    item.search_value
-                        .as_ref()
-                        .is_some_and(|v| v.to_lowercase().contains(&query_lower))
+                .enumerate()
+                .filter_map(|(idx, item)| {
+                    let haystack = item.search_value.as_deref().unwrap_or(&item.name);
+                    fuzzy_match(haystack, &self.search_query).map(|(_indices, score)| (idx, score))
                 })
                 .collect();
+            matches.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+            self.filtered_indices = matches.into_iter().map(|(idx, _)| idx).collect();
         } else {
             self.filtered_indices = (0..self.items.len()).collect();
         }
@@ -249,6 +260,25 @@ impl ListSelectionView {
                     };
                     let wrap_prefix_width = UnicodeWidthStr::width(wrap_prefix.as_str());
                     let display_name = format!("{wrap_prefix}{name_with_marker}");
+                    let match_indices = if self.is_searchable && !self.search_query.is_empty() {
+                        let haystack = item.search_value.as_deref().unwrap_or(name);
+                        fuzzy_match(haystack, &self.search_query)
+                            .map(|(indices, _score)| {
+                                indices
+                                    .into_iter()
+                                    .filter_map(|idx| {
+                                        if idx < name.len() {
+                                            Some(idx + wrap_prefix.len())
+                                        } else {
+                                            None
+                                        }
+                                    })
+                                    .collect::<Vec<usize>>()
+                            })
+                            .unwrap_or_default()
+                    } else {
+                        Vec::new()
+                    };
                     let description = is_selected
                         .then(|| item.selected_description.clone())
                         .flatten()
@@ -258,11 +288,16 @@ impl ListSelectionView {
                     GenericDisplayRow {
                         name: display_name,
                         display_shortcut: item.display_shortcut,
-                        match_indices: None,
+                        match_indices: if match_indices.is_empty() {
+                            None
+                        } else {
+                            Some(match_indices)
+                        },
                         description,
                         wrap_indent,
                         is_disabled,
                         disabled_reason: item.disabled_reason.clone(),
+                        is_dimmed: item.is_dimmed,
                     }
                 })
             })
@@ -309,6 +344,21 @@ impl ListSelectionView {
         } else if selected_item.is_none() {
             self.complete = true;
         }
+    }
+
+    fn cycle_tab(&self, forward: bool) {
+        let Some(tab_state) = &self.tab_state else {
+            return;
+        };
+        if tab_state.count == 0 {
+            return;
+        }
+        let next = if forward {
+            (tab_state.current + 1) % tab_state.count
+        } else {
+            (tab_state.current + tab_state.count - 1) % tab_state.count
+        };
+        (tab_state.on_tab)(next, &self.app_event_tx);
     }
 
     #[cfg(test)]
@@ -361,6 +411,10 @@ impl ListSelectionView {
 }
 
 impl BottomPaneView for ListSelectionView {
+    fn view_kind(&self) -> super::bottom_pane_view::BottomPaneViewKind {
+        super::bottom_pane_view::BottomPaneViewKind::SelectionList
+    }
+
     fn handle_key_event(&mut self, key_event: KeyEvent) {
         match key_event {
             // Some terminals (or configurations) send Control key chords as
@@ -453,6 +507,18 @@ impl BottomPaneView for ListSelectionView {
                 modifiers: KeyModifiers::NONE,
                 ..
             } => self.accept(),
+            KeyEvent {
+                code: KeyCode::Char(' '),
+                modifiers: KeyModifiers::NONE,
+                ..
+            } => self.accept(),
+            KeyEvent {
+                code: KeyCode::Tab, ..
+            } => self.cycle_tab(true),
+            KeyEvent {
+                code: KeyCode::BackTab,
+                ..
+            } => self.cycle_tab(false),
             _ => {}
         }
     }

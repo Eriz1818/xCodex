@@ -333,6 +333,7 @@ impl WorktreeLinkSharedWizardView {
                     display_shortcut: None,
                     match_indices: None,
                     disabled_reason: None,
+                    is_dimmed: false,
                     wrap_indent: None,
                 }
             })

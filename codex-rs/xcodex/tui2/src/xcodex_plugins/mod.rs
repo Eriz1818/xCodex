@@ -1,3 +1,4 @@
+pub(crate) mod exclusions;
 pub(crate) mod help;
 pub(crate) mod history_cell;
 mod hook_process_state;
@@ -86,6 +87,7 @@ pub(crate) fn try_handle_slash_command(chat: &mut ChatWidget, name: &str, rest: 
     match name {
         "thoughts" => thoughts::handle(chat, rest),
         "xtreme" => xtreme::handle(chat, rest),
+        "exclusion" => exclusions::handle_exclusions_command(chat, rest),
         _ => false,
     }
 }

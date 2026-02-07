@@ -2866,6 +2866,68 @@ impl App {
                     }
                 }
             }
+            AppEvent::UpdateExclusionSettings {
+                exclusion,
+                hooks_sanitize_payloads,
+            } => {
+                self.config.exclusion = exclusion.clone();
+                self.config.xcodex.hooks.sanitize_payloads = hooks_sanitize_payloads;
+                self.chat_widget
+                    .set_exclusion_settings(exclusion, hooks_sanitize_payloads);
+            }
+            AppEvent::PersistExclusionSettings {
+                exclusion,
+                hooks_sanitize_payloads,
+            } => {
+                let profile = self.active_profile.as_deref();
+                let exclusion_value = match exclusion_to_item(&exclusion) {
+                    Ok(value) => value,
+                    Err(err) => {
+                        tracing::error!(error = %err, "failed to serialize exclusion settings");
+                        if let Some(profile) = profile {
+                            self.chat_widget.add_error_message(format!(
+                                "Failed to save exclusions for profile `{profile}`: {err}"
+                            ));
+                        } else {
+                            self.chat_widget
+                                .add_error_message(format!("Failed to save exclusions: {err}"));
+                        }
+                        return Ok(AppRunControl::Continue);
+                    }
+                };
+                match ConfigEditsBuilder::new(&self.config.codex_home)
+                    .with_profile(profile)
+                    .with_edits([
+                        ConfigEdit::SetPath {
+                            segments: vec!["exclusion".to_string()],
+                            value: exclusion_value,
+                        },
+                        ConfigEdit::SetPath {
+                            segments: vec![
+                                "xcodex".to_string(),
+                                "hooks".to_string(),
+                                "sanitize_payloads".to_string(),
+                            ],
+                            value: toml_edit::value(hooks_sanitize_payloads),
+                        },
+                    ])
+                    .apply()
+                    .await
+                {
+                    Ok(()) => {}
+                    Err(err) => {
+                        tracing::error!(error = %err, "failed to persist exclusion settings");
+                        if let Some(profile) = profile {
+                            self.chat_widget.add_error_message(format!(
+                                "Failed to save exclusions for profile `{profile}`: {err}"
+                            ));
+                        } else {
+                            self.chat_widget
+                                .add_error_message(format!("Failed to save exclusions: {err}"));
+                        }
+                    }
+                }
+            }
             AppEvent::UpdateWorktreesSharedDirs { shared_dirs } => {
                 self.config.worktrees_shared_dirs = shared_dirs.clone();
                 crate::xcodex_plugins::worktree::set_worktrees_shared_dirs(
@@ -3419,6 +3481,16 @@ impl App {
             }
         });
     }
+}
+
+fn exclusion_to_item(
+    exclusion: &codex_core::config::types::ExclusionConfig,
+) -> Result<toml_edit::Item, String> {
+    let serialized = toml::to_string(exclusion).map_err(|err| err.to_string())?;
+    let document = serialized
+        .parse::<toml_edit::DocumentMut>()
+        .map_err(|err| err.to_string())?;
+    Ok(toml_edit::Item::Table(document.as_table().clone()))
 }
 
 #[cfg(test)]

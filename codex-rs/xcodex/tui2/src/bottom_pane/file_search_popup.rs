@@ -132,6 +132,7 @@ impl WidgetRef for &FileSearchPopup {
                     display_shortcut: None,
                     description: None,
                     disabled_reason: None,
+                    is_dimmed: false,
                     wrap_indent: None,
                 })
                 .collect()

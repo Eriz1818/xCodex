@@ -43,6 +43,7 @@ pub(crate) struct GenericDisplayRow {
     pub description: Option<String>,       // optional grey text after the name
     pub disabled_reason: Option<String>,   // optional disabled message
     pub is_disabled: bool,
+    pub is_dimmed: bool,
     pub wrap_indent: Option<usize>, // optional indent for wrapped lines
 }
 
@@ -513,13 +514,15 @@ fn render_rows_inner(
 
         let mut full_line = build_full_line(row, desc_col);
         let row_is_disabled = row.is_disabled || row.disabled_reason.is_some();
-        let row_style = if row_is_disabled {
+        let row_is_dimmed = row.is_dimmed && !row_is_disabled;
+        let row_style = if row_is_disabled || row_is_dimmed {
             base_style.patch(crate::theme::dim_style())
         } else {
             base_style
         };
 
-        if Some(i) == state.selected_idx && !row_is_disabled {
+        let is_selected = Some(i) == state.selected_idx && !row_is_disabled;
+        if is_selected {
             // Keep the popup background stable and use accent color for selection.
             let style = base_style
                 .patch(crate::theme::accent_style())
@@ -529,7 +532,7 @@ fn render_rows_inner(
                 .iter_mut()
                 .for_each(|span| span.style = style);
         }
-        if row_is_disabled {
+        if !is_selected && (row_is_disabled || row_is_dimmed) {
             full_line.spans.iter_mut().for_each(|span| {
                 span.style = span.style.dim();
             });
