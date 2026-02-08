@@ -97,6 +97,8 @@ use codex_protocol::account::PlanType;
 use codex_protocol::approvals::ElicitationRequestEvent;
 #[cfg(target_os = "windows")]
 use codex_protocol::config_types::WindowsSandboxLevel;
+use codex_protocol::items::AgentMessageItem;
+use codex_protocol::models::MessagePhase;
 use codex_protocol::parse_command::ParsedCommand;
 use codex_protocol::request_user_input::RequestUserInputEvent;
 use codex_protocol::user_input::UserInput;
@@ -451,6 +453,9 @@ pub(crate) struct ChatWidget {
     // The separator itself is only rendered if the turn recorded "work" activity (see
     // `turn_summary`).
     needs_final_message_separator: bool,
+    // Armed when the protocol identifies the next assistant output as the final answer.
+    // We consume this exactly once to place the separator immediately before final output.
+    separator_armed_for_final_answer: bool,
     turn_summary: history_cell::TurnSummary,
     session_stats: crate::status::SessionStats,
 
@@ -721,6 +726,7 @@ impl ChatWidget {
         self.retry_status_header = None;
         self.bottom_pane.set_interrupt_hint_visible(true);
         self.turn_summary = history_cell::TurnSummary::default();
+        self.separator_armed_for_final_answer = false;
         self.last_turn_completion_label = None;
         if let Some(header) = self
             .ramp_status
@@ -750,9 +756,7 @@ impl ChatWidget {
         self.flush_answer_stream_with_separator();
         self.last_turn_completion_label =
             xcodex_plugins::ramps::completion_label(&self.ramp_status);
-        if self.maybe_insert_final_message_separator() {
-            self.request_redraw();
-        }
+        self.separator_armed_for_final_answer = false;
         // Mark task stopped and request redraw now that all content is in history.
         self.agent_turn_running = false;
         self.update_task_running_state();
@@ -1411,6 +1415,13 @@ impl ChatWidget {
         // Before streaming agent content, flush any active exec cell group.
         let needs_redraw = self.active_cell.is_some();
         self.flush_active_cell();
+        let inserted_separator =
+            if self.stream_controller.is_none() && self.separator_armed_for_final_answer {
+                self.separator_armed_for_final_answer = false;
+                self.maybe_insert_final_message_separator()
+            } else {
+                false
+            };
 
         if self.ramp_status.stage() == crate::ramps::RampStage::Waiting
             && let Some(header) = xcodex_plugins::ramps::apply_status_header(
@@ -1432,8 +1443,19 @@ impl ChatWidget {
         {
             self.app_event_tx.send(AppEvent::StartCommitAnimation);
         }
-        if needs_redraw {
+        if needs_redraw || inserted_separator {
             self.request_redraw();
+        }
+    }
+
+    fn on_agent_message_item_started(&mut self, item: AgentMessageItem) {
+        self.separator_armed_for_final_answer =
+            matches!(item.phase, Some(MessagePhase::FinalAnswer));
+    }
+
+    fn on_agent_message_item_completed(&mut self, item: AgentMessageItem) {
+        if matches!(item.phase, Some(MessagePhase::FinalAnswer)) {
+            self.separator_armed_for_final_answer = true;
         }
     }
 
@@ -1912,6 +1934,7 @@ impl ChatWidget {
             is_review_mode: false,
             pre_review_token_info: None,
             needs_final_message_separator: false,
+            separator_armed_for_final_answer: false,
             turn_summary: history_cell::TurnSummary::default(),
             session_stats: crate::status::SessionStats::default(),
             last_rendered_width: std::cell::Cell::new(None),
@@ -2033,6 +2056,7 @@ impl ChatWidget {
             is_review_mode: false,
             pre_review_token_info: None,
             needs_final_message_separator: false,
+            separator_armed_for_final_answer: false,
             turn_summary: history_cell::TurnSummary::default(),
             session_stats: crate::status::SessionStats::default(),
             last_rendered_width: std::cell::Cell::new(None),
@@ -3270,12 +3294,20 @@ impl ChatWidget {
             EventMsg::CollabWaitingEnd(ev) => self.on_collab_event(collab::waiting_end(ev)),
             EventMsg::CollabCloseBegin(_) => {}
             EventMsg::CollabCloseEnd(ev) => self.on_collab_event(collab::close_end(ev)),
+            EventMsg::ItemStarted(event) => {
+                if let codex_protocol::items::TurnItem::AgentMessage(item) = event.item {
+                    self.on_agent_message_item_started(item);
+                }
+            }
+            EventMsg::ItemCompleted(event) => {
+                if let codex_protocol::items::TurnItem::AgentMessage(item) = event.item {
+                    self.on_agent_message_item_completed(item);
+                }
+            }
             EventMsg::RawResponseItem(_)
             | EventMsg::ThreadRolledBack(_)
             | EventMsg::ThreadNameUpdated(_)
             | EventMsg::PlanDelta(_)
-            | EventMsg::ItemStarted(_)
-            | EventMsg::ItemCompleted(_)
             | EventMsg::AgentMessageContentDelta(_)
             | EventMsg::DynamicToolCallRequest(_)
             | EventMsg::ReasoningContentDelta(_)

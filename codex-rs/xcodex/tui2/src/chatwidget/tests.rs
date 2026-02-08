@@ -40,6 +40,7 @@ use codex_core::protocol::ExecPolicyAmendment;
 use codex_core::protocol::ExitedReviewModeEvent;
 use codex_core::protocol::FileChange;
 use codex_core::protocol::HookProcessBeginEvent;
+use codex_core::protocol::ItemStartedEvent;
 use codex_core::protocol::McpStartupCompleteEvent;
 use codex_core::protocol::McpStartupStatus;
 use codex_core::protocol::McpStartupUpdateEvent;
@@ -66,6 +67,10 @@ use codex_protocol::account::PlanType;
 use codex_protocol::config_types::ModeKind;
 #[cfg(target_os = "windows")]
 use codex_protocol::config_types::WindowsSandboxLevel;
+use codex_protocol::items::AgentMessageContent;
+use codex_protocol::items::AgentMessageItem;
+use codex_protocol::items::TurnItem;
+use codex_protocol::models::MessagePhase;
 use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::openai_models::ReasoningEffortPreset;
 use codex_protocol::openai_models::default_input_modalities;
@@ -462,6 +467,7 @@ async fn make_chatwidget_manual(
         is_review_mode: false,
         pre_review_token_info: None,
         needs_final_message_separator: false,
+        separator_armed_for_final_answer: false,
         turn_summary: history_cell::TurnSummary::default(),
         session_stats: crate::status::SessionStats::default(),
         last_rendered_width: std::cell::Cell::new(None),
@@ -2000,7 +2006,7 @@ async fn exec_end_without_begin_uses_event_command() {
 }
 
 #[tokio::test]
-async fn final_message_separator_is_emitted_only_on_turn_complete() {
+async fn final_message_separator_is_emitted_immediately_before_final_answer() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
     chat.handle_codex_event(Event {
         id: "turn-start".to_string(),
@@ -2041,15 +2047,26 @@ async fn final_message_separator_is_emitted_only_on_turn_complete() {
     assert_eq!(cells.len(), 1, "expected orphaned exec cell to flush");
 
     chat.handle_codex_event(Event {
+        id: "agent-item-start".to_string(),
+        msg: EventMsg::ItemStarted(ItemStartedEvent {
+            thread_id: ThreadId::new(),
+            turn_id: "turn-1".to_string(),
+            item: TurnItem::AgentMessage(AgentMessageItem {
+                id: "msg-final".to_string(),
+                content: vec![AgentMessageContent::Text {
+                    text: "hello".to_string(),
+                }],
+                phase: Some(MessagePhase::FinalAnswer),
+            }),
+        }),
+    });
+
+    chat.handle_codex_event(Event {
         id: "agent-delta".to_string(),
         msg: EventMsg::AgentMessageDelta(AgentMessageDeltaEvent {
             delta: "hello".to_string(),
         }),
     });
-    assert!(
-        drain_insert_history(&mut rx).is_empty(),
-        "separator should not be emitted while the turn is still running"
-    );
 
     chat.handle_codex_event(Event {
         id: "agent-final".to_string(),
@@ -2060,17 +2077,18 @@ async fn final_message_separator_is_emitted_only_on_turn_complete() {
     let cells = drain_insert_history(&mut rx);
     assert_eq!(
         cells.len(),
-        1,
-        "expected only the assistant message before turn completion"
+        2,
+        "expected separator immediately before final assistant message"
     );
-    let msg = lines_to_single_string(&cells[0]);
+    let separator = lines_to_single_string(&cells[0]);
+    assert!(
+        separator.trim_start().starts_with('─'),
+        "expected separator before final answer, got: {separator:?}"
+    );
+    let msg = lines_to_single_string(&cells[1]);
     assert!(
         msg.contains("hello"),
         "expected agent message to render, got: {msg:?}"
-    );
-    assert!(
-        !msg.trim_start().starts_with('─'),
-        "unexpected separator before turn completion: {msg:?}"
     );
 
     chat.handle_codex_event(Event {
@@ -2081,15 +2099,9 @@ async fn final_message_separator_is_emitted_only_on_turn_complete() {
     });
 
     let cells = drain_insert_history(&mut rx);
-    assert_eq!(
-        cells.len(),
-        1,
-        "expected separator to be emitted exactly when the turn completes"
-    );
-    let separator = lines_to_single_string(&cells[0]);
     assert!(
-        separator.trim_start().starts_with('─'),
-        "expected separator cell on turn completion, got: {separator:?}"
+        cells.is_empty(),
+        "separator should not be emitted at turn completion once final output has been shown"
     );
 }
 
