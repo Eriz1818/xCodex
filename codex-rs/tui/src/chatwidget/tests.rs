@@ -46,6 +46,7 @@ use codex_core::protocol::ExitedReviewModeEvent;
 use codex_core::protocol::FileChange;
 use codex_core::protocol::HookProcessBeginEvent;
 use codex_core::protocol::ItemCompletedEvent;
+use codex_core::protocol::ItemStartedEvent;
 use codex_core::protocol::McpAuthStatus;
 use codex_core::protocol::McpListToolsResponseEvent;
 use codex_core::protocol::McpStartupCompleteEvent;
@@ -1123,6 +1124,7 @@ async fn make_chatwidget_manual(
         is_review_mode: false,
         pre_review_token_info: None,
         needs_final_message_separator: false,
+        separator_armed_for_final_answer: false,
         turn_summary: xcodex_plugins::history_cell::TurnSummary::default(),
         session_stats: crate::status::SessionStats::default(),
         had_work_activity: false,
@@ -2824,6 +2826,28 @@ fn complete_assistant_message(
     });
 }
 
+fn start_assistant_message(
+    chat: &mut ChatWidget,
+    item_id: &str,
+    text: &str,
+    phase: Option<MessagePhase>,
+) {
+    chat.handle_codex_event(Event {
+        id: format!("raw-start-{item_id}"),
+        msg: EventMsg::ItemStarted(ItemStartedEvent {
+            thread_id: ThreadId::new(),
+            turn_id: "turn-1".to_string(),
+            item: TurnItem::AgentMessage(AgentMessageItem {
+                id: item_id.to_string(),
+                content: vec![AgentMessageContent::Text {
+                    text: text.to_string(),
+                }],
+                phase,
+            }),
+        }),
+    });
+}
+
 fn begin_exec(chat: &mut ChatWidget, call_id: &str, raw_cmd: &str) -> ExecCommandBeginEvent {
     begin_exec_with_source(chat, call_id, raw_cmd, ExecCommandSource::Agent)
 }
@@ -3428,6 +3452,12 @@ async fn orphaned_exec_end_counts_toward_turn_summary_for_separator() {
 
     let cells = drain_insert_history(&mut rx);
     assert_eq!(cells.len(), 1, "expected orphaned exec cell to flush");
+    start_assistant_message(
+        &mut chat,
+        "msg-final",
+        "hello",
+        Some(MessagePhase::FinalAnswer),
+    );
 
     chat.handle_codex_event(Event {
         id: "agent-after-orphan".to_string(),
@@ -3440,19 +3470,30 @@ async fn orphaned_exec_end_counts_toward_turn_summary_for_separator() {
     assert_eq!(
         cells.len(),
         2,
-        "expected separator + agent message after orphaned exec output"
+        "expected separator immediately before final agent message"
     );
-
     let separator = lines_to_single_string(&cells[0]);
     assert!(
         separator.trim_start().starts_with('─'),
-        "expected separator cell, got: {separator:?}"
+        "expected separator before final message, got: {separator:?}"
     );
-
     let msg = lines_to_single_string(&cells[1]);
     assert!(
         msg.contains("hello"),
         "expected agent message to render, got: {msg:?}"
+    );
+
+    chat.handle_codex_event(Event {
+        id: "turn-complete-after-orphan".to_string(),
+        msg: EventMsg::TurnComplete(TurnCompleteEvent {
+            last_agent_message: None,
+        }),
+    });
+
+    let cells = drain_insert_history(&mut rx);
+    assert!(
+        cells.is_empty(),
+        "separator should not be emitted at turn completion once final output has been shown"
     );
 }
 

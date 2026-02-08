@@ -610,6 +610,9 @@ pub(crate) struct ChatWidget {
     // The separator itself is only rendered if the turn recorded "work" activity (see
     // `turn_summary`).
     needs_final_message_separator: bool,
+    // Armed when the protocol identifies the next assistant output as the final answer.
+    // We consume this exactly once to place the separator immediately before final output.
+    separator_armed_for_final_answer: bool,
     turn_summary: xcodex_plugins::history_cell::TurnSummary,
     session_stats: crate::status::SessionStats,
     // Whether the current turn performed "work" (exec commands, MCP tool calls, patch applications).
@@ -1356,6 +1359,7 @@ impl ChatWidget {
         self.pending_status_indicator_restore = false;
         self.bottom_pane.set_interrupt_hint_visible(true);
         self.turn_summary = xcodex_plugins::history_cell::TurnSummary::default();
+        self.separator_armed_for_final_answer = false;
         self.last_turn_completion_label = None;
         let header = xcodex_plugins::ramps::task_start_header(
             &mut self.ramp_status,
@@ -1389,23 +1393,15 @@ impl ChatWidget {
             self.collect_runtime_metrics_delta();
             let runtime_metrics =
                 (!self.turn_runtime_metrics.is_empty()).then_some(self.turn_runtime_metrics);
-            let show_work_separator = self.needs_final_message_separator && self.had_work_activity;
-            if show_work_separator || runtime_metrics.is_some() {
-                let elapsed_seconds = if show_work_separator {
-                    self.bottom_pane
-                        .status_widget()
-                        .map(super::status_indicator_widget::StatusIndicatorWidget::elapsed_seconds)
-                        .map(|current| self.worked_elapsed_from(current))
-                } else {
-                    None
-                };
+            if runtime_metrics.is_some() {
                 self.add_to_history(history_cell::FinalMessageSeparator::new(
-                    elapsed_seconds,
+                    None,
                     runtime_metrics,
                 ));
             }
             self.turn_runtime_metrics = RuntimeMetricsSummary::default();
             self.needs_final_message_separator = false;
+            self.separator_armed_for_final_answer = false;
             self.had_work_activity = false;
             self.request_status_line_branch_refresh();
         }
@@ -2344,8 +2340,16 @@ impl ChatWidget {
     /// Commentary completion sets a deferred restore flag so the status row
     /// returns once stream queues are idle. Final-answer completion (or absent
     /// phase for legacy models) clears the flag to preserve historical behavior.
+    fn on_agent_message_item_started(&mut self, item: AgentMessageItem) {
+        self.separator_armed_for_final_answer =
+            matches!(item.phase, Some(MessagePhase::FinalAnswer));
+    }
+
     fn on_agent_message_item_completed(&mut self, item: AgentMessageItem) {
-        self.pending_status_indicator_restore = match item.phase {
+        if matches!(item.phase, Some(MessagePhase::FinalAnswer)) {
+            self.separator_armed_for_final_answer = true;
+        }
+        self.pending_status_indicator_restore = match item.phase.as_ref() {
             // Models that don't support preambles only output AgentMessageItems on turn completion.
             Some(MessagePhase::FinalAnswer) | None => false,
             Some(MessagePhase::Commentary) => true,
@@ -2435,6 +2439,10 @@ impl ChatWidget {
         // Before streaming agent content, flush any active exec cell group.
         self.flush_unified_exec_wait_streak();
         self.flush_active_cell();
+        if self.stream_controller.is_none() && self.separator_armed_for_final_answer {
+            self.maybe_insert_final_message_separator();
+            self.separator_armed_for_final_answer = false;
+        }
 
         if self.ramp_status.stage() == crate::ramps::RampStage::Waiting
             && let Some(header) = xcodex_plugins::ramps::apply_status_header(
@@ -2447,9 +2455,6 @@ impl ChatWidget {
         }
 
         if self.stream_controller.is_none() {
-            // If the previous turn inserted non-stream history (exec output, patch status, MCP
-            // calls), render a separator before starting the next streamed assistant message.
-            self.maybe_insert_final_message_separator();
             self.stream_controller = Some(StreamController::new(
                 self.last_rendered_width.get().map(|w| w.saturating_sub(2)),
             ));
@@ -2971,6 +2976,7 @@ impl ChatWidget {
             is_review_mode: false,
             pre_review_token_info: None,
             needs_final_message_separator: false,
+            separator_armed_for_final_answer: false,
             turn_summary: xcodex_plugins::history_cell::TurnSummary::default(),
             session_stats: crate::status::SessionStats::default(),
             had_work_activity: false,
@@ -3162,6 +3168,7 @@ impl ChatWidget {
             is_review_mode: false,
             pre_review_token_info: None,
             needs_final_message_separator: false,
+            separator_armed_for_final_answer: false,
             turn_summary: xcodex_plugins::history_cell::TurnSummary::default(),
             session_stats: crate::status::SessionStats::default(),
             had_work_activity: false,
@@ -3340,6 +3347,7 @@ impl ChatWidget {
             is_review_mode: false,
             pre_review_token_info: None,
             needs_final_message_separator: false,
+            separator_armed_for_final_answer: false,
             turn_summary: xcodex_plugins::history_cell::TurnSummary::default(),
             session_stats: crate::status::SessionStats::default(),
             had_work_activity: false,
@@ -4693,11 +4701,15 @@ impl ChatWidget {
             EventMsg::CollabCloseEnd(ev) => self.on_collab_event(collab::close_end(ev)),
             EventMsg::ThreadRolledBack(_) => {}
             EventMsg::RawResponseItem(_)
-            | EventMsg::ItemStarted(_)
             | EventMsg::AgentMessageContentDelta(_)
             | EventMsg::ReasoningContentDelta(_)
             | EventMsg::ReasoningRawContentDelta(_)
             | EventMsg::DynamicToolCallRequest(_) => {}
+            EventMsg::ItemStarted(event) => {
+                if let codex_protocol::items::TurnItem::AgentMessage(item) = event.item {
+                    self.on_agent_message_item_started(item);
+                }
+            }
             EventMsg::ItemCompleted(event) => {
                 let item = event.item;
                 if let codex_protocol::items::TurnItem::Plan(plan_item) = &item {
