@@ -634,6 +634,12 @@ pub(crate) struct ChatWidget {
     // This lets the separator show per-chunk work time (since the previous separator) rather than
     // the total task-running time reported by the status indicator.
     last_separator_elapsed_secs: Option<u64>,
+    // Last elapsed value observed from the status indicator before it was hidden.
+    //
+    // The status row is hidden while streaming output, but we still render the final separator
+    // before the final answer. Cache the latest status-derived elapsed seconds so we don't fall
+    // back to wall-clock timing when the widget is temporarily hidden.
+    last_status_elapsed_secs: Option<u64>,
     // Runtime metrics accumulated across delta snapshots for the active turn.
     turn_runtime_metrics: RuntimeMetricsSummary,
     last_rendered_width: std::cell::Cell<Option<usize>>,
@@ -1367,6 +1373,7 @@ impl ChatWidget {
         self.turn_summary = xcodex_plugins::history_cell::TurnSummary::default();
         self.separator_armed_for_final_answer = false;
         self.last_turn_completion_label = None;
+        self.last_status_elapsed_secs = None;
         let header = xcodex_plugins::ramps::task_start_header(
             &mut self.ramp_status,
             &self.config,
@@ -1394,12 +1401,13 @@ impl ChatWidget {
         self.flush_active_cell();
         self.last_turn_completion_label =
             xcodex_plugins::ramps::completion_label(&self.ramp_status);
+        self.last_status_elapsed_secs = None;
         self.flush_unified_exec_wait_streak();
         if !from_replay {
             self.collect_runtime_metrics_delta();
             let runtime_metrics =
                 (!self.turn_runtime_metrics.is_empty()).then_some(self.turn_runtime_metrics);
-            if runtime_metrics.is_some() {
+            if !codex_core::config::is_xcodex_invocation() && runtime_metrics.is_some() {
                 self.add_to_history(history_cell::FinalMessageSeparator::new(
                     None,
                     runtime_metrics,
@@ -2395,6 +2403,13 @@ impl ChatWidget {
             now,
         );
         for cell in outcome.cells {
+            if let Some(elapsed) = self
+                .bottom_pane
+                .status_widget()
+                .map(super::status_indicator_widget::StatusIndicatorWidget::elapsed_seconds)
+            {
+                self.last_status_elapsed_secs = Some(elapsed);
+            }
             self.bottom_pane.hide_status_indicator();
             self.add_boxed_history(cell);
         }
@@ -2484,6 +2499,7 @@ impl ChatWidget {
                 .bottom_pane
                 .status_widget()
                 .map(super::status_indicator_widget::StatusIndicatorWidget::elapsed_seconds)
+                .or(self.last_status_elapsed_secs)
                 .map(|current| self.worked_elapsed_from(current));
             let show_ramp_separator = xcodex_plugins::ramps::show_separator(&self.ramp_status);
             let xtreme_ui_enabled = crate::xtreme::xtreme_ui_enabled(&self.config);
@@ -2564,7 +2580,7 @@ impl ChatWidget {
             )));
         }
 
-        if orphaned_begin && !matches!(source, ExecCommandSource::UserShell) {
+        if orphaned_begin {
             self.turn_summary.exec_commands = self.turn_summary.exec_commands.saturating_add(1);
             self.session_stats.exec_commands = self.session_stats.exec_commands.saturating_add(1);
             if is_cargo_test {
@@ -2735,24 +2751,21 @@ impl ChatWidget {
             return;
         }
 
-        if !matches!(ev.source, ExecCommandSource::UserShell) {
-            self.turn_summary.exec_commands = self.turn_summary.exec_commands.saturating_add(1);
-            self.session_stats.exec_commands = self.session_stats.exec_commands.saturating_add(1);
-            if crate::exec_command::strip_bash_lc_and_escape(&ev.command).starts_with("cargo test")
-            {
-                self.session_stats.tests_run = self.session_stats.tests_run.saturating_add(1);
-            }
-            if let Some(header) = xcodex_plugins::ramps::apply_status_header(
-                &mut self.ramp_status,
-                self.bottom_pane.is_task_running(),
-                xcodex_plugins::ramps::RampStatusUpdate::Stage(crate::ramps::RampStage::Active),
-            ) {
-                self.set_status_header(header);
-            } else if crate::xtreme::xtreme_ui_enabled(&self.config)
-                && self.current_status_header == "Charging"
-            {
-                self.set_status_header("Overclocking".to_string());
-            }
+        self.turn_summary.exec_commands = self.turn_summary.exec_commands.saturating_add(1);
+        self.session_stats.exec_commands = self.session_stats.exec_commands.saturating_add(1);
+        if crate::exec_command::strip_bash_lc_and_escape(&ev.command).starts_with("cargo test") {
+            self.session_stats.tests_run = self.session_stats.tests_run.saturating_add(1);
+        }
+        if let Some(header) = xcodex_plugins::ramps::apply_status_header(
+            &mut self.ramp_status,
+            self.bottom_pane.is_task_running(),
+            xcodex_plugins::ramps::RampStatusUpdate::Stage(crate::ramps::RampStage::Active),
+        ) {
+            self.set_status_header(header);
+        } else if crate::xtreme::xtreme_ui_enabled(&self.config)
+            && self.current_status_header == "Charging"
+        {
+            self.set_status_header("Overclocking".to_string());
         }
 
         let interaction_input = ev.interaction_input.clone();
@@ -2991,6 +3004,7 @@ impl ChatWidget {
             plan_delta_buffer: String::new(),
             plan_item_active: false,
             last_separator_elapsed_secs: None,
+            last_status_elapsed_secs: None,
             turn_runtime_metrics: RuntimeMetricsSummary::default(),
             last_rendered_width: std::cell::Cell::new(None),
             feedback,
@@ -3179,6 +3193,7 @@ impl ChatWidget {
             session_stats: crate::status::SessionStats::default(),
             had_work_activity: false,
             last_separator_elapsed_secs: None,
+            last_status_elapsed_secs: None,
             turn_runtime_metrics: RuntimeMetricsSummary::default(),
             last_rendered_width: std::cell::Cell::new(None),
             feedback,
@@ -3362,6 +3377,7 @@ impl ChatWidget {
             plan_delta_buffer: String::new(),
             plan_item_active: false,
             last_separator_elapsed_secs: None,
+            last_status_elapsed_secs: None,
             turn_runtime_metrics: RuntimeMetricsSummary::default(),
             last_rendered_width: std::cell::Cell::new(None),
             feedback,
@@ -4084,9 +4100,7 @@ impl ChatWidget {
 
     fn flush_active_cell(&mut self) {
         if let Some(active) = self.active_cell.take() {
-            if Self::should_mark_separator_for_cell(active.as_ref()) {
-                self.needs_final_message_separator = true;
-            }
+            self.needs_final_message_separator = true;
             self.app_event_tx.send(AppEvent::InsertHistoryCell(active));
         }
     }
@@ -4108,9 +4122,7 @@ impl ChatWidget {
         if !keep_placeholder_header_active && !cell.display_lines(u16::MAX).is_empty() {
             // Only break exec grouping if the cell renders visible lines.
             self.flush_active_cell();
-            if Self::should_mark_separator_for_cell(cell.as_ref()) {
-                self.needs_final_message_separator = true;
-            }
+            self.needs_final_message_separator = true;
         }
         self.app_event_tx.send(AppEvent::InsertHistoryCell(cell));
     }
@@ -7445,13 +7457,6 @@ impl ChatWidget {
     pub(crate) fn add_error_message(&mut self, message: String) {
         self.add_to_history(history_cell::new_error_event(message));
         self.request_redraw();
-    }
-
-    fn should_mark_separator_for_cell(cell: &dyn HistoryCell) -> bool {
-        cell.as_any()
-            .downcast_ref::<ExecCell>()
-            .map(|exec| exec.calls.iter().any(|call| !call.is_user_shell_command()))
-            .unwrap_or(true)
     }
 
     fn rename_confirmation_cell(name: &str, thread_id: Option<ThreadId>) -> PlainHistoryCell {

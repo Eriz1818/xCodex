@@ -469,6 +469,7 @@ async fn make_chatwidget_manual(
         needs_final_message_separator: false,
         separator_armed_for_final_answer: false,
         turn_summary: history_cell::TurnSummary::default(),
+        last_status_elapsed_secs: None,
         session_stats: crate::status::SessionStats::default(),
         last_rendered_width: std::cell::Cell::new(None),
         feedback: codex_feedback::CodexFeedback::new(),
@@ -3132,6 +3133,81 @@ async fn user_shell_command_renders_output_not_exploring() {
     );
     let blob = lines_to_single_string(cells.first().unwrap());
     assert_snapshot!("user_shell_ls_output", blob);
+}
+
+#[tokio::test]
+async fn user_shell_command_emits_separator_before_final_message() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.handle_codex_event(Event {
+        id: "turn-start-user-shell".to_string(),
+        msg: EventMsg::TurnStarted(TurnStartedEvent {
+            model_context_window: None,
+            collaboration_mode_kind: ModeKind::Default,
+        }),
+    });
+
+    let begin = begin_exec_with_source(
+        &mut chat,
+        "user-shell-separator",
+        "git status",
+        ExecCommandSource::UserShell,
+    );
+    end_exec(&mut chat, begin, "On branch main\n", "", 0);
+
+    let cells = drain_insert_history(&mut rx);
+    assert_eq!(cells.len(), 1, "expected finalized user-shell exec cell");
+
+    chat.handle_codex_event(Event {
+        id: "agent-item-start-user-shell".to_string(),
+        msg: EventMsg::ItemStarted(ItemStartedEvent {
+            thread_id: ThreadId::new(),
+            turn_id: "turn-1".to_string(),
+            item: TurnItem::AgentMessage(AgentMessageItem {
+                id: "msg-final-user-shell".to_string(),
+                content: vec![AgentMessageContent::Text {
+                    text: "done".to_string(),
+                }],
+                phase: Some(MessagePhase::FinalAnswer),
+            }),
+        }),
+    });
+    chat.handle_codex_event(Event {
+        id: "agent-final-user-shell".to_string(),
+        msg: EventMsg::AgentMessage(AgentMessageEvent {
+            message: "done".to_string(),
+        }),
+    });
+
+    let cells = drain_insert_history(&mut rx);
+    assert_eq!(
+        cells.len(),
+        2,
+        "expected separator immediately before final assistant message"
+    );
+    let separator = lines_to_single_string(&cells[0]);
+    assert!(
+        separator.trim_start().starts_with('─'),
+        "expected separator before final answer, got: {separator:?}"
+    );
+    assert!(
+        separator.contains("Overclocked") || separator.contains("Worked for"),
+        "expected labeled separator, got: {separator:?}"
+    );
+
+    let msg = lines_to_single_string(&cells[1]);
+    assert!(msg.contains("done"), "expected final message, got: {msg:?}");
+
+    chat.handle_codex_event(Event {
+        id: "turn-complete-user-shell".to_string(),
+        msg: EventMsg::TurnComplete(TurnCompleteEvent {
+            last_agent_message: None,
+        }),
+    });
+    let cells = drain_insert_history(&mut rx);
+    assert!(
+        cells.is_empty(),
+        "separator should not be emitted again at turn completion"
+    );
 }
 
 #[tokio::test]

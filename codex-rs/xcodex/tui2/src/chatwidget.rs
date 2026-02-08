@@ -457,6 +457,11 @@ pub(crate) struct ChatWidget {
     // We consume this exactly once to place the separator immediately before final output.
     separator_armed_for_final_answer: bool,
     turn_summary: history_cell::TurnSummary,
+    // Last elapsed value observed from the status indicator before it was hidden.
+    //
+    // This keeps separator timing status-derived without falling back to wall-clock elapsed time
+    // when the status indicator is temporarily hidden during streaming.
+    last_status_elapsed_secs: Option<u64>,
     session_stats: crate::status::SessionStats,
 
     last_rendered_width: std::cell::Cell<Option<usize>>,
@@ -734,6 +739,7 @@ impl ChatWidget {
         self.turn_summary = history_cell::TurnSummary::default();
         self.separator_armed_for_final_answer = false;
         self.last_turn_completion_label = None;
+        self.last_status_elapsed_secs = None;
         if let Some(header) = self
             .ramp_status
             .start_turn(&self.config, self.bottom_pane.is_task_running())
@@ -763,6 +769,7 @@ impl ChatWidget {
         self.last_turn_completion_label =
             xcodex_plugins::ramps::completion_label(&self.ramp_status);
         self.separator_armed_for_final_answer = false;
+        self.last_status_elapsed_secs = None;
         // Mark task stopped and request redraw now that all content is in history.
         self.agent_turn_running = false;
         self.update_task_running_state();
@@ -1375,6 +1382,13 @@ impl ChatWidget {
         if let Some(controller) = self.stream_controller.as_mut() {
             let (cell, is_idle) = controller.on_commit_tick();
             if let Some(cell) = cell {
+                if let Some(elapsed) = self
+                    .bottom_pane
+                    .status_widget()
+                    .map(super::status_indicator_widget::StatusIndicatorWidget::elapsed_seconds)
+                {
+                    self.last_status_elapsed_secs = Some(elapsed);
+                }
                 self.bottom_pane.hide_status_indicator();
                 self.add_boxed_history(cell);
                 self.request_redraw();
@@ -1474,7 +1488,8 @@ impl ChatWidget {
             let elapsed_seconds = self
                 .bottom_pane
                 .status_widget()
-                .map(super::status_indicator_widget::StatusIndicatorWidget::elapsed_seconds);
+                .map(super::status_indicator_widget::StatusIndicatorWidget::elapsed_seconds)
+                .or(self.last_status_elapsed_secs);
             let show_ramp_separator = xcodex_plugins::ramps::show_separator(&self.ramp_status);
             let xtreme_ui_enabled = crate::xtreme::xtreme_ui_enabled(&self.config);
             let completion_label = self.last_turn_completion_label.take();
@@ -1545,7 +1560,7 @@ impl ChatWidget {
             )));
         }
 
-        if orphaned_begin && !matches!(source, ExecCommandSource::UserShell) {
+        if orphaned_begin {
             self.turn_summary.exec_commands = self.turn_summary.exec_commands.saturating_add(1);
             self.session_stats.exec_commands = self.session_stats.exec_commands.saturating_add(1);
             if is_cargo_test {
@@ -1715,24 +1730,21 @@ impl ChatWidget {
             return;
         }
 
-        if !matches!(ev.source, ExecCommandSource::UserShell) {
-            self.turn_summary.exec_commands = self.turn_summary.exec_commands.saturating_add(1);
-            self.session_stats.exec_commands = self.session_stats.exec_commands.saturating_add(1);
-            if crate::exec_command::strip_bash_lc_and_escape(&ev.command).starts_with("cargo test")
-            {
-                self.session_stats.tests_run = self.session_stats.tests_run.saturating_add(1);
-            }
-            if let Some(header) = xcodex_plugins::ramps::apply_status_header(
-                &mut self.ramp_status,
-                self.bottom_pane.is_task_running(),
-                xcodex_plugins::ramps::RampStatusUpdate::Stage(crate::ramps::RampStage::Active),
-            ) {
-                self.set_status_header(header);
-            } else if crate::xtreme::xtreme_ui_enabled(&self.config)
-                && self.current_status_header == "Charging"
-            {
-                self.set_status_header("Overclocking".to_string());
-            }
+        self.turn_summary.exec_commands = self.turn_summary.exec_commands.saturating_add(1);
+        self.session_stats.exec_commands = self.session_stats.exec_commands.saturating_add(1);
+        if crate::exec_command::strip_bash_lc_and_escape(&ev.command).starts_with("cargo test") {
+            self.session_stats.tests_run = self.session_stats.tests_run.saturating_add(1);
+        }
+        if let Some(header) = xcodex_plugins::ramps::apply_status_header(
+            &mut self.ramp_status,
+            self.bottom_pane.is_task_running(),
+            xcodex_plugins::ramps::RampStatusUpdate::Stage(crate::ramps::RampStage::Active),
+        ) {
+            self.set_status_header(header);
+        } else if crate::xtreme::xtreme_ui_enabled(&self.config)
+            && self.current_status_header == "Charging"
+        {
+            self.set_status_header("Overclocking".to_string());
         }
 
         let interaction_input = ev.interaction_input.clone();
@@ -1942,6 +1954,7 @@ impl ChatWidget {
             needs_final_message_separator: false,
             separator_armed_for_final_answer: false,
             turn_summary: history_cell::TurnSummary::default(),
+            last_status_elapsed_secs: None,
             session_stats: crate::status::SessionStats::default(),
             last_rendered_width: std::cell::Cell::new(None),
             feedback,
@@ -2064,6 +2077,7 @@ impl ChatWidget {
             needs_final_message_separator: false,
             separator_armed_for_final_answer: false,
             turn_summary: history_cell::TurnSummary::default(),
+            last_status_elapsed_secs: None,
             session_stats: crate::status::SessionStats::default(),
             last_rendered_width: std::cell::Cell::new(None),
             feedback,
@@ -2541,9 +2555,7 @@ impl ChatWidget {
 
     fn flush_active_cell(&mut self) {
         if let Some(active) = self.active_cell.take() {
-            if Self::should_mark_separator_for_cell(active.as_ref()) {
-                self.needs_final_message_separator = true;
-            }
+            self.needs_final_message_separator = true;
             self.app_event_tx.send(AppEvent::InsertHistoryCell(active));
         }
     }
@@ -2564,9 +2576,7 @@ impl ChatWidget {
         if !keep_placeholder_header_active && !cell.display_lines(u16::MAX).is_empty() {
             // Only break exec grouping if the cell renders visible lines.
             self.flush_active_cell();
-            if Self::should_mark_separator_for_cell(cell.as_ref()) {
-                self.needs_final_message_separator = true;
-            }
+            self.needs_final_message_separator = true;
         }
         self.app_event_tx.send(AppEvent::InsertHistoryCell(cell));
     }
@@ -5238,13 +5248,6 @@ impl ChatWidget {
     pub(crate) fn add_error_message(&mut self, message: String) {
         self.add_to_history(history_cell::new_error_event(message));
         self.request_redraw();
-    }
-
-    fn should_mark_separator_for_cell(cell: &dyn HistoryCell) -> bool {
-        cell.as_any()
-            .downcast_ref::<ExecCell>()
-            .map(|exec| exec.calls.iter().any(|call| !call.is_user_shell_command()))
-            .unwrap_or(true)
     }
 
     pub(crate) fn add_mcp_output(&mut self) {
