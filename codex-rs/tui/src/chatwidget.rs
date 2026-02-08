@@ -1220,6 +1220,12 @@ impl ChatWidget {
         // If we have a stream_controller, then the final agent message is redundant and will be a
         // duplicate of what has already been streamed.
         if self.stream_controller.is_none() && !message.is_empty() {
+            // Legacy streams may omit ItemStarted/ItemCompleted phase markers. In that case, arm
+            // the separator on the first post-work final message so we still render it exactly
+            // once before the assistant output.
+            if !self.separator_armed_for_final_answer && self.needs_final_message_separator {
+                self.separator_armed_for_final_answer = true;
+            }
             self.handle_streaming_delta(message);
         }
         self.flush_answer_stream_with_separator();

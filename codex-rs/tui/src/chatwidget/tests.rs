@@ -3498,6 +3498,51 @@ async fn orphaned_exec_end_counts_toward_turn_summary_for_separator() {
 }
 
 #[tokio::test]
+async fn final_message_separator_is_emitted_without_phase_markers() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.on_task_started();
+
+    let begin = begin_exec(&mut chat, "call-no-phase-sep", "echo ok");
+    end_exec(&mut chat, begin, "ok\n", "", 0);
+    let cells = drain_insert_history(&mut rx);
+    assert_eq!(cells.len(), 1, "expected finalized exec cell to flush");
+
+    chat.handle_codex_event(Event {
+        id: "agent-final-no-phase".to_string(),
+        msg: EventMsg::AgentMessage(AgentMessageEvent {
+            message: "done".to_string(),
+        }),
+    });
+
+    let cells = drain_insert_history(&mut rx);
+    assert_eq!(
+        cells.len(),
+        2,
+        "expected separator immediately before final message without phase markers"
+    );
+    let separator = lines_to_single_string(&cells[0]);
+    assert!(
+        separator.trim_start().starts_with('─'),
+        "expected separator before final message, got: {separator:?}"
+    );
+    let msg = lines_to_single_string(&cells[1]);
+    assert!(msg.contains("done"), "expected final message, got: {msg:?}");
+
+    chat.handle_codex_event(Event {
+        id: "turn-complete-no-phase".to_string(),
+        msg: EventMsg::TurnComplete(TurnCompleteEvent {
+            last_agent_message: None,
+        }),
+    });
+
+    let cells = drain_insert_history(&mut rx);
+    assert!(
+        cells.is_empty(),
+        "separator should not be emitted again at turn completion"
+    );
+}
+
+#[tokio::test]
 async fn exec_history_shows_unified_exec_startup_commands() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
     chat.on_task_started();
