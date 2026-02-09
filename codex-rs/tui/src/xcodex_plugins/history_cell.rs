@@ -1034,46 +1034,49 @@ impl HistoryCell for XcodexSessionHeaderHistoryCell {
             &self.sandbox,
             label_width,
         );
-        let model_spans: Vec<Span<'static>> = if self.is_collaboration {
+        let model_label = format!(
+            "{model_label:<label_width$}",
+            model_label = "model:",
+            label_width = label_width
+        );
+        let reasoning_label = self.reasoning_label();
+        let mut model_spans = vec![
+            Span::from(format!("{model_label} ")).dim(),
+            Span::styled(self.model.clone(), self.model_style),
+        ];
+        if let Some(reasoning) = reasoning_label {
+            model_spans.push(Span::from(" "));
+            model_spans.push(Span::from(reasoning));
+        }
+        model_spans.push("   ".dim());
+        model_spans
+            .push(Span::from(CHANGE_MODEL_HINT_COMMAND).set_style(crate::theme::accent_style()));
+        model_spans.push(CHANGE_MODEL_HINT_EXPLANATION.dim());
+
+        let mode_spans: Option<Vec<Span<'static>>> = if self.is_collaboration {
             let collab_label = format!(
                 "{collab_label:<label_width$}",
                 collab_label = "mode:",
                 label_width = label_width
             );
-            let mut spans = vec![Span::from(format!("{collab_label} ")).dim()];
-            if self.model == "loading" {
-                spans.push(Span::styled(self.model.clone(), self.model_style));
+            let mode_text = if self.model == "loading" {
+                "loading"
             } else if let Some(mode_label) = self.collaboration_mode_label() {
-                spans.push(Span::styled(mode_label.to_string(), self.model_style));
+                mode_label
             } else {
-                spans.push(Span::styled("Custom", self.model_style));
-            }
+                "Custom"
+            };
+            let mut spans = vec![
+                Span::from(format!("{collab_label} ")).dim(),
+                Span::styled(mode_text, self.model_style),
+            ];
             spans.push("   ".dim());
             let shift_tab_span: Span<'static> = key_hint::shift(KeyCode::Tab).into();
             spans.push(shift_tab_span.cyan());
             spans.push(CHANGE_MODE_HINT_EXPLANATION.dim());
-            spans
+            Some(spans)
         } else {
-            let model_label = format!(
-                "{model_label:<label_width$}",
-                model_label = "model:",
-                label_width = label_width
-            );
-            let reasoning_label = self.reasoning_label();
-            let mut spans = vec![
-                Span::from(format!("{model_label} ")).dim(),
-                Span::styled(self.model.clone(), self.model_style),
-            ];
-            if let Some(reasoning) = reasoning_label {
-                spans.push(Span::from(" "));
-                spans.push(Span::from(reasoning));
-            }
-            spans.push("   ".dim());
-            spans.push(
-                Span::from(CHANGE_MODEL_HINT_COMMAND).set_style(crate::theme::accent_style()),
-            );
-            spans.push(CHANGE_MODEL_HINT_EXPLANATION.dim());
-            spans
+            None
         };
 
         let dir_label = format!("{DIR_LABEL:<label_width$}");
@@ -1087,6 +1090,9 @@ impl HistoryCell for XcodexSessionHeaderHistoryCell {
         lines.push(make_row(title_spans));
         lines.push(make_row(Vec::new()));
         if let Some(spans) = power_spans {
+            lines.push(make_row(spans));
+        }
+        if let Some(spans) = mode_spans {
             lines.push(make_row(spans));
         }
         lines.push(make_row(model_spans));
@@ -1352,6 +1358,7 @@ pub(crate) fn placeholder_session_header_cell(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use insta::assert_snapshot;
     use pretty_assertions::assert_eq;
 
     fn render_lines(lines: &[Line<'static>]) -> Vec<String> {
@@ -1377,5 +1384,43 @@ mod tests {
             render_lines(&cell.display_lines(80)),
             vec!["  ⚡Tips: xcodex tip", "  Tips: codex tip"],
         );
+    }
+
+    fn relevant_header_lines(lines: &[Line<'static>]) -> String {
+        render_lines(lines)
+            .into_iter()
+            .filter(|line| {
+                line.contains("mode:")
+                    || line.contains("model:")
+                    || line.contains("directory:")
+                    || line.contains("/model")
+                    || line.contains("shift + tab")
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    #[test]
+    fn collaboration_header_shows_mode_and_model_rows() {
+        let cell = XcodexSessionHeaderHistoryCell::new(
+            "gpt-5.3-codex high".to_string(),
+            Some(ReasoningEffortConfig::High),
+            std::path::PathBuf::from("/Users/test/repo"),
+            "0.0.0",
+            AskForApproval::Never,
+            SandboxPolicy::DangerFullAccess,
+            false,
+            true,
+            CollaborationMode {
+                mode: ModeKind::Default,
+                settings: Settings {
+                    model: "gpt-5.3-codex high".to_string(),
+                    reasoning_effort: Some(ReasoningEffortConfig::High),
+                    developer_instructions: None,
+                },
+            },
+        );
+
+        assert_snapshot!(relevant_header_lines(&cell.display_lines(120)));
     }
 }
