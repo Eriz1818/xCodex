@@ -294,12 +294,12 @@ impl Renderable for SkillsToggleView {
             return;
         }
 
+        let base_style = popup_surface_style();
+        Block::default().style(base_style).render(area, buf);
+
         // Reserve the footer line for the key-hint row.
         let [content_area, footer_area] =
             Layout::vertical([Constraint::Fill(1), Constraint::Length(1)]).areas(area);
-
-        let base_style = popup_surface_style();
-        Block::default().style(base_style).render(content_area, buf);
 
         let header_height = self
             .header

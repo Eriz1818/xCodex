@@ -4,6 +4,7 @@ use ratatui::layout::Constraint;
 use ratatui::layout::Layout;
 use ratatui::layout::Rect;
 use ratatui::text::Line;
+use ratatui::widgets::Block;
 use ratatui::widgets::Widget;
 use ratatui::widgets::WidgetRef;
 
@@ -183,6 +184,7 @@ impl WidgetRef for SkillPopup {
             (area, None)
         };
         let base_style = crate::theme::transcript_style();
+        Block::default().style(base_style).render(area, buf);
         let rows = self.rows_from_matches(self.filtered());
         render_rows_single_line(
             list_area.inset(Insets::tlbr(0, 2, 0, 0)),

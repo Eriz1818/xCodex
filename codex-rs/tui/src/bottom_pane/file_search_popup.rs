@@ -3,6 +3,8 @@ use std::path::PathBuf;
 use codex_file_search::FileMatch;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
+use ratatui::widgets::Block;
+use ratatui::widgets::Widget;
 use ratatui::widgets::WidgetRef;
 
 use crate::render::Insets;
@@ -141,6 +143,7 @@ impl WidgetRef for &FileSearchPopup {
         };
 
         let base_style = crate::theme::transcript_style();
+        Block::default().style(base_style).render(area, buf);
         render_rows(
             area.inset(Insets::tlbr(0, 2, 0, 0)),
             buf,
