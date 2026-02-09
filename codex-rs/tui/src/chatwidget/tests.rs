@@ -1125,6 +1125,11 @@ async fn make_chatwidget_manual(
         pre_review_token_info: None,
         needs_final_message_separator: false,
         separator_armed_for_final_answer: false,
+        buffered_agent_message: None,
+        suppress_legacy_agent_messages: 0,
+        answer_stream_has_committed_cells: false,
+        debug_separators: false,
+        saw_message_phase_markers: false,
         turn_summary: xcodex_plugins::history_cell::TurnSummary::default(),
         session_stats: crate::status::SessionStats::default(),
         had_work_activity: false,
@@ -3544,6 +3549,179 @@ async fn final_message_separator_is_emitted_without_phase_markers() {
 }
 
 #[tokio::test]
+async fn final_message_separator_is_emitted_for_delta_stream_without_phase_markers() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.on_task_started();
+
+    let begin = begin_exec(&mut chat, "call-no-phase-sep-delta", "echo ok");
+    end_exec(&mut chat, begin, "ok\n", "", 0);
+    let cells = drain_insert_history(&mut rx);
+    assert_eq!(cells.len(), 1, "expected finalized exec cell to flush");
+
+    chat.handle_codex_event(Event {
+        id: "agent-delta-no-phase".to_string(),
+        msg: EventMsg::AgentMessageDelta(AgentMessageDeltaEvent {
+            delta: "done".to_string(),
+        }),
+    });
+
+    // Simulate providers that stream deltas followed by a redundant final message.
+    chat.handle_codex_event(Event {
+        id: "agent-final-no-phase-delta".to_string(),
+        msg: EventMsg::AgentMessage(AgentMessageEvent {
+            message: "done".to_string(),
+        }),
+    });
+
+    let cells = drain_insert_history(&mut rx);
+    assert_eq!(
+        cells.len(),
+        2,
+        "expected separator immediately before streamed final message without phase markers"
+    );
+    let separator = lines_to_single_string(&cells[0]);
+    assert!(
+        separator.trim_start().starts_with('─'),
+        "expected separator before final message, got: {separator:?}"
+    );
+    let msg = lines_to_single_string(&cells[1]);
+    assert!(msg.contains("done"), "expected final message, got: {msg:?}");
+}
+
+#[tokio::test]
+async fn final_message_separator_is_emitted_when_phase_arrives_only_on_completion() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.on_task_started();
+
+    let begin = begin_exec(&mut chat, "call-phase-only-sep", "echo ok");
+    end_exec(&mut chat, begin, "ok\n", "", 0);
+    let cells = drain_insert_history(&mut rx);
+    assert_eq!(cells.len(), 1, "expected finalized exec cell to flush");
+
+    start_assistant_message(&mut chat, "msg-phase-only", "", None);
+    chat.handle_codex_event(Event {
+        id: "agent-delta-phase-only".to_string(),
+        msg: EventMsg::AgentMessageDelta(AgentMessageDeltaEvent {
+            delta: "done".to_string(),
+        }),
+    });
+
+    // Some providers only populate `MessagePhase` on the completion event. Ensure we still emit a
+    // separator immediately before the final answer without needing to guess at stream start.
+    complete_assistant_message(
+        &mut chat,
+        "msg-phase-only",
+        "done",
+        Some(MessagePhase::FinalAnswer),
+    );
+
+    let cells = drain_insert_history(&mut rx);
+    assert_eq!(
+        cells.len(),
+        2,
+        "expected separator and message to flush at item completion"
+    );
+    let separator = lines_to_single_string(&cells[0]);
+    assert!(
+        separator.trim_start().starts_with('─'),
+        "expected separator before final message, got: {separator:?}"
+    );
+    let msg = lines_to_single_string(&cells[1]);
+    assert!(msg.contains("done"), "expected final message, got: {msg:?}");
+
+    chat.handle_codex_event(Event {
+        id: "turn-complete-phase-only".to_string(),
+        msg: EventMsg::TurnComplete(TurnCompleteEvent {
+            last_agent_message: None,
+        }),
+    });
+    let cells = drain_insert_history(&mut rx);
+    assert!(
+        cells.is_empty(),
+        "buffered final answer should already be in history before turn completion"
+    );
+}
+
+#[tokio::test]
+async fn buffered_unphased_final_answer_suppresses_legacy_agent_message_event() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.on_task_started();
+
+    let begin = begin_exec(&mut chat, "call-buffer-suppress", "echo ok");
+    end_exec(&mut chat, begin, "ok\n", "", 0);
+    let cells = drain_insert_history(&mut rx);
+    assert_eq!(cells.len(), 1, "expected finalized exec cell to flush");
+
+    start_assistant_message(&mut chat, "msg-buffer-suppress", "", None);
+    chat.handle_codex_event(Event {
+        id: "agent-delta-buffer-suppress".to_string(),
+        msg: EventMsg::AgentMessageDelta(AgentMessageDeltaEvent {
+            delta: "done".to_string(),
+        }),
+    });
+    complete_assistant_message(
+        &mut chat,
+        "msg-buffer-suppress",
+        "done",
+        Some(MessagePhase::FinalAnswer),
+    );
+
+    let cells = drain_insert_history(&mut rx);
+    assert_eq!(cells.len(), 2, "expected separator and message to flush");
+
+    // The protocol emits a redundant legacy AgentMessage event for backward compatibility.
+    // When we flush on ItemCompleted, we must suppress it to avoid duplicate transcript text.
+    chat.handle_codex_event(Event {
+        id: "legacy-agent-message-dup".to_string(),
+        msg: EventMsg::AgentMessage(AgentMessageEvent {
+            message: "done".to_string(),
+        }),
+    });
+    let cells = drain_insert_history(&mut rx);
+    assert!(
+        cells.is_empty(),
+        "expected legacy agent message to be suppressed"
+    );
+}
+
+#[tokio::test]
+async fn buffered_unphased_commentary_does_not_emit_separator() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.on_task_started();
+
+    let begin = begin_exec(&mut chat, "call-buffer-commentary", "echo ok");
+    end_exec(&mut chat, begin, "ok\n", "", 0);
+    let cells = drain_insert_history(&mut rx);
+    assert_eq!(cells.len(), 1, "expected finalized exec cell to flush");
+
+    start_assistant_message(&mut chat, "msg-buffer-commentary", "", None);
+    chat.handle_codex_event(Event {
+        id: "agent-delta-buffer-commentary".to_string(),
+        msg: EventMsg::AgentMessageDelta(AgentMessageDeltaEvent {
+            delta: "progress".to_string(),
+        }),
+    });
+    complete_assistant_message(
+        &mut chat,
+        "msg-buffer-commentary",
+        "progress",
+        Some(MessagePhase::Commentary),
+    );
+
+    let cells = drain_insert_history(&mut rx);
+    assert_eq!(
+        cells.len(),
+        1,
+        "expected commentary to flush without separator"
+    );
+    let msg = lines_to_single_string(&cells[0]);
+    assert!(
+        msg.contains("progress"),
+        "expected commentary message, got: {msg:?}"
+    );
+}
+
+#[tokio::test]
 async fn exec_history_shows_unified_exec_startup_commands() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
     chat.on_task_started();
@@ -5254,6 +5432,75 @@ async fn user_shell_command_emits_separator_before_final_message() {
         cells.is_empty(),
         "separator should not be emitted again at turn completion"
     );
+}
+
+#[tokio::test]
+async fn user_shell_command_does_not_emit_separator_before_commentary_message() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.on_task_started();
+
+    let begin = begin_exec_with_source(
+        &mut chat,
+        "user-shell-separator-commentary",
+        "git status",
+        ExecCommandSource::UserShell,
+    );
+    end_exec(&mut chat, begin, "On branch main\n", "", 0);
+
+    let cells = drain_insert_history(&mut rx);
+    assert_eq!(cells.len(), 1, "expected finalized user-shell exec cell");
+
+    start_assistant_message(
+        &mut chat,
+        "msg-commentary-user-shell",
+        "progress update",
+        Some(MessagePhase::Commentary),
+    );
+    chat.handle_codex_event(Event {
+        id: "agent-commentary-user-shell".to_string(),
+        msg: EventMsg::AgentMessage(AgentMessageEvent {
+            message: "progress update".to_string(),
+        }),
+    });
+
+    let cells = drain_insert_history(&mut rx);
+    assert_eq!(
+        cells.len(),
+        1,
+        "separator should not be emitted before commentary message"
+    );
+    let msg = lines_to_single_string(&cells[0]);
+    assert!(
+        msg.contains("progress update"),
+        "expected commentary message, got: {msg:?}"
+    );
+
+    start_assistant_message(
+        &mut chat,
+        "msg-final-user-shell-commentary",
+        "done",
+        Some(MessagePhase::FinalAnswer),
+    );
+    chat.handle_codex_event(Event {
+        id: "agent-final-user-shell-commentary".to_string(),
+        msg: EventMsg::AgentMessage(AgentMessageEvent {
+            message: "done".to_string(),
+        }),
+    });
+
+    let cells = drain_insert_history(&mut rx);
+    assert_eq!(
+        cells.len(),
+        2,
+        "expected separator immediately before final agent message"
+    );
+    let separator = lines_to_single_string(&cells[0]);
+    assert!(
+        separator.trim_start().starts_with('─'),
+        "expected separator before final message, got: {separator:?}"
+    );
+    let msg = lines_to_single_string(&cells[1]);
+    assert!(msg.contains("done"), "expected final message, got: {msg:?}");
 }
 
 #[tokio::test]

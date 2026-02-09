@@ -613,6 +613,30 @@ pub(crate) struct ChatWidget {
     // Armed when the protocol identifies the next assistant output as the final answer.
     // We consume this exactly once to place the separator immediately before final output.
     separator_armed_for_final_answer: bool,
+    // When an assistant message item begins with no `phase`, some providers only populate phase on
+    // `ItemCompleted`. In that case we can't safely decide whether to insert a final separator
+    // until completion, so we buffer assistant deltas and flush once phase is known.
+    buffered_agent_message: Option<BufferedAgentMessage>,
+    // Suppress redundant legacy `AgentMessage` events emitted after turn-item completion.
+    //
+    // When we flush buffered assistant content on `ItemCompleted`, the protocol still emits
+    // legacy `AgentMessage` events for backward compatibility. Without suppression we'd render
+    // duplicate assistant text.
+    suppress_legacy_agent_messages: usize,
+    // Tracks whether the current answer stream has committed any history cells yet.
+    //
+    // Some providers only populate `MessagePhase` on `ItemCompleted`, which is too late to arm
+    // separators at stream start. When nothing has been committed yet we can still insert the
+    // separator at completion (before the first commit tick drains the stream).
+    answer_stream_has_committed_cells: bool,
+    // Enables verbose separator / message-phase debug logs when set.
+    //
+    // Opt-in via `XCODEX_DEBUG_SEPARATORS=1` so default logs stay clean.
+    debug_separators: bool,
+    // True once we observe `MessagePhase` markers for the active turn.
+    //
+    // This disables legacy separator heuristics so commentary blocks don't get separators.
+    saw_message_phase_markers: bool,
     turn_summary: xcodex_plugins::history_cell::TurnSummary,
     session_stats: crate::status::SessionStats,
     // Whether the current turn performed "work" (exec commands, MCP tool calls, patch applications).
@@ -819,7 +843,46 @@ fn remap_placeholders_for_message(message: UserMessage, next_label: &mut usize) 
     }
 }
 
+#[derive(Debug, Clone)]
+struct BufferedAgentMessage {
+    item_id: String,
+    buffer: String,
+}
+
 impl ChatWidget {
+    fn debug_separators_enabled() -> bool {
+        std::env::var_os("XCODEX_DEBUG_SEPARATORS").is_some()
+    }
+
+    fn buffer_unphased_agent_messages_enabled() -> bool {
+        // Default on, allow quick rollback by setting to "0".
+        std::env::var_os("XCODEX_BUFFER_UNPHASED_AGENT_MESSAGES")
+            .map(|v| v.to_string_lossy() != "0")
+            .unwrap_or(true)
+    }
+
+    fn log_separator_state(&self, event: &str, phase: Option<&MessagePhase>) {
+        if !self.debug_separators {
+            return;
+        }
+
+        tracing::info!(
+            target: "codex_tui::separator_debug",
+            event,
+            phase = phase.map(|p| format!("{p:?}")),
+            stream_controller = self.stream_controller.is_some(),
+            needs_final_message_separator = self.needs_final_message_separator,
+            separator_armed_for_final_answer = self.separator_armed_for_final_answer,
+            saw_message_phase_markers = self.saw_message_phase_markers,
+            buffered_agent_message = self.buffered_agent_message.is_some(),
+            suppress_legacy_agent_messages = self.suppress_legacy_agent_messages,
+            turn_summary_exec = self.turn_summary.exec_commands,
+            turn_summary_patches = self.turn_summary.patches,
+            turn_summary_files = self.turn_summary.files_changed,
+            turn_summary_mcp = self.turn_summary.mcp_calls,
+        );
+    }
+
     /// Synchronize the bottom-pane "task running" indicator with the current lifecycles.
     ///
     /// The bottom pane only has one running flag, but this module treats it as a derived state of
@@ -855,6 +918,7 @@ impl ChatWidget {
             self.add_boxed_history(cell);
         }
         self.adaptive_chunking.reset();
+        self.answer_stream_has_committed_cells = false;
     }
 
     fn stream_controllers_idle(&self) -> bool {
@@ -1223,13 +1287,26 @@ impl ChatWidget {
     }
 
     fn on_agent_message(&mut self, message: String) {
+        if self.suppress_legacy_agent_messages > 0 {
+            self.suppress_legacy_agent_messages =
+                self.suppress_legacy_agent_messages.saturating_sub(1);
+            self.log_separator_state("on_agent_message_suppressed", None);
+            return;
+        }
         // If we have a stream_controller, then the final agent message is redundant and will be a
         // duplicate of what has already been streamed.
         if self.stream_controller.is_none() && !message.is_empty() {
+            self.log_separator_state("on_agent_message_before", None);
             // Legacy streams may omit ItemStarted/ItemCompleted phase markers. In that case, arm
             // the separator on the first post-work final message so we still render it exactly
             // once before the assistant output.
-            if !self.separator_armed_for_final_answer && self.needs_final_message_separator {
+            //
+            // When phases are present we should *not* apply this heuristic, or we'd insert
+            // separators before commentary blocks.
+            if !self.saw_message_phase_markers
+                && !self.separator_armed_for_final_answer
+                && self.needs_final_message_separator
+            {
                 self.separator_armed_for_final_answer = true;
             }
             self.handle_streaming_delta(message);
@@ -1240,6 +1317,17 @@ impl ChatWidget {
     }
 
     fn on_agent_message_delta(&mut self, delta: String) {
+        if let Some(buffered) = self.buffered_agent_message.as_mut() {
+            buffered.buffer.push_str(&delta);
+            if self.stream_controller.is_none() && !delta.is_empty() {
+                self.log_separator_state("on_agent_message_delta_buffered", None);
+            }
+            // Deliberately skip streaming into history until phase is known.
+            return;
+        }
+        if self.stream_controller.is_none() && !delta.is_empty() {
+            self.log_separator_state("on_agent_message_delta_start", None);
+        }
         self.handle_streaming_delta(delta);
     }
 
@@ -1372,8 +1460,13 @@ impl ChatWidget {
         self.bottom_pane.set_interrupt_hint_visible(true);
         self.turn_summary = xcodex_plugins::history_cell::TurnSummary::default();
         self.separator_armed_for_final_answer = false;
+        self.buffered_agent_message = None;
+        self.suppress_legacy_agent_messages = 0;
+        self.debug_separators = Self::debug_separators_enabled();
+        self.saw_message_phase_markers = false;
         self.last_turn_completion_label = None;
         self.last_status_elapsed_secs = None;
+        self.log_separator_state("on_task_started", None);
         let header = xcodex_plugins::ramps::task_start_header(
             &mut self.ramp_status,
             &self.config,
@@ -1393,6 +1486,14 @@ impl ChatWidget {
     fn on_task_complete(&mut self, last_agent_message: Option<String>, from_replay: bool) {
         // If a stream is currently active, finalize it.
         self.flush_answer_stream_with_separator();
+        if let Some(buffered) = self.buffered_agent_message.take()
+            && !buffered.buffer.is_empty()
+        {
+            // Best-effort flush to avoid dropping buffered text if we never received `ItemCompleted`.
+            self.handle_streaming_delta(buffered.buffer);
+            self.flush_answer_stream_with_separator();
+            self.handle_stream_finished();
+        }
         if let Some(mut controller) = self.plan_stream_controller.take()
             && let Some(cell) = controller.finalize()
         {
@@ -2355,13 +2456,50 @@ impl ChatWidget {
     /// returns once stream queues are idle. Final-answer completion (or absent
     /// phase for legacy models) clears the flag to preserve historical behavior.
     fn on_agent_message_item_started(&mut self, item: AgentMessageItem) {
+        self.saw_message_phase_markers |= item.phase.is_some();
         self.separator_armed_for_final_answer =
             matches!(item.phase, Some(MessagePhase::FinalAnswer));
+        if item.phase.is_none()
+            && Self::buffer_unphased_agent_messages_enabled()
+            && !self.turn_summary.is_empty()
+        {
+            self.buffered_agent_message = Some(BufferedAgentMessage {
+                item_id: item.id.clone(),
+                buffer: String::new(),
+            });
+        } else {
+            self.buffered_agent_message = None;
+        }
+        self.log_separator_state("on_agent_message_item_started", item.phase.as_ref());
     }
 
     fn on_agent_message_item_completed(&mut self, item: AgentMessageItem) {
+        self.saw_message_phase_markers |= item.phase.is_some();
         if matches!(item.phase, Some(MessagePhase::FinalAnswer)) {
             self.separator_armed_for_final_answer = true;
+        }
+        self.log_separator_state("on_agent_message_item_completed", item.phase.as_ref());
+        if let Some(buffered) = self.buffered_agent_message.take()
+            && buffered.item_id == item.id
+        {
+            // Emit the separator (if needed) and flush buffered text now that phase is known.
+            self.suppress_legacy_agent_messages = item.content.len();
+            self.handle_streaming_delta(buffered.buffer);
+            self.flush_answer_stream_with_separator();
+            self.handle_stream_finished();
+            self.request_redraw();
+        }
+        if matches!(item.phase, Some(MessagePhase::FinalAnswer))
+            && self.stream_controller.is_some()
+            && !self.answer_stream_has_committed_cells
+        {
+            self.log_separator_state(
+                "on_agent_message_item_completed_insert_separator_before_first_commit",
+                item.phase.as_ref(),
+            );
+            let controller = self.stream_controller.take();
+            self.maybe_insert_final_message_separator();
+            self.stream_controller = controller;
         }
         self.pending_status_indicator_restore = match item.phase.as_ref() {
             // Models that don't support preambles only output AgentMessageItems on turn completion.
@@ -2395,6 +2533,7 @@ impl ChatWidget {
     /// the row after commentary completion once stream queues are idle.
     fn run_commit_tick_with_scope(&mut self, scope: CommitTickScope) {
         let now = Instant::now();
+        let answer_stream_active = self.stream_controller.is_some();
         let outcome = run_commit_tick(
             &mut self.adaptive_chunking,
             self.stream_controller.as_mut(),
@@ -2402,6 +2541,9 @@ impl ChatWidget {
             scope,
             now,
         );
+        if answer_stream_active && !outcome.cells.is_empty() {
+            self.answer_stream_has_committed_cells = true;
+        }
         for cell in outcome.cells {
             if let Some(elapsed) = self
                 .bottom_pane
@@ -2460,9 +2602,40 @@ impl ChatWidget {
         // Before streaming agent content, flush any active exec cell group.
         self.flush_unified_exec_wait_streak();
         self.flush_active_cell();
-        if self.stream_controller.is_none() && self.separator_armed_for_final_answer {
-            self.maybe_insert_final_message_separator();
-            self.separator_armed_for_final_answer = false;
+        if self.stream_controller.is_none() {
+            // Insert the "Worked for..." separator when beginning the final answer stream.
+            //
+            // Preferred path: the provider emits an `AgentMessageItem` with `phase=FinalAnswer`,
+            // which arms `separator_armed_for_final_answer`.
+            //
+            // Compatibility: some providers stream deltas without emitting any phase markers.
+            // In that case we treat the first assistant stream after work as the final answer.
+            let should_emit_unphased_separator = !self.saw_message_phase_markers
+                && self.needs_final_message_separator
+                && !self.turn_summary.is_empty();
+            if self.debug_separators
+                && (self.separator_armed_for_final_answer || should_emit_unphased_separator)
+            {
+                tracing::info!(
+                    target: "codex_tui::separator_debug",
+                    event = "handle_streaming_delta_insert_separator",
+                    reason = if self.separator_armed_for_final_answer {
+                        "armed_for_final_answer"
+                    } else {
+                        "unphased_fallback"
+                    },
+                    needs_final_message_separator = self.needs_final_message_separator,
+                    saw_message_phase_markers = self.saw_message_phase_markers,
+                    turn_summary_exec = self.turn_summary.exec_commands,
+                    turn_summary_patches = self.turn_summary.patches,
+                    turn_summary_files = self.turn_summary.files_changed,
+                    turn_summary_mcp = self.turn_summary.mcp_calls,
+                );
+            }
+            if self.separator_armed_for_final_answer || should_emit_unphased_separator {
+                self.maybe_insert_final_message_separator();
+                self.separator_armed_for_final_answer = false;
+            }
         }
 
         if self.ramp_status.stage() == crate::ramps::RampStage::Waiting
@@ -2476,6 +2649,7 @@ impl ChatWidget {
         }
 
         if self.stream_controller.is_none() {
+            self.answer_stream_has_committed_cells = false;
             self.stream_controller = Some(StreamController::new(
                 self.last_rendered_width.get().map(|w| w.saturating_sub(2)),
             ));
@@ -2495,6 +2669,7 @@ impl ChatWidget {
         }
 
         if self.needs_final_message_separator && !self.turn_summary.is_empty() {
+            self.log_separator_state("maybe_insert_final_message_separator_insert", None);
             let elapsed_seconds = self
                 .bottom_pane
                 .status_widget()
@@ -2517,6 +2692,7 @@ impl ChatWidget {
             self.needs_final_message_separator = false;
             self.turn_summary = xcodex_plugins::history_cell::TurnSummary::default();
         } else if self.needs_final_message_separator {
+            self.log_separator_state("maybe_insert_final_message_separator_skip_no_work", None);
             // Reset the flag even if we don't show separator (no work was done)
             self.needs_final_message_separator = false;
         }
@@ -2534,6 +2710,7 @@ impl ChatWidget {
     }
 
     pub(crate) fn handle_exec_end_now(&mut self, ev: ExecCommandEndEvent) {
+        self.log_separator_state("handle_exec_end_now", None);
         let running = self.running_commands.remove(&ev.call_id);
         let should_stabilize = xcodex_plugins::ramps::status_active(
             &self.ramp_status,
@@ -2625,6 +2802,11 @@ impl ChatWidget {
         {
             self.set_status_header(header);
         }
+
+        // Note: do not arm separators here. Tool-driven multi-step workflows often interleave
+        // additional commentary blocks between commands; arming here would insert separators
+        // before those commentary messages. We only insert separators once we positively identify
+        // the final answer (via `MessagePhase::FinalAnswer`).
     }
 
     pub(crate) fn handle_patch_apply_end_now(
@@ -2719,6 +2901,7 @@ impl ChatWidget {
     }
 
     pub(crate) fn handle_exec_begin_now(&mut self, ev: ExecCommandBeginEvent) {
+        self.log_separator_state("handle_exec_begin_now", None);
         // Ensure the status indicator is visible while the command runs.
         self.bottom_pane.ensure_status_indicator();
         self.running_commands.insert(
@@ -2996,6 +3179,11 @@ impl ChatWidget {
             pre_review_token_info: None,
             needs_final_message_separator: false,
             separator_armed_for_final_answer: false,
+            buffered_agent_message: None,
+            suppress_legacy_agent_messages: 0,
+            answer_stream_has_committed_cells: false,
+            debug_separators: Self::debug_separators_enabled(),
+            saw_message_phase_markers: false,
             turn_summary: xcodex_plugins::history_cell::TurnSummary::default(),
             session_stats: crate::status::SessionStats::default(),
             had_work_activity: false,
@@ -3189,6 +3377,11 @@ impl ChatWidget {
             pre_review_token_info: None,
             needs_final_message_separator: false,
             separator_armed_for_final_answer: false,
+            buffered_agent_message: None,
+            suppress_legacy_agent_messages: 0,
+            answer_stream_has_committed_cells: false,
+            debug_separators: Self::debug_separators_enabled(),
+            saw_message_phase_markers: false,
             turn_summary: xcodex_plugins::history_cell::TurnSummary::default(),
             session_stats: crate::status::SessionStats::default(),
             had_work_activity: false,
@@ -3369,6 +3562,11 @@ impl ChatWidget {
             pre_review_token_info: None,
             needs_final_message_separator: false,
             separator_armed_for_final_answer: false,
+            buffered_agent_message: None,
+            suppress_legacy_agent_messages: 0,
+            answer_stream_has_committed_cells: false,
+            debug_separators: Self::debug_separators_enabled(),
+            saw_message_phase_markers: false,
             turn_summary: xcodex_plugins::history_cell::TurnSummary::default(),
             session_stats: crate::status::SessionStats::default(),
             had_work_activity: false,
