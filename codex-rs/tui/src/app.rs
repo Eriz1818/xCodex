@@ -1685,6 +1685,11 @@ impl App {
                 self.chat_widget.set_transcript_syntax_highlight(enabled);
                 tui.frame_requester().schedule_frame();
             }
+            AppEvent::UpdateTranscriptSideBySide(enabled) => {
+                self.config.tui_transcript_side_by_side = enabled;
+                self.chat_widget.set_transcript_side_by_side(enabled);
+                tui.frame_requester().schedule_frame();
+            }
             AppEvent::UpdateMinimalComposer(enabled) => {
                 self.config.tui_minimal_composer = enabled;
                 self.chat_widget.set_minimal_composer(enabled);
@@ -2190,6 +2195,32 @@ impl App {
                     }
                 }
             }
+            AppEvent::PersistTranscriptSideBySide(enabled) => {
+                let profile = self.active_profile.as_deref();
+                match ConfigEditsBuilder::new(&self.config.codex_home)
+                    .with_profile(profile)
+                    .with_edits([ConfigEdit::SetPath {
+                        segments: vec!["tui".to_string(), "transcript_side_by_side".to_string()],
+                        value: toml_edit::value(enabled),
+                    }])
+                    .apply()
+                    .await
+                {
+                    Ok(()) => {}
+                    Err(err) => {
+                        tracing::error!(error = %err, "failed to persist side-by-side toggle");
+                        if let Some(profile) = profile {
+                            self.chat_widget.add_error_message(format!(
+                                "Failed to save side-by-side setting for profile `{profile}`: {err}"
+                            ));
+                        } else {
+                            self.chat_widget.add_error_message(format!(
+                                "Failed to save side-by-side setting: {err}"
+                            ));
+                        }
+                    }
+                }
+            }
             AppEvent::PersistMinimalComposer(enabled) => {
                 let profile = self.active_profile.as_deref();
                 match ConfigEditsBuilder::new(&self.config.codex_home)
@@ -2555,10 +2586,11 @@ impl App {
                     cwd,
                     changes,
                     diff_highlight,
+                    side_by_side,
                     ..
                 } => {
                     let _ = tui.enter_alt_screen();
-                    let diff_summary = DiffSummary::new(changes, cwd, diff_highlight);
+                    let diff_summary = DiffSummary::new(changes, cwd, diff_highlight, side_by_side);
                     self.overlay = Some(Overlay::new_static_with_renderables(
                         vec![diff_summary.into()],
                         "P A T C H".to_string(),

@@ -126,6 +126,27 @@ fn settings_nested_subcommands_are_suggested_under_status_bar() {
 }
 
 #[test]
+fn settings_nested_subcommands_are_suggested_under_transcript() {
+    let mut popup = popup_with_prompts(Vec::new());
+    popup.on_composer_text_change("/settings transcript ".to_string());
+
+    let items = popup.filtered_items();
+    let subcommands: Vec<&str> = items
+        .into_iter()
+        .filter_map(|item| match item {
+            CommandItem::BuiltinText { name, .. } => Some(name),
+            _ => None,
+        })
+        .collect();
+
+    assert!(
+        subcommands.contains(&"settings transcript diff-highlight")
+            && subcommands.contains(&"settings transcript side-by-side"),
+        "expected /settings transcript to suggest nested subcommands, got {subcommands:?}"
+    );
+}
+
+#[test]
 fn mcp_subcommands_are_suggested_under_mcp() {
     let mut popup = popup_with_prompts(Vec::new());
     popup.on_composer_text_change("/mcp ".to_string());

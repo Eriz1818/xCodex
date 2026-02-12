@@ -41,6 +41,7 @@ pub(crate) struct StatusMenuView {
     status_bar_show_worktree: bool,
     transcript_syntax_highlight: bool,
     transcript_diff_highlight: bool,
+    transcript_side_by_side: bool,
     transcript_user_prompt_highlight: bool,
     minimal_composer: bool,
     verbose_tool_output: bool,
@@ -63,6 +64,7 @@ impl StatusMenuView {
         status_bar_show_worktree: bool,
         transcript_syntax_highlight: bool,
         transcript_diff_highlight: bool,
+        transcript_side_by_side: bool,
         transcript_user_prompt_highlight: bool,
         minimal_composer: bool,
         xtreme_mode: XtremeMode,
@@ -80,6 +82,7 @@ impl StatusMenuView {
             status_bar_show_worktree,
             transcript_syntax_highlight,
             transcript_diff_highlight,
+            transcript_side_by_side,
             transcript_user_prompt_highlight,
             minimal_composer,
             verbose_tool_output,
@@ -148,7 +151,7 @@ impl StatusMenuView {
     }
 
     fn settings_row_count(&self) -> usize {
-        7
+        8
     }
 
     fn tools_row_count(&self) -> usize {
@@ -302,9 +305,22 @@ impl StatusMenuView {
             );
         }
 
-        // Row 4: transcript user prompt highlight.
+        // Row 4: transcript side-by-side diff.
         {
             let selected = self.selected_settings_row == 4;
+            lines.push(
+                vec![
+                    selected_prefix(selected),
+                    checkbox(self.transcript_side_by_side),
+                    "Transcript: side-by-side diff".into(),
+                ]
+                .into(),
+            );
+        }
+
+        // Row 5: transcript user prompt highlight.
+        {
+            let selected = self.selected_settings_row == 5;
             lines.push(
                 vec![
                     selected_prefix(selected),
@@ -315,9 +331,9 @@ impl StatusMenuView {
             );
         }
 
-        // Row 5: minimal composer borders.
+        // Row 6: minimal composer borders.
         {
-            let selected = self.selected_settings_row == 5;
+            let selected = self.selected_settings_row == 6;
             lines.push(
                 vec![
                     selected_prefix(selected),
@@ -328,9 +344,9 @@ impl StatusMenuView {
             );
         }
 
-        // Row 6: Worktrees settings editor.
+        // Row 7: Worktrees settings editor.
         {
-            let selected = self.selected_settings_row == 6;
+            let selected = self.selected_settings_row == 7;
             lines.push(vec![selected_prefix(selected), "Worktrees…".into()].into());
         }
 
@@ -627,6 +643,16 @@ impl StatusMenuView {
                         ));
                 }
                 4 => {
+                    self.transcript_side_by_side = !self.transcript_side_by_side;
+                    self.app_event_tx.send(AppEvent::UpdateTranscriptSideBySide(
+                        self.transcript_side_by_side,
+                    ));
+                    self.app_event_tx
+                        .send(AppEvent::PersistTranscriptSideBySide(
+                            self.transcript_side_by_side,
+                        ));
+                }
+                5 => {
                     self.transcript_user_prompt_highlight = !self.transcript_user_prompt_highlight;
                     self.app_event_tx
                         .send(AppEvent::UpdateTranscriptUserPromptHighlight(
@@ -637,14 +663,14 @@ impl StatusMenuView {
                             self.transcript_user_prompt_highlight,
                         ));
                 }
-                5 => {
+                6 => {
                     self.minimal_composer = !self.minimal_composer;
                     self.app_event_tx
                         .send(AppEvent::UpdateMinimalComposer(self.minimal_composer));
                     self.app_event_tx
                         .send(AppEvent::PersistMinimalComposer(self.minimal_composer));
                 }
-                6 => {
+                7 => {
                     self.app_event_tx.send(AppEvent::OpenWorktreesSettingsView);
                     self.complete = true;
                 }
@@ -1027,6 +1053,7 @@ mod tests {
             false,
             true,
             false,
+            true,
             false,
             false,
             XtremeMode::On,
@@ -1051,6 +1078,7 @@ mod tests {
             false,
             true,
             false,
+            true,
             false,
             false,
             XtremeMode::On,
@@ -1078,6 +1106,7 @@ mod tests {
             false,
             true,
             false,
+            true,
             false,
             false,
             XtremeMode::On,
@@ -1102,6 +1131,7 @@ mod tests {
             false,
             true,
             false,
+            true,
             false,
             false,
             XtremeMode::On,

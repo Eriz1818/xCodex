@@ -803,6 +803,12 @@ pub struct Tui {
     #[serde(default = "default_true")]
     pub transcript_syntax_highlight: bool,
 
+    /// When true, render transcript diffs in side-by-side columns.
+    ///
+    /// Defaults to `true`.
+    #[serde(default = "default_true")]
+    pub transcript_side_by_side: bool,
+
     /// Show the current git branch in the bottom status bar.
     /// Defaults to `false`.
     #[serde(default)]

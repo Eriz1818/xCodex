@@ -201,6 +201,11 @@ impl ThemeSelectorOverlay {
         } else {
             "off"
         };
+        let side_by_side = if self.config.tui_transcript_side_by_side {
+            "on"
+        } else {
+            "off"
+        };
         let prompt_highlight = if self.config.tui_transcript_user_prompt_highlight {
             "on"
         } else {
@@ -230,6 +235,12 @@ impl ThemeSelectorOverlay {
                 Span::from(KEY_CTRL_G),
                 "  ".into(),
                 format!("toggle diff highlight ({diff_highlight})").into(),
+            ]
+            .into(),
+            vec![
+                Span::from(KEY_CTRL_B),
+                "  ".into(),
+                format!("toggle side-by-side diff ({side_by_side})").into(),
             ]
             .into(),
             vec![
@@ -671,6 +682,7 @@ impl ThemeSelectorOverlay {
                 changes,
                 self.config.cwd.as_path(),
                 self.config.tui_transcript_diff_highlight,
+                self.config.tui_transcript_side_by_side,
             );
             lines.extend(patch.display_lines(area.width));
             lines.push(Line::from(""));
@@ -1235,6 +1247,16 @@ impl ThemeSelectorOverlay {
                             .send(AppEvent::UpdateTranscriptDiffHighlight(next));
                         self.app_event_tx
                             .send(AppEvent::PersistTranscriptDiffHighlight(next));
+                        tui.frame_requester().schedule_frame();
+                        Ok(())
+                    }
+                    e if KEY_CTRL_B.is_press(e) => {
+                        let next = !self.config.tui_transcript_side_by_side;
+                        self.config.tui_transcript_side_by_side = next;
+                        self.app_event_tx
+                            .send(AppEvent::UpdateTranscriptSideBySide(next));
+                        self.app_event_tx
+                            .send(AppEvent::PersistTranscriptSideBySide(next));
                         tui.frame_requester().schedule_frame();
                         Ok(())
                     }

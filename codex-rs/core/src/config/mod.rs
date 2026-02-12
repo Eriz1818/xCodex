@@ -336,6 +336,11 @@ pub struct Config {
     /// This is the same `tui.transcript_syntax_highlight` value from `config.toml` (see [`Tui`]).
     pub tui_transcript_syntax_highlight: bool,
 
+    /// When true, render transcript diffs in side-by-side columns.
+    ///
+    /// This is the same `tui.transcript_side_by_side` value from `config.toml` (see [`Tui`]).
+    pub tui_transcript_side_by_side: bool,
+
     /// Enable application mouse capture in TUI2.
     ///
     /// This is the same `tui.mouse_capture` value from `config.toml` (see [`Tui`]).
@@ -2358,6 +2363,11 @@ impl Config {
                 .as_ref()
                 .map(|t| t.transcript_syntax_highlight)
                 .unwrap_or(true),
+            tui_transcript_side_by_side: cfg
+                .tui
+                .as_ref()
+                .map(|t| t.transcript_side_by_side)
+                .unwrap_or(true),
             tui_mouse_capture: cfg.tui.as_ref().map(|t| t.mouse_capture).unwrap_or(true),
             tui_status_line: cfg.tui.as_ref().and_then(|t| t.status_line.clone()),
             otel: {
@@ -2712,6 +2722,7 @@ persistence = "none"
                 transcript_diff_highlight: false,
                 transcript_user_prompt_highlight: false,
                 transcript_syntax_highlight: true,
+                transcript_side_by_side: true,
                 status_bar_show_git_branch: false,
                 status_bar_show_worktree: false,
                 minimal_composer: false,
@@ -4792,6 +4803,7 @@ model_verbosity = "high"
                 tui_transcript_diff_highlight: false,
                 tui_transcript_user_prompt_highlight: false,
                 tui_transcript_syntax_highlight: true,
+                tui_transcript_side_by_side: true,
                 tui_mouse_capture: true,
                 tui_status_line: None,
                 otel: OtelConfig::default(),
@@ -4903,6 +4915,7 @@ model_verbosity = "high"
             tui_transcript_diff_highlight: false,
             tui_transcript_user_prompt_highlight: false,
             tui_transcript_syntax_highlight: true,
+            tui_transcript_side_by_side: true,
             tui_mouse_capture: true,
             tui_status_line: None,
             otel: OtelConfig::default(),
@@ -5029,6 +5042,7 @@ model_verbosity = "high"
             tui_transcript_diff_highlight: false,
             tui_transcript_user_prompt_highlight: false,
             tui_transcript_syntax_highlight: true,
+            tui_transcript_side_by_side: true,
             tui_mouse_capture: true,
             tui_status_line: None,
             otel: OtelConfig::default(),
@@ -5141,6 +5155,7 @@ model_verbosity = "high"
             tui_transcript_diff_highlight: false,
             tui_transcript_user_prompt_highlight: false,
             tui_transcript_syntax_highlight: true,
+            tui_transcript_side_by_side: true,
             tui_mouse_capture: true,
             tui_status_line: None,
             otel: OtelConfig::default(),

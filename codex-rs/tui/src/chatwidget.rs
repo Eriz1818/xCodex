@@ -2185,6 +2185,7 @@ impl ChatWidget {
             event.changes,
             &self.config.cwd,
             self.config.tui_transcript_diff_highlight,
+            self.config.tui_transcript_side_by_side,
         ));
     }
 
@@ -2867,6 +2868,7 @@ impl ChatWidget {
             changes: ev.changes.clone(),
             cwd: self.config.cwd.clone(),
             diff_highlight: self.config.tui_transcript_diff_highlight,
+            side_by_side: self.config.tui_transcript_side_by_side,
         };
         self.bottom_pane
             .push_approval_request(request, &self.config.features);
@@ -3726,6 +3728,7 @@ impl ChatWidget {
                 self.config.tui_status_bar_show_worktree,
                 self.config.tui_transcript_syntax_highlight,
                 self.config.tui_transcript_diff_highlight,
+                self.config.tui_transcript_side_by_side,
                 self.config.tui_transcript_user_prompt_highlight,
                 self.config.tui_minimal_composer,
                 self.config.xcodex.tui_xtreme_mode,
@@ -5135,6 +5138,7 @@ impl ChatWidget {
             self.config.tui_status_bar_show_worktree,
             self.config.tui_transcript_syntax_highlight,
             self.config.tui_transcript_diff_highlight,
+            self.config.tui_transcript_side_by_side,
             self.config.tui_transcript_user_prompt_highlight,
             self.config.tui_minimal_composer,
             self.config.xcodex.tui_xtreme_mode,
@@ -7282,6 +7286,11 @@ impl ChatWidget {
 
     pub(crate) fn set_transcript_diff_highlight(&mut self, enabled: bool) {
         self.config.tui_transcript_diff_highlight = enabled;
+        self.request_redraw();
+    }
+
+    pub(crate) fn set_transcript_side_by_side(&mut self, enabled: bool) {
+        self.config.tui_transcript_side_by_side = enabled;
         self.request_redraw();
     }
 

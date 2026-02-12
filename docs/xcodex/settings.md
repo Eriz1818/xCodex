@@ -57,11 +57,13 @@ xcodex also exposes transcript-related rendering toggles. These affect how the t
 
 ```text
 /settings transcript diff-highlight           [on|off|toggle|status]
+/settings transcript side-by-side             [on|off|toggle|status]
 /settings transcript highlight-past-prompts   [on|off|toggle|status]
 /settings transcript syntax-highlight         [on|off|toggle|status]
 ```
 
 - `diff-highlight`: emphasizes added/removed lines when rendering diffs in the transcript.
+- `side-by-side`: renders diffs in two columns with old/new content aligned line-by-line.
 - `highlight-past-prompts`: adds a theme-derived background to past user prompts in the transcript.
 - `syntax-highlight`: syntax-highlights fenced code blocks in the transcript when supported (themeable).
 
@@ -72,6 +74,7 @@ These keys live under `[tui]`:
 ```toml
 [tui]
 transcript_diff_highlight = true
+transcript_side_by_side = true
 transcript_user_prompt_highlight = true
 transcript_syntax_highlight = true
 ```

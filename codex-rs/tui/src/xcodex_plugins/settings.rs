@@ -9,6 +9,7 @@ pub(crate) fn add_settings_output_with_values(
     show_git_branch: bool,
     show_worktree: bool,
     transcript_diff_highlight: bool,
+    transcript_side_by_side: bool,
     transcript_user_prompt_highlight: bool,
     transcript_syntax_highlight: bool,
 ) {
@@ -18,6 +19,7 @@ pub(crate) fn add_settings_output_with_values(
         show_git_branch,
         show_worktree,
         transcript_diff_highlight,
+        transcript_side_by_side,
         transcript_user_prompt_highlight,
         transcript_syntax_highlight,
     );
@@ -29,6 +31,7 @@ pub(crate) fn handle_settings_command(chat: &mut ChatWidget, rest: &str) -> bool
     let current_git_branch = chat.config_ref().tui_status_bar_show_git_branch;
     let current_worktree = chat.config_ref().tui_status_bar_show_worktree;
     let current_diff_highlight = chat.config_ref().tui_transcript_diff_highlight;
+    let current_side_by_side = chat.config_ref().tui_transcript_side_by_side;
     let current_user_prompt_highlight = chat.config_ref().tui_transcript_user_prompt_highlight;
     let current_syntax_highlight = chat.config_ref().tui_transcript_syntax_highlight;
 
@@ -39,6 +42,7 @@ pub(crate) fn handle_settings_command(chat: &mut ChatWidget, rest: &str) -> bool
                 current_git_branch,
                 current_worktree,
                 current_diff_highlight,
+                current_side_by_side,
                 current_user_prompt_highlight,
                 current_syntax_highlight,
             );
@@ -64,6 +68,7 @@ pub(crate) fn handle_settings_command(chat: &mut ChatWidget, rest: &str) -> bool
     let mut next_git_branch = current_git_branch;
     let mut next_worktree = current_worktree;
     let mut next_diff_highlight = current_diff_highlight;
+    let mut next_side_by_side = current_side_by_side;
     let mut next_user_prompt_highlight = current_user_prompt_highlight;
     let mut next_syntax_highlight = current_syntax_highlight;
 
@@ -89,7 +94,7 @@ pub(crate) fn handle_settings_command(chat: &mut ChatWidget, rest: &str) -> bool
                     None,
                 ),
                 "transcript" => chat.add_info_message(
-                    "Usage: /settings transcript <diff-highlight|highlight-past-prompts|syntax-highlight> [on|off|toggle|status]"
+                    "Usage: /settings transcript <diff-highlight|side-by-side|highlight-past-prompts|syntax-highlight> [on|off|toggle|status]"
                         .to_string(),
                     None,
                 ),
@@ -135,11 +140,12 @@ pub(crate) fn handle_settings_command(chat: &mut ChatWidget, rest: &str) -> bool
         }
         "transcript" => {
             if item.as_str() != "diff-highlight"
+                && item.as_str() != "side-by-side"
                 && item.as_str() != "highlight-past-prompts"
                 && item.as_str() != "syntax-highlight"
             {
                 chat.add_info_message(
-                    "Unknown setting. Use: diff-highlight | highlight-past-prompts | syntax-highlight"
+                    "Unknown setting. Use: diff-highlight | side-by-side | highlight-past-prompts | syntax-highlight"
                         .to_string(),
                     None,
                 );
@@ -162,6 +168,21 @@ pub(crate) fn handle_settings_command(chat: &mut ChatWidget, rest: &str) -> bool
                         crate::app_event::AppEvent::PersistTranscriptDiffHighlight(
                             next_diff_highlight,
                         ),
+                    );
+                }
+            } else if item.as_str() == "side-by-side" {
+                let next = match action {
+                    SettingsAction::Toggle => Some(!current_side_by_side),
+                    SettingsAction::Set(value) => Some(value),
+                    SettingsAction::Status => None,
+                };
+                if let Some(value) = next {
+                    next_side_by_side = value;
+                    chat.app_event_tx().send(
+                        crate::app_event::AppEvent::UpdateTranscriptSideBySide(next_side_by_side),
+                    );
+                    chat.app_event_tx().send(
+                        crate::app_event::AppEvent::PersistTranscriptSideBySide(next_side_by_side),
                     );
                 }
             } else if item.as_str() == "highlight-past-prompts" {
@@ -212,6 +233,7 @@ pub(crate) fn handle_settings_command(chat: &mut ChatWidget, rest: &str) -> bool
         next_git_branch,
         next_worktree,
         next_diff_highlight,
+        next_side_by_side,
         next_user_prompt_highlight,
         next_syntax_highlight,
     );

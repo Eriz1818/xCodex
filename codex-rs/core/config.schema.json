@@ -1835,6 +1835,11 @@
           "description": "When true, render diffs in the transcript with red/green background highlights, while keeping diff text in the normal transcript foreground color.\n\nWhen false (default), additions render as green text and deletions as red text (no background highlight).",
           "type": "boolean"
         },
+        "transcript_side_by_side": {
+          "default": true,
+          "description": "When true, render transcript diffs in side-by-side columns.\n\nDefaults to `true`.",
+          "type": "boolean"
+        },
         "transcript_syntax_highlight": {
           "default": true,
           "description": "When true, render fenced code blocks with syntax highlighting (when supported).\n\nDefaults to `true`.",

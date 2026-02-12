@@ -291,6 +291,7 @@ pub(crate) fn new_settings_card(
     show_git_branch: bool,
     show_worktree: bool,
     transcript_diff_highlight: bool,
+    transcript_side_by_side: bool,
     transcript_user_prompt_highlight: bool,
     transcript_syntax_highlight: bool,
 ) -> Box<dyn HistoryCell> {
@@ -299,6 +300,7 @@ pub(crate) fn new_settings_card(
         show_git_branch,
         show_worktree,
         transcript_diff_highlight,
+        transcript_side_by_side,
         transcript_user_prompt_highlight,
         transcript_syntax_highlight,
     })
@@ -310,6 +312,7 @@ struct SettingsHistoryCell {
     show_git_branch: bool,
     show_worktree: bool,
     transcript_diff_highlight: bool,
+    transcript_side_by_side: bool,
     transcript_user_prompt_highlight: bool,
     transcript_syntax_highlight: bool,
 }
@@ -352,6 +355,14 @@ impl HistoryCell for SettingsHistoryCell {
             lines.push(Line::from(format!("  {checkbox} Diff highlight")));
         }
         {
+            let checkbox = if self.transcript_side_by_side {
+                "[x]"
+            } else {
+                "[ ]"
+            };
+            lines.push(Line::from(format!("  {checkbox} Side-by-side diff")));
+        }
+        {
             let checkbox = if self.transcript_user_prompt_highlight {
                 "[x]"
             } else {
@@ -379,7 +390,7 @@ impl HistoryCell for SettingsHistoryCell {
         lines.push(
             vec![
                 "Usage: ".dim(),
-                "/settings transcript <diff-highlight|highlight-past-prompts|syntax-highlight> [on|off|toggle|status]"
+                "/settings transcript <diff-highlight|side-by-side|highlight-past-prompts|syntax-highlight> [on|off|toggle|status]"
                     .cyan(),
             ]
             .into(),
