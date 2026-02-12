@@ -15,6 +15,7 @@ use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
 use crate::tools::context::ToolProvenance;
 use async_trait::async_trait;
+use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::models::FunctionCallOutputContentItem;
@@ -107,6 +108,22 @@ impl ToolRegistry {
                 sandbox_policy_tag(&invocation.turn.sandbox_policy),
             ),
         ];
+
+        if let Some(message) = plan_mode_tool_block_message(
+            invocation.turn.collaboration_mode.mode,
+            tool_name.as_ref(),
+        ) {
+            otel.tool_result_with_tags(
+                tool_name.as_ref(),
+                &call_id_owned,
+                log_payload.as_ref(),
+                Duration::ZERO,
+                false,
+                &message,
+                &metric_tags,
+            );
+            return Err(FunctionCallError::RespondToModel(message));
+        }
 
         let handler = match self.handler(tool_name.as_ref()) {
             Some(handler) => handler,
@@ -806,6 +823,7 @@ fn block_unattested_output(output: ToolOutput) -> ToolOutput {
 mod tests {
     use super::*;
     use crate::config::types::UnattestedOutputPolicy;
+    use codex_protocol::config_types::ModeKind;
     use pretty_assertions::assert_eq;
 
     fn unattested_output() -> ToolOutput {
@@ -1086,6 +1104,32 @@ mod tests {
             Some("Matched content:\n- token_abc123 (reason: Secret pattern)".to_string())
         );
     }
+
+    #[test]
+    fn plan_mode_blocks_file_mutation_tools_and_allows_read_only_tools() {
+        assert_eq!(
+            super::plan_mode_tool_block_message(ModeKind::Plan, "apply_patch").is_some(),
+            true
+        );
+        assert_eq!(
+            super::plan_mode_tool_block_message(ModeKind::Plan, "mcp__filesystem__write_file")
+                .is_some(),
+            true
+        );
+        assert_eq!(
+            super::plan_mode_tool_block_message(ModeKind::Plan, "mcp__filesystem__edit_file")
+                .is_some(),
+            true
+        );
+        assert_eq!(
+            super::plan_mode_tool_block_message(ModeKind::Plan, "read_file").is_none(),
+            true
+        );
+        assert_eq!(
+            super::plan_mode_tool_block_message(ModeKind::Default, "apply_patch").is_none(),
+            true
+        );
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -1169,6 +1213,26 @@ fn unsupported_tool_call_message(payload: &ToolPayload, tool_name: &str) -> Stri
         ToolPayload::Custom { .. } => format!("unsupported custom tool call: {tool_name}"),
         _ => format!("unsupported call: {tool_name}"),
     }
+}
+
+fn plan_mode_tool_block_message(mode: ModeKind, tool_name: &str) -> Option<String> {
+    if mode != ModeKind::Plan || !is_plan_mode_file_mutation_tool(tool_name) {
+        return None;
+    }
+
+    Some(format!(
+        "`{tool_name}` is blocked in Plan mode because it can mutate files. Switch to Default mode to run file edits."
+    ))
+}
+
+fn is_plan_mode_file_mutation_tool(tool_name: &str) -> bool {
+    let trailing = tool_name
+        .rsplit_once("__")
+        .map_or(tool_name, |(_, suffix)| suffix);
+    let canonical = trailing
+        .rsplit_once('/')
+        .map_or(trailing, |(_, suffix)| suffix);
+    matches!(canonical, "apply_patch" | "write_file" | "edit_file")
 }
 
 fn sandbox_tag(policy: &SandboxPolicy, windows_sandbox_level: WindowsSandboxLevel) -> &'static str {

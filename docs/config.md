@@ -90,6 +90,25 @@ layer_output_sanitization = false
 layer_request_interceptor = true
 ```
 
+## Plan files
+
+`xcodex` supports durable plan files for `/plan` workflows. Configure the default base directory with:
+
+```toml
+[plan]
+base_dir = "/absolute/path/to/plans"
+mode = "default"               # default | adr-lite | custom
+custom_template = "/abs/path/to/template.md"
+custom_seed_mode = "adr-lite"  # default | adr-lite
+```
+
+Defaults when unset:
+
+- `base_dir`: `$CODEX_HOME/plans`
+- `mode`: `default`
+- `custom_template`: `$CODEX_HOME/plans/custom/template.md`
+- `custom_seed_mode`: `adr-lite`
+
 ## Themes
 
 Codex TUIs support theming via xcodex-native YAML theme files.

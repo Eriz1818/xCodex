@@ -7,6 +7,15 @@ This project follows SemVer (`xcodex-vX.Y.Z` / `xcodex-vX.Y.Z-alpha.N` tags) and
 - `@eriz1818/xcodex` (CLI wrapper + native `xcodex` binaries + bundled `rg`)
 - `@eriz1818/xcodex-responses-api-proxy` (native proxy binary)
 
+## Unreleased
+
+Plan mode and durable planning workflow improvements.
+
+- Added durable plan-file workflows in TUI/TUI2 and CLI (`xcodex plan status|list|open|done`).
+- Added `/plan` menu/settings UX updates and plan-mode clarity improvements (including active-state visual treatment).
+- Added repo-aware plan base-dir `.gitignore` guidance (one-time prompt behavior) for in-repo plan paths.
+- Added clarification UX improvements in Plan mode (review step + multi-select parity in TUI/TUI2).
+
 ## 0.3.6
 
 TUI exclusion management, transcript rendering reliability fixes, and GPT-5.3 Codex availability.

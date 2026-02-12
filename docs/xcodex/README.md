@@ -13,6 +13,8 @@ xcodex (xtreme-codex) is an effort to add features to upstream Codex CLI.
 
 - Settings: `docs/xcodex/settings.md`
 - Worktrees: `docs/xcodex/worktrees.md` (quickstart + shared-dirs contract at the top)
+- Plan mode + durable plans: `docs/xcodex/plan.md`
+- Plan mode troubleshooting: `docs/xcodex/plan-troubleshooting.md`
 - Hooks: `docs/xcodex/hooks.md`
 - External hooks: `docs/xcodex/hooks-external.md`
 - Python Host hooks (“py-box”): `docs/xcodex/hooks-python-host.md`

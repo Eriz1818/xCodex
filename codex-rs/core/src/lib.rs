@@ -59,6 +59,7 @@ mod model_provider_info;
 pub mod parse_command;
 pub mod path_utils;
 pub mod personality_migration;
+pub mod plan_file;
 pub mod powershell;
 mod proposed_plan_parser;
 pub mod sandboxing;
