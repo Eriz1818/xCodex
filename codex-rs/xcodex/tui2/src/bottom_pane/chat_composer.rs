@@ -84,6 +84,7 @@ use super::chat_composer_history::ChatComposerHistory;
 use super::command_popup::CommandItem;
 use super::command_popup::CommandPopup;
 use super::file_search_popup::FileSearchPopup;
+use super::footer::CollaborationModeIndicator;
 use super::footer::FooterMode;
 use super::footer::FooterProps;
 use super::footer::esc_hint_mode;
@@ -215,6 +216,8 @@ pub(crate) struct ChatComposer {
     dismissed_skill_popup_token: Option<String>,
     /// When enabled, `Enter` submits immediately and `Tab` requests queuing behavior.
     steer_enabled: bool,
+    slash_commands_enabled: bool,
+    collaboration_mode_indicator: Option<CollaborationModeIndicator>,
 }
 
 /// Popup state – at most one can be visible at any time.
@@ -280,6 +283,8 @@ impl ChatComposer {
             skills: None,
             dismissed_skill_popup_token: None,
             steer_enabled: false,
+            slash_commands_enabled: true,
+            collaboration_mode_indicator: None,
         };
         // Apply configuration via the setter to keep side-effects centralized.
         this.set_disable_paste_burst(disable_paste_burst);
@@ -331,6 +336,20 @@ impl ChatComposer {
     /// "queue while a task is running" behavior.
     pub fn set_steer_enabled(&mut self, enabled: bool) {
         self.steer_enabled = enabled;
+    }
+
+    pub(crate) fn set_slash_commands_enabled(&mut self, enabled: bool) {
+        self.slash_commands_enabled = enabled;
+        if !enabled && matches!(self.active_popup, ActivePopup::Command(_)) {
+            self.active_popup = ActivePopup::None;
+        }
+    }
+
+    pub fn set_collaboration_mode_indicator(
+        &mut self,
+        indicator: Option<CollaborationModeIndicator>,
+    ) {
+        self.collaboration_mode_indicator = indicator;
     }
 
     fn layout_areas(&self, area: Rect) -> [Rect; 3] {
@@ -1617,6 +1636,9 @@ impl ChatComposer {
     /// Check if the first line is a bare slash command (no args) and dispatch it.
     /// Returns Some(InputResult) if a command was dispatched, None otherwise.
     fn try_dispatch_bare_slash_command(&mut self) -> Option<InputResult> {
+        if !self.slash_commands_enabled {
+            return None;
+        }
         let first_line = self.textarea.text().lines().next().unwrap_or("");
         if let Some((name, rest)) = parse_slash_name(first_line)
             && rest.is_empty()
@@ -1637,6 +1659,9 @@ impl ChatComposer {
     /// Check if the input is a slash command with args (e.g., /review args) and dispatch it.
     /// Returns Some(InputResult) if a command was dispatched, None otherwise.
     fn try_dispatch_slash_command_with_args(&mut self) -> Option<InputResult> {
+        if !self.slash_commands_enabled {
+            return None;
+        }
         let original_input = self.textarea.text().to_string();
         let input_starts_with_space = original_input.starts_with(' ');
 
@@ -1648,7 +1673,7 @@ impl ChatComposer {
                 && let Some((_n, cmd)) = built_in_slash_commands()
                     .into_iter()
                     .find(|(command_name, _)| *command_name == name)
-                && cmd == SlashCommand::Review
+                && cmd.supports_inline_args()
             {
                 self.textarea.set_text("");
                 return Some(InputResult::CommandWithArgs(cmd, rest.to_string()));
@@ -2076,7 +2101,8 @@ impl ChatComposer {
         }
         let skill_token = self.current_skill_token();
 
-        let allow_command_popup = file_token.is_none() && skill_token.is_none();
+        let allow_command_popup =
+            self.slash_commands_enabled && file_token.is_none() && skill_token.is_none();
         self.sync_command_popup(allow_command_popup);
 
         if matches!(self.active_popup, ActivePopup::Command(_)) {
@@ -2449,6 +2475,9 @@ impl Renderable for ChatComposer {
             if let Some(bg) = style.bg {
                 border_style = border_style.fg(bg);
             }
+            if self.collaboration_mode_indicator == Some(CollaborationModeIndicator::Plan) {
+                border_style = border_style.patch(crate::theme::accent_style());
+            }
             border_style = border_style.add_modifier(Modifier::BOLD);
             let line = "━".repeat(composer_rect.width as usize);
             buf.set_string(composer_rect.x, composer_rect.y, &line, border_style);
@@ -2460,11 +2489,14 @@ impl Renderable for ChatComposer {
             );
         }
         if !textarea_rect.is_empty() {
-            let prefix_style = if self.input_enabled {
+            let mut prefix_style = if self.input_enabled {
                 base_style.add_modifier(Modifier::BOLD)
             } else {
                 base_style.add_modifier(Modifier::DIM)
             };
+            if self.collaboration_mode_indicator == Some(CollaborationModeIndicator::Plan) {
+                prefix_style = prefix_style.patch(crate::theme::accent_style());
+            }
             let prefix = Span::from("›").set_style(prefix_style);
             buf.set_span(
                 textarea_rect.x - LIVE_PREFIX_COLS,

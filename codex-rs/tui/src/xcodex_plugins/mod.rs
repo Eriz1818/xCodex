@@ -8,6 +8,7 @@ mod hook_process_state;
 pub(crate) mod hooks;
 mod mcp;
 mod mcp_startup_state;
+pub(crate) mod plan;
 mod ramp_status_state;
 pub(crate) mod ramps;
 pub(crate) mod settings;
@@ -77,6 +78,7 @@ pub(crate) struct PluginSubcommandRoot {
 
 const PLUGIN_SUBCOMMAND_ROOTS: &[PluginSubcommandRoot] = &[
     mcp::MCP_SUBCOMMAND_ROOT,
+    plan::PLAN_SUBCOMMAND_ROOT,
     theme::THEME_SUBCOMMAND_ROOT,
     worktree::WORKTREE_SUBCOMMAND_ROOT,
 ];
@@ -97,6 +99,10 @@ pub(crate) fn try_handle_slash_command(chat: &mut ChatWidget, name: &str, rest: 
         "settings" => settings::handle_settings_command(chat, rest),
         "help" => {
             help::handle_help_command(chat, rest);
+            true
+        }
+        "plan" => {
+            plan::handle_plan_command(chat, rest);
             true
         }
         "hooks" => {

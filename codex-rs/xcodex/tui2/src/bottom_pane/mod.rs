@@ -58,6 +58,7 @@ mod skill_popup;
 mod slash_arg_hints;
 mod slash_subcommands;
 mod status_menu_view;
+pub(crate) use footer::CollaborationModeIndicator;
 pub(crate) use list_selection_view::SelectionViewParams;
 pub(crate) use request_user_input::RequestUserInputOverlay;
 mod feedback_view;
@@ -117,6 +118,7 @@ use codex_protocol::custom_prompts::CustomPrompt;
 use crate::status_indicator_widget::StatusIndicatorWidget;
 pub(crate) use list_selection_view::SelectionAction;
 pub(crate) use list_selection_view::SelectionItem;
+pub(crate) use list_selection_view::TabState;
 
 #[derive(Debug)]
 pub(crate) struct McpStartupBannerWidget {
@@ -326,6 +328,14 @@ impl BottomPane {
         self.composer.set_steer_enabled(enabled);
     }
 
+    pub fn set_collaboration_mode_indicator(
+        &mut self,
+        indicator: Option<CollaborationModeIndicator>,
+    ) {
+        self.composer.set_collaboration_mode_indicator(indicator);
+        self.request_redraw();
+    }
+
     pub fn set_slash_popup_max_rows(&mut self, max_rows: usize) {
         self.composer.set_slash_popup_max_rows(max_rows);
         self.request_redraw();
@@ -351,6 +361,14 @@ impl BottomPane {
 
     fn active_view(&self) -> Option<&dyn BottomPaneView> {
         self.view_stack.last().map(std::convert::AsRef::as_ref)
+    }
+
+    fn active_view_mut(&mut self) -> Option<&mut (dyn BottomPaneView + '_)> {
+        if let Some(view) = self.view_stack.last_mut() {
+            Some(view.as_mut())
+        } else {
+            None
+        }
     }
 
     fn push_view(&mut self, view: Box<dyn BottomPaneView>) {
@@ -897,6 +915,9 @@ impl BottomPane {
     }
 
     pub(crate) fn on_file_search_result(&mut self, query: String, matches: Vec<FileMatch>) {
+        if let Some(view) = self.active_view_mut() {
+            view.on_file_search_result(query.clone(), matches.clone());
+        }
         self.composer.on_file_search_result(query, matches);
         self.request_redraw();
     }

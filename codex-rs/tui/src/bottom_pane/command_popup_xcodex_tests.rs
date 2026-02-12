@@ -126,6 +126,37 @@ fn settings_nested_subcommands_are_suggested_under_status_bar() {
 }
 
 #[test]
+fn plan_subcommands_are_suggested_under_plan() {
+    let mut popup = popup_with_prompts(Vec::new());
+    popup.on_composer_text_change("/plan ".to_string());
+
+    let items = popup.filtered_items();
+    let subcommands: Vec<&str> = items
+        .into_iter()
+        .filter_map(|item| match item {
+            CommandItem::BuiltinText { name, .. } => Some(name),
+            _ => None,
+        })
+        .collect();
+
+    assert!(
+        subcommands.contains(&"plan list")
+            && subcommands.contains(&"plan open")
+            && subcommands.contains(&"plan settings"),
+        "expected /plan to suggest subcommands, got {subcommands:?}"
+    );
+}
+
+#[test]
+fn plan_subcommand_hint_uses_plugin_order() {
+    let hint = subcommand_list_hint("plan").expect("plan hint");
+    assert_eq!(
+        hint,
+        "Type space for subcommands: list, open, status, settings, done, archive"
+    );
+}
+
+#[test]
 fn mcp_subcommands_are_suggested_under_mcp() {
     let mut popup = popup_with_prompts(Vec::new());
     popup.on_composer_text_change("/mcp ".to_string());

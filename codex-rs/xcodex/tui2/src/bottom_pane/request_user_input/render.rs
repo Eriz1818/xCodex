@@ -1,8 +1,10 @@
 use crossterm::event::KeyCode;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
+use ratatui::style::Modifier;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
+use ratatui::text::Span;
 use ratatui::widgets::Clear;
 use ratatui::widgets::Paragraph;
 use ratatui::widgets::StatefulWidgetRef;
@@ -17,6 +19,13 @@ use super::RequestUserInputOverlay;
 
 impl Renderable for RequestUserInputOverlay {
     fn desired_height(&self, width: u16) -> u16 {
+        if self.confirm_unanswered_active() {
+            return self.unanswered_confirmation_height(width);
+        }
+        if self.confirm_review_active() {
+            return self.review_confirmation_height(width);
+        }
+
         let sections = self.layout_sections(Rect::new(0, 0, width, u16::MAX));
         let mut height = sections
             .question_lines
@@ -41,18 +50,317 @@ impl Renderable for RequestUserInputOverlay {
 }
 
 impl RequestUserInputOverlay {
+    fn unanswered_confirmation_height(&self, width: u16) -> u16 {
+        let content_width = width.max(1) as usize;
+        let title_lines = textwrap::wrap(super::UNANSWERED_CONFIRM_TITLE, content_width).len();
+        let subtitle_lines = textwrap::wrap(
+            &format!(
+                "{} unanswered question{}",
+                self.unanswered_question_count(),
+                if self.unanswered_question_count() == 1 {
+                    ""
+                } else {
+                    "s"
+                }
+            ),
+            content_width,
+        )
+        .len();
+        let rows = self.unanswered_confirmation_rows();
+        let rows_height = rows.len().max(1);
+        let hint_lines = 1usize;
+
+        let height = title_lines
+            .saturating_add(subtitle_lines)
+            .saturating_add(1)
+            .saturating_add(rows_height)
+            .saturating_add(1)
+            .saturating_add(hint_lines)
+            .max(8);
+        height as u16
+    }
+
+    fn review_confirmation_height(&self, width: u16) -> u16 {
+        let content_width = width.max(1) as usize;
+        let title_lines = textwrap::wrap(super::REVIEW_CONFIRM_TITLE, content_width).len();
+        let subtitle_lines = textwrap::wrap(
+            &format!("{} question(s)", self.question_count()),
+            content_width,
+        )
+        .len();
+        let summary_lines = self
+            .review_answer_summaries()
+            .into_iter()
+            .map(|line| textwrap::wrap(&line, content_width).len())
+            .sum::<usize>();
+        let rows = self.review_confirmation_rows();
+        let rows_height = rows.len().max(1);
+        let hint_lines = 1usize;
+
+        let height = title_lines
+            .saturating_add(subtitle_lines)
+            .saturating_add(1)
+            .saturating_add(summary_lines)
+            .saturating_add(1)
+            .saturating_add(rows_height)
+            .saturating_add(1)
+            .saturating_add(hint_lines)
+            .max(10);
+        height as u16
+    }
+
+    fn render_unanswered_confirmation(&self, area: Rect, buf: &mut Buffer) {
+        if area.width == 0 || area.height == 0 {
+            return;
+        }
+
+        let base_style = crate::theme::transcript_style();
+        for y in area.top()..area.bottom() {
+            for x in area.left()..area.right() {
+                buf[(x, y)].set_symbol(" ");
+                buf[(x, y)].set_style(base_style);
+            }
+        }
+
+        let mut cursor_y = area.y;
+        let title = textwrap::wrap(super::UNANSWERED_CONFIRM_TITLE, area.width.max(1) as usize)
+            .into_iter()
+            .map(std::borrow::Cow::into_owned)
+            .collect::<Vec<_>>();
+        for line in title {
+            if cursor_y >= area.bottom() {
+                return;
+            }
+            Paragraph::new(Line::from(line.bold())).render(
+                Rect {
+                    x: area.x,
+                    y: cursor_y,
+                    width: area.width,
+                    height: 1,
+                },
+                buf,
+            );
+            cursor_y = cursor_y.saturating_add(1);
+        }
+
+        let subtitle_text = format!(
+            "{} unanswered question{}",
+            self.unanswered_question_count(),
+            if self.unanswered_question_count() == 1 {
+                ""
+            } else {
+                "s"
+            }
+        );
+        for line in textwrap::wrap(&subtitle_text, area.width.max(1) as usize) {
+            if cursor_y >= area.bottom() {
+                return;
+            }
+            Paragraph::new(Line::from(line.into_owned().dim())).render(
+                Rect {
+                    x: area.x,
+                    y: cursor_y,
+                    width: area.width,
+                    height: 1,
+                },
+                buf,
+            );
+            cursor_y = cursor_y.saturating_add(1);
+        }
+
+        if cursor_y < area.bottom() {
+            cursor_y = cursor_y.saturating_add(1);
+        }
+
+        let hint_height = 1u16;
+        let rows = self.unanswered_confirmation_rows();
+        let rows_area = Rect {
+            x: area.x,
+            y: cursor_y,
+            width: area.width,
+            height: area
+                .bottom()
+                .saturating_sub(cursor_y)
+                .saturating_sub(hint_height)
+                .max(1),
+        };
+        render_rows(
+            rows_area,
+            buf,
+            &rows,
+            &self.confirm_unanswered.unwrap_or_default(),
+            rows.len().max(1),
+            base_style,
+            "No choices",
+        );
+
+        let hint_line = Line::from(vec![
+            key_hint::plain(KeyCode::Up).into(),
+            "/".into(),
+            key_hint::plain(KeyCode::Down).into(),
+            " move | ".into(),
+            key_hint::plain(KeyCode::Enter).into(),
+            " choose | ".into(),
+            key_hint::plain(KeyCode::Esc).into(),
+            " go back".into(),
+        ])
+        .dim();
+
+        Paragraph::new(hint_line).render(
+            Rect {
+                x: area.x,
+                y: area.bottom().saturating_sub(1),
+                width: area.width,
+                height: 1,
+            },
+            buf,
+        );
+    }
+
+    fn render_review_confirmation(&self, area: Rect, buf: &mut Buffer) {
+        if area.width == 0 || area.height == 0 {
+            return;
+        }
+
+        let base_style = crate::theme::transcript_style();
+        for y in area.top()..area.bottom() {
+            for x in area.left()..area.right() {
+                buf[(x, y)].set_symbol(" ");
+                buf[(x, y)].set_style(base_style);
+            }
+        }
+
+        let mut cursor_y = area.y;
+        for line in textwrap::wrap(super::REVIEW_CONFIRM_TITLE, area.width.max(1) as usize) {
+            if cursor_y >= area.bottom() {
+                return;
+            }
+            Paragraph::new(Line::from(line.into_owned().bold())).render(
+                Rect {
+                    x: area.x,
+                    y: cursor_y,
+                    width: area.width,
+                    height: 1,
+                },
+                buf,
+            );
+            cursor_y = cursor_y.saturating_add(1);
+        }
+
+        let subtitle = format!("{} question(s)", self.question_count());
+        for line in textwrap::wrap(&subtitle, area.width.max(1) as usize) {
+            if cursor_y >= area.bottom() {
+                return;
+            }
+            Paragraph::new(Line::from(line.into_owned().dim())).render(
+                Rect {
+                    x: area.x,
+                    y: cursor_y,
+                    width: area.width,
+                    height: 1,
+                },
+                buf,
+            );
+            cursor_y = cursor_y.saturating_add(1);
+        }
+
+        if cursor_y < area.bottom() {
+            cursor_y = cursor_y.saturating_add(1);
+        }
+
+        for summary in self.review_answer_summaries() {
+            for line in textwrap::wrap(&format!("- {summary}"), area.width.max(1) as usize) {
+                if cursor_y >= area.bottom() {
+                    return;
+                }
+                Paragraph::new(Line::from(line.into_owned().dim())).render(
+                    Rect {
+                        x: area.x,
+                        y: cursor_y,
+                        width: area.width,
+                        height: 1,
+                    },
+                    buf,
+                );
+                cursor_y = cursor_y.saturating_add(1);
+            }
+        }
+
+        if cursor_y < area.bottom() {
+            cursor_y = cursor_y.saturating_add(1);
+        }
+
+        let hint_height = 1u16;
+        let rows = self.review_confirmation_rows();
+        let rows_area = Rect {
+            x: area.x,
+            y: cursor_y,
+            width: area.width,
+            height: area
+                .bottom()
+                .saturating_sub(cursor_y)
+                .saturating_sub(hint_height)
+                .max(1),
+        };
+        render_rows(
+            rows_area,
+            buf,
+            &rows,
+            &self.confirm_review.unwrap_or_default(),
+            rows.len().max(1),
+            base_style,
+            "No choices",
+        );
+
+        let hint_line = Line::from(vec![
+            key_hint::plain(KeyCode::Up).into(),
+            "/".into(),
+            key_hint::plain(KeyCode::Down).into(),
+            " move | ".into(),
+            key_hint::plain(KeyCode::Enter).into(),
+            " choose | ".into(),
+            key_hint::plain(KeyCode::Esc).into(),
+            " go back".into(),
+        ])
+        .dim();
+
+        Paragraph::new(hint_line).render(
+            Rect {
+                x: area.x,
+                y: area.bottom().saturating_sub(1),
+                width: area.width,
+                height: 1,
+            },
+            buf,
+        );
+    }
+
     /// Render the full request-user-input overlay.
     pub(super) fn render_ui(&self, area: Rect, buf: &mut Buffer) {
         if area.width == 0 || area.height == 0 {
             return;
         }
+        if self.confirm_unanswered_active() {
+            self.render_unanswered_confirmation(area, buf);
+            return;
+        }
+        if self.confirm_review_active() {
+            self.render_review_confirmation(area, buf);
+            return;
+        }
+
         let sections = self.layout_sections(area);
 
         // Progress header keeps the user oriented across multiple questions.
         let progress_line = if self.question_count() > 0 {
             let idx = self.current_index() + 1;
             let total = self.question_count();
-            Line::from(format!("Question {idx}/{total}").dim())
+            let unanswered = self.unanswered_count();
+            if unanswered > 0 {
+                Line::from(format!("Question {idx}/{total} ({unanswered} unanswered)").dim())
+            } else {
+                Line::from(format!("Question {idx}/{total}").dim())
+            }
         } else {
             Line::from("No questions".dim())
         };
@@ -88,9 +396,12 @@ impl RequestUserInputOverlay {
         if sections.answer_title_area.height > 0 {
             let answer_label = "Answer";
             let answer_title = if self.focus_is_options() || self.focus_is_notes_without_options() {
-                answer_label.cyan().bold()
+                Span::styled(
+                    answer_label,
+                    crate::theme::accent_style().add_modifier(Modifier::BOLD),
+                )
             } else {
-                answer_label.dim()
+                Span::styled(answer_label, crate::theme::dim_style())
             };
             Paragraph::new(Line::from(answer_title)).render(sections.answer_title_area, buf);
         }
@@ -100,17 +411,21 @@ impl RequestUserInputOverlay {
             .current_question()
             .and_then(|question| question.options.as_ref())
             .map(|options| {
+                let focused_idx = self.selected_option_index();
+                let selected = self
+                    .current_answer()
+                    .map(|answer| answer.selected_option_indices.clone())
+                    .unwrap_or_default();
                 options
                     .iter()
                     .enumerate()
                     .map(|(idx, opt)| {
-                        let selected = self
-                            .current_answer()
-                            .and_then(|answer| answer.selected)
-                            .is_some_and(|sel| sel == idx);
-                        let prefix = if selected { "(x)" } else { "( )" };
+                        let focused = focused_idx.is_some_and(|focused| focused == idx);
+                        let checked = selected.contains(&idx);
+                        let cursor = if focused { '›' } else { ' ' };
+                        let check = if checked { 'x' } else { ' ' };
                         GenericDisplayRow {
-                            name: format!("{prefix} {}", opt.label),
+                            name: format!("{cursor} {}. [{check}] {}", idx + 1, opt.label),
                             display_shortcut: None,
                             match_indices: None,
                             description: Some(opt.description.clone()),
@@ -146,23 +461,14 @@ impl RequestUserInputOverlay {
         }
 
         if sections.notes_title_area.height > 0 {
-            let notes_label = if self.has_options()
-                && self
-                    .current_answer()
-                    .is_some_and(|answer| answer.selected.is_some())
-            {
-                if let Some(label) = self.current_option_label() {
-                    format!("Notes for {label} (optional)")
-                } else {
-                    "Notes (optional)".to_string()
-                }
-            } else {
-                "Notes (optional)".to_string()
-            };
+            let notes_label = "Notes (optional)";
             let notes_title = if self.focus_is_notes() {
-                notes_label.as_str().cyan().bold()
+                Span::styled(
+                    notes_label,
+                    crate::theme::accent_style().add_modifier(Modifier::BOLD),
+                )
             } else {
-                notes_label.as_str().dim()
+                Span::styled(notes_label, crate::theme::dim_style())
             };
             Paragraph::new(Line::from(notes_title)).render(sections.notes_title_area, buf);
         }
@@ -176,7 +482,6 @@ impl RequestUserInputOverlay {
             .y
             .saturating_add(sections.notes_area.height);
         if sections.footer_lines == 2 {
-            // Status line for unanswered count when any question is empty.
             let warning = format!(
                 "Unanswered: {} | Will submit as skipped",
                 self.unanswered_count()
@@ -191,14 +496,16 @@ impl RequestUserInputOverlay {
                 buf,
             );
         }
+
         let hint_y = footer_y.saturating_add(sections.footer_lines.saturating_sub(1));
-        // Footer hints (selection index + navigation keys).
         let mut hint_spans = Vec::new();
         if self.has_options() {
             let options_len = self.options_len();
             let option_index = self.selected_option_index().map_or(0, |idx| idx + 1);
             hint_spans.extend(vec![
-                format!("Option {option_index} of {options_len}").into(),
+                format!("Option {option_index}/{options_len}").into(),
+                " | ".into(),
+                "space select".into(),
                 " | ".into(),
             ]);
         }
@@ -208,17 +515,19 @@ impl RequestUserInputOverlay {
             key_hint::plain(KeyCode::Down).into(),
             " scroll | ".into(),
             key_hint::plain(KeyCode::Enter).into(),
-            " next question | ".into(),
+            " next".into(),
         ]);
         if self.question_count() > 1 {
             hint_spans.extend(vec![
+                " | ".into(),
                 key_hint::plain(KeyCode::PageUp).into(),
-                " prev | ".into(),
+                "/".into(),
                 key_hint::plain(KeyCode::PageDown).into(),
-                " next | ".into(),
+                " question".into(),
             ]);
         }
         hint_spans.extend(vec![
+            " | ".into(),
             key_hint::plain(KeyCode::Esc).into(),
             " interrupt".into(),
         ]);
@@ -235,7 +544,10 @@ impl RequestUserInputOverlay {
 
     /// Return the cursor position when editing notes, if visible.
     pub(super) fn cursor_pos_impl(&self, area: Rect) -> Option<(u16, u16)> {
-        if !self.focus_is_notes() {
+        if self.confirm_unanswered_active()
+            || self.confirm_review_active()
+            || !self.focus_is_notes()
+        {
             return None;
         }
         let sections = self.layout_sections(area);

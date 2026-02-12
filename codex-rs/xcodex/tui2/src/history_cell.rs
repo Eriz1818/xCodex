@@ -25,6 +25,7 @@ use crate::render::line_utils::line_to_static;
 use crate::render::line_utils::prefix_lines;
 use crate::render::line_utils::push_owned_lines;
 use crate::render::renderable::Renderable;
+use crate::style::proposed_plan_style;
 use crate::style::user_message_style;
 use crate::text_formatting::format_and_truncate_tool_result;
 use crate::text_formatting::truncate_text;
@@ -2458,6 +2459,37 @@ pub(crate) fn new_error_event(message: String) -> PlainHistoryCell {
 pub(crate) fn new_plan_update(update: UpdatePlanArgs) -> PlanUpdateCell {
     let UpdatePlanArgs { explanation, plan } = update;
     PlanUpdateCell { explanation, plan }
+}
+
+pub(crate) fn new_proposed_plan(plan_markdown: String) -> ProposedPlanCell {
+    ProposedPlanCell { plan_markdown }
+}
+
+#[derive(Debug)]
+pub(crate) struct ProposedPlanCell {
+    plan_markdown: String,
+}
+
+impl HistoryCell for ProposedPlanCell {
+    fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
+        let mut lines: Vec<Line<'static>> = Vec::new();
+        lines.push(vec!["• ".dim(), "Proposed Plan".bold()].into());
+        lines.push(Line::from(" "));
+
+        let plan_style = proposed_plan_style();
+        let wrap_width = width.saturating_sub(4).max(1) as usize;
+        let mut body: Vec<Line<'static>> = Vec::new();
+        append_markdown(&self.plan_markdown, Some(wrap_width), &mut body);
+        if body.is_empty() {
+            body.push(Line::from("(empty)".dim().italic()));
+        }
+
+        let mut plan_lines: Vec<Line<'static>> = vec![Line::from(" ")];
+        plan_lines.extend(prefix_lines(body, "  ".into(), "  ".into()));
+        plan_lines.push(Line::from(" "));
+        lines.extend(plan_lines.into_iter().map(|line| line.style(plan_style)));
+        lines
+    }
 }
 
 #[derive(Debug)]

@@ -1,0 +1,13 @@
+---
+source: xcodex/tui2/src/chatwidget/tests.rs
+expression: popup
+---
+  Plan list
+  0 plans · filter: Open · base: CODEX_HOME/plans
+
+  Search plans by title, status, or path
+› Create new plan                  Create/open active plan file
+  Plan settings
+  No plans in this tab (disabled)  disabled: No matches
+
+  ↑/↓: select  Enter: choose  Tab: next filter  type: search  Esc: close

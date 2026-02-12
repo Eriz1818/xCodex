@@ -95,6 +95,10 @@ use codex_core::windows_sandbox::WindowsSandboxLevelExt;
 use codex_protocol::ThreadId;
 use codex_protocol::account::PlanType;
 use codex_protocol::approvals::ElicitationRequestEvent;
+use codex_protocol::config_types::CollaborationMode;
+use codex_protocol::config_types::CollaborationModeMask;
+use codex_protocol::config_types::ModeKind;
+use codex_protocol::config_types::Settings;
 #[cfg(target_os = "windows")]
 use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::items::AgentMessageItem;
@@ -132,6 +136,7 @@ use crate::bottom_pane::BottomPane;
 use crate::bottom_pane::BottomPaneParams;
 use crate::bottom_pane::BottomPaneView;
 use crate::bottom_pane::CancellationEvent;
+use crate::bottom_pane::CollaborationModeIndicator;
 use crate::bottom_pane::DOUBLE_PRESS_QUIT_SHORTCUT_ENABLED;
 use crate::bottom_pane::InputResult;
 use crate::bottom_pane::QUIT_SHORTCUT_TIMEOUT;
@@ -229,6 +234,7 @@ const RATE_LIMIT_WARNING_THRESHOLDS: [f64; 3] = [75.0, 90.0, 95.0];
 const NUDGE_MODEL_SLUG: &str = "gpt-5.1-codex-mini";
 const RATE_LIMIT_SWITCH_PROMPT_THRESHOLD: f64 = 90.0;
 const DEFAULT_MODEL_DISPLAY_NAME: &str = "loading";
+const PLAN_IMPLEMENTATION_OTHER: &str = "Do something else...";
 
 pub(crate) fn transcript_spacer_line() -> Line<'static> {
     Line::from("").style(crate::theme::transcript_style())
@@ -373,6 +379,8 @@ pub(crate) struct ChatWidget {
     active_cell_revision: u64,
     config: Config,
     model: Option<String>,
+    stored_collaboration_mode: CollaborationMode,
+    active_collaboration_mask: Option<CollaborationModeMask>,
     auth_manager: Arc<AuthManager>,
     models_manager: Arc<ModelsManager>,
     session_header: SessionHeader,
@@ -417,6 +425,12 @@ pub(crate) struct ChatWidget {
     reasoning_buffer: String,
     // Accumulates full reasoning content for transcript-only recording
     full_reasoning_buffer: String,
+    // Buffers streamed proposed-plan markdown while a plan item is in flight.
+    plan_delta_buffer: String,
+    // Marks whether this turn emitted a completed plan item.
+    saw_plan_item_this_turn: bool,
+    // True when "Discuss Further" requested re-opening the post-plan prompt after the next turn.
+    reopen_plan_prompt_after_turn: bool,
     // Current status header shown in the status indicator.
     current_status_header: String,
     // Previous status header to restore after a transient stream retry.
@@ -571,7 +585,19 @@ impl ChatWidget {
         let initial_messages = event.initial_messages.clone();
         let model_for_header = event.model.clone();
         self.model = Some(model_for_header.clone());
-        self.session_header.set_model(&model_for_header);
+        if self.collaboration_modes_enabled() {
+            if let Some(mask) = self.active_collaboration_mask.as_mut() {
+                mask.model = Some(model_for_header.clone());
+            }
+        } else {
+            self.stored_collaboration_mode = self.stored_collaboration_mode.with_updates(
+                Some(model_for_header.clone()),
+                Some(event.reasoning_effort),
+                None,
+            );
+        }
+        self.refresh_model_display();
+        self.update_collaboration_mode_indicator();
         let session_info_cell = history_cell::new_session_info(
             &self.config,
             &model_for_header,
@@ -723,7 +749,16 @@ impl ChatWidget {
 
     // Raw reasoning uses the same flow as summarized reasoning
 
-    fn on_task_started(&mut self) {
+    fn on_task_started(&mut self, mode_kind: ModeKind) {
+        if self.collaboration_modes_enabled()
+            && mode_kind.is_tui_visible()
+            && let Some(mask) =
+                crate::collaboration_modes::mask_for_kind(self.models_manager.as_ref(), mode_kind)
+        {
+            self.active_collaboration_mask = Some(mask);
+            self.update_collaboration_mode_indicator();
+            self.refresh_model_display();
+        }
         self.agent_turn_running = true;
         self.bottom_pane.clear_quit_shortcut_hint();
         self.quit_shortcut_expires_at = None;
@@ -754,6 +789,8 @@ impl ChatWidget {
         self.pending_footer_token_info = None;
         self.full_reasoning_buffer.clear();
         self.reasoning_buffer.clear();
+        self.plan_delta_buffer.clear();
+        self.saw_plan_item_this_turn = false;
         self.request_redraw();
     }
 
@@ -770,6 +807,24 @@ impl ChatWidget {
         self.running_commands.clear();
         self.suppressed_exec_calls.clear();
         self.last_unified_wait = None;
+        let should_prompt_plan_implementation = if self.active_mode_kind() == ModeKind::Plan {
+            self.saw_plan_item_this_turn || self.reopen_plan_prompt_after_turn
+        } else {
+            self.reopen_plan_prompt_after_turn = false;
+            false
+        };
+        if !self.saw_plan_item_this_turn {
+            let plan_text = self.plan_delta_buffer.trim();
+            if !plan_text.is_empty() {
+                self.add_to_history(history_cell::new_proposed_plan(plan_text.to_string()));
+            }
+        }
+        self.plan_delta_buffer.clear();
+        self.saw_plan_item_this_turn = false;
+        if should_prompt_plan_implementation {
+            self.reopen_plan_prompt_after_turn = false;
+            self.open_plan_implementation_prompt();
+        }
         self.request_redraw();
 
         // If there is a queued user message, send exactly one now to begin the next turn.
@@ -781,6 +836,16 @@ impl ChatWidget {
 
         self.maybe_show_pending_rate_limit_prompt();
         self.session_stats.turns_completed = self.session_stats.turns_completed.saturating_add(1);
+    }
+
+    fn open_plan_implementation_prompt(&mut self) {
+        let default_mode_mask =
+            crate::collaboration_modes::default_mode_mask(self.models_manager.as_ref());
+        crate::xcodex_plugins::plan::open_post_plan_prompt(self, default_mode_mask);
+    }
+
+    pub(crate) fn reopen_plan_prompt_after_turn(&mut self) {
+        self.reopen_plan_prompt_after_turn = true;
     }
 
     pub(crate) fn set_token_info(&mut self, info: Option<TokenUsageInfo>) {
@@ -1019,6 +1084,8 @@ impl ChatWidget {
         self.suppressed_exec_calls.clear();
         self.last_unified_wait = None;
         self.stream_controller = None;
+        self.plan_delta_buffer.clear();
+        self.saw_plan_item_this_turn = false;
         self.maybe_show_pending_rate_limit_prompt();
     }
 
@@ -1132,6 +1199,31 @@ impl ChatWidget {
 
     fn on_plan_update(&mut self, update: UpdatePlanArgs) {
         self.add_to_history(history_cell::new_plan_update(update));
+    }
+
+    fn on_plan_delta(&mut self, delta: String) {
+        if self.active_mode_kind() != ModeKind::Plan {
+            return;
+        }
+        self.plan_delta_buffer.push_str(&delta);
+    }
+
+    fn on_plan_item_completed(&mut self, text: String) {
+        self.saw_plan_item_this_turn = true;
+        let streamed_plan = self.plan_delta_buffer.trim().to_string();
+        let plan_text = if text.trim().is_empty() {
+            streamed_plan
+        } else {
+            text
+        };
+        self.plan_delta_buffer.clear();
+        if plan_text.trim().is_empty() {
+            return;
+        }
+
+        self.flush_active_cell();
+        self.add_to_history(history_cell::new_proposed_plan(plan_text));
+        self.request_redraw();
     }
 
     fn on_exec_approval_request(&mut self, id: String, ev: ExecApprovalRequestEvent) {
@@ -1865,6 +1957,17 @@ impl ChatWidget {
             .model
             .clone()
             .unwrap_or_else(|| DEFAULT_MODEL_DISPLAY_NAME.to_string());
+        let fallback_custom = Settings {
+            model: model_for_header.clone(),
+            reasoning_effort: None,
+            developer_instructions: None,
+        };
+        let stored_collaboration_mode = CollaborationMode {
+            mode: ModeKind::Default,
+            settings: fallback_custom,
+        };
+        let active_collaboration_mask =
+            Self::initial_collaboration_mask(&config, models_manager.as_ref(), model.as_deref());
         let active_cell = if model.is_none() {
             Some(Self::placeholder_session_header_cell(&config))
         } else {
@@ -1891,6 +1994,8 @@ impl ChatWidget {
             active_cell_revision: 0,
             config,
             model,
+            stored_collaboration_mode,
+            active_collaboration_mask,
             auth_manager,
             models_manager,
             session_header: SessionHeader::new(model_for_header),
@@ -1925,6 +2030,9 @@ impl ChatWidget {
             interrupts: InterruptManager::new(),
             reasoning_buffer: String::new(),
             full_reasoning_buffer: String::new(),
+            plan_delta_buffer: String::new(),
+            saw_plan_item_this_turn: false,
+            reopen_plan_prompt_after_turn: false,
             current_status_header: String::from("Working"),
             retry_status_header: None,
             ramp_status: RampStatusController::default(),
@@ -1959,6 +2067,7 @@ impl ChatWidget {
         widget
             .bottom_pane
             .set_steer_enabled(widget.config.features.enabled(Feature::Steer));
+        widget.update_collaboration_mode_indicator();
 
         widget
     }
@@ -1992,6 +2101,20 @@ impl ChatWidget {
             spawn_agent_from_existing(conversation, session_configured, app_event_tx.clone());
         let auto_compact_enabled =
             codex_core::prefs::load_blocking(&config.codex_home).auto_compact_enabled;
+        let fallback_custom = Settings {
+            model: header_model.clone(),
+            reasoning_effort: None,
+            developer_instructions: None,
+        };
+        let stored_collaboration_mode = CollaborationMode {
+            mode: ModeKind::Default,
+            settings: fallback_custom,
+        };
+        let active_collaboration_mask = Self::initial_collaboration_mask(
+            &config,
+            models_manager.as_ref(),
+            Some(header_model.as_str()),
+        );
 
         let mut widget = Self {
             app_event_tx: app_event_tx.clone(),
@@ -2013,6 +2136,8 @@ impl ChatWidget {
             active_cell_revision: 0,
             config,
             model: Some(header_model.clone()),
+            stored_collaboration_mode,
+            active_collaboration_mask,
             auth_manager,
             models_manager,
             session_header: SessionHeader::new(header_model),
@@ -2047,6 +2172,9 @@ impl ChatWidget {
             interrupts: InterruptManager::new(),
             reasoning_buffer: String::new(),
             full_reasoning_buffer: String::new(),
+            plan_delta_buffer: String::new(),
+            saw_plan_item_this_turn: false,
+            reopen_plan_prompt_after_turn: false,
             current_status_header: String::from("Working"),
             retry_status_header: None,
             ramp_status: RampStatusController::default(),
@@ -2081,6 +2209,7 @@ impl ChatWidget {
         widget
             .bottom_pane
             .set_steer_enabled(widget.config.features.enabled(Feature::Steer));
+        widget.update_collaboration_mode_indicator();
 
         widget
     }
@@ -2196,6 +2325,16 @@ impl ChatWidget {
         }
 
         match key_event {
+            KeyEvent {
+                code: KeyCode::BackTab,
+                kind: KeyEventKind::Press,
+                ..
+            } if self.collaboration_modes_enabled()
+                && !self.bottom_pane.is_task_running()
+                && self.bottom_pane.no_modal_or_popup_active() =>
+            {
+                self.toggle_plan_mode();
+            }
             KeyEvent {
                 code: KeyCode::Up,
                 modifiers: KeyModifiers::ALT,
@@ -2412,6 +2551,9 @@ impl ChatWidget {
             SlashCommand::Settings => {
                 self.open_status_menu_view(crate::bottom_pane::StatusMenuTab::Settings);
             }
+            SlashCommand::Plan => {
+                crate::xcodex_plugins::plan::open_plan_menu(self);
+            }
             SlashCommand::Theme => {
                 xcodex_plugins::handle_theme_command(self, "");
             }
@@ -2485,6 +2627,10 @@ impl ChatWidget {
     }
 
     fn dispatch_command_with_args(&mut self, cmd: SlashCommand, args: String) {
+        if !cmd.supports_inline_args() {
+            self.dispatch_command(cmd);
+            return;
+        }
         if !cmd.available_during_task() && self.bottom_pane.is_task_running() {
             let message = format!(
                 "'/{}' is disabled while a task is in progress.",
@@ -2506,6 +2652,9 @@ impl ChatWidget {
                         user_facing_hint: None,
                     },
                 });
+            }
+            SlashCommand::Plan => {
+                crate::xcodex_plugins::plan::handle_plan_command(self, trimmed);
             }
             SlashCommand::Worktree => {
                 xcodex_plugins::try_handle_worktree_subcommand(self, trimmed);
@@ -2605,6 +2754,7 @@ impl ChatWidget {
                     | "help"
                     | "hooks"
                     | "mcp"
+                    | "plan"
                     | "settings"
                     | "thoughts"
                     | "verbose"
@@ -3117,10 +3267,26 @@ impl ChatWidget {
             }
         }
 
+        let effective_mode = self.effective_collaboration_mode();
+        let collaboration_mode = if self.collaboration_modes_enabled() {
+            self.active_collaboration_mask
+                .as_ref()
+                .map(|_| effective_mode.clone())
+        } else {
+            None
+        };
         self.codex_op_tx
-            .send(Op::UserInput {
+            .send(Op::UserTurn {
                 items,
+                cwd: self.config.cwd.clone(),
+                approval_policy: self.config.approval_policy.value(),
+                sandbox_policy: self.config.sandbox_policy.get().clone(),
+                model: effective_mode.model().to_string(),
+                effort: effective_mode.reasoning_effort(),
+                summary: self.config.model_reasoning_summary,
                 final_output_json_schema: None,
+                collaboration_mode,
+                personality: None,
             })
             .unwrap_or_else(|e| {
                 tracing::error!("failed to send message: {e}");
@@ -3193,6 +3359,7 @@ impl ChatWidget {
             EventMsg::AgentMessageDelta(AgentMessageDeltaEvent { delta }) => {
                 self.on_agent_message_delta(delta)
             }
+            EventMsg::PlanDelta(event) => self.on_plan_delta(event.delta),
             EventMsg::AgentReasoningDelta(AgentReasoningDeltaEvent { delta })
             | EventMsg::AgentReasoningRawContentDelta(AgentReasoningRawContentDeltaEvent {
                 delta,
@@ -3203,7 +3370,7 @@ impl ChatWidget {
                 self.on_agent_reasoning_final();
             }
             EventMsg::AgentReasoningSectionBreak(_) => self.on_reasoning_section_break(),
-            EventMsg::TurnStarted(_) => self.on_task_started(),
+            EventMsg::TurnStarted(ev) => self.on_task_started(ev.collaboration_mode_kind),
             EventMsg::TurnComplete(TurnCompleteEvent { last_agent_message }) => {
                 self.on_task_complete(last_agent_message)
             }
@@ -3306,6 +3473,9 @@ impl ChatWidget {
                 }
             }
             EventMsg::ItemCompleted(event) => {
+                if let codex_protocol::items::TurnItem::Plan(plan_item) = &event.item {
+                    self.on_plan_item_completed(plan_item.text.clone());
+                }
                 if let codex_protocol::items::TurnItem::AgentMessage(item) = event.item {
                     self.on_agent_message_item_completed(item);
                 }
@@ -3313,7 +3483,6 @@ impl ChatWidget {
             EventMsg::RawResponseItem(_)
             | EventMsg::ThreadRolledBack(_)
             | EventMsg::ThreadNameUpdated(_)
-            | EventMsg::PlanDelta(_)
             | EventMsg::AgentMessageContentDelta(_)
             | EventMsg::DynamicToolCallRequest(_)
             | EventMsg::ReasoningContentDelta(_)
@@ -3912,6 +4081,16 @@ impl ChatWidget {
             .iter()
             .find(|preset| preset.show_in_picker && preset.model == NUDGE_MODEL_SLUG)
             .cloned()
+    }
+
+    pub(crate) fn selectable_model_presets(&self) -> Option<Vec<ModelPreset>> {
+        let models = self.models_manager.try_list_models(&self.config).ok()?;
+        Some(
+            models
+                .into_iter()
+                .filter(|preset| preset.show_in_picker)
+                .collect(),
+        )
     }
 
     fn rate_limit_switch_prompt_hidden(&self) -> bool {
@@ -5056,6 +5235,21 @@ impl ChatWidget {
         if feature == Feature::Steer {
             self.bottom_pane.set_steer_enabled(enabled);
         }
+        if feature == Feature::CollaborationModes {
+            let settings = self.stored_collaboration_mode.settings.clone();
+            self.stored_collaboration_mode = CollaborationMode {
+                mode: ModeKind::Default,
+                settings,
+            };
+            self.active_collaboration_mask = if enabled {
+                crate::collaboration_modes::default_mask(self.models_manager.as_ref())
+            } else {
+                None
+            };
+            self.update_collaboration_mode_indicator();
+            self.refresh_model_display();
+            self.request_redraw();
+        }
     }
 
     pub(crate) fn set_full_access_warning_acknowledged(&mut self, acknowledged: bool) {
@@ -5083,6 +5277,14 @@ impl ChatWidget {
 
     /// Set the reasoning effort in the widget's config copy.
     pub(crate) fn set_reasoning_effort(&mut self, effort: Option<ReasoningEffortConfig>) {
+        self.stored_collaboration_mode =
+            self.stored_collaboration_mode
+                .with_updates(None, Some(effort), None);
+        if self.collaboration_modes_enabled()
+            && let Some(mask) = self.active_collaboration_mask.as_mut()
+        {
+            mask.reasoning_effort = Some(effort);
+        }
         self.config.model_reasoning_effort = effort;
     }
 
@@ -5147,16 +5349,187 @@ impl ChatWidget {
 
     /// Set the model in the widget's config copy.
     pub(crate) fn set_model(&mut self, model: &str) {
-        self.session_header.set_model(model);
+        self.stored_collaboration_mode =
+            self.stored_collaboration_mode
+                .with_updates(Some(model.to_string()), None, None);
+        if self.collaboration_modes_enabled()
+            && let Some(mask) = self.active_collaboration_mask.as_mut()
+        {
+            mask.model = Some(model.to_string());
+        }
         self.model = Some(model.to_string());
+        self.refresh_model_display();
     }
 
     fn current_model(&self) -> Option<&str> {
-        self.model.as_deref()
+        if !self.collaboration_modes_enabled() {
+            return Some(self.stored_collaboration_mode.model());
+        }
+        self.active_collaboration_mask
+            .as_ref()
+            .and_then(|mask| mask.model.as_deref())
+            .or_else(|| Some(self.stored_collaboration_mode.model()))
     }
 
     fn model_display_name(&self) -> &str {
-        self.model.as_deref().unwrap_or(DEFAULT_MODEL_DISPLAY_NAME)
+        self.current_model().unwrap_or(DEFAULT_MODEL_DISPLAY_NAME)
+    }
+
+    fn collaboration_modes_enabled(&self) -> bool {
+        self.config.features.enabled(Feature::CollaborationModes)
+    }
+
+    fn initial_collaboration_mask(
+        config: &Config,
+        models_manager: &ModelsManager,
+        model_override: Option<&str>,
+    ) -> Option<CollaborationModeMask> {
+        if !config.features.enabled(Feature::CollaborationModes) {
+            return None;
+        }
+        let mut mask = match config.experimental_mode {
+            Some(kind) => crate::collaboration_modes::mask_for_kind(models_manager, kind)?,
+            None => crate::collaboration_modes::default_mask(models_manager)?,
+        };
+        if let Some(model_override) = model_override {
+            mask.model = Some(model_override.to_string());
+        }
+        Some(mask)
+    }
+
+    fn plan_mode_mask_with_overrides(&self) -> Option<CollaborationModeMask> {
+        let mut mask = crate::collaboration_modes::plan_mask(self.models_manager.as_ref())?;
+        if let Some(model_override) = crate::xcodex_plugins::plan::plan_mode_model_override(self) {
+            mask.model = Some(model_override);
+        }
+        Some(mask)
+    }
+
+    fn active_mode_kind(&self) -> ModeKind {
+        self.active_collaboration_mask
+            .as_ref()
+            .and_then(|mask| mask.mode)
+            .unwrap_or(ModeKind::Default)
+    }
+
+    fn effective_collaboration_mode(&self) -> CollaborationMode {
+        if !self.collaboration_modes_enabled() {
+            return self.stored_collaboration_mode.clone();
+        }
+        self.active_collaboration_mask.as_ref().map_or_else(
+            || self.stored_collaboration_mode.clone(),
+            |mask| self.stored_collaboration_mode.apply_mask(mask),
+        )
+    }
+
+    fn refresh_model_display(&mut self) {
+        let effective = self.effective_collaboration_mode();
+        self.model = Some(effective.model().to_string());
+        self.session_header.set_model(effective.model());
+    }
+
+    fn collaboration_mode_indicator(&self) -> Option<CollaborationModeIndicator> {
+        if !self.collaboration_modes_enabled() {
+            return None;
+        }
+        match self.active_mode_kind() {
+            ModeKind::Plan => Some(CollaborationModeIndicator::Plan),
+            ModeKind::Default | ModeKind::PairProgramming | ModeKind::Execute => None,
+        }
+    }
+
+    fn update_collaboration_mode_indicator(&mut self) {
+        let indicator = self.collaboration_mode_indicator();
+        self.bottom_pane.set_collaboration_mode_indicator(indicator);
+    }
+
+    /// Toggle between Default and Plan collaboration modes.
+    fn toggle_plan_mode(&mut self) {
+        if !self.collaboration_modes_enabled() {
+            return;
+        }
+
+        let target_kind = if self.active_mode_kind() == ModeKind::Plan {
+            ModeKind::Default
+        } else {
+            ModeKind::Plan
+        };
+
+        let next_mask = if target_kind == ModeKind::Plan {
+            self.plan_mode_mask_with_overrides()
+        } else {
+            crate::collaboration_modes::mask_for_kind(self.models_manager.as_ref(), target_kind)
+        };
+        if let Some(next_mask) = next_mask {
+            self.set_collaboration_mask(next_mask);
+        } else if target_kind == ModeKind::Plan {
+            self.add_info_message("Plan mode unavailable right now.".to_string(), None);
+        }
+    }
+
+    /// Update the active collaboration mask.
+    pub(crate) fn set_collaboration_mask(&mut self, mask: CollaborationModeMask) {
+        if !self.collaboration_modes_enabled() {
+            return;
+        }
+        self.active_collaboration_mask = Some(mask);
+        self.update_collaboration_mode_indicator();
+        self.refresh_model_display();
+        self.request_redraw();
+    }
+
+    pub(crate) fn submit_user_message_with_mode(
+        &mut self,
+        text: String,
+        collaboration_mode: CollaborationModeMask,
+    ) {
+        if self.agent_turn_running
+            && self.active_collaboration_mask.as_ref() != Some(&collaboration_mode)
+        {
+            self.add_error_message(
+                "Cannot switch collaboration mode while a turn is running.".to_string(),
+            );
+            return;
+        }
+        self.set_collaboration_mask(collaboration_mode);
+        let user_message = UserMessage {
+            text,
+            image_paths: Vec::new(),
+        };
+        self.submit_user_message(user_message);
+    }
+
+    pub(crate) fn show_plan_do_something_else_prompt(&mut self) {
+        let tx = self.app_event_tx.clone();
+        let plan_mask = self
+            .active_collaboration_mask
+            .clone()
+            .filter(|mask| mask.mode == Some(ModeKind::Plan))
+            .or_else(|| self.plan_mode_mask_with_overrides());
+        let view = CustomPromptView::new(
+            PLAN_IMPLEMENTATION_OTHER.to_string(),
+            "Type your next step and press Enter".to_string(),
+            Some("This submits immediately in Plan mode.".to_string()),
+            Box::new(move |prompt: String| {
+                let trimmed = prompt.trim().to_string();
+                if trimmed.is_empty() {
+                    return;
+                }
+                let Some(mask) = plan_mask.clone() else {
+                    tx.send(AppEvent::InsertHistoryCell(Box::new(
+                        history_cell::new_error_event(
+                            "Plan mode is unavailable for this session.".to_string(),
+                        ),
+                    )));
+                    return;
+                };
+                tx.send(AppEvent::SubmitUserMessageWithMode {
+                    text: trimmed,
+                    collaboration_mode: mask,
+                });
+            }),
+        );
+        self.bottom_pane.show_view(Box::new(view));
     }
 
     /// Build a placeholder header cell while the session is configuring.
@@ -5219,6 +5592,50 @@ impl ChatWidget {
 
     pub(crate) fn codex_home(&self) -> &Path {
         &self.config.codex_home
+    }
+
+    pub(crate) fn configured_plan_base_dir(&self) -> Option<&Path> {
+        self.config.xcodex.plan_base_dir.as_deref()
+    }
+
+    pub(crate) fn configured_plan_mode(&self) -> Option<&'static str> {
+        self.config
+            .xcodex
+            .plan_mode
+            .map(codex_core::xcodex::config::PlanWorkflowMode::as_str)
+    }
+
+    pub(crate) fn configured_plan_custom_template(&self) -> Option<&Path> {
+        self.config.xcodex.plan_custom_template.as_deref()
+    }
+
+    pub(crate) fn configured_plan_custom_seed_mode(&self) -> Option<&'static str> {
+        self.config
+            .xcodex
+            .plan_custom_seed_mode
+            .map(codex_core::xcodex::config::PlanTemplateSeedMode::as_str)
+    }
+
+    pub(crate) fn configured_plan_track_worktree(&self) -> Option<bool> {
+        self.config.xcodex.plan_track_worktree
+    }
+
+    pub(crate) fn configured_plan_track_branch(&self) -> Option<bool> {
+        self.config.xcodex.plan_track_branch
+    }
+
+    pub(crate) fn configured_plan_mismatch_action(&self) -> Option<&'static str> {
+        self.config
+            .xcodex
+            .plan_mismatch_action
+            .map(codex_core::xcodex::config::PlanContextMismatchAction::as_str)
+    }
+
+    pub(crate) fn configured_plan_naming_strategy(&self) -> Option<&'static str> {
+        self.config
+            .xcodex
+            .plan_naming_strategy
+            .map(codex_core::xcodex::config::PlanNamingStrategy::as_str)
     }
 
     pub(crate) fn themes_dir(&self) -> PathBuf {

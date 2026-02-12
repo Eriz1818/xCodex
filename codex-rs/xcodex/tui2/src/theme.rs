@@ -22,6 +22,7 @@ use std::sync::atomic::Ordering;
 pub(crate) struct ThemeStyles {
     base: Style,
     transcript: Style,
+    transcript_bg_rgb: Option<(u8, u8, u8)>,
     composer: Style,
     user_prompt_highlight: Style,
     status: Style,
@@ -186,6 +187,10 @@ pub(crate) fn base_style() -> Style {
 
 pub(crate) fn transcript_style() -> Style {
     get_styles().transcript
+}
+
+pub(crate) fn transcript_bg_rgb() -> Option<(u8, u8, u8)> {
+    get_styles().transcript_bg_rgb
 }
 
 pub(crate) fn composer_style() -> Style {
@@ -738,7 +743,11 @@ fn styles_for(
     let base_bg = resolve_color(theme, "roles.bg", &theme.roles.bg);
     let base = style_from_roles(base_fg, base_bg, Style::default());
 
-    let transcript_bg = to_color(theme.resolve_transcript_bg(), terminal_bg);
+    let transcript_bg_rgb = match theme.resolve_transcript_bg() {
+        ThemeColorResolved::Rgb(rgb) => Some((rgb.0, rgb.1, rgb.2)),
+        ThemeColorResolved::Inherit => terminal_bg,
+    };
+    let transcript_bg = transcript_bg_rgb.map(best_color);
     let transcript = style_from_roles(base_fg, transcript_bg, base);
 
     fn lifted_bg(rgb: (u8, u8, u8)) -> ratatui::style::Color {
@@ -751,10 +760,7 @@ fn styles_for(
     }
 
     let composer_bg = to_color(theme.resolve_composer_bg(), None).or_else(|| {
-        let base_rgb = match theme.resolve_transcript_bg() {
-            ThemeColorResolved::Rgb(rgb) => Some((rgb.0, rgb.1, rgb.2)),
-            ThemeColorResolved::Inherit => terminal_bg,
-        }?;
+        let base_rgb = transcript_bg_rgb?;
         Some(lifted_bg(base_rgb))
     });
     let composer = style_from_roles(base_fg, composer_bg, base);
@@ -795,23 +801,17 @@ fn styles_for(
                     .bg(best_color(bg_rgb))
                     .fg(highlight_fg(bg_rgb))
             }
-            ThemeColorResolved::Inherit => {
-                let base_rgb = match theme.resolve_transcript_bg() {
-                    ThemeColorResolved::Rgb(rgb) => Some((rgb.0, rgb.1, rgb.2)),
-                    ThemeColorResolved::Inherit => terminal_bg,
+            ThemeColorResolved::Inherit => transcript_bg_rgb.map_or_else(Style::default, |rgb| {
+                let top = if is_light(rgb) {
+                    (0, 0, 0)
+                } else {
+                    (255, 255, 255)
                 };
-                base_rgb.map_or_else(Style::default, |rgb| {
-                    let top = if is_light(rgb) {
-                        (0, 0, 0)
-                    } else {
-                        (255, 255, 255)
-                    };
-                    let bg_rgb = blend(top, rgb, 0.18);
-                    Style::default()
-                        .bg(best_color(bg_rgb))
-                        .fg(highlight_fg(bg_rgb))
-                })
-            }
+                let bg_rgb = blend(top, rgb, 0.18);
+                Style::default()
+                    .bg(best_color(bg_rgb))
+                    .fg(highlight_fg(bg_rgb))
+            }),
         },
         |bg_rgb| {
             Style::default()
@@ -968,6 +968,7 @@ fn styles_for(
     ThemeStyles {
         base,
         transcript,
+        transcript_bg_rgb,
         composer,
         user_prompt_highlight,
         status,
@@ -1016,6 +1017,7 @@ fn fallback_styles() -> ThemeStyles {
     ThemeStyles {
         base: Style::default(),
         transcript: Style::default(),
+        transcript_bg_rgb: None,
         composer: Style::default(),
         user_prompt_highlight: Style::default(),
         status: Style::default(),

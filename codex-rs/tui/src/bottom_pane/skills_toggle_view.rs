@@ -299,7 +299,7 @@ impl Renderable for SkillsToggleView {
             Layout::vertical([Constraint::Fill(1), Constraint::Length(1)]).areas(area);
 
         let base_style = popup_surface_style();
-        Block::default().style(base_style).render(content_area, buf);
+        Block::default().style(base_style).render(area, buf);
 
         let header_height = self
             .header

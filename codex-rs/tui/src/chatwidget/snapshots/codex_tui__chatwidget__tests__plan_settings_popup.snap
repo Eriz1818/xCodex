@@ -1,0 +1,19 @@
+---
+source: tui/src/chatwidget/tests.rs
+assertion_line: 4058
+expression: popup
+---
+  Plan settings
+  Manage plan mode defaults
+
+  Search plan settings
+› Default plan base directory     CODEX_HOME/plans
+  Brainstorm-first: auto
+  Flowchart preference: auto
+  Track worktree: on
+  Track branch: on
+  Context mismatch action: block
+  Plan naming strategy: funny
+  Plan mode: default
+
+  ↑/↓: select  Enter: apply  Tab: cycle selected  type: search  Esc: close

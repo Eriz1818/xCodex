@@ -1,15 +1,14 @@
 ---
 source: tui/src/bottom_pane/request_user_input/mod.rs
-assertion_line: 2321
 expression: "render_snapshot(&overlay, area)"
 ---
                                                                                                                         
-  Question 1/1 (1 unanswered)                                                                                           
+  Question 1/1                                                                                                          
   Choose an option.                                                                                                     
                                                                                                                         
-  › 1. Option 1  First choice.                                                                                          
-    2. Option 2  Second choice.                                                                                         
-    3. Option 3  Third choice.                                                                                          
+  › 1. [x] Option 1  First choice.                                                                                      
+    2. [ ] Option 2  Second choice.                                                                                     
+    3. [ ] Option 3  Third choice.                                                                                      
                                                                                                                         
   › Add notes                                                                                                           
                                                                                                                         
@@ -17,4 +16,4 @@ expression: "render_snapshot(&overlay, area)"
                                                                                                                         
                                                                                                                         
                                                                                                                         
-  tab or esc to clear notes | enter to submit answer
+  space selects option | tab or esc to clear notes | enter to submit answer
