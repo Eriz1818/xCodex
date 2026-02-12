@@ -44,6 +44,23 @@ struct UnansweredConfirmationLayout {
     state: ScrollState,
 }
 
+struct ReviewConfirmationData {
+    title_line: Line<'static>,
+    subtitle_line: Line<'static>,
+    summary_lines: Vec<Line<'static>>,
+    hint_line: Line<'static>,
+    rows: Vec<crate::bottom_pane::selection_popup_common::GenericDisplayRow>,
+    state: ScrollState,
+}
+
+struct ReviewConfirmationLayout {
+    header_lines: Vec<Line<'static>>,
+    summary_lines: Vec<Line<'static>>,
+    hint_lines: Vec<Line<'static>>,
+    rows: Vec<crate::bottom_pane::selection_popup_common::GenericDisplayRow>,
+    state: ScrollState,
+}
+
 fn line_to_owned(line: Line<'_>) -> Line<'static> {
     Line {
         style: line.style,
@@ -63,6 +80,9 @@ impl Renderable for RequestUserInputOverlay {
     fn desired_height(&self, width: u16) -> u16 {
         if self.confirm_unanswered_active() {
             return self.unanswered_confirmation_height(width);
+        }
+        if self.confirm_review_active() {
+            return self.review_confirmation_height(width);
         }
         let outer = Rect::new(0, 0, width, u16::MAX);
         let inner = menu_surface_inset(outer);
@@ -247,6 +267,165 @@ impl RequestUserInputOverlay {
         }
     }
 
+    fn review_confirmation_data(&self) -> ReviewConfirmationData {
+        let summary_lines = self
+            .review_answer_summaries()
+            .into_iter()
+            .map(|line| Line::from(format!("• {line}").dim()))
+            .collect::<Vec<_>>();
+        ReviewConfirmationData {
+            title_line: Line::from(super::REVIEW_CONFIRM_TITLE.bold()),
+            subtitle_line: Line::from(format!("{} question(s)", self.question_count()).dim()),
+            summary_lines,
+            hint_line: standard_popup_hint_line(),
+            rows: self.review_confirmation_rows(),
+            state: self.confirm_review.unwrap_or_default(),
+        }
+    }
+
+    fn review_confirmation_layout(&self, width: u16) -> ReviewConfirmationLayout {
+        let data = self.review_confirmation_data();
+        let content_width = width.max(1);
+        let mut header_lines = wrap_styled_line(&data.title_line, content_width);
+        let mut subtitle_lines = wrap_styled_line(&data.subtitle_line, content_width);
+        header_lines.append(&mut subtitle_lines);
+        let header_lines = header_lines.into_iter().map(line_to_owned).collect();
+        let mut summary_lines = Vec::new();
+        for line in data.summary_lines {
+            let wrapped = wrap_styled_line(&line, content_width);
+            summary_lines.extend(wrapped.into_iter().map(line_to_owned));
+        }
+        let hint_lines = wrap_styled_line(&data.hint_line, content_width)
+            .into_iter()
+            .map(line_to_owned)
+            .collect();
+        ReviewConfirmationLayout {
+            header_lines,
+            summary_lines,
+            hint_lines,
+            rows: data.rows,
+            state: data.state,
+        }
+    }
+
+    fn review_confirmation_height(&self, width: u16) -> u16 {
+        let outer = Rect::new(0, 0, width, u16::MAX);
+        let inner = menu_surface_inset(outer);
+        let inner_width = inner.width.max(1);
+        let layout = self.review_confirmation_layout(inner_width);
+        let rows_height = measure_rows_height(
+            &layout.rows,
+            &layout.state,
+            layout.rows.len().max(1),
+            inner_width.max(1),
+        );
+        let height = layout.header_lines.len() as u16
+            + 1
+            + layout.summary_lines.len() as u16
+            + 1
+            + rows_height
+            + 1
+            + layout.hint_lines.len() as u16
+            + menu_surface_padding_height();
+        height.max(MIN_OVERLAY_HEIGHT as u16)
+    }
+
+    fn render_review_confirmation(&self, area: Rect, buf: &mut Buffer) {
+        let content_area = render_menu_surface(area, buf);
+        if content_area.width == 0 || content_area.height == 0 {
+            return;
+        }
+        let width = content_area.width.max(1);
+        let layout = self.review_confirmation_layout(width);
+
+        let mut cursor_y = content_area.y;
+        for line in layout.header_lines {
+            if cursor_y >= content_area.y + content_area.height {
+                return;
+            }
+            Paragraph::new(line).render(
+                Rect {
+                    x: content_area.x,
+                    y: cursor_y,
+                    width: content_area.width,
+                    height: 1,
+                },
+                buf,
+            );
+            cursor_y = cursor_y.saturating_add(1);
+        }
+
+        if cursor_y < content_area.y + content_area.height {
+            cursor_y = cursor_y.saturating_add(1);
+        }
+        for line in layout.summary_lines {
+            if cursor_y >= content_area.y + content_area.height {
+                return;
+            }
+            Paragraph::new(line).render(
+                Rect {
+                    x: content_area.x,
+                    y: cursor_y,
+                    width: content_area.width,
+                    height: 1,
+                },
+                buf,
+            );
+            cursor_y = cursor_y.saturating_add(1);
+        }
+        if cursor_y < content_area.y + content_area.height {
+            cursor_y = cursor_y.saturating_add(1);
+        }
+
+        let remaining = content_area
+            .height
+            .saturating_sub(cursor_y.saturating_sub(content_area.y));
+        if remaining == 0 {
+            return;
+        }
+
+        let hint_height = layout.hint_lines.len() as u16;
+        let spacer_before_hint = u16::from(remaining > hint_height);
+        let rows_height = remaining.saturating_sub(hint_height + spacer_before_hint);
+
+        let rows_area = Rect {
+            x: content_area.x,
+            y: cursor_y,
+            width: content_area.width,
+            height: rows_height,
+        };
+        let base_style = popup_surface_style();
+        render_rows(
+            rows_area,
+            buf,
+            &layout.rows,
+            &layout.state,
+            layout.rows.len().max(1),
+            base_style,
+            "No choices",
+        );
+
+        cursor_y = cursor_y.saturating_add(rows_height);
+        if spacer_before_hint > 0 {
+            cursor_y = cursor_y.saturating_add(1);
+        }
+        for (offset, line) in layout.hint_lines.into_iter().enumerate() {
+            let y = cursor_y.saturating_add(offset as u16);
+            if y >= content_area.y + content_area.height {
+                break;
+            }
+            Paragraph::new(line).render(
+                Rect {
+                    x: content_area.x,
+                    y,
+                    width: content_area.width,
+                    height: 1,
+                },
+                buf,
+            );
+        }
+    }
+
     /// Render the full request-user-input overlay.
     pub(super) fn render_ui(&self, area: Rect, buf: &mut Buffer) {
         if area.width == 0 || area.height == 0 {
@@ -254,6 +433,10 @@ impl RequestUserInputOverlay {
         }
         if self.confirm_unanswered_active() {
             self.render_unanswered_confirmation(area, buf);
+            return;
+        }
+        if self.confirm_review_active() {
+            self.render_review_confirmation(area, buf);
             return;
         }
         // Paint the same menu surface used by other bottom-pane overlays and
@@ -283,8 +466,7 @@ impl RequestUserInputOverlay {
 
         // Question prompt text.
         let question_y = sections.question_area.y;
-        let answered =
-            self.is_question_answered(self.current_index(), &self.composer.current_text());
+        let answered = self.is_question_answered(self.current_index());
         for (offset, line) in sections.question_lines.iter().enumerate() {
             if question_y.saturating_add(offset as u16)
                 >= sections.question_area.y + sections.question_area.height
@@ -294,7 +476,7 @@ impl RequestUserInputOverlay {
             let question_line = if answered {
                 Line::from(line.clone())
             } else {
-                Line::from(line.clone()).cyan()
+                Line::from(line.clone()).style(crate::theme::accent_style())
             };
             Paragraph::new(question_line).render(
                 Rect {
@@ -390,7 +572,7 @@ impl RequestUserInputOverlay {
 
     /// Return the cursor position when editing notes, if visible.
     pub(super) fn cursor_pos_impl(&self, area: Rect) -> Option<(u16, u16)> {
-        if self.confirm_unanswered_active() {
+        if self.confirm_unanswered_active() || self.confirm_review_active() {
             return None;
         }
         let has_options = self.has_options();

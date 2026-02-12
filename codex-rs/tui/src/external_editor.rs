@@ -1,5 +1,6 @@
 use std::env;
 use std::fs;
+use std::path::Path;
 use std::process::Stdio;
 
 use color_eyre::eyre::Report;
@@ -90,6 +91,40 @@ pub(crate) async fn run_editor(seed: &str, editor_cmd: &[String]) -> Result<Stri
     Ok(contents)
 }
 
+/// Launch the editor command directly against an existing file path.
+pub(crate) async fn run_editor_for_path(path: &Path, editor_cmd: &[String]) -> Result<()> {
+    if editor_cmd.is_empty() {
+        return Err(Report::msg("editor command is empty"));
+    }
+
+    let mut cmd = {
+        #[cfg(windows)]
+        {
+            Command::new(resolve_windows_program(&editor_cmd[0]))
+        }
+        #[cfg(not(windows))]
+        {
+            Command::new(&editor_cmd[0])
+        }
+    };
+    if editor_cmd.len() > 1 {
+        cmd.args(&editor_cmd[1..]);
+    }
+    let status = cmd
+        .arg(path)
+        .stdin(Stdio::inherit())
+        .stdout(Stdio::inherit())
+        .stderr(Stdio::inherit())
+        .status()
+        .await?;
+
+    if !status.success() {
+        return Err(Report::msg(format!("editor exited with status {status}")));
+    }
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -167,5 +202,26 @@ mod tests {
         let cmd = vec![script_path.to_string_lossy().to_string()];
         let result = run_editor("seed", &cmd).await.unwrap();
         assert_eq!(result, "edited".to_string());
+    }
+
+    #[tokio::test]
+    #[cfg(unix)]
+    async fn run_editor_for_path_updates_existing_file() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempdir().unwrap();
+        let script_path = dir.path().join("edit-file.sh");
+        fs::write(&script_path, "#!/bin/sh\nprintf \"file-edited\" > \"$1\"\n").unwrap();
+        let mut perms = fs::metadata(&script_path).unwrap().permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(&script_path, perms).unwrap();
+
+        let target_path = dir.path().join("plan.md");
+        fs::write(&target_path, "seed").unwrap();
+
+        let cmd = vec![script_path.to_string_lossy().to_string()];
+        run_editor_for_path(&target_path, &cmd).await.unwrap();
+        let result = fs::read_to_string(&target_path).unwrap();
+        assert_eq!(result, "file-edited".to_string());
     }
 }

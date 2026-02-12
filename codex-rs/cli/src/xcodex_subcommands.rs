@@ -2,8 +2,12 @@ use clap::Parser;
 use codex_common::CliConfigOverrides;
 use codex_core::config::find_codex_home;
 use codex_core::config::load_config_as_toml_with_cli_overrides;
+use codex_core::git_info::get_git_repo_root;
+use codex_core::plan_file;
 use codex_tui::AppExitInfo;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use rand::Rng;
+use std::ffi::OsStr;
 use std::io::IsTerminal;
 use std::path::Path;
 use std::path::PathBuf;
@@ -364,6 +368,62 @@ enum HooksTestEventCli {
     ToolCallStarted,
     ToolCallFinished,
 }
+
+#[derive(Debug, Parser)]
+#[command(disable_help_subcommand = true)]
+pub(crate) struct PlanCommand {
+    #[command(subcommand)]
+    sub: Option<PlanSubcommand>,
+}
+
+#[derive(Debug, clap::Subcommand)]
+enum PlanSubcommand {
+    /// Show current plan status and active plan details.
+    Status(PlanStatusCommand),
+
+    /// List durable plans under the configured plan base directory.
+    List(PlanListCommand),
+
+    /// Open or create the active plan file.
+    Open(PlanOpenCommand),
+
+    /// Mark the active plan file as done.
+    Done(PlanDoneCommand),
+
+    /// Mark the active plan file as archived.
+    Archive(PlanArchiveCommand),
+}
+
+#[derive(Debug, Parser)]
+struct PlanStatusCommand {}
+
+#[derive(Debug, Clone, Copy, clap::ValueEnum)]
+enum PlanListScopeArg {
+    Open,
+    Closed,
+    All,
+    Archived,
+}
+
+#[derive(Debug, Parser)]
+struct PlanListCommand {
+    /// Filter plan list by status scope.
+    #[arg(value_enum, default_value_t = PlanListScopeArg::Open)]
+    scope: PlanListScopeArg,
+}
+
+#[derive(Debug, Parser)]
+struct PlanOpenCommand {
+    /// Optional plan file path. Relative paths resolve under the plan base directory.
+    #[arg(value_name = "PATH")]
+    path: Option<String>,
+}
+
+#[derive(Debug, Parser)]
+struct PlanDoneCommand {}
+
+#[derive(Debug, Parser)]
+struct PlanArchiveCommand {}
 
 pub(crate) async fn run_hooks_command(
     root_config_overrides: &CliConfigOverrides,
@@ -826,6 +886,60 @@ pub(crate) async fn run_hooks_command(
     Ok(())
 }
 
+pub(crate) async fn run_plan_command(
+    root_config_overrides: &CliConfigOverrides,
+    cmd: PlanCommand,
+) -> anyhow::Result<()> {
+    let codex_home = find_codex_home()?;
+    let config_cwd = AbsolutePathBuf::current_dir()?;
+    let cli_overrides = root_config_overrides
+        .parse_overrides()
+        .map_err(|err| anyhow::anyhow!(err))?;
+    let config_toml =
+        load_config_as_toml_with_cli_overrides(&codex_home, &config_cwd, cli_overrides).await?;
+    let mode = plan_mode(&codex_home, &config_toml);
+    let custom_template = plan_custom_template_path(&codex_home, &config_toml);
+    let custom_seed_mode = plan_custom_seed_mode(&codex_home, &config_toml);
+    let track_worktree = plan_track_worktree(&codex_home, &config_toml);
+    let track_branch = plan_track_branch(&codex_home, &config_toml);
+    let mismatch_action = plan_mismatch_action(&codex_home, &config_toml);
+    let naming_strategy = plan_naming_strategy(&codex_home, &config_toml, &mode);
+    let base_dir = plan_base_dir(&codex_home, &config_toml, &mode, config_cwd.as_ref());
+
+    match cmd.sub {
+        None => print_plan_usage(),
+        Some(PlanSubcommand::Status(_)) => print_plan_status(
+            &codex_home,
+            &base_dir,
+            &mode,
+            &custom_template,
+            &custom_seed_mode,
+            track_worktree,
+            track_branch,
+            &mismatch_action,
+            &naming_strategy,
+        ),
+        Some(PlanSubcommand::List(args)) => print_plan_list(&codex_home, &base_dir, args.scope)?,
+        Some(PlanSubcommand::Open(args)) => open_plan_file_cli(
+            &codex_home,
+            &base_dir,
+            args.path,
+            &mode,
+            &custom_template,
+            &custom_seed_mode,
+            &naming_strategy,
+            config_cwd.as_ref(),
+            track_worktree,
+            track_branch,
+            &mismatch_action,
+        )?,
+        Some(PlanSubcommand::Done(_)) => mark_active_plan_done_cli(&codex_home)?,
+        Some(PlanSubcommand::Archive(_)) => mark_active_plan_archived_cli(&codex_home)?,
+    }
+
+    Ok(())
+}
+
 pub(crate) async fn run_mcp_command(
     root_config_overrides: &CliConfigOverrides,
     mut mcp_cli: McpCli,
@@ -856,6 +970,768 @@ pub(crate) async fn run_tui2_command(
         root_config_overrides.clone(),
     );
     xcodex_entrypoints::run_tui2(tui2_cli, codex_linux_sandbox_exe).await
+}
+
+const PLAN_BASE_DIR_FILE: &str = ".base-dir";
+const PLAN_MODE_FILE: &str = ".mode";
+const PLAN_CUSTOM_TEMPLATE_FILE: &str = ".custom-template";
+const PLAN_CUSTOM_SEED_MODE_FILE: &str = ".custom-seed-mode";
+const PLAN_TRACK_WORKTREE_FILE: &str = ".track-worktree";
+const PLAN_TRACK_BRANCH_FILE: &str = ".track-branch";
+const PLAN_MISMATCH_ACTION_FILE: &str = ".mismatch-action";
+const PLAN_NAMING_STRATEGY_FILE: &str = ".naming-strategy";
+const ACTIVE_PLAN_FILE: &str = ".active-plan";
+const OPEN_PLAN_STATUSES: &[&str] = &["Draft", "Active", "Paused"];
+const CLOSED_PLAN_STATUSES: &[&str] = &["Done"];
+const ARCHIVED_PLAN_STATUSES: &[&str] = &["Archived"];
+const DEFAULT_PLAN_MODE: &str = "default";
+const PLAN_MODE_DEFAULT: &str = "default";
+const PLAN_MODE_ADR_LITE: &str = "adr-lite";
+const PLAN_MODE_CUSTOM: &str = "custom";
+const PLAN_MISMATCH_ACTION_WARN: &str = "warn";
+const PLAN_MISMATCH_ACTION_BLOCK: &str = "block";
+const PLAN_NAMING_FUNNY: &str = "funny";
+const PLAN_NAMING_DATE_TITLE: &str = "date-title";
+
+#[derive(Clone, Debug)]
+struct PlanEntry {
+    path: PathBuf,
+    status: String,
+    title: String,
+    todos_remaining: usize,
+}
+
+impl PlanListScopeArg {
+    fn token(self) -> &'static str {
+        match self {
+            Self::Open => "open",
+            Self::Closed => "closed",
+            Self::All => "all",
+            Self::Archived => "archived",
+        }
+    }
+
+    fn matches_status(self, status: &str) -> bool {
+        match self {
+            Self::Open => OPEN_PLAN_STATUSES.contains(&status),
+            Self::Closed => CLOSED_PLAN_STATUSES.contains(&status),
+            Self::All => !ARCHIVED_PLAN_STATUSES.contains(&status),
+            Self::Archived => ARCHIVED_PLAN_STATUSES.contains(&status),
+        }
+    }
+}
+
+fn plan_state_dir(codex_home: &Path) -> PathBuf {
+    codex_home.join("plans")
+}
+
+fn read_plan_state_file(codex_home: &Path, file: &str) -> Option<String> {
+    std::fs::read_to_string(plan_state_dir(codex_home).join(file))
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+}
+
+fn active_plan_pointer_path(codex_home: &Path) -> PathBuf {
+    plan_state_dir(codex_home).join(ACTIVE_PLAN_FILE)
+}
+
+fn read_active_plan_path(codex_home: &Path) -> Option<PathBuf> {
+    let value = std::fs::read_to_string(active_plan_pointer_path(codex_home)).ok()?;
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    Some(PathBuf::from(trimmed))
+}
+
+fn write_active_plan_path(codex_home: &Path, path: &Path) -> std::io::Result<()> {
+    let pointer = active_plan_pointer_path(codex_home);
+    if let Some(parent) = pointer.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    plan_file::write_atomic(&pointer, &path.display().to_string())
+}
+
+fn plan_base_dir(
+    codex_home: &Path,
+    config_toml: &codex_core::config::ConfigToml,
+    mode: &str,
+    cwd: &Path,
+) -> PathBuf {
+    read_plan_state_file(codex_home, PLAN_BASE_DIR_FILE)
+        .map(PathBuf::from)
+        .or_else(|| {
+            config_toml
+                .plan
+                .as_ref()
+                .and_then(|plan| plan.base_dir.as_ref())
+                .map(codex_utils_absolute_path::AbsolutePathBuf::to_path_buf)
+        })
+        .unwrap_or_else(|| mode_default_plan_base_dir(codex_home, mode, cwd))
+}
+
+fn plan_mode(codex_home: &Path, config_toml: &codex_core::config::ConfigToml) -> String {
+    read_plan_state_file(codex_home, PLAN_MODE_FILE)
+        .or_else(|| {
+            config_toml
+                .plan
+                .as_ref()
+                .and_then(|plan| plan.mode)
+                .map(|mode| mode.as_str().to_string())
+        })
+        .and_then(|mode| normalize_plan_mode(&mode).map(ToString::to_string))
+        .unwrap_or_else(|| DEFAULT_PLAN_MODE.to_string())
+}
+
+fn normalize_plan_mode(raw: &str) -> Option<&'static str> {
+    match raw.trim() {
+        PLAN_MODE_DEFAULT | "xcodex" => Some(PLAN_MODE_DEFAULT),
+        PLAN_MODE_ADR_LITE => Some(PLAN_MODE_ADR_LITE),
+        PLAN_MODE_CUSTOM => Some(PLAN_MODE_CUSTOM),
+        _ => None,
+    }
+}
+
+fn plan_custom_template_path(
+    codex_home: &Path,
+    config_toml: &codex_core::config::ConfigToml,
+) -> PathBuf {
+    read_plan_state_file(codex_home, PLAN_CUSTOM_TEMPLATE_FILE)
+        .map(PathBuf::from)
+        .or_else(|| {
+            config_toml
+                .plan
+                .as_ref()
+                .and_then(|plan| plan.custom_template.as_ref())
+                .map(codex_utils_absolute_path::AbsolutePathBuf::to_path_buf)
+        })
+        .unwrap_or_else(|| {
+            plan_state_dir(codex_home)
+                .join("custom")
+                .join("template.md")
+        })
+}
+
+fn plan_custom_seed_mode(
+    codex_home: &Path,
+    config_toml: &codex_core::config::ConfigToml,
+) -> String {
+    read_plan_state_file(codex_home, PLAN_CUSTOM_SEED_MODE_FILE)
+        .or_else(|| {
+            config_toml
+                .plan
+                .as_ref()
+                .and_then(|plan| plan.custom_seed_mode)
+                .map(|mode| mode.as_str().to_string())
+        })
+        .and_then(|mode| normalize_custom_seed_mode(&mode).map(ToString::to_string))
+        .unwrap_or_else(|| PLAN_MODE_ADR_LITE.to_string())
+}
+
+fn normalize_custom_seed_mode(raw: &str) -> Option<&'static str> {
+    match raw.trim() {
+        PLAN_MODE_DEFAULT => Some(PLAN_MODE_DEFAULT),
+        PLAN_MODE_ADR_LITE => Some(PLAN_MODE_ADR_LITE),
+        _ => None,
+    }
+}
+
+fn normalize_bool_setting(raw: &str) -> Option<bool> {
+    match raw.trim() {
+        "on" | "true" | "yes" | "1" => Some(true),
+        "off" | "false" | "no" | "0" => Some(false),
+        _ => None,
+    }
+}
+
+fn bool_setting_label(value: bool) -> &'static str {
+    if value { "on" } else { "off" }
+}
+
+fn normalize_mismatch_action(raw: &str) -> Option<&'static str> {
+    match raw.trim() {
+        PLAN_MISMATCH_ACTION_WARN => Some(PLAN_MISMATCH_ACTION_WARN),
+        PLAN_MISMATCH_ACTION_BLOCK => Some(PLAN_MISMATCH_ACTION_BLOCK),
+        _ => None,
+    }
+}
+
+fn normalize_naming_strategy(raw: &str) -> Option<&'static str> {
+    match raw.trim() {
+        PLAN_NAMING_FUNNY => Some(PLAN_NAMING_FUNNY),
+        PLAN_NAMING_DATE_TITLE => Some(PLAN_NAMING_DATE_TITLE),
+        _ => None,
+    }
+}
+
+fn default_naming_strategy_for_mode(mode: &str) -> &'static str {
+    match mode {
+        PLAN_MODE_DEFAULT => PLAN_NAMING_FUNNY,
+        PLAN_MODE_ADR_LITE | PLAN_MODE_CUSTOM => PLAN_NAMING_DATE_TITLE,
+        _ => PLAN_NAMING_FUNNY,
+    }
+}
+
+fn plan_track_worktree(codex_home: &Path, config_toml: &codex_core::config::ConfigToml) -> bool {
+    read_plan_state_file(codex_home, PLAN_TRACK_WORKTREE_FILE)
+        .and_then(|value| normalize_bool_setting(&value))
+        .or_else(|| {
+            config_toml
+                .plan
+                .as_ref()
+                .and_then(|plan| plan.track_worktree)
+        })
+        .unwrap_or(true)
+}
+
+fn plan_track_branch(codex_home: &Path, config_toml: &codex_core::config::ConfigToml) -> bool {
+    read_plan_state_file(codex_home, PLAN_TRACK_BRANCH_FILE)
+        .and_then(|value| normalize_bool_setting(&value))
+        .or_else(|| config_toml.plan.as_ref().and_then(|plan| plan.track_branch))
+        .unwrap_or(true)
+}
+
+fn plan_mismatch_action(codex_home: &Path, config_toml: &codex_core::config::ConfigToml) -> String {
+    read_plan_state_file(codex_home, PLAN_MISMATCH_ACTION_FILE)
+        .or_else(|| {
+            config_toml
+                .plan
+                .as_ref()
+                .and_then(|plan| plan.mismatch_action)
+                .map(|value| value.as_str().to_string())
+        })
+        .and_then(|value| normalize_mismatch_action(&value).map(ToString::to_string))
+        .unwrap_or_else(|| PLAN_MISMATCH_ACTION_BLOCK.to_string())
+}
+
+fn plan_naming_strategy(
+    codex_home: &Path,
+    config_toml: &codex_core::config::ConfigToml,
+    mode: &str,
+) -> String {
+    read_plan_state_file(codex_home, PLAN_NAMING_STRATEGY_FILE)
+        .or_else(|| {
+            config_toml
+                .plan
+                .as_ref()
+                .and_then(|plan| plan.naming_strategy)
+                .map(|value| value.as_str().to_string())
+        })
+        .and_then(|value| normalize_naming_strategy(&value).map(ToString::to_string))
+        .unwrap_or_else(|| default_naming_strategy_for_mode(mode).to_string())
+}
+
+fn mode_default_plan_base_dir(codex_home: &Path, mode: &str, cwd: &Path) -> PathBuf {
+    match mode {
+        PLAN_MODE_ADR_LITE => get_git_repo_root(cwd)
+            .map(|repo_root| repo_root.join("docs/impl-plans"))
+            .unwrap_or_else(|| plan_state_dir(codex_home)),
+        _ => plan_state_dir(codex_home),
+    }
+}
+
+fn print_plan_usage() {
+    println!("Usage: xcodex plan <status|list|open|done|archive>");
+    println!();
+    println!("Examples:");
+    println!("- xcodex plan status");
+    println!("- xcodex plan list open");
+    println!("- xcodex plan list archived");
+    println!("- xcodex plan open");
+    println!("- xcodex plan open plans/next-release.md");
+    println!("- xcodex plan done");
+    println!("- xcodex plan archive");
+}
+
+fn print_plan_status(
+    codex_home: &Path,
+    base_dir: &Path,
+    mode: &str,
+    custom_template: &Path,
+    custom_seed_mode: &str,
+    track_worktree: bool,
+    track_branch: bool,
+    mismatch_action: &str,
+    naming_strategy: &str,
+) {
+    let active_plan = read_active_plan_path(codex_home);
+    println!("Plan status");
+    println!("- Mode: {mode}");
+    println!("- Base directory: {}", base_dir.display());
+    println!("- Active plan file: {}", format_path(active_plan.clone()));
+    println!("- Track worktree: {}", bool_setting_label(track_worktree));
+    println!("- Track branch: {}", bool_setting_label(track_branch));
+    println!("- Context mismatch action: {mismatch_action}");
+    println!("- Naming strategy: {naming_strategy}");
+    if mode == PLAN_MODE_CUSTOM {
+        println!("- Custom template path: {}", custom_template.display());
+        println!("- Custom seed mode: {custom_seed_mode}");
+    }
+
+    if let Some(path) = active_plan
+        && path.exists()
+    {
+        let status = plan_file::read_status(&path)
+            .ok()
+            .flatten()
+            .unwrap_or_else(|| "Unknown".to_string());
+        let todos_remaining = plan_file::count_unchecked_todos(&path).unwrap_or(0);
+        println!("- Active plan status: {status}");
+        println!("- TODOs remaining: {todos_remaining}");
+        let summary = plan_context_mismatch_summary(&path, track_worktree, track_branch);
+        println!("- Context check: {summary}");
+    }
+}
+
+fn read_plan_metadata_value(path: &Path, key: &str) -> Option<String> {
+    let content = std::fs::read_to_string(path).ok()?;
+    content.lines().find_map(|line| {
+        let trimmed = line.trim_start();
+        if trimmed.starts_with(key) {
+            return Some(trimmed.trim_start_matches(key).trim().to_string());
+        }
+        None
+    })
+}
+
+fn plan_context_mismatch_summary(path: &Path, track_worktree: bool, track_branch: bool) -> String {
+    if !track_worktree && !track_branch {
+        return "tracking disabled".to_string();
+    }
+
+    let mut mismatches = Vec::new();
+    let current_worktree = std::env::current_dir()
+        .unwrap_or_else(|_| PathBuf::from("."))
+        .display()
+        .to_string();
+    let current_branch = current_branch_name();
+
+    if track_worktree {
+        let expected = read_plan_metadata_value(path, "Worktree:");
+        if expected.as_deref() != Some(current_worktree.as_str()) {
+            let expected = expected.unwrap_or_else(|| "<missing>".to_string());
+            mismatches.push(format!(
+                "worktree expected `{expected}` but current `{current_worktree}`"
+            ));
+        }
+    }
+    if track_branch {
+        let expected = read_plan_metadata_value(path, "Branch:");
+        if expected.as_deref() != Some(current_branch.as_str()) {
+            let expected = expected.unwrap_or_else(|| "<missing>".to_string());
+            mismatches.push(format!(
+                "branch expected `{expected}` but current `{current_branch}`"
+            ));
+        }
+    }
+
+    if mismatches.is_empty() {
+        "matched".to_string()
+    } else {
+        format!("mismatch ({})", mismatches.join("; "))
+    }
+}
+
+fn print_plan_list(
+    codex_home: &Path,
+    base_dir: &Path,
+    scope: PlanListScopeArg,
+) -> anyhow::Result<()> {
+    let plans = discover_plans(base_dir)?;
+    let active_plan = read_active_plan_path(codex_home);
+    let filtered: Vec<PlanEntry> = plans
+        .into_iter()
+        .filter(|entry| scope.matches_status(entry.status.as_str()))
+        .collect();
+
+    println!("Plan list ({}) under {}", scope.token(), base_dir.display());
+    if filtered.is_empty() {
+        println!("- No plans found.");
+        return Ok(());
+    }
+
+    for entry in filtered {
+        let active_suffix = if active_plan.as_ref() == Some(&entry.path) {
+            " (active)"
+        } else {
+            ""
+        };
+        println!(
+            "- [{}] {} ({} TODOs){}",
+            entry.status, entry.title, entry.todos_remaining, active_suffix
+        );
+        println!("  {}", entry.path.display());
+    }
+
+    Ok(())
+}
+
+fn open_plan_file_cli(
+    codex_home: &Path,
+    base_dir: &Path,
+    path_arg: Option<String>,
+    mode: &str,
+    custom_template: &Path,
+    custom_seed_mode: &str,
+    naming_strategy: &str,
+    cwd: &Path,
+    track_worktree: bool,
+    track_branch: bool,
+    mismatch_action: &str,
+) -> anyhow::Result<()> {
+    let resolved_path = path_arg
+        .as_deref()
+        .map(|raw| resolve_plan_path(base_dir, raw))
+        .unwrap_or_else(|| {
+            default_new_plan_path(
+                base_dir,
+                read_active_plan_path(codex_home),
+                naming_strategy,
+                cwd,
+            )
+        });
+
+    if let Some(parent) = resolved_path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    if !resolved_path.exists() {
+        std::fs::write(
+            &resolved_path,
+            default_plan_template(&resolved_path, mode, custom_template, custom_seed_mode),
+        )?;
+    }
+
+    if uses_adr_lite_sync(mode, custom_seed_mode) {
+        let today = chrono::Local::now().date_naive().to_string();
+        let worktree = std::env::current_dir()
+            .unwrap_or_else(|_| PathBuf::from("."))
+            .display()
+            .to_string();
+        let branch = current_branch_name();
+        plan_file::sync_adr_lite_open_or_resume(
+            &resolved_path,
+            &today,
+            &worktree,
+            &branch,
+            "open sync",
+        )?;
+    }
+
+    write_active_plan_path(codex_home, &resolved_path)?;
+    println!("Active plan file set to `{}`.", resolved_path.display());
+    let summary = plan_context_mismatch_summary(&resolved_path, track_worktree, track_branch);
+    if summary.starts_with("mismatch ") {
+        let disposition = if mismatch_action == PLAN_MISMATCH_ACTION_BLOCK {
+            "blocked"
+        } else {
+            "warning"
+        };
+        println!("- Context check ({disposition}): {summary}");
+    }
+    Ok(())
+}
+
+fn mark_active_plan_done_cli(codex_home: &Path) -> anyhow::Result<()> {
+    let Some(path) = read_active_plan_path(codex_home) else {
+        anyhow::bail!("No active plan file. Run `xcodex plan open` first.");
+    };
+    if !path.exists() {
+        anyhow::bail!("Active plan file does not exist: `{}`", path.display());
+    }
+
+    let today = chrono::Local::now().date_naive().to_string();
+    plan_file::set_status(&path, "Done", &today)?;
+    println!("Marked plan as done: `{}`", path.display());
+    Ok(())
+}
+
+fn mark_active_plan_archived_cli(codex_home: &Path) -> anyhow::Result<()> {
+    let Some(path) = read_active_plan_path(codex_home) else {
+        anyhow::bail!("No active plan file. Run `xcodex plan open` first.");
+    };
+    if !path.exists() {
+        anyhow::bail!("Active plan file does not exist: `{}`", path.display());
+    }
+
+    let today = chrono::Local::now().date_naive().to_string();
+    plan_file::set_status(&path, "Archived", &today)?;
+    println!("Archived plan: `{}`", path.display());
+    Ok(())
+}
+
+fn discover_plans(base_dir: &Path) -> anyhow::Result<Vec<PlanEntry>> {
+    let mut plans = Vec::new();
+    if !base_dir.exists() {
+        return Ok(plans);
+    }
+
+    let mut stack = vec![base_dir.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        let entries = std::fs::read_dir(&dir)?;
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let Some(name) = path.file_name().and_then(OsStr::to_str) else {
+                continue;
+            };
+            if name.starts_with('.') {
+                continue;
+            }
+            if path.is_dir() {
+                stack.push(path);
+                continue;
+            }
+            if path.extension() != Some(OsStr::new("md")) {
+                continue;
+            }
+            let status = plan_file::read_status(&path)
+                .ok()
+                .flatten()
+                .unwrap_or_else(|| "Draft".to_string());
+            let title = plan_file::read_title(&path)
+                .ok()
+                .flatten()
+                .unwrap_or_else(|| "Untitled".to_string());
+            let todos_remaining = plan_file::count_unchecked_todos(&path).unwrap_or(0);
+            plans.push(PlanEntry {
+                path,
+                status,
+                title,
+                todos_remaining,
+            });
+        }
+    }
+    plans.sort_by(|left, right| left.path.cmp(&right.path));
+    Ok(plans)
+}
+
+fn resolve_plan_path(base_dir: &Path, raw: &str) -> PathBuf {
+    let value = strip_wrapping_quotes(raw.trim());
+    let path = PathBuf::from(value);
+    if path.is_absolute() {
+        path
+    } else {
+        base_dir.join(path)
+    }
+}
+
+fn strip_wrapping_quotes(raw: &str) -> &str {
+    let has_double = raw.starts_with('"') && raw.ends_with('"') && raw.len() >= 2;
+    let has_single = raw.starts_with('\'') && raw.ends_with('\'') && raw.len() >= 2;
+    if has_double || has_single {
+        &raw[1..raw.len() - 1]
+    } else {
+        raw
+    }
+}
+
+fn default_new_plan_path(
+    base_dir: &Path,
+    active_plan: Option<PathBuf>,
+    naming_strategy: &str,
+    cwd: &Path,
+) -> PathBuf {
+    if let Some(active_path) = active_plan
+        && active_path.exists()
+    {
+        return active_path;
+    }
+
+    let stem = if naming_strategy == PLAN_NAMING_DATE_TITLE {
+        date_title_slug(cwd)
+    } else {
+        let mut rng = rand::rng();
+        funny_slug(&mut rng)
+    };
+    let project_name = derive_project_name();
+    let project_dir = base_dir.join(project_name);
+    let initial = project_dir.join(format!("{stem}.md"));
+    if !initial.exists() {
+        return initial;
+    }
+
+    for suffix in 2..1000 {
+        let candidate = project_dir.join(format!("{stem}-{suffix}.md"));
+        if !candidate.exists() {
+            return candidate;
+        }
+    }
+    project_dir.join(format!("{stem}-{}.md", rand::random::<u16>()))
+}
+
+fn derive_project_name() -> String {
+    if let Ok(cwd) = std::env::current_dir()
+        && let Some(name) = cwd
+            .file_name()
+            .and_then(OsStr::to_str)
+            .map(sanitize_component)
+            .filter(|value| !value.is_empty())
+    {
+        return name;
+    }
+
+    std::env::args()
+        .next()
+        .and_then(|arg| {
+            PathBuf::from(arg)
+                .file_name()
+                .and_then(OsStr::to_str)
+                .map(sanitize_component)
+        })
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| "project".to_string())
+}
+
+fn sanitize_component(raw: &str) -> String {
+    let mut out = String::new();
+    for ch in raw.chars() {
+        if ch.is_ascii_alphanumeric() {
+            out.push(ch.to_ascii_lowercase());
+        } else if !out.ends_with('-') {
+            out.push('-');
+        }
+    }
+    out.trim_matches('-').to_string()
+}
+
+fn funny_slug(rng: &mut impl Rng) -> String {
+    const VERBS: &[&str] = &[
+        "shaping",
+        "debugging",
+        "building",
+        "tuning",
+        "sketching",
+        "mapping",
+        "stitching",
+        "planning",
+    ];
+    const ADJECTIVES: &[&str] = &[
+        "swift", "curious", "steady", "silver", "bright", "quiet", "nimble", "bold",
+    ];
+    const ANIMALS: &[&str] = &[
+        "otter", "panda", "falcon", "lynx", "dolphin", "fox", "owl", "whale",
+    ];
+
+    let verb = VERBS[rng.random_range(0..VERBS.len())];
+    let adjective = ADJECTIVES[rng.random_range(0..ADJECTIVES.len())];
+    let animal = ANIMALS[rng.random_range(0..ANIMALS.len())];
+    format!("{verb}-{adjective}-{animal}")
+}
+
+fn date_title_slug(cwd: &Path) -> String {
+    let today = chrono::Local::now().date_naive().to_string();
+    let title = relevant_plan_title_slug(cwd);
+    format!("{today}-{title}")
+}
+
+fn relevant_plan_title_slug(cwd: &Path) -> String {
+    let branch = current_branch_name();
+    let branch_slug = sanitize_component(&branch);
+    let title = if branch_slug.is_empty()
+        || matches!(branch_slug.as_str(), "main" | "master" | "unknown")
+    {
+        sanitize_component(
+            cwd.file_name()
+                .and_then(OsStr::to_str)
+                .unwrap_or("plan-task"),
+        )
+    } else {
+        branch_slug
+    };
+
+    title.chars().take(64).collect::<String>()
+}
+
+fn default_plan_template(
+    path: &Path,
+    mode: &str,
+    custom_template: &Path,
+    custom_seed_mode: &str,
+) -> String {
+    if mode == PLAN_MODE_CUSTOM {
+        if let Ok(template) = std::fs::read_to_string(custom_template) {
+            return template;
+        }
+        return default_plan_template_for_mode(path, custom_seed_mode);
+    }
+    default_plan_template_for_mode(path, mode)
+}
+
+fn default_plan_template_for_mode(path: &Path, mode: &str) -> String {
+    if mode == PLAN_MODE_ADR_LITE {
+        return default_adr_lite_template(path);
+    }
+    default_default_template(path)
+}
+
+fn effective_sync_mode(mode: &str, custom_seed_mode: &str) -> &'static str {
+    if mode == PLAN_MODE_ADR_LITE {
+        return PLAN_MODE_ADR_LITE;
+    }
+    if mode == PLAN_MODE_CUSTOM {
+        return if custom_seed_mode == PLAN_MODE_ADR_LITE {
+            PLAN_MODE_ADR_LITE
+        } else {
+            PLAN_MODE_DEFAULT
+        };
+    }
+    PLAN_MODE_DEFAULT
+}
+
+fn uses_adr_lite_sync(mode: &str, custom_seed_mode: &str) -> bool {
+    effective_sync_mode(mode, custom_seed_mode) == PLAN_MODE_ADR_LITE
+}
+
+fn default_default_template(path: &Path) -> String {
+    let today = chrono::Local::now().date_naive();
+    let worktree = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    format!(
+        "# /plan task\n\nStatus: Draft\nTODOs remaining: 3\nStarted: {today}\nLast updated: {today}\nWorktree: {}\nBranch: {}\n\n## Goal\n\n- TODO\n\n## Plan (checklist)\n\n- [ ] Phase 0 — setup foundations\n- [ ] Phase 1 — build on Phase 0\n- [ ] Phase 2 — iterate and validate\n\n## Progress log\n\n- {today}: Created plan file at `{}`.\n",
+        worktree.display(),
+        current_branch_name(),
+        path.display(),
+    )
+}
+
+fn default_adr_lite_template(path: &Path) -> String {
+    let today = chrono::Local::now().date_naive();
+    let worktree = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    format!(
+        "# /plan task — Implementation plan\n\nStatus: Draft\nTODOs remaining: 4\nAllowed statuses: Draft|Active|Paused|Done|Archived\nOwner: {}\nStarted: {today}\nLast updated: {today}\nWorktree: {}\nBranch: {}\n\n## Goal\n\nWhat we are trying to achieve, in 1–3 sentences.\n\n## Scope\n\n- In scope:\n- Out of scope:\n\n## Definitions / contracts\n\n- <term>: <definition>\n\n## Current state / evidence (facts only)\n\n- <fact> (evidence: <path or link>)\n\n## Hypotheses (unconfirmed)\n\n- <hypothesis> (confidence: low|med|high)\n\n## Root causes (confirmed)\n\n- <root cause> (evidence: <path or link>)\n\n## Decisions\n\n- {today}: [Active] Decision: Do X, not Y.\n  - Expected behavior:\n  - Evidence:\n  - Rationale:\n\n## Open questions\n\n- <question> (options: A/B, recommendation)\n\n## Implementation approach (recommended)\n\n- <approach>\n\n## Plan (checklist)\n\n- [ ] Phase 1 — first small shippable milestone\n- [ ] Phase 2 — next milestone\n- [ ] Phase 3 — final milestone\n\n## Acceptance criteria / verification\n\n- [ ] <criterion>\n\n## Progress log\n\n- {today}: Created plan file at `{}`.\n\n## Learnings\n\n- None yet.\n\n## Memories\n\n- None yet.\n",
+        plan_owner(),
+        worktree.display(),
+        current_branch_name(),
+        path.display(),
+    )
+}
+
+fn plan_owner() -> String {
+    std::env::var("USER")
+        .ok()
+        .or_else(|| std::env::var("USERNAME").ok())
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| "unknown".to_string())
+}
+
+fn current_branch_name() -> String {
+    std::process::Command::new("git")
+        .args(["branch", "--show-current"])
+        .output()
+        .ok()
+        .and_then(|output| {
+            if output.status.success() {
+                let branch = String::from_utf8_lossy(&output.stdout).trim().to_string();
+                (!branch.is_empty()).then_some(branch)
+            } else {
+                None
+            }
+        })
+        .unwrap_or_else(|| "unknown".to_string())
+}
+
+fn format_path(path: Option<PathBuf>) -> String {
+    path.map(|value| value.display().to_string())
+        .unwrap_or_else(|| "(none)".to_string())
 }
 
 fn hooks_logs_dir(codex_home: &Path) -> PathBuf {

@@ -1,5 +1,6 @@
 use crate::bottom_pane::ApprovalRequest;
 use crate::render::renderable::Renderable;
+use codex_file_search::FileMatch;
 use codex_protocol::request_user_input::RequestUserInputEvent;
 use crossterm::event::KeyEvent;
 
@@ -54,4 +55,7 @@ pub(crate) trait BottomPaneView: Renderable {
     ) -> Option<RequestUserInputEvent> {
         Some(request)
     }
+
+    /// Forward asynchronous file-search results to views that provide `@` search UI.
+    fn on_file_search_result(&mut self, _query: String, _matches: Vec<FileMatch>) {}
 }

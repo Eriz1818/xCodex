@@ -1,5 +1,6 @@
 use crate::app::App;
 use crate::app_event::AppEvent;
+use crate::app_event::PlanSettingsCycleTarget;
 use crate::tui;
 use codex_core::config::edit::ConfigEdit;
 use codex_core::config::edit::ConfigEditsBuilder;
@@ -108,6 +109,149 @@ pub(crate) async fn try_handle_event(
                     None,
                 );
             }
+            tui.frame_requester().schedule_frame();
+            Ok(None)
+        }
+        AppEvent::OpenPlanListView { scope } => {
+            crate::xcodex_plugins::plan::open_plan_list_scope(&mut app.chat_widget, &scope);
+            tui.frame_requester().schedule_frame();
+            Ok(None)
+        }
+        AppEvent::OpenPlanSettingsView => {
+            crate::xcodex_plugins::plan::open_plan_settings_menu(&mut app.chat_widget);
+            tui.frame_requester().schedule_frame();
+            Ok(None)
+        }
+        AppEvent::OpenPlanBaseDirEditorView => {
+            crate::xcodex_plugins::plan::open_plan_base_dir_editor(&mut app.chat_widget);
+            tui.frame_requester().schedule_frame();
+            Ok(None)
+        }
+        AppEvent::OpenPlanModePickerView => {
+            crate::xcodex_plugins::plan::open_plan_mode_picker(&mut app.chat_widget);
+            tui.frame_requester().schedule_frame();
+            Ok(None)
+        }
+        AppEvent::OpenPlanModelPickerView => {
+            crate::xcodex_plugins::plan::open_plan_model_picker(&mut app.chat_widget);
+            tui.frame_requester().schedule_frame();
+            Ok(None)
+        }
+        AppEvent::ApplyPlanSettingsCommand {
+            args,
+            reopen_settings,
+        } => {
+            crate::xcodex_plugins::plan::apply_plan_settings_command(
+                &mut app.chat_widget,
+                &args,
+                reopen_settings,
+            );
+            tui.frame_requester().schedule_frame();
+            Ok(None)
+        }
+        AppEvent::CyclePlanSettingsValue {
+            target,
+            selected_idx,
+        } => {
+            let target = match target {
+                PlanSettingsCycleTarget::BrainstormFirst => "brainstorm-first",
+                PlanSettingsCycleTarget::Flowchart => "flowchart",
+                PlanSettingsCycleTarget::Mode => "mode",
+                PlanSettingsCycleTarget::TrackWorktree => "track-worktree",
+                PlanSettingsCycleTarget::TrackBranch => "track-branch",
+                PlanSettingsCycleTarget::MismatchAction => "mismatch-action",
+                PlanSettingsCycleTarget::Naming => "naming",
+            };
+            crate::xcodex_plugins::plan::cycle_plan_settings_value(
+                &mut app.chat_widget,
+                target,
+                selected_idx,
+            );
+            tui.frame_requester().schedule_frame();
+            Ok(None)
+        }
+        AppEvent::OpenPlanFile { path } => {
+            if let Some(update) =
+                crate::xcodex_plugins::plan::open_plan_file_path(&mut app.chat_widget, path)
+            {
+                app.app_event_tx.send(AppEvent::PlanFileUiUpdated {
+                    path: update.path,
+                    todos_remaining: update.todos_remaining,
+                    is_done: update.is_done,
+                });
+            }
+            tui.frame_requester().schedule_frame();
+            Ok(None)
+        }
+        AppEvent::MarkActivePlanDone => {
+            if let Some(update) =
+                crate::xcodex_plugins::plan::mark_active_plan_done_action(&mut app.chat_widget)
+            {
+                app.app_event_tx.send(AppEvent::PlanFileUiUpdated {
+                    path: update.path,
+                    todos_remaining: update.todos_remaining,
+                    is_done: update.is_done,
+                });
+            }
+            tui.frame_requester().schedule_frame();
+            Ok(None)
+        }
+        AppEvent::MarkActivePlanArchived => {
+            if let Some(update) =
+                crate::xcodex_plugins::plan::mark_active_plan_archived_action(&mut app.chat_widget)
+            {
+                app.app_event_tx.send(AppEvent::PlanFileUiUpdated {
+                    path: update.path,
+                    todos_remaining: update.todos_remaining,
+                    is_done: update.is_done,
+                });
+            }
+            tui.frame_requester().schedule_frame();
+            Ok(None)
+        }
+        AppEvent::PauseActivePlanRun => {
+            if let Some(update) =
+                crate::xcodex_plugins::plan::pause_active_plan_run_action(&mut app.chat_widget)
+            {
+                app.app_event_tx.send(AppEvent::PlanFileUiUpdated {
+                    path: update.path,
+                    todos_remaining: update.todos_remaining,
+                    is_done: update.is_done,
+                });
+            }
+            tui.frame_requester().schedule_frame();
+            Ok(None)
+        }
+        AppEvent::OpenPlanLoadConfirmation { path, scope } => {
+            crate::xcodex_plugins::plan::open_plan_load_confirmation(
+                &mut app.chat_widget,
+                path,
+                &scope,
+            );
+            tui.frame_requester().schedule_frame();
+            Ok(None)
+        }
+        AppEvent::OpenPlanDoSomethingElsePrompt => {
+            app.chat_widget.show_plan_do_something_else_prompt();
+            tui.frame_requester().schedule_frame();
+            Ok(None)
+        }
+        AppEvent::ReopenPlanNextStepPromptAfterTurn => {
+            app.chat_widget.reopen_plan_prompt_after_turn();
+            tui.frame_requester().schedule_frame();
+            Ok(None)
+        }
+        AppEvent::PlanFileUiUpdated {
+            path,
+            todos_remaining,
+            is_done,
+        } => {
+            tracing::debug!(
+                path = %path.display(),
+                todos_remaining,
+                is_done,
+                "plan file ui state updated"
+            );
             tui.frame_requester().schedule_frame();
             Ok(None)
         }

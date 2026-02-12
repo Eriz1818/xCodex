@@ -11,9 +11,9 @@ expression: terminal.backend()
 "                                                                                                    "
 "                                                                                                    "
 "  100% context left                                                                                 "
-"  / for commands                     ctrl + o for ⚡Tools                                           " Hidden by multi-width symbols: [(51, " ")]
-"  ! for shell commands               shift + enter for newline                                      "
-"  tab to queue message               @ for file paths                                               "
-"  ctrl + v to paste images           esc again to edit previous message                             "
-"  ctrl + c to exit                                                                                  "
-"  ctrl + t to view transcript                                                                       "
+"  / for commands                  ctrl + o for ⚡Tools                                              " Hidden by multi-width symbols: [(48, " ")]
+"  ! for shell commands            shift + enter for newline                                         "
+"  tab to queue message            @ for file paths                                                  "
+"  ctrl + v to paste images        esc again to edit previous message                                "
+"  ctrl + c to exit                shift + back tab to toggle plan mode                              "
+"                                  ctrl + t to view transcript                                       "

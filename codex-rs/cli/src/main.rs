@@ -47,6 +47,7 @@ mod xcodex_subcommands;
 use crate::config_cmd::ConfigCli;
 use crate::mcp_cmd::McpCli;
 use crate::xcodex_subcommands::HooksCommand;
+use crate::xcodex_subcommands::PlanCommand;
 
 use codex_core::config::Config;
 use codex_core::config::ConfigOverrides;
@@ -165,6 +166,9 @@ enum Subcommand {
 
     /// Utilities for exercising external hooks.
     Hooks(HooksCommand),
+
+    /// Manage durable `/plan` files from the CLI.
+    Plan(PlanCommand),
 
     /// Configuration helpers (paths, editing, diagnostics).
     Config(ConfigCli),
@@ -753,6 +757,9 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
         }
         Some(Subcommand::Hooks(cmd)) => {
             xcodex_subcommands::run_hooks_command(&root_config_overrides, cmd).await?;
+        }
+        Some(Subcommand::Plan(cmd)) => {
+            xcodex_subcommands::run_plan_command(&root_config_overrides, cmd).await?;
         }
 
         Some(Subcommand::Fork(ForkCommand {

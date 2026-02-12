@@ -1103,6 +1103,9 @@ pub struct ConfigToml {
     /// Settings that affect worktree behavior.
     pub worktrees: Option<Worktrees>,
 
+    /// Settings for durable plan files (`/plan` workflow).
+    pub plan: Option<crate::xcodex::config::PlanSettings>,
+
     /// When set to `true`, `AgentReasoning` events will be hidden from the
     /// UI/output. Defaults to `false`.
     pub hide_agent_reasoning: Option<bool>,
@@ -2297,6 +2300,7 @@ impl Config {
             xcodex: crate::xcodex::config::XcodexRuntimeConfig::from_toml(
                 cfg.notify,
                 cfg.hooks,
+                cfg.plan.as_ref(),
                 cfg.tui.as_ref(),
                 cfg.themes,
                 cfg.worktrees.as_ref(),
@@ -2590,6 +2594,14 @@ mod tests {
         crate::xcodex::config::XcodexRuntimeConfig {
             notify: None,
             hooks: HooksConfig::default(),
+            plan_base_dir: None,
+            plan_mode: None,
+            plan_custom_template: None,
+            plan_custom_seed_mode: None,
+            plan_track_worktree: None,
+            plan_track_branch: None,
+            plan_mismatch_action: None,
+            plan_naming_strategy: None,
             tui_xtreme_mode: XtremeMode::On,
             tui_ramps_rotate: true,
             tui_ramps_build: true,
@@ -5662,6 +5674,48 @@ mcp_oauth_callback_port = 5678
         )?;
 
         assert_eq!(config.mcp_oauth_callback_port, Some(5678));
+        Ok(())
+    }
+
+    #[test]
+    fn config_toml_deserializes_plan_base_dir() {
+        let toml = r#"
+[plan]
+base_dir = "/tmp/xcodex-plans"
+"#;
+        let cfg: ConfigToml =
+            toml::from_str(toml).expect("TOML deserialization should succeed for plan.base_dir");
+        assert_eq!(
+            cfg.plan
+                .as_ref()
+                .and_then(|plan| plan.base_dir.as_ref())
+                .map(|path| path.to_path_buf()),
+            Some(PathBuf::from("/tmp/xcodex-plans"))
+        );
+    }
+
+    #[test]
+    fn config_loads_plan_base_dir_from_toml() -> std::io::Result<()> {
+        let codex_home = TempDir::new()?;
+        let plan_base_dir = codex_home.path().join("plan-base-dir");
+        let toml = format!(
+            r#"
+model = "gpt-5.1"
+[plan]
+base_dir = "{}"
+"#,
+            plan_base_dir.display()
+        );
+        let cfg: ConfigToml =
+            toml::from_str(&toml).expect("TOML deserialization should succeed for plan.base_dir");
+
+        let config = Config::load_from_base_config_with_overrides(
+            cfg,
+            ConfigOverrides::default(),
+            codex_home.path().to_path_buf(),
+        )?;
+
+        assert_eq!(config.xcodex.plan_base_dir, Some(plan_base_dir));
         Ok(())
     }
 

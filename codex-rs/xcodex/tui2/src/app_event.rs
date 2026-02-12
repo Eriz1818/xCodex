@@ -26,6 +26,7 @@ use codex_core::config::types::ExclusionConfig;
 use codex_core::config::types::XtremeMode;
 use codex_core::protocol::AskForApproval;
 use codex_core::protocol::SandboxPolicy;
+use codex_protocol::config_types::CollaborationModeMask;
 use codex_protocol::openai_models::ReasoningEffort;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -170,6 +171,69 @@ pub(crate) enum AppEvent {
     #[allow(dead_code)]
     OpenToolsCommand {
         command: String,
+    },
+
+    /// Open the `/plan list` popup for a specific status scope.
+    OpenPlanListView {
+        scope: String,
+    },
+
+    /// Open the `/plan settings` popup.
+    OpenPlanSettingsView,
+
+    /// Open the base-directory editor popup used by `/plan settings`.
+    OpenPlanBaseDirEditorView,
+
+    /// Open the plan-mode picker popup used by `/plan settings`.
+    OpenPlanModePickerView,
+
+    /// Open the custom plan-mode seed picker popup used by `/plan settings`.
+    OpenPlanModeCustomSeedPickerView,
+
+    /// Open the plan-mode model picker popup used by `/plan settings`.
+    OpenPlanModelPickerView,
+
+    /// Apply a `/plan settings ...` subcommand directly (without composer insertion).
+    ApplyPlanSettingsCommand {
+        args: String,
+        reopen_settings: bool,
+    },
+
+    /// Open/create a plan file and set it active.
+    OpenPlanFile {
+        path: Option<PathBuf>,
+    },
+
+    /// Mark the active plan file as done.
+    MarkActivePlanDone,
+
+    /// Mark the active plan file as archived.
+    MarkActivePlanArchived,
+
+    /// Pause the active plan run by setting plan status to `Paused`.
+    PauseActivePlanRun,
+
+    /// Open a confirmation dialog for loading a plan from `/plan list`.
+    OpenPlanLoadConfirmation {
+        path: PathBuf,
+        scope: String,
+    },
+
+    /// Open a one-line prompt for the post-plan `Do something else...` action.
+    OpenPlanDoSomethingElsePrompt,
+    /// Re-open the post-plan next-step prompt after the next assistant turn completes.
+    ReopenPlanNextStepPromptAfterTurn,
+
+    /// Open a plan file path in the external editor (`$VISUAL` / `$EDITOR`).
+    OpenPlanInExternalEditor {
+        path: PathBuf,
+    },
+
+    /// Emitted whenever the active plan file state changes and UI surfaces should refresh.
+    PlanFileUiUpdated {
+        path: PathBuf,
+        todos_remaining: usize,
+        is_done: bool,
     },
 
     /// Open the worktrees settings editor view.
@@ -412,6 +476,12 @@ pub(crate) enum AppEvent {
 
     /// Open the custom prompt option from the review popup.
     OpenReviewCustomPrompt,
+
+    /// Submit a user message with an explicit collaboration mask.
+    SubmitUserMessageWithMode {
+        text: String,
+        collaboration_mode: CollaborationModeMask,
+    },
 
     /// Open the approval popup.
     FullScreenApprovalRequest(ApprovalRequest),

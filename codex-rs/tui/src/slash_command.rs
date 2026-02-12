@@ -91,7 +91,7 @@ impl SlashCommand {
             SlashCommand::Approvals => "choose what xcodex can do without approval",
             SlashCommand::Permissions => "choose what xcodex is allowed to do",
             SlashCommand::Personality => "choose a communication style for xcodex",
-            SlashCommand::Plan => "switch to Plan mode",
+            SlashCommand::Plan => "open the Plan menu (plans + settings)",
             SlashCommand::Collab => "change collaboration mode (experimental)",
             SlashCommand::Agent => "switch the active agent thread",
             SlashCommand::ElevateSandbox => "set up elevated agent sandbox",
@@ -139,9 +139,9 @@ impl SlashCommand {
             | SlashCommand::ElevateSandbox
             | SlashCommand::Experimental
             | SlashCommand::Review
-            | SlashCommand::Plan
             | SlashCommand::Logout => false,
             SlashCommand::Diff
+            | SlashCommand::Plan
             | SlashCommand::Rename
             | SlashCommand::Mention
             | SlashCommand::Skills

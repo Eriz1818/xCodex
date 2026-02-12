@@ -1,8 +1,7 @@
 ---
 source: tui/src/xcodex_plugins/history_cell.rs
-assertion_line: 1424
 expression: relevant_header_lines(&cell.display_lines(120))
 ---
-│ mode:      Code   shift + tab to change mode          │
+│ mode:      Code   shift + tab to toggle plan mode     │
 │ model:     gpt-5.3-codex high high   /model to change │
 │ directory: /Users/test/repo                           │

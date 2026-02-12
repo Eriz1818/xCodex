@@ -71,6 +71,11 @@ pub(crate) enum FooterMode {
     ContextOnly,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum CollaborationModeIndicator {
+    Plan,
+}
+
 pub(crate) fn toggle_shortcut_mode(current: FooterMode, ctrl_c_hint: bool) -> FooterMode {
     if ctrl_c_hint && matches!(current, FooterMode::QuitShortcutReminder) {
         return current;
@@ -297,6 +302,7 @@ fn shortcut_overlay_lines(state: ShortcutsState) -> Vec<Line<'static>> {
     let mut edit_previous = Line::from("");
     let mut quit = Line::from("");
     let mut show_transcript = Line::from("");
+    let mut plan_mode_toggle = Line::from("");
 
     for descriptor in SHORTCUTS {
         if let Some(text) = descriptor.overlay_entry(state) {
@@ -311,6 +317,7 @@ fn shortcut_overlay_lines(state: ShortcutsState) -> Vec<Line<'static>> {
                 ShortcutId::EditPrevious => edit_previous = text,
                 ShortcutId::Quit => quit = text,
                 ShortcutId::ShowTranscript => show_transcript = text,
+                ShortcutId::PlanModeToggle => plan_mode_toggle = text,
             }
         }
     }
@@ -325,6 +332,7 @@ fn shortcut_overlay_lines(state: ShortcutsState) -> Vec<Line<'static>> {
         paste_image,
         edit_previous,
         quit,
+        plan_mode_toggle,
         Line::from(""),
         show_transcript,
     ];
@@ -404,6 +412,7 @@ enum ShortcutId {
     PasteImage,
     EditPrevious,
     Quit,
+    PlanModeToggle,
     ShowTranscript,
 }
 
@@ -575,6 +584,15 @@ const SHORTCUTS: &[ShortcutDescriptor] = &[
         }],
         prefix: "",
         label: " to view transcript",
+    },
+    ShortcutDescriptor {
+        id: ShortcutId::PlanModeToggle,
+        bindings: &[ShortcutBinding {
+            key: key_hint::shift(KeyCode::BackTab),
+            condition: DisplayCondition::Always,
+        }],
+        prefix: "",
+        label: " to toggle plan mode",
     },
 ];
 

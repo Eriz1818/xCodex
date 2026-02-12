@@ -25,6 +25,7 @@ pub enum SlashCommand {
     Init,
     Compact,
     Autocompact,
+    Plan,
     // Undo,
     Diff,
     Mention,
@@ -56,6 +57,7 @@ impl SlashCommand {
             SlashCommand::Init => "create an AGENTS.md file with instructions for xcodex",
             SlashCommand::Compact => "summarize conversation to prevent hitting the context limit",
             SlashCommand::Autocompact => "toggle automatic conversation compaction (persists)",
+            SlashCommand::Plan => "open the Plan menu (plans + settings)",
             SlashCommand::Review => "review my current changes and find issues",
             SlashCommand::Resume => "resume a saved chat",
             SlashCommand::Fork => "fork the current chat",
@@ -90,6 +92,17 @@ impl SlashCommand {
         self.into()
     }
 
+    /// Whether this command supports inline args (for example `/review ...`).
+    pub fn supports_inline_args(self) -> bool {
+        matches!(
+            self,
+            SlashCommand::Review
+                | SlashCommand::Theme
+                | SlashCommand::Worktree
+                | SlashCommand::Plan
+        )
+    }
+
     /// Whether this command can be run while a task is in progress.
     pub fn available_during_task(self) -> bool {
         match self {
@@ -106,6 +119,7 @@ impl SlashCommand {
             | SlashCommand::Review
             | SlashCommand::Logout => false,
             SlashCommand::Diff
+            | SlashCommand::Plan
             | SlashCommand::Mention
             | SlashCommand::Skills
             | SlashCommand::Help

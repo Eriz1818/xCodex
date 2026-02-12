@@ -87,13 +87,16 @@ use ratatui::text::Span;
 use ratatui::widgets::Paragraph;
 use ratatui::widgets::Wrap;
 use std::collections::BTreeMap;
+use std::env;
 use std::path::Path;
 use std::path::PathBuf;
+use std::process::Stdio;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 use std::thread;
 use std::time::Duration;
+use tokio::process::Command;
 use tokio::select;
 use tokio::sync::mpsc::unbounded_channel;
 
@@ -2001,6 +2004,11 @@ impl App {
                 self.chat_widget.on_commit_tick();
             }
             AppEvent::CodexEvent(event) => {
+                let turn_complete_message = match &event.msg {
+                    EventMsg::TurnComplete(turn) => Some(turn.last_agent_message.clone()),
+                    _ => None,
+                };
+                let is_session_configured = matches!(event.msg, EventMsg::SessionConfigured(_));
                 if self.suppress_shutdown_complete
                     && matches!(event.msg, EventMsg::ShutdownComplete)
                 {
@@ -2013,6 +2021,30 @@ impl App {
                     emit_skill_load_warnings(&self.app_event_tx, &errors);
                 }
                 self.chat_widget.handle_codex_event(event);
+                if is_session_configured
+                    && let Some(update) =
+                        crate::xcodex_plugins::plan::sync_active_plan_session_state(
+                            &mut self.chat_widget,
+                        )
+                {
+                    self.app_event_tx.send(AppEvent::PlanFileUiUpdated {
+                        path: update.path,
+                        todos_remaining: update.todos_remaining,
+                        is_done: update.is_done,
+                    });
+                }
+                if let Some(last_agent_message) = turn_complete_message
+                    && let Some(update) = crate::xcodex_plugins::plan::sync_active_plan_turn_end(
+                        &mut self.chat_widget,
+                        last_agent_message.as_deref(),
+                    )
+                {
+                    self.app_event_tx.send(AppEvent::PlanFileUiUpdated {
+                        path: update.path,
+                        todos_remaining: update.todos_remaining,
+                        is_done: update.is_done,
+                    });
+                }
             }
             AppEvent::Exit(mode) => match mode {
                 ExitMode::ShutdownFirst => self.chat_widget.submit_op(Op::Shutdown),
@@ -3208,6 +3240,115 @@ impl App {
             AppEvent::OpenReviewCustomPrompt => {
                 self.chat_widget.show_review_custom_prompt();
             }
+            AppEvent::OpenPlanListView { scope } => {
+                crate::xcodex_plugins::plan::open_plan_list_scope(&mut self.chat_widget, &scope);
+            }
+            AppEvent::OpenPlanSettingsView => {
+                crate::xcodex_plugins::plan::open_plan_settings_menu(&mut self.chat_widget);
+            }
+            AppEvent::OpenPlanBaseDirEditorView => {
+                crate::xcodex_plugins::plan::open_plan_base_dir_editor(&mut self.chat_widget);
+            }
+            AppEvent::OpenPlanModePickerView => {
+                crate::xcodex_plugins::plan::open_plan_mode_picker(&mut self.chat_widget);
+            }
+            AppEvent::OpenPlanModeCustomSeedPickerView => {
+                crate::xcodex_plugins::plan::open_plan_mode_custom_seed_picker(
+                    &mut self.chat_widget,
+                );
+            }
+            AppEvent::OpenPlanModelPickerView => {
+                crate::xcodex_plugins::plan::open_plan_model_picker(&mut self.chat_widget);
+            }
+            AppEvent::ApplyPlanSettingsCommand {
+                args,
+                reopen_settings,
+            } => {
+                crate::xcodex_plugins::plan::apply_plan_settings_command(
+                    &mut self.chat_widget,
+                    &args,
+                    reopen_settings,
+                );
+            }
+            AppEvent::OpenPlanFile { path } => {
+                if let Some(update) =
+                    crate::xcodex_plugins::plan::open_plan_file_path(&mut self.chat_widget, path)
+                {
+                    self.app_event_tx.send(AppEvent::PlanFileUiUpdated {
+                        path: update.path,
+                        todos_remaining: update.todos_remaining,
+                        is_done: update.is_done,
+                    });
+                }
+            }
+            AppEvent::MarkActivePlanDone => {
+                if let Some(update) =
+                    crate::xcodex_plugins::plan::mark_active_plan_done_action(&mut self.chat_widget)
+                {
+                    self.app_event_tx.send(AppEvent::PlanFileUiUpdated {
+                        path: update.path,
+                        todos_remaining: update.todos_remaining,
+                        is_done: update.is_done,
+                    });
+                }
+            }
+            AppEvent::MarkActivePlanArchived => {
+                if let Some(update) = crate::xcodex_plugins::plan::mark_active_plan_archived_action(
+                    &mut self.chat_widget,
+                ) {
+                    self.app_event_tx.send(AppEvent::PlanFileUiUpdated {
+                        path: update.path,
+                        todos_remaining: update.todos_remaining,
+                        is_done: update.is_done,
+                    });
+                }
+            }
+            AppEvent::PauseActivePlanRun => {
+                if let Some(update) =
+                    crate::xcodex_plugins::plan::pause_active_plan_run_action(&mut self.chat_widget)
+                {
+                    self.app_event_tx.send(AppEvent::PlanFileUiUpdated {
+                        path: update.path,
+                        todos_remaining: update.todos_remaining,
+                        is_done: update.is_done,
+                    });
+                }
+            }
+            AppEvent::OpenPlanLoadConfirmation { path, scope } => {
+                crate::xcodex_plugins::plan::open_plan_load_confirmation(
+                    &mut self.chat_widget,
+                    path,
+                    &scope,
+                );
+            }
+            AppEvent::SubmitUserMessageWithMode {
+                text,
+                collaboration_mode,
+            } => {
+                self.chat_widget
+                    .submit_user_message_with_mode(text, collaboration_mode);
+            }
+            AppEvent::OpenPlanDoSomethingElsePrompt => {
+                self.chat_widget.show_plan_do_something_else_prompt();
+            }
+            AppEvent::ReopenPlanNextStepPromptAfterTurn => {
+                self.chat_widget.reopen_plan_prompt_after_turn();
+            }
+            AppEvent::OpenPlanInExternalEditor { path } => {
+                self.launch_external_editor_for_path(tui, &path).await;
+            }
+            AppEvent::PlanFileUiUpdated {
+                path,
+                todos_remaining,
+                is_done,
+            } => {
+                tracing::debug!(
+                    path = %path.display(),
+                    todos_remaining,
+                    is_done,
+                    "plan file ui state updated"
+                );
+            }
             AppEvent::FullScreenApprovalRequest(request) => match request {
                 ApprovalRequest::ApplyPatch {
                     cwd,
@@ -3288,6 +3429,88 @@ impl App {
     fn on_update_reasoning_effort(&mut self, effort: Option<ReasoningEffortConfig>) {
         self.chat_widget.set_reasoning_effort(effort);
         self.config.model_reasoning_effort = effort;
+    }
+
+    fn resolve_external_editor_command() -> Result<Vec<String>, String> {
+        let raw = env::var("VISUAL")
+            .or_else(|_| env::var("EDITOR"))
+            .map_err(|_| {
+                "Cannot open external editor: set $VISUAL or $EDITOR before starting Codex."
+                    .to_string()
+            })?;
+        let parts = shlex::split(&raw)
+            .ok_or_else(|| "Failed to parse external editor command.".to_string())?;
+        if parts.is_empty() {
+            return Err("External editor command is empty.".to_string());
+        }
+        Ok(parts)
+    }
+
+    async fn run_external_editor_for_path(
+        path: &Path,
+        editor_cmd: &[String],
+    ) -> Result<(), String> {
+        if editor_cmd.is_empty() {
+            return Err("External editor command is empty.".to_string());
+        }
+
+        let mut command = Command::new(&editor_cmd[0]);
+        if editor_cmd.len() > 1 {
+            command.args(&editor_cmd[1..]);
+        }
+        let status = command
+            .arg(path)
+            .stdin(Stdio::inherit())
+            .stdout(Stdio::inherit())
+            .stderr(Stdio::inherit())
+            .status()
+            .await
+            .map_err(|err| format!("Failed to open editor: {err}"))?;
+        if !status.success() {
+            return Err(format!(
+                "Failed to open editor: editor exited with status {status}"
+            ));
+        }
+        Ok(())
+    }
+
+    async fn launch_external_editor_for_path(&mut self, tui: &mut tui::Tui, path: &Path) {
+        let editor_cmd = match Self::resolve_external_editor_command() {
+            Ok(cmd) => cmd,
+            Err(message) => {
+                self.chat_widget.add_error_message(message);
+                return;
+            }
+        };
+
+        let _ = tui.leave_alt_screen();
+        let restore_result = crate::tui::restore();
+
+        let editor_result = Self::run_external_editor_for_path(path, &editor_cmd).await;
+
+        let set_modes_result = crate::tui::set_modes();
+        let enter_alt_result = tui.enter_alt_screen();
+
+        if let Err(err) = restore_result {
+            self.chat_widget.add_error_message(format!(
+                "Failed to prepare terminal for external editor: {err}"
+            ));
+        }
+        if let Err(err) = set_modes_result {
+            self.chat_widget.add_error_message(format!(
+                "Failed to restore terminal modes after external editor: {err}"
+            ));
+        }
+        if let Err(err) = enter_alt_result {
+            self.chat_widget.add_error_message(format!(
+                "Failed to restore TUI screen after external editor: {err}"
+            ));
+        }
+        if let Err(err) = editor_result {
+            self.chat_widget.add_error_message(err);
+        }
+
+        tui.frame_requester().schedule_frame();
     }
 
     async fn handle_key_event(&mut self, tui: &mut tui::Tui, key_event: KeyEvent) {

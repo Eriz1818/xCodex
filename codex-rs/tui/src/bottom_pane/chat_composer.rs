@@ -290,6 +290,7 @@ pub(crate) struct ChatComposer {
     footer_mode: FooterMode,
     footer_hint_override: Option<Vec<(String, String)>>,
     footer_flash: Option<FooterFlash>,
+    show_context_right: bool,
     context_window_percent: Option<i64>,
     context_window_used_tokens: Option<i64>,
     status_bar_git_branch: Option<String>,
@@ -397,6 +398,7 @@ impl ChatComposer {
             footer_mode: FooterMode::ComposerEmpty,
             footer_hint_override: None,
             footer_flash: None,
+            show_context_right: true,
             context_window_percent: None,
             context_window_used_tokens: None,
             status_bar_git_branch: None,
@@ -795,6 +797,10 @@ impl ChatComposer {
     /// `None` restores the default shortcut footer.
     pub(crate) fn set_footer_hint_override(&mut self, items: Option<Vec<(String, String)>>) {
         self.footer_hint_override = items;
+    }
+
+    pub(crate) fn set_show_context_right(&mut self, show: bool) {
+        self.show_context_right = show;
     }
 
     pub(crate) fn show_footer_flash(&mut self, line: Line<'static>, duration: Duration) {
@@ -1379,6 +1385,23 @@ impl ChatComposer {
                         } => {
                             let completed = format!("/{name}");
                             if !run_on_enter && first_line.trim_end().starts_with(&completed) {
+                                return self.handle_key_event_without_popup(key_event);
+                            }
+                            let root_name = name.split_whitespace().next().unwrap_or(name);
+                            if run_on_enter
+                                && let Some((typed_name, typed_rest, _rest_offset)) =
+                                    parse_slash_name(first_line)
+                                && typed_name == root_name
+                                && !typed_rest.trim().is_empty()
+                                && let Some(root_cmd) = slash_commands::find_builtin_command(
+                                    typed_name,
+                                    self.collaboration_modes_enabled,
+                                    self.connectors_enabled,
+                                    self.personality_command_enabled,
+                                    self.windows_degraded_sandbox_active,
+                                )
+                                && root_cmd == SlashCommand::Plan
+                            {
                                 return self.handle_key_event_without_popup(key_event);
                             }
                             let text = if insert_trailing_space {
@@ -3794,7 +3817,10 @@ impl ChatComposer {
                     );
                 }
 
-                if show_right && let Some(line) = &right_line {
+                if self.show_context_right
+                    && show_right
+                    && let Some(line) = &right_line
+                {
                     render_context_right(hint_rect, buf, line);
                 }
             }
@@ -3817,6 +3843,9 @@ impl ChatComposer {
             if let Some(bg) = style.bg {
                 border_style = border_style.fg(bg);
             }
+            if self.collaboration_mode_indicator == Some(CollaborationModeIndicator::Plan) {
+                border_style = border_style.patch(crate::theme::accent_style());
+            }
             border_style = border_style.add_modifier(Modifier::BOLD);
             let line = "━".repeat(composer_rect.width as usize);
             buf.set_string(composer_rect.x, composer_rect.y, &line, border_style);
@@ -3828,11 +3857,14 @@ impl ChatComposer {
             );
         }
         if !textarea_rect.is_empty() {
-            let prefix_style = if self.input_enabled {
+            let mut prefix_style = if self.input_enabled {
                 base_style.add_modifier(Modifier::BOLD)
             } else {
                 base_style.add_modifier(Modifier::DIM)
             };
+            if self.collaboration_mode_indicator == Some(CollaborationModeIndicator::Plan) {
+                prefix_style = prefix_style.patch(crate::theme::accent_style());
+            }
             let prefix = Span::from("›").set_style(prefix_style);
             buf.set_span(
                 textarea_rect.x - LIVE_PREFIX_COLS,

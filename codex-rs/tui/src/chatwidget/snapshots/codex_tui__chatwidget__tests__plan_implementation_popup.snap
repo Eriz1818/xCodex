@@ -1,10 +1,15 @@
 ---
 source: tui/src/chatwidget/tests.rs
+assertion_line: 2287
 expression: popup
 ---
-  Implement this plan?
+  Plan ready: choose next step
+  Select how to proceed from Plan mode.
 
-› 1. Yes, implement this plan  Switch to Default and start coding.
-  2. No, stay in Plan mode     Continue planning with the model.
+› 1. Start Implementation  Switch to Default mode and start coding.
+  2. Discuss Further       Stay in Plan mode and continue refining.
+  3. Cancel                Pause this plan run and keep the plan file.
+  4. Do something else...  Enter a one-line prompt and send it immediately.
 
-  Press enter to confirm or esc to go back
+  Cancel keeps the plan file and sets status to `Paused`.
+  ↑/↓: select  Enter: confirm  Esc: close

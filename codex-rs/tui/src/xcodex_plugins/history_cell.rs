@@ -1024,7 +1024,7 @@ impl HistoryCell for XcodexSessionHeaderHistoryCell {
 
         const CHANGE_MODEL_HINT_COMMAND: &str = "/model";
         const CHANGE_MODEL_HINT_EXPLANATION: &str = " to change";
-        const CHANGE_MODE_HINT_EXPLANATION: &str = " to change mode";
+        const CHANGE_MODE_HINT_EXPLANATION: &str = " to toggle plan mode";
         const DIR_LABEL: &str = "directory:";
         let label_width = DIR_LABEL.len();
 

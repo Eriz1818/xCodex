@@ -432,9 +432,9 @@ fn build_full_line(row: &GenericDisplayRow, desc_col: usize) -> Line<'static> {
     let this_name_width = Line::from(name_spans.clone()).width();
     let mut full_spans: Vec<Span> = name_spans;
     if let Some(display_shortcut) = row.display_shortcut {
-        full_spans.push(" (".into());
+        full_spans.push(" (".dim());
         full_spans.push(display_shortcut.into());
-        full_spans.push(")".into());
+        full_spans.push(")".dim());
     }
     if let Some(desc) = combined_description.as_ref() {
         let gap = desc_col.saturating_sub(this_name_width);
@@ -529,13 +529,16 @@ fn render_rows_inner(
         let is_selected = Some(i) == state.selected_idx && !row_is_disabled;
         if is_selected {
             // Keep the popup background stable and use accent color for selection.
-            let style = base_style
+            let selected_style = base_style
                 .patch(crate::theme::accent_style())
                 .add_modifier(Modifier::BOLD);
-            full_line
-                .spans
-                .iter_mut()
-                .for_each(|span| span.style = style);
+            full_line.spans.iter_mut().for_each(|span| {
+                if span.style.add_modifier.contains(Modifier::DIM) {
+                    span.style = base_style.patch(crate::theme::dim_style());
+                } else {
+                    span.style = selected_style;
+                }
+            });
         }
         if !is_selected && (row_is_disabled || row_is_dimmed) {
             full_line.spans.iter_mut().for_each(|span| {
@@ -729,13 +732,16 @@ pub(crate) fn render_rows_single_line(
         };
 
         if Some(i) == state.selected_idx && !row_is_disabled {
-            let style = base_style
+            let selected_style = base_style
                 .patch(crate::theme::accent_style())
                 .add_modifier(Modifier::BOLD);
-            full_line
-                .spans
-                .iter_mut()
-                .for_each(|span| span.style = style);
+            full_line.spans.iter_mut().for_each(|span| {
+                if span.style.add_modifier.contains(Modifier::DIM) {
+                    span.style = base_style.patch(crate::theme::dim_style());
+                } else {
+                    span.style = selected_style;
+                }
+            });
         }
         if row_is_disabled {
             full_line.spans.iter_mut().for_each(|span| {

@@ -149,9 +149,10 @@ use tokio::time::MissedTickBehavior;
 use tracing::debug;
 
 const DEFAULT_MODEL_DISPLAY_NAME: &str = "loading";
-const PLAN_IMPLEMENTATION_TITLE: &str = "Implement this plan?";
-const PLAN_IMPLEMENTATION_YES: &str = "Yes, implement this plan";
-const PLAN_IMPLEMENTATION_NO: &str = "No, stay in Plan mode";
+#[cfg(test)]
+const PLAN_IMPLEMENTATION_TITLE: &str = "Plan ready: choose next step";
+const PLAN_IMPLEMENTATION_OTHER: &str = "Do something else...";
+#[cfg(test)]
 const PLAN_IMPLEMENTATION_CODING_MESSAGE: &str = "Implement the plan.";
 
 use crate::app_event::AppEvent;
@@ -649,6 +650,8 @@ pub(crate) struct ChatWidget {
     saw_plan_update_this_turn: bool,
     // Whether the current turn emitted a proposed plan item.
     saw_plan_item_this_turn: bool,
+    // True when "Discuss Further" requested re-opening the post-plan prompt after the next turn.
+    reopen_plan_prompt_after_turn: bool,
     // Incremental buffer for streamed plan content.
     plan_delta_buffer: String,
     // True while a plan item is streaming.
@@ -1559,9 +1562,10 @@ impl ChatWidget {
             return;
         }
         if self.active_mode_kind() != ModeKind::Plan {
+            self.reopen_plan_prompt_after_turn = false;
             return;
         }
-        if !self.saw_plan_item_this_turn {
+        if !self.saw_plan_item_this_turn && !self.reopen_plan_prompt_after_turn {
             return;
         }
         if !self.bottom_pane.no_modal_or_popup_active() {
@@ -1576,53 +1580,16 @@ impl ChatWidget {
         }
 
         self.open_plan_implementation_prompt();
+        self.reopen_plan_prompt_after_turn = false;
     }
 
     fn open_plan_implementation_prompt(&mut self) {
         let default_mask = collaboration_modes::default_mode_mask(self.models_manager.as_ref());
-        let (implement_actions, implement_disabled_reason) = match default_mask {
-            Some(mask) => {
-                let user_text = PLAN_IMPLEMENTATION_CODING_MESSAGE.to_string();
-                let actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
-                    tx.send(AppEvent::SubmitUserMessageWithMode {
-                        text: user_text.clone(),
-                        collaboration_mode: mask.clone(),
-                    });
-                })];
-                (actions, None)
-            }
-            None => (Vec::new(), Some("Default mode unavailable".to_string())),
-        };
+        crate::xcodex_plugins::plan::open_post_plan_prompt(self, default_mask);
+    }
 
-        let items = vec![
-            SelectionItem {
-                name: PLAN_IMPLEMENTATION_YES.to_string(),
-                description: Some("Switch to Default and start coding.".to_string()),
-                selected_description: None,
-                is_current: false,
-                actions: implement_actions,
-                disabled_reason: implement_disabled_reason,
-                dismiss_on_select: true,
-                ..Default::default()
-            },
-            SelectionItem {
-                name: PLAN_IMPLEMENTATION_NO.to_string(),
-                description: Some("Continue planning with the model.".to_string()),
-                selected_description: None,
-                is_current: false,
-                actions: Vec::new(),
-                dismiss_on_select: true,
-                ..Default::default()
-            },
-        ];
-
-        self.bottom_pane.show_selection_view(SelectionViewParams {
-            title: Some(PLAN_IMPLEMENTATION_TITLE.to_string()),
-            subtitle: None,
-            footer_hint: Some(standard_popup_hint_line()),
-            items,
-            ..Default::default()
-        });
+    pub(crate) fn reopen_plan_prompt_after_turn(&mut self) {
+        self.reopen_plan_prompt_after_turn = true;
     }
 
     pub(crate) fn set_token_info(&mut self, info: Option<TokenUsageInfo>) {
@@ -3191,6 +3158,7 @@ impl ChatWidget {
             had_work_activity: false,
             saw_plan_update_this_turn: false,
             saw_plan_item_this_turn: false,
+            reopen_plan_prompt_after_turn: false,
             plan_delta_buffer: String::new(),
             plan_item_active: false,
             last_separator_elapsed_secs: None,
@@ -3367,6 +3335,7 @@ impl ChatWidget {
             forked_from: None,
             saw_plan_update_this_turn: false,
             saw_plan_item_this_turn: false,
+            reopen_plan_prompt_after_turn: false,
             plan_delta_buffer: String::new(),
             plan_item_active: false,
             queued_user_messages: VecDeque::new(),
@@ -3574,6 +3543,7 @@ impl ChatWidget {
             had_work_activity: false,
             saw_plan_update_this_turn: false,
             saw_plan_item_this_turn: false,
+            reopen_plan_prompt_after_turn: false,
             plan_delta_buffer: String::new(),
             plan_item_active: false,
             last_separator_elapsed_secs: None,
@@ -3748,7 +3718,7 @@ impl ChatWidget {
                 && !self.bottom_pane.is_task_running()
                 && self.bottom_pane.no_modal_or_popup_active() =>
             {
-                self.cycle_collaboration_mode();
+                self.toggle_plan_mode();
             }
             KeyEvent {
                 code: KeyCode::Up,
@@ -3934,18 +3904,7 @@ impl ChatWidget {
                 self.open_personality_popup();
             }
             SlashCommand::Plan => {
-                if !self.collaboration_modes_enabled() {
-                    self.add_info_message(
-                        "Collaboration modes are disabled.".to_string(),
-                        Some("Enable collaboration modes to use /plan.".to_string()),
-                    );
-                    return;
-                }
-                if let Some(mask) = collaboration_modes::plan_mask(self.models_manager.as_ref()) {
-                    self.set_collaboration_mask(mask);
-                } else {
-                    self.add_info_message("Plan mode unavailable right now.".to_string(), None);
-                }
+                crate::xcodex_plugins::plan::open_plan_menu(self);
             }
             SlashCommand::Collab => {
                 if !self.collaboration_modes_enabled() {
@@ -4185,32 +4144,14 @@ impl ChatWidget {
                     .send(AppEvent::CodexOp(Op::SetThreadName { name }));
                 self.bottom_pane.drain_pending_submission_state();
             }
-            SlashCommand::Plan if !trimmed.is_empty() => {
-                self.dispatch_command(cmd);
-                if self.active_mode_kind() != ModeKind::Plan {
-                    return;
-                }
-                let Some((prepared_args, prepared_elements)) =
-                    self.bottom_pane.prepare_inline_args_submission(true)
-                else {
-                    return;
-                };
-                let user_message = UserMessage {
-                    text: prepared_args,
-                    local_images: self
-                        .bottom_pane
-                        .take_recent_submission_images_with_placeholders(),
-                    text_elements: prepared_elements,
-                    mention_bindings: self.bottom_pane.take_recent_submission_mention_bindings(),
-                };
-                if self.is_session_configured() {
-                    self.reasoning_buffer.clear();
-                    self.full_reasoning_buffer.clear();
-                    self.set_status_header(String::from("Working"));
-                    self.submit_user_message(user_message);
-                } else {
-                    self.queue_user_message(user_message);
-                }
+            SlashCommand::Plan => {
+                let plan_args = self
+                    .bottom_pane
+                    .prepare_inline_args_submission(false)
+                    .map(|(prepared_args, _prepared_elements)| prepared_args)
+                    .unwrap_or_else(|| trimmed.to_string());
+                crate::xcodex_plugins::plan::handle_plan_command(self, plan_args.trim());
+                self.bottom_pane.drain_pending_submission_state();
             }
             SlashCommand::Review if !trimmed.is_empty() => {
                 let Some((prepared_args, _prepared_elements)) =
@@ -4361,6 +4302,7 @@ impl ChatWidget {
                     | "help"
                     | "hooks"
                     | "mcp"
+                    | "plan"
                     | "settings"
                     | "thoughts"
                     | "verbose"
@@ -5822,6 +5764,16 @@ impl ChatWidget {
             .iter()
             .find(|preset| preset.show_in_picker && preset.model == NUDGE_MODEL_SLUG)
             .cloned()
+    }
+
+    pub(crate) fn selectable_model_presets(&self) -> Option<Vec<ModelPreset>> {
+        let models = self.models_manager.try_list_models(&self.config).ok()?;
+        Some(
+            models
+                .into_iter()
+                .filter(|preset| preset.show_in_picker)
+                .collect(),
+        )
     }
 
     fn rate_limit_switch_prompt_hidden(&self) -> bool {
@@ -7366,6 +7318,50 @@ impl ChatWidget {
         &self.config.codex_home
     }
 
+    pub(crate) fn configured_plan_base_dir(&self) -> Option<&Path> {
+        self.config.xcodex.plan_base_dir.as_deref()
+    }
+
+    pub(crate) fn configured_plan_mode(&self) -> Option<&'static str> {
+        self.config
+            .xcodex
+            .plan_mode
+            .map(codex_core::xcodex::config::PlanWorkflowMode::as_str)
+    }
+
+    pub(crate) fn configured_plan_custom_template(&self) -> Option<&Path> {
+        self.config.xcodex.plan_custom_template.as_deref()
+    }
+
+    pub(crate) fn configured_plan_custom_seed_mode(&self) -> Option<&'static str> {
+        self.config
+            .xcodex
+            .plan_custom_seed_mode
+            .map(codex_core::xcodex::config::PlanTemplateSeedMode::as_str)
+    }
+
+    pub(crate) fn configured_plan_track_worktree(&self) -> Option<bool> {
+        self.config.xcodex.plan_track_worktree
+    }
+
+    pub(crate) fn configured_plan_track_branch(&self) -> Option<bool> {
+        self.config.xcodex.plan_track_branch
+    }
+
+    pub(crate) fn configured_plan_mismatch_action(&self) -> Option<&'static str> {
+        self.config
+            .xcodex
+            .plan_mismatch_action
+            .map(codex_core::xcodex::config::PlanContextMismatchAction::as_str)
+    }
+
+    pub(crate) fn configured_plan_naming_strategy(&self) -> Option<&'static str> {
+        self.config
+            .xcodex
+            .plan_naming_strategy
+            .map(codex_core::xcodex::config::PlanNamingStrategy::as_str)
+    }
+
     pub(crate) fn xtreme_ui_enabled(&self) -> bool {
         crate::xtreme::xtreme_ui_enabled(&self.config)
     }
@@ -7487,6 +7483,14 @@ impl ChatWidget {
         Some(mask)
     }
 
+    fn plan_mode_mask_with_overrides(&self) -> Option<CollaborationModeMask> {
+        let mut mask = collaboration_modes::plan_mask(self.models_manager.as_ref())?;
+        if let Some(model_override) = crate::xcodex_plugins::plan::plan_mode_model_override(self) {
+            mask.model = Some(model_override);
+        }
+        Some(mask)
+    }
+
     fn active_mode_kind(&self) -> ModeKind {
         self.active_collaboration_mask
             .as_ref()
@@ -7566,17 +7570,27 @@ impl ChatWidget {
         }
     }
 
-    /// Cycle to the next collaboration mode variant (Plan -> Default -> Plan).
-    fn cycle_collaboration_mode(&mut self) {
+    /// Toggle between Default and Plan collaboration modes.
+    fn toggle_plan_mode(&mut self) {
         if !self.collaboration_modes_enabled() {
             return;
         }
 
-        if let Some(next_mask) = collaboration_modes::next_mask(
-            self.models_manager.as_ref(),
-            self.active_collaboration_mask.as_ref(),
-        ) {
+        let target_kind = if self.active_mode_kind() == ModeKind::Plan {
+            ModeKind::Default
+        } else {
+            ModeKind::Plan
+        };
+
+        let next_mask = if target_kind == ModeKind::Plan {
+            self.plan_mode_mask_with_overrides()
+        } else {
+            collaboration_modes::mask_for_kind(self.models_manager.as_ref(), target_kind)
+        };
+        if let Some(next_mask) = next_mask {
             self.set_collaboration_mask(next_mask);
+        } else if target_kind == ModeKind::Plan {
+            self.add_info_message("Plan mode unavailable right now.".to_string(), None);
         }
     }
 
@@ -8255,6 +8269,39 @@ impl ChatWidget {
                         user_facing_hint: None,
                     },
                 }));
+            }),
+        );
+        self.bottom_pane.show_view(Box::new(view));
+    }
+
+    pub(crate) fn show_plan_do_something_else_prompt(&mut self) {
+        let tx = self.app_event_tx.clone();
+        let plan_mask = self
+            .active_collaboration_mask
+            .clone()
+            .filter(|mask| mask.mode == Some(ModeKind::Plan))
+            .or_else(|| self.plan_mode_mask_with_overrides());
+        let view = CustomPromptView::new(
+            PLAN_IMPLEMENTATION_OTHER.to_string(),
+            "Type your next step and press Enter".to_string(),
+            Some("This submits immediately in Plan mode.".to_string()),
+            Box::new(move |prompt: String| {
+                let trimmed = prompt.trim().to_string();
+                if trimmed.is_empty() {
+                    return;
+                }
+                let Some(mask) = plan_mask.clone() else {
+                    tx.send(AppEvent::InsertHistoryCell(Box::new(
+                        history_cell::new_error_event(
+                            "Plan mode is unavailable for this session.".to_string(),
+                        ),
+                    )));
+                    return;
+                };
+                tx.send(AppEvent::SubmitUserMessageWithMode {
+                    text: trimmed,
+                    collaboration_mode: mask,
+                });
             }),
         );
         self.bottom_pane.show_view(Box::new(view));

@@ -55,6 +55,7 @@ pub(crate) struct SelectionItem {
     pub is_default: bool,
     pub is_disabled: bool,
     pub actions: Vec<SelectionAction>,
+    pub tab_actions: Vec<SelectionAction>,
     pub dismiss_on_select: bool,
     pub search_value: Option<String>,
     pub disabled_reason: Option<String>,
@@ -80,6 +81,8 @@ pub(crate) struct SelectionViewParams {
     pub subtitle: Option<String>,
     pub footer_note: Option<Line<'static>>,
     pub footer_hint: Option<Line<'static>>,
+    pub undim_footer_hint: bool,
+    pub selected_item_footer_note: bool,
     pub items: Vec<SelectionItem>,
     pub is_searchable: bool,
     pub search_placeholder: Option<String>,
@@ -96,6 +99,8 @@ impl Default for SelectionViewParams {
             subtitle: None,
             footer_note: None,
             footer_hint: None,
+            undim_footer_hint: false,
+            selected_item_footer_note: false,
             items: Vec::new(),
             is_searchable: false,
             search_placeholder: None,
@@ -115,6 +120,8 @@ impl Default for SelectionViewParams {
 pub(crate) struct ListSelectionView {
     footer_note: Option<Line<'static>>,
     footer_hint: Option<Line<'static>>,
+    undim_footer_hint: bool,
+    selected_item_footer_note: bool,
     items: Vec<SelectionItem>,
     state: ScrollState,
     complete: bool,
@@ -152,6 +159,8 @@ impl ListSelectionView {
         let mut s = Self {
             footer_note: params.footer_note,
             footer_hint: params.footer_hint,
+            undim_footer_hint: params.undim_footer_hint,
+            selected_item_footer_note: params.selected_item_footer_note,
             items: params.items,
             state: ScrollState::new(),
             complete: false,
@@ -362,6 +371,23 @@ impl ListSelectionView {
         (tab_state.on_tab)(next, &self.app_event_tx);
     }
 
+    fn run_tab_actions(&self) {
+        let Some(item) = self
+            .state
+            .selected_idx
+            .and_then(|idx| self.filtered_indices.get(idx))
+            .and_then(|actual_idx| self.items.get(*actual_idx))
+        else {
+            return;
+        };
+        if item.disabled_reason.is_some() || item.is_disabled {
+            return;
+        }
+        for act in &item.tab_actions {
+            act(&self.app_event_tx);
+        }
+    }
+
     #[cfg(test)]
     pub(crate) fn set_search_query(&mut self, query: String) {
         self.search_query = query;
@@ -408,6 +434,26 @@ impl ListSelectionView {
                 break;
             }
         }
+    }
+
+    fn selected_item_note_line(&self) -> Option<Line<'static>> {
+        if !self.selected_item_footer_note {
+            return None;
+        }
+        let selected = self
+            .state
+            .selected_idx
+            .and_then(|idx| self.filtered_indices.get(idx))
+            .and_then(|idx| self.items.get(*idx));
+        let description = selected
+            .and_then(|item| {
+                item.selected_description
+                    .as_deref()
+                    .or(item.description.as_deref())
+            })
+            .map(str::to_owned)
+            .unwrap_or_default();
+        Some(Line::from(description).dim())
     }
 }
 
@@ -515,11 +561,23 @@ impl BottomPaneView for ListSelectionView {
             } => self.accept(),
             KeyEvent {
                 code: KeyCode::Tab, ..
-            } => self.cycle_tab(true),
+            } => {
+                if self.tab_state.is_some() {
+                    self.cycle_tab(true);
+                } else {
+                    self.run_tab_actions();
+                }
+            }
             KeyEvent {
                 code: KeyCode::BackTab,
                 ..
-            } => self.cycle_tab(false),
+            } => {
+                if self.tab_state.is_some() {
+                    self.cycle_tab(false);
+                } else {
+                    self.run_tab_actions();
+                }
+            }
             _ => {}
         }
     }
@@ -568,10 +626,14 @@ impl Renderable for ListSelectionView {
         if self.is_searchable {
             height = height.saturating_add(1);
         }
+        let note_width = width.saturating_sub(2);
         if let Some(note) = &self.footer_note {
-            let note_width = width.saturating_sub(2);
-            let note_lines = wrap_styled_line(note, note_width);
-            height = height.saturating_add(note_lines.len() as u16);
+            let lines = wrap_styled_line(note, note_width);
+            height = height.saturating_add(lines.len() as u16);
+        }
+        if let Some(selected_note) = self.selected_item_note_line().as_ref() {
+            let lines = wrap_styled_line(selected_note, note_width);
+            height = height.saturating_add(lines.len() as u16);
         }
         if self.footer_hint.is_some() {
             height = height.saturating_add(1);
@@ -588,8 +650,14 @@ impl Renderable for ListSelectionView {
         let note_lines = self
             .footer_note
             .as_ref()
-            .map(|note| wrap_styled_line(note, note_width));
-        let note_height = note_lines.as_ref().map_or(0, |lines| lines.len() as u16);
+            .map(|note| wrap_styled_line(note, note_width))
+            .unwrap_or_default();
+        let selected_note = self.selected_item_note_line();
+        let selected_note_lines = selected_note
+            .as_ref()
+            .map(|note| wrap_styled_line(note, note_width))
+            .unwrap_or_default();
+        let note_height = (note_lines.len() + selected_note_lines.len()) as u16;
         let footer_rows = note_height + u16::from(self.footer_hint.is_some());
         let [content_area, footer_area] =
             Layout::vertical([Constraint::Fill(1), Constraint::Length(footer_rows)]).areas(area);
@@ -706,20 +774,35 @@ impl Renderable for ListSelectionView {
             ])
             .areas(footer_area);
 
-            if let Some(lines) = note_lines {
+            if !note_lines.is_empty() || !selected_note_lines.is_empty() {
                 let note_area = Rect {
                     x: note_area.x + 2,
                     y: note_area.y,
                     width: note_area.width.saturating_sub(2),
                     height: note_area.height,
                 };
-                for (idx, line) in lines.iter().enumerate() {
+                let mut line_idx: usize = 0;
+                for (idx, line) in note_lines.iter().enumerate() {
                     if idx as u16 >= note_area.height {
                         break;
                     }
                     let line_area = Rect {
                         x: note_area.x,
                         y: note_area.y + idx as u16,
+                        width: note_area.width,
+                        height: 1,
+                    };
+                    line.clone().render(line_area, buf);
+                    line_idx = idx + 1;
+                }
+                for (idx, line) in selected_note_lines.iter().enumerate() {
+                    let y_idx = line_idx + idx;
+                    if y_idx as u16 >= note_area.height {
+                        break;
+                    }
+                    let line_area = Rect {
+                        x: note_area.x,
+                        y: note_area.y + y_idx as u16,
                         width: note_area.width,
                         height: 1,
                     };
@@ -734,7 +817,11 @@ impl Renderable for ListSelectionView {
                     width: hint_area.width.saturating_sub(2),
                     height: hint_area.height,
                 };
-                hint.clone().dim().render(hint_area, buf);
+                if self.undim_footer_hint {
+                    hint.clone().render(hint_area, buf);
+                } else {
+                    hint.clone().dim().render(hint_area, buf);
+                }
             }
         }
     }

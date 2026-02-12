@@ -19,9 +19,9 @@
 //!    - When the queue hint is active, prefer keeping that queue hint visible,
 //!      even if it means dropping the right-side context earlier; the queue
 //!      hint may also be shortened before it is removed.
-//!    - When the queue hint is not active but the mode cycle hint is applicable,
-//!      drop "? for shortcuts" before dropping "(shift+tab to cycle)".
-//!    - If "(shift+tab to cycle)" cannot fit, also hide the right-side
+//!    - When the queue hint is not active but the mode toggle hint is applicable,
+//!      drop "? for shortcuts" before dropping "(shift+tab to toggle plan)".
+//!    - If "(shift+tab to toggle plan)" cannot fit, also hide the right-side
 //!      context to avoid too many state transitions in quick succession.
 //!    - Finally, try a mode-only line (with and without context), and fall
 //!      back to no left-side footer if nothing can fit.
@@ -81,7 +81,7 @@ pub(crate) enum CollaborationModeIndicator {
     Execute,
 }
 
-const MODE_CYCLE_HINT: &str = "shift+tab to cycle";
+const MODE_CYCLE_HINT: &str = "shift+tab to toggle plan";
 const FOOTER_CONTEXT_GAP_COLS: u16 = 1;
 
 impl CollaborationModeIndicator {
@@ -320,7 +320,7 @@ pub(crate) fn single_line_footer_layout(
     };
     let state_width = |state: LeftSideState| -> u16 { state_line(state).width() as u16 };
     // When the mode cycle hint is applicable (idle, non-queue mode), only show
-    // the right-side context indicator if the "(shift+tab to cycle)" variant
+    // the right-side context indicator if the "(shift+tab to toggle plan)" variant
     // can also fit.
     let context_requires_cycle_hint = show_cycle_hint && !show_queue_hint;
 
@@ -391,7 +391,7 @@ pub(crate) fn single_line_footer_layout(
 
         // Next fallback: mode label only. If the cycle hint is applicable but
         // cannot fit, we also suppress context so the right side does not
-        // outlive "(shift+tab to cycle)" on the left.
+        // outlive "(shift+tab to toggle plan)" on the left.
         let mode_only_state = LeftSideState {
             hint: SummaryHintKind::None,
             show_cycle_hint: false,
@@ -639,10 +639,11 @@ pub(crate) fn footer_hint_items_width(items: &[(String, String)]) -> u16 {
 }
 
 fn footer_hint_items_line(items: &[(String, String)]) -> Line<'static> {
+    let key_style = crate::theme::accent_style().bold();
     let mut spans = Vec::with_capacity(items.len() * 4);
     for (idx, (key, label)) in items.iter().enumerate() {
         spans.push(" ".into());
-        spans.push(key.clone().bold());
+        spans.push(Span::styled(key.clone(), key_style));
         spans.push(format!(" {label}").into());
         if idx + 1 != items.len() {
             spans.push("   ".into());
@@ -983,7 +984,7 @@ const SHORTCUTS: &[ShortcutDescriptor] = &[
             condition: DisplayCondition::WhenCollaborationModesEnabled,
         }],
         prefix: "",
-        label: " to change mode",
+        label: " to toggle plan mode",
     },
 ];
 
@@ -1568,7 +1569,7 @@ mod tests {
             "mode indicator should remain visible"
         );
         assert!(
-            !collapsed.contains("shift+tab to cycle"),
+            !collapsed.contains("shift+tab to toggle plan"),
             "compact mode indicator should be used when space is tight"
         );
         assert!(

@@ -152,6 +152,7 @@ pub(crate) use experimental_features_view::ExperimentalFeaturesView;
 pub(crate) use feedback_view::FeedbackAudience;
 pub(crate) use list_selection_view::SelectionAction;
 pub(crate) use list_selection_view::SelectionItem;
+pub(crate) use list_selection_view::TabState;
 pub(crate) use status_menu_view::StatusMenuTab;
 pub(crate) use status_menu_view::StatusMenuView;
 
@@ -447,6 +448,14 @@ impl BottomPane {
 
     fn active_view(&self) -> Option<&dyn BottomPaneView> {
         self.view_stack.last().map(std::convert::AsRef::as_ref)
+    }
+
+    fn active_view_mut(&mut self) -> Option<&mut (dyn BottomPaneView + '_)> {
+        if let Some(view) = self.view_stack.last_mut() {
+            Some(view.as_mut())
+        } else {
+            None
+        }
     }
 
     fn push_view(&mut self, view: Box<dyn BottomPaneView>) {
@@ -1077,6 +1086,9 @@ impl BottomPane {
     }
 
     pub(crate) fn on_file_search_result(&mut self, query: String, matches: Vec<FileMatch>) {
+        if let Some(view) = self.active_view_mut() {
+            view.on_file_search_result(query.clone(), matches.clone());
+        }
         self.composer.on_file_search_result(query, matches);
         self.request_redraw();
     }

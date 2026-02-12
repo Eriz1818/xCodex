@@ -71,6 +71,7 @@ use codex_core::protocol::UndoStartedEvent;
 use codex_core::protocol::ViewImageToolCallEvent;
 use codex_core::protocol::WarningEvent;
 use codex_core::skills::model::SkillMetadata;
+use codex_core::themes::ThemeCatalog;
 use codex_otel::OtelManager;
 use codex_otel::RuntimeMetricsSummary;
 use codex_protocol::ThreadId;
@@ -100,7 +101,6 @@ use crossterm::event::KeyEvent;
 use crossterm::event::KeyModifiers;
 use insta::assert_snapshot;
 use pretty_assertions::assert_eq;
-#[cfg(target_os = "windows")]
 use serial_test::serial;
 use std::collections::HashMap;
 use std::collections::HashSet;
@@ -141,6 +141,14 @@ fn snapshot(percent: f64) -> RateLimitSnapshot {
         secondary: None,
         credits: None,
         plan_type: None,
+    }
+}
+
+struct ThemeReset;
+
+impl Drop for ThemeReset {
+    fn drop(&mut self) {
+        crate::theme::preview_definition(&ThemeCatalog::built_in_default());
     }
 }
 
@@ -1135,6 +1143,7 @@ async fn make_chatwidget_manual(
         had_work_activity: false,
         saw_plan_update_this_turn: false,
         saw_plan_item_this_turn: false,
+        reopen_plan_prompt_after_turn: false,
         plan_delta_buffer: String::new(),
         plan_item_active: false,
         last_separator_elapsed_secs: None,
@@ -2286,6 +2295,8 @@ async fn rate_limit_switch_prompt_popup_snapshot() {
 #[tokio::test]
 async fn plan_implementation_popup_snapshot() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
+    let temp_dir = tempdir().expect("tempdir");
+    chat.config.codex_home = temp_dir.path().join("codex-home");
     chat.open_plan_implementation_prompt();
 
     let popup = render_bottom_popup(&chat, 80);
@@ -2295,6 +2306,8 @@ async fn plan_implementation_popup_snapshot() {
 #[tokio::test]
 async fn plan_implementation_popup_no_selected_snapshot() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
+    let temp_dir = tempdir().expect("tempdir");
+    chat.config.codex_home = temp_dir.path().join("codex-home");
     chat.open_plan_implementation_prompt();
     chat.handle_key_event(KeyEvent::from(KeyCode::Down));
 
@@ -2305,6 +2318,8 @@ async fn plan_implementation_popup_no_selected_snapshot() {
 #[tokio::test]
 async fn plan_implementation_popup_yes_emits_submit_message_event() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
+    let temp_dir = tempdir().expect("tempdir");
+    chat.config.codex_home = temp_dir.path().join("codex-home");
     chat.open_plan_implementation_prompt();
 
     chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
@@ -2319,6 +2334,78 @@ async fn plan_implementation_popup_yes_emits_submit_message_event() {
     };
     assert_eq!(text, PLAN_IMPLEMENTATION_CODING_MESSAGE);
     assert_eq!(collaboration_mode.mode, Some(ModeKind::Default));
+}
+
+#[tokio::test]
+async fn plan_implementation_popup_cancel_emits_pause_event() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
+    chat.open_plan_implementation_prompt();
+
+    chat.handle_key_event(KeyEvent::from(KeyCode::Down));
+    chat.handle_key_event(KeyEvent::from(KeyCode::Down));
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+
+    match rx.try_recv() {
+        Ok(AppEvent::PauseActivePlanRun) => {}
+        other => panic!("expected PauseActivePlanRun, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn plan_implementation_popup_discuss_further_reopens_after_next_turn_event() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
+    chat.open_plan_implementation_prompt();
+
+    chat.handle_key_event(KeyEvent::from(KeyCode::Down));
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+
+    match rx.try_recv() {
+        Ok(AppEvent::ReopenPlanNextStepPromptAfterTurn) => {}
+        other => panic!("expected ReopenPlanNextStepPromptAfterTurn, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn plan_implementation_popup_do_something_else_opens_prompt() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
+    chat.open_plan_implementation_prompt();
+
+    chat.handle_key_event(KeyEvent::from(KeyCode::Down));
+    chat.handle_key_event(KeyEvent::from(KeyCode::Down));
+    chat.handle_key_event(KeyEvent::from(KeyCode::Down));
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+
+    match rx.try_recv() {
+        Ok(AppEvent::OpenPlanDoSomethingElsePrompt) => {}
+        other => panic!("expected OpenPlanDoSomethingElsePrompt, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn do_something_else_prompt_submits_plan_mode_message() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
+    chat.set_feature_enabled(Feature::CollaborationModes, true);
+    let plan_mask =
+        collaboration_modes::mask_for_kind(chat.models_manager.as_ref(), ModeKind::Plan)
+            .expect("expected plan mode");
+    chat.set_collaboration_mask(plan_mask);
+    chat.show_plan_do_something_else_prompt();
+
+    for ch in "Investigate scope".chars() {
+        chat.handle_key_event(KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE));
+    }
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+
+    let event = rx.try_recv().expect("expected AppEvent");
+    let AppEvent::SubmitUserMessageWithMode {
+        text,
+        collaboration_mode,
+    } = event
+    else {
+        panic!("expected SubmitUserMessageWithMode, got {event:?}");
+    };
+    assert_eq!(text, "Investigate scope");
+    assert_eq!(collaboration_mode.mode, Some(ModeKind::Plan));
 }
 
 #[tokio::test]
@@ -2581,6 +2668,26 @@ async fn plan_implementation_popup_shows_after_proposed_plan_output() {
 }
 
 #[tokio::test]
+async fn plan_implementation_popup_reopens_after_discuss_further_on_next_turn() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
+    chat.set_feature_enabled(Feature::CollaborationModes, true);
+    let plan_mask =
+        collaboration_modes::mask_for_kind(chat.models_manager.as_ref(), ModeKind::Plan)
+            .expect("expected plan collaboration mask");
+    chat.set_collaboration_mask(plan_mask);
+    chat.reopen_plan_prompt_after_turn();
+
+    chat.on_task_started();
+    chat.on_task_complete(None, false);
+
+    let popup = render_bottom_popup(&chat, 80);
+    assert!(
+        popup.contains(PLAN_IMPLEMENTATION_TITLE),
+        "expected plan popup to re-open after discuss-further continuation, got {popup:?}"
+    );
+}
+
+#[tokio::test]
 async fn plan_implementation_popup_skips_when_rate_limit_prompt_pending() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
     chat.auth_manager =
@@ -2617,6 +2724,10 @@ async fn plan_implementation_popup_skips_when_rate_limit_prompt_pending() {
 
 #[tokio::test]
 async fn exec_approval_emits_proposed_command_and_decision_history() {
+    let _theme_guard = crate::theme::test_style_guard();
+    let _theme_reset = ThemeReset;
+    crate::theme::preview_definition(&ThemeCatalog::built_in_default());
+
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
 
     // Trigger an exec approval request with a short, single-line command
@@ -4056,7 +4167,7 @@ async fn slash_init_skips_when_project_doc_exists() {
 }
 
 #[tokio::test]
-async fn collab_mode_shift_tab_cycles_only_when_enabled_and_idle() {
+async fn collab_mode_shift_tab_toggles_plan_only_when_enabled_and_idle() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
     chat.set_feature_enabled(Feature::CollaborationModes, false);
 
@@ -4139,60 +4250,746 @@ async fn collab_slash_command_opens_picker_and_updates_mode() {
 }
 
 #[tokio::test]
-async fn plan_slash_command_switches_to_plan_mode() {
+async fn plan_slash_command_opens_plan_menu() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
-    chat.set_feature_enabled(Feature::CollaborationModes, true);
-    let initial = chat.current_collaboration_mode().clone();
 
     chat.dispatch_command(SlashCommand::Plan);
 
     assert!(rx.try_recv().is_err(), "plan should not emit an app event");
-    assert_eq!(chat.active_collaboration_mode_kind(), ModeKind::Plan);
-    assert_eq!(chat.current_collaboration_mode(), &initial);
+    let popup = render_bottom_popup(&chat, 100);
+    assert!(
+        popup.contains("Plan"),
+        "expected /plan to open the plan menu, got {popup:?}"
+    );
 }
 
 #[tokio::test]
-async fn plan_slash_command_with_args_submits_prompt_in_plan_mode() {
-    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(None).await;
-    chat.set_feature_enabled(Feature::CollaborationModes, true);
+async fn plan_menu_popup_snapshot() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.config.codex_home = PathBuf::from("CODEX_HOME");
 
-    let configured = codex_core::protocol::SessionConfiguredEvent {
-        session_id: ThreadId::new(),
-        forked_from_id: None,
-        thread_name: None,
-        model: "test-model".to_string(),
-        model_provider_id: "test-provider".to_string(),
-        approval_policy: AskForApproval::Never,
-        sandbox_policy: SandboxPolicy::ReadOnly,
-        cwd: PathBuf::from("/home/user/project"),
-        reasoning_effort: Some(ReasoningEffortConfig::default()),
-        history_log_id: 0,
-        history_entry_count: 0,
-        initial_messages: None,
-        rollout_path: None,
-    };
-    chat.handle_codex_event(Event {
-        id: "configured".into(),
-        msg: EventMsg::SessionConfigured(configured),
-    });
+    chat.dispatch_command(SlashCommand::Plan);
+
+    assert!(rx.try_recv().is_err(), "plan should not emit an app event");
+    let popup = render_bottom_popup(&chat, 120);
+    assert_snapshot!("plan_menu_popup", popup);
+}
+
+#[tokio::test]
+#[serial]
+async fn plan_settings_popup_snapshot() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(None).await;
+    chat.config.codex_home = PathBuf::from("CODEX_HOME");
+    let _ = std::fs::remove_dir_all(&chat.config.codex_home);
 
     chat.bottom_pane
-        .set_composer_text("/plan build the plan".to_string(), Vec::new(), Vec::new());
+        .set_composer_text("/plan settings".to_string(), Vec::new(), Vec::new());
     chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
 
-    let items = match next_submit_op(&mut op_rx) {
-        Op::UserTurn { items, .. } => items,
-        other => panic!("expected Op::UserTurn, got {other:?}"),
-    };
-    assert_eq!(items.len(), 1);
-    assert_eq!(
-        items[0],
-        UserInput::Text {
-            text: "build the plan".to_string(),
-            text_elements: Vec::new(),
-        }
+    assert_matches!(op_rx.try_recv(), Err(TryRecvError::Empty));
+    let popup = render_bottom_popup(&chat, 120);
+    assert_snapshot!("plan_settings_popup", popup);
+}
+
+#[tokio::test]
+#[serial]
+async fn plan_settings_base_dir_without_args_opens_editor_popup() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(None).await;
+    chat.config.codex_home = PathBuf::from("CODEX_HOME");
+
+    chat.bottom_pane.set_composer_text(
+        "/plan settings base-dir".to_string(),
+        Vec::new(),
+        Vec::new(),
     );
-    assert_eq!(chat.active_collaboration_mode_kind(), ModeKind::Plan);
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+
+    assert_matches!(op_rx.try_recv(), Err(TryRecvError::Empty));
+    let popup = render_bottom_popup(&chat, 120);
+    assert!(
+        popup.contains("Plan settings: default base directory"),
+        "expected base-dir editor popup, got {popup:?}"
+    );
+    assert!(
+        popup.contains("Type path directly or use @ file search"),
+        "expected @search hint in base-dir editor, got {popup:?}"
+    );
+    assert!(
+        !popup.contains("context left"),
+        "expected no context indicator in base-dir editor popup, got {popup:?}"
+    );
+    assert!(
+        popup.contains("CODEX_HOME/plans"),
+        "expected initial base-dir path to be visible in base-dir editor popup, got {popup:?}"
+    );
+
+    chat.handle_key_event(KeyEvent::from(KeyCode::Esc));
+    let popup = render_bottom_popup(&chat, 120);
+    assert!(
+        popup.contains("Plan settings"),
+        "expected Esc to return to plan settings popup, got {popup:?}"
+    );
+    assert!(
+        !popup.contains("Plan settings: default base directory"),
+        "expected Esc to exit base-dir editor popup, got {popup:?}"
+    );
+}
+
+#[tokio::test]
+async fn plan_mode_picker_shows_custom_option() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    crate::xcodex_plugins::plan::open_plan_mode_picker(&mut chat);
+    let popup = render_bottom_popup(&chat, 120);
+
+    assert!(
+        popup.contains("Custom"),
+        "expected custom mode option, got {popup:?}"
+    );
+    assert!(
+        !popup.contains("Custom (seed"),
+        "expected seed choice to be handled in custom submenu, got {popup:?}"
+    );
+}
+
+#[tokio::test]
+#[serial]
+async fn plan_settings_custom_template_rows_require_custom_mode() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(None).await;
+    let temp_dir = tempdir().expect("tempdir");
+    chat.config.codex_home = temp_dir.path().join("codex-home");
+
+    chat.bottom_pane.set_composer_text(
+        "/plan settings mode default".to_string(),
+        Vec::new(),
+        Vec::new(),
+    );
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+    assert_matches!(op_rx.try_recv(), Err(TryRecvError::Empty));
+
+    chat.bottom_pane
+        .set_composer_text("/plan settings".to_string(), Vec::new(), Vec::new());
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+    assert_matches!(op_rx.try_recv(), Err(TryRecvError::Empty));
+    let popup = render_bottom_popup(&chat, 120);
+    assert!(
+        !popup.contains("Custom workflow template"),
+        "expected custom template rows hidden outside custom mode, got {popup:?}"
+    );
+
+    chat.handle_key_event(KeyEvent::from(KeyCode::Esc));
+
+    chat.bottom_pane.set_composer_text(
+        "/plan settings mode custom default".to_string(),
+        Vec::new(),
+        Vec::new(),
+    );
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+    assert_matches!(op_rx.try_recv(), Err(TryRecvError::Empty));
+
+    chat.bottom_pane
+        .set_composer_text("/plan settings".to_string(), Vec::new(), Vec::new());
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+    assert_matches!(op_rx.try_recv(), Err(TryRecvError::Empty));
+    for _ in 0..8 {
+        chat.handle_key_event(KeyEvent::from(KeyCode::Down));
+    }
+    let popup = render_bottom_popup(&chat, 120);
+    assert!(
+        popup.contains("Custom workflow template"),
+        "expected custom template rows visible in custom mode, got {popup:?}"
+    );
+}
+
+#[tokio::test]
+#[serial]
+async fn plan_settings_custom_mode_shows_custom_setup_hint() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(None).await;
+    chat.config.codex_home = PathBuf::from("CODEX_HOME");
+
+    chat.bottom_pane.set_composer_text(
+        "/plan settings mode custom default".to_string(),
+        Vec::new(),
+        Vec::new(),
+    );
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+    assert_matches!(op_rx.try_recv(), Err(TryRecvError::Empty));
+
+    chat.bottom_pane
+        .set_composer_text("/plan settings".to_string(), Vec::new(), Vec::new());
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+    assert_matches!(op_rx.try_recv(), Err(TryRecvError::Empty));
+    for _ in 0..7 {
+        chat.handle_key_event(KeyEvent::from(KeyCode::Down));
+    }
+
+    let popup = render_bottom_popup(&chat, 120);
+    assert!(
+        popup.contains("Tab: cycle. Press Enter for custom mode setup."),
+        "expected custom mode hint in plan settings, got {popup:?}"
+    );
+}
+
+#[tokio::test]
+#[serial]
+async fn plan_settings_custom_mode_enter_opens_custom_setup_menu() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(None).await;
+    chat.config.codex_home = PathBuf::from("CODEX_HOME");
+
+    chat.bottom_pane.set_composer_text(
+        "/plan settings mode custom default".to_string(),
+        Vec::new(),
+        Vec::new(),
+    );
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+    assert_matches!(op_rx.try_recv(), Err(TryRecvError::Empty));
+
+    chat.bottom_pane
+        .set_composer_text("/plan settings".to_string(), Vec::new(), Vec::new());
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+    assert_matches!(op_rx.try_recv(), Err(TryRecvError::Empty));
+
+    for _ in 0..7 {
+        chat.handle_key_event(KeyEvent::from(KeyCode::Down));
+    }
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+    assert_matches!(op_rx.try_recv(), Err(TryRecvError::Empty));
+    let mut found = false;
+    for _ in 0..8 {
+        match rx.try_recv() {
+            Ok(AppEvent::ApplyPlanSettingsCommand {
+                args,
+                reopen_settings,
+            }) => {
+                assert_eq!(args, "mode custom-setup");
+                assert!(!reopen_settings);
+                found = true;
+                break;
+            }
+            Ok(_) => continue,
+            Err(TryRecvError::Empty) => break,
+            Err(err) => panic!("unexpected app-event channel state: {err:?}"),
+        }
+    }
+    assert!(
+        found,
+        "expected ApplyPlanSettingsCommand(mode custom-setup)"
+    );
+}
+
+#[tokio::test]
+#[serial]
+async fn plan_settings_default_mode_enter_closes_settings() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(None).await;
+    chat.config.codex_home = PathBuf::from("CODEX_HOME");
+
+    chat.bottom_pane.set_composer_text(
+        "/plan settings mode default".to_string(),
+        Vec::new(),
+        Vec::new(),
+    );
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+    assert_matches!(op_rx.try_recv(), Err(TryRecvError::Empty));
+
+    chat.bottom_pane
+        .set_composer_text("/plan settings".to_string(), Vec::new(), Vec::new());
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+    assert_matches!(op_rx.try_recv(), Err(TryRecvError::Empty));
+
+    for _ in 0..7 {
+        chat.handle_key_event(KeyEvent::from(KeyCode::Down));
+    }
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+
+    let popup = render_bottom_popup(&chat, 120);
+    assert!(
+        !popup.contains("Plan settings"),
+        "expected Enter on non-custom plan mode row to close settings, got {popup:?}"
+    );
+}
+
+#[tokio::test]
+#[serial]
+async fn plan_settings_tab_cycles_do_not_stack_popups() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(None).await;
+    chat.config.codex_home = PathBuf::from("CODEX_HOME");
+
+    chat.bottom_pane
+        .set_composer_text("/plan settings".to_string(), Vec::new(), Vec::new());
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+    assert_matches!(op_rx.try_recv(), Err(TryRecvError::Empty));
+
+    for _ in 0..10 {
+        chat.handle_key_event(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+        assert_matches!(op_rx.try_recv(), Err(TryRecvError::Empty));
+    }
+
+    let before_escape = render_bottom_popup(&chat, 120);
+    assert!(
+        before_escape.contains("Plan settings"),
+        "expected plan settings popup to be visible, got {before_escape:?}"
+    );
+
+    chat.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+
+    let after_escape = render_bottom_popup(&chat, 120);
+    assert!(
+        !after_escape.contains("Plan settings"),
+        "expected single Esc to close plan settings popup, got {after_escape:?}"
+    );
+}
+
+#[tokio::test]
+async fn plan_slash_command_with_args_executes_local_subcommand() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(None).await;
+
+    chat.bottom_pane.set_composer_text(
+        "/plan settings brainstorm-first always".to_string(),
+        Vec::new(),
+        Vec::new(),
+    );
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+
+    assert_matches!(op_rx.try_recv(), Err(TryRecvError::Empty));
+}
+
+#[tokio::test]
+async fn plan_done_requires_confirmation_then_marks_active_file_done() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    let temp_dir = tempdir().expect("tempdir");
+    chat.config.codex_home = temp_dir.path().join("codex-home");
+    chat.thread_id = None;
+    let plan_state_dir = chat.codex_home().join("plans");
+    let plan_path = plan_state_dir.join("plan-done-test.md");
+    std::fs::create_dir_all(&plan_state_dir).expect("create plan state dir");
+    let _ = std::fs::remove_file(plan_state_dir.join(".active-plan"));
+    let _ = std::fs::remove_file(plan_state_dir.join(".active-plan-by-thread.json"));
+    std::fs::write(
+        &plan_path,
+        "# Plan done test\n\nStatus: Active\n\n## Plan (checklist)\n\n- [ ] one\n",
+    )
+    .expect("write plan file");
+    std::fs::write(
+        plan_state_dir.join(".active-plan"),
+        plan_path.display().to_string(),
+    )
+    .expect("write active-plan pointer");
+
+    chat.bottom_pane
+        .set_composer_text("/plan done".to_string(), Vec::new(), Vec::new());
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+
+    assert!(
+        rx.try_recv().is_err(),
+        "expected no app event before confirmation"
+    );
+    let popup = render_bottom_popup(&chat, 100);
+    assert!(
+        popup.contains("Mark active plan as done?"),
+        "expected done confirmation popup, got {popup:?}"
+    );
+
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+    match rx.try_recv() {
+        Ok(AppEvent::MarkActivePlanDone) => {}
+        other => panic!("expected MarkActivePlanDone event, got {other:?}"),
+    }
+
+    crate::xcodex_plugins::plan::mark_active_plan_done_action(&mut chat);
+    let updated = std::fs::read_to_string(&plan_path).expect("read updated plan file");
+    assert!(
+        updated.contains("Status: Done"),
+        "expected plan status to be updated to Done: {updated:?}"
+    );
+}
+
+#[tokio::test]
+async fn plan_archive_requires_confirmation_then_marks_active_file_archived() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    let temp_dir = tempdir().expect("tempdir");
+    chat.config.codex_home = temp_dir.path().join("codex-home");
+    chat.thread_id = None;
+    let plan_state_dir = chat.codex_home().join("plans");
+    let plan_path = plan_state_dir.join("plan-archive-test.md");
+    std::fs::create_dir_all(&plan_state_dir).expect("create plan state dir");
+    let _ = std::fs::remove_file(plan_state_dir.join(".active-plan"));
+    let _ = std::fs::remove_file(plan_state_dir.join(".active-plan-by-thread.json"));
+    std::fs::write(
+        &plan_path,
+        "# Plan archive test\n\nStatus: Active\n\n## Plan (checklist)\n\n- [ ] one\n",
+    )
+    .expect("write plan file");
+    std::fs::write(
+        plan_state_dir.join(".active-plan"),
+        plan_path.display().to_string(),
+    )
+    .expect("write active-plan pointer");
+
+    chat.bottom_pane
+        .set_composer_text("/plan archive".to_string(), Vec::new(), Vec::new());
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+
+    assert!(
+        rx.try_recv().is_err(),
+        "expected no app event before confirmation"
+    );
+    let popup = render_bottom_popup(&chat, 100);
+    assert!(
+        popup.contains("Archive active plan?"),
+        "expected archive confirmation popup, got {popup:?}"
+    );
+
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+    match rx.try_recv() {
+        Ok(AppEvent::MarkActivePlanArchived) => {}
+        other => panic!("expected MarkActivePlanArchived event, got {other:?}"),
+    }
+
+    crate::xcodex_plugins::plan::mark_active_plan_archived_action(&mut chat);
+    let updated = std::fs::read_to_string(&plan_path).expect("read updated plan file");
+    assert!(
+        updated.contains("Status: Archived"),
+        "expected plan status to be updated to Archived: {updated:?}"
+    );
+}
+
+#[tokio::test]
+async fn plan_active_file_state_is_scoped_by_thread_id() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    let temp_dir = tempdir().expect("tempdir");
+    chat.config.codex_home = temp_dir.path().join("codex-home");
+    let plan_state_dir = chat.codex_home().join("plans");
+    std::fs::create_dir_all(&plan_state_dir).expect("create plan state dir");
+    let _ = std::fs::remove_file(plan_state_dir.join(".active-plan"));
+    let _ = std::fs::remove_file(plan_state_dir.join(".active-plan-by-thread.json"));
+
+    let plan_a = plan_state_dir.join("plan-thread-a.md");
+    let plan_b = plan_state_dir.join("plan-thread-b.md");
+    std::fs::write(
+        &plan_a,
+        "# Plan A\n\nStatus: Active\nTODOs remaining: 1\n\n## Progress log\n",
+    )
+    .expect("write plan a");
+    std::fs::write(
+        &plan_b,
+        "# Plan B\n\nStatus: Active\nTODOs remaining: 2\n\n## Progress log\n",
+    )
+    .expect("write plan b");
+
+    let thread_a = ThreadId::new();
+    let thread_b = ThreadId::new();
+
+    chat.thread_id = Some(thread_a);
+    let update_a =
+        crate::xcodex_plugins::plan::open_plan_file_path(&mut chat, Some(plan_a.clone()))
+            .expect("plan ui update for thread a");
+    assert_eq!(update_a.path, plan_a);
+
+    chat.thread_id = Some(thread_b);
+    let update_b =
+        crate::xcodex_plugins::plan::open_plan_file_path(&mut chat, Some(plan_b.clone()))
+            .expect("plan ui update for thread b");
+    assert_eq!(update_b.path, plan_b);
+
+    chat.thread_id = Some(thread_a);
+    let synced_a = crate::xcodex_plugins::plan::sync_active_plan_turn_end(&mut chat, Some("A"))
+        .expect("turn-end sync for thread a");
+    assert_eq!(synced_a.path, plan_a);
+
+    chat.thread_id = Some(thread_b);
+    let synced_b = crate::xcodex_plugins::plan::sync_active_plan_turn_end(&mut chat, Some("B"))
+        .expect("turn-end sync for thread b");
+    assert_eq!(synced_b.path, plan_b);
+
+    let thread_state = std::fs::read_to_string(plan_state_dir.join(".active-plan-by-thread.json"))
+        .expect("read thread-scoped active-plan state");
+    assert!(
+        thread_state.contains(&thread_a.to_string()),
+        "expected thread-a key in thread-scoped plan state"
+    );
+    assert!(
+        thread_state.contains(&thread_b.to_string()),
+        "expected thread-b key in thread-scoped plan state"
+    );
+}
+
+#[tokio::test]
+async fn plan_current_path_open_emits_external_editor_event() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(None).await;
+    let temp_dir = tempdir().expect("tempdir");
+    chat.config.codex_home = temp_dir.path().join("codex-home");
+    let plan_state_dir = chat.codex_home().join("plans");
+    let plan_path = plan_state_dir.join("plan-open-editor.md");
+    let thread_id = ThreadId::new();
+    chat.thread_id = Some(thread_id);
+    std::fs::create_dir_all(&plan_state_dir).expect("create plan state dir");
+    let _ = std::fs::remove_file(plan_state_dir.join(".active-plan"));
+    let _ = std::fs::remove_file(plan_state_dir.join(".active-plan-by-thread.json"));
+    std::fs::write(&plan_path, "# Plan editor test\n\nStatus: Active\n").expect("write plan file");
+    std::fs::write(
+        plan_state_dir.join(".active-plan"),
+        plan_path.display().to_string(),
+    )
+    .expect("write active-plan pointer");
+    let by_thread = HashMap::from([(thread_id.to_string(), plan_path.display().to_string())]);
+    std::fs::write(
+        plan_state_dir.join(".active-plan-by-thread.json"),
+        serde_json::to_string(&by_thread).expect("serialize thread-scoped active plan map"),
+    )
+    .expect("write thread-scoped active-plan map");
+
+    chat.bottom_pane.set_composer_text(
+        "/plan settings current-path open".to_string(),
+        Vec::new(),
+        Vec::new(),
+    );
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+
+    assert_matches!(op_rx.try_recv(), Err(TryRecvError::Empty));
+    match rx.try_recv() {
+        Ok(AppEvent::OpenPlanInExternalEditor { path }) => assert_eq!(path, plan_path),
+        other => panic!("expected OpenPlanInExternalEditor event, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn plan_base_dir_inside_repo_shows_gitignore_guidance_once() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(None).await;
+    let temp_dir = tempdir().expect("tempdir");
+    let repo_path = temp_dir.path().join("repo");
+    std::fs::create_dir_all(&repo_path).expect("create repo path");
+    let status = tokio::process::Command::new("git")
+        .args(["init"])
+        .current_dir(&repo_path)
+        .status()
+        .await
+        .expect("git init");
+    assert!(status.success(), "git init should succeed");
+
+    chat.config.cwd = repo_path.clone();
+    let base_dir = repo_path.join("plans-state");
+    let command = format!("/plan settings base-dir {}", base_dir.display());
+
+    chat.bottom_pane
+        .set_composer_text(command.clone(), Vec::new(), Vec::new());
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+    assert_matches!(op_rx.try_recv(), Err(TryRecvError::Empty));
+    let first_cells = drain_insert_history(&mut rx);
+    let first_rendered = lines_to_single_string(first_cells.last().expect("first info message"));
+    assert!(
+        first_rendered.contains("Plan base directory set to"),
+        "expected success message, got: {first_rendered:?}"
+    );
+    assert!(
+        first_rendered.contains(".gitignore"),
+        "expected gitignore guidance on first set, got: {first_rendered:?}"
+    );
+
+    chat.bottom_pane
+        .set_composer_text(command, Vec::new(), Vec::new());
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+    assert_matches!(op_rx.try_recv(), Err(TryRecvError::Empty));
+    let second_cells = drain_insert_history(&mut rx);
+    let second_rendered = lines_to_single_string(second_cells.last().expect("second info message"));
+    assert!(
+        !second_rendered.contains(".gitignore"),
+        "expected one-time gitignore guidance to be suppressed, got: {second_rendered:?}"
+    );
+}
+
+#[tokio::test]
+async fn plan_mode_adr_lite_changes_default_base_dir_and_template() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(None).await;
+    let temp_dir = tempdir().expect("tempdir");
+    chat.config.codex_home = temp_dir.path().join("codex-home");
+    let repo_path = temp_dir.path().join("repo");
+    std::fs::create_dir_all(&repo_path).expect("create repo path");
+    let status = tokio::process::Command::new("git")
+        .args(["init"])
+        .current_dir(&repo_path)
+        .status()
+        .await
+        .expect("git init");
+    assert!(status.success(), "git init should succeed");
+
+    chat.config.cwd = repo_path.clone();
+    chat.bottom_pane.set_composer_text(
+        "/plan settings mode adr-lite".to_string(),
+        Vec::new(),
+        Vec::new(),
+    );
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+    assert_matches!(op_rx.try_recv(), Err(TryRecvError::Empty));
+    let mode_cells = drain_insert_history(&mut rx);
+    let mode_rendered = lines_to_single_string(mode_cells.last().expect("mode info message"));
+    assert!(
+        mode_rendered.contains("Plan mode set to `adr-lite`"),
+        "expected mode success message, got: {mode_rendered:?}"
+    );
+
+    chat.bottom_pane
+        .set_composer_text("/plan open".to_string(), Vec::new(), Vec::new());
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+    assert_matches!(op_rx.try_recv(), Err(TryRecvError::Empty));
+    let open_cells = drain_insert_history(&mut rx);
+    let open_rendered = lines_to_single_string(open_cells.last().expect("open info message"));
+    assert!(
+        open_rendered.contains("Active plan file set to"),
+        "expected open success message, got: {open_rendered:?}"
+    );
+
+    let pointer_path = chat.codex_home().join("plans/.active-plan");
+    let active_plan = std::fs::read_to_string(pointer_path)
+        .expect("read active pointer")
+        .trim()
+        .to_string();
+    let expected_base = repo_path.join("docs/impl-plans");
+    assert!(
+        active_plan.starts_with(&expected_base.display().to_string()),
+        "expected adr-lite default base dir, got: {active_plan:?}"
+    );
+
+    let content = std::fs::read_to_string(active_plan).expect("read active plan content");
+    assert!(content.contains("TODOs remaining: 4"));
+    assert!(content.contains("## Learnings"));
+    assert!(content.contains("## Memories"));
+}
+
+#[tokio::test]
+async fn plan_mode_custom_seed_default_initializes_template_and_uses_it() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(None).await;
+    let temp_dir = tempdir().expect("tempdir");
+    chat.config.codex_home = temp_dir.path().join("codex-home");
+    let repo_path = temp_dir.path().join("repo");
+    std::fs::create_dir_all(&repo_path).expect("create repo path");
+    let status = tokio::process::Command::new("git")
+        .args(["init"])
+        .current_dir(&repo_path)
+        .status()
+        .await
+        .expect("git init");
+    assert!(status.success(), "git init should succeed");
+
+    chat.config.cwd = repo_path;
+    chat.bottom_pane.set_composer_text(
+        "/plan settings mode custom default".to_string(),
+        Vec::new(),
+        Vec::new(),
+    );
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+    assert_matches!(op_rx.try_recv(), Err(TryRecvError::Empty));
+    let mode_cells = drain_insert_history(&mut rx);
+    let mode_rendered = lines_to_single_string(mode_cells.last().expect("mode info message"));
+    assert!(
+        mode_rendered.contains("Plan mode set to `custom`"),
+        "expected mode success message, got: {mode_rendered:?}"
+    );
+    assert!(
+        mode_rendered.contains("Custom seed mode: `default`."),
+        "expected custom seed note, got: {mode_rendered:?}"
+    );
+
+    let template_path = chat.codex_home().join("plans/custom/template.md");
+    assert!(
+        template_path.exists(),
+        "expected custom template to be created"
+    );
+    let template = std::fs::read_to_string(&template_path).expect("read custom template");
+    assert!(
+        template.contains("# /plan task"),
+        "expected default-seeded template, got: {template:?}"
+    );
+    let marker = "custom-template-marker";
+    std::fs::write(
+        &template_path,
+        format!("{template}\n\n## Marker\n\n{marker}\n"),
+    )
+    .expect("write custom template marker");
+
+    chat.bottom_pane
+        .set_composer_text("/plan open".to_string(), Vec::new(), Vec::new());
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+    assert_matches!(op_rx.try_recv(), Err(TryRecvError::Empty));
+    let open_cells = drain_insert_history(&mut rx);
+    let open_rendered = lines_to_single_string(open_cells.last().expect("open info message"));
+    assert!(
+        open_rendered.contains("Active plan file set to"),
+        "expected open success message, got: {open_rendered:?}"
+    );
+
+    let pointer_path = chat.codex_home().join("plans/.active-plan");
+    let active_plan = std::fs::read_to_string(pointer_path)
+        .expect("read active pointer")
+        .trim()
+        .to_string();
+    let content = std::fs::read_to_string(active_plan).expect("read active plan content");
+    assert!(content.contains(marker), "expected custom template content");
+}
+
+#[tokio::test]
+async fn plan_list_closed_subcommand_opens_list_popup() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(None).await;
+
+    chat.bottom_pane
+        .set_composer_text("/plan list closed".to_string(), Vec::new(), Vec::new());
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+
+    assert_matches!(op_rx.try_recv(), Err(TryRecvError::Empty));
+    assert!(
+        rx.try_recv().is_err(),
+        "plan list should not emit app events before selection"
+    );
+    let popup = render_bottom_popup(&chat, 120);
+    assert!(
+        popup.contains("Plan list"),
+        "expected plan list popup, got {popup:?}"
+    );
+    assert!(
+        popup.contains("filter: Closed"),
+        "expected closed filter subtitle, got {popup:?}"
+    );
+}
+
+#[tokio::test]
+async fn plan_list_archived_subcommand_opens_list_popup() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(None).await;
+
+    chat.bottom_pane
+        .set_composer_text("/plan list archived".to_string(), Vec::new(), Vec::new());
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+
+    assert_matches!(op_rx.try_recv(), Err(TryRecvError::Empty));
+    assert!(
+        rx.try_recv().is_err(),
+        "plan list should not emit app events before selection"
+    );
+    let popup = render_bottom_popup(&chat, 120);
+    assert!(
+        popup.contains("Plan list"),
+        "expected plan list popup, got {popup:?}"
+    );
+    assert!(
+        popup.contains("filter: Archived"),
+        "expected archived filter subtitle, got {popup:?}"
+    );
+}
+
+#[tokio::test]
+async fn plan_unknown_subcommand_shows_usage_help() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(None).await;
+
+    chat.bottom_pane
+        .set_composer_text("/plan unexpected".to_string(), Vec::new(), Vec::new());
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+
+    assert_matches!(op_rx.try_recv(), Err(TryRecvError::Empty));
+    let cells = drain_insert_history(&mut rx);
+    assert!(!cells.is_empty(), "expected usage help history output");
+    let rendered = lines_to_single_string(cells.last().unwrap());
+    assert!(
+        rendered.contains("Usage: /plan [list|open|status|done|archive|settings]"),
+        "expected usage help for unknown /plan subcommand, got: {rendered:?}"
+    );
 }
 
 #[tokio::test]

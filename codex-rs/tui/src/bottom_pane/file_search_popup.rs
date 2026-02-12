@@ -13,6 +13,7 @@ use crate::render::RectExt;
 use super::popup_consts::MAX_POPUP_ROWS;
 use super::scroll_state::ScrollState;
 use super::selection_popup_common::GenericDisplayRow;
+use super::selection_popup_common::popup_surface_style;
 use super::selection_popup_common::render_rows;
 
 /// Visual state for the file-search popup.
@@ -113,6 +114,10 @@ impl FileSearchPopup {
 
 impl WidgetRef for &FileSearchPopup {
     fn render_ref(&self, area: Rect, buf: &mut Buffer) {
+        Block::default()
+            .style(popup_surface_style())
+            .render(area, buf);
+
         // Convert matches to GenericDisplayRow, translating indices to usize at the UI boundary.
         let rows_all: Vec<GenericDisplayRow> = if self.matches.is_empty() {
             Vec::new()
@@ -142,8 +147,7 @@ impl WidgetRef for &FileSearchPopup {
             "no matches"
         };
 
-        let base_style = crate::theme::transcript_style();
-        Block::default().style(base_style).render(area, buf);
+        let base_style = crate::theme::transcript_style().patch(popup_surface_style());
         render_rows(
             area.inset(Insets::tlbr(0, 2, 0, 0)),
             buf,
@@ -159,14 +163,14 @@ impl WidgetRef for &FileSearchPopup {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::bottom_pane::selection_popup_common::assert_transcript_surface_bg;
+    use crate::bottom_pane::selection_popup_common::assert_popup_surface_bg;
     use ratatui::layout::Rect;
     use ratatui::widgets::WidgetRef;
 
     #[test]
-    fn popup_uses_transcript_background() {
+    fn popup_uses_shared_popup_background() {
         let popup = FileSearchPopup::new();
-        assert_transcript_surface_bg(Rect::new(0, 0, 32, 4), |area, buf| {
+        assert_popup_surface_bg(Rect::new(0, 0, 32, 4), |area, buf| {
             (&popup).render_ref(area, buf);
         });
     }

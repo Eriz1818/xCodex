@@ -1787,6 +1787,9 @@ impl App {
                     self.launch_external_editor(tui).await;
                 }
             }
+            AppEvent::OpenPlanInExternalEditor { path } => {
+                self.launch_external_editor_for_path(tui, &path).await;
+            }
             AppEvent::OpenWindowsSandboxEnablePrompt { preset } => {
                 self.chat_widget.open_windows_sandbox_enable_prompt(preset);
             }
@@ -2578,6 +2581,15 @@ impl App {
                 self.chat_widget
                     .submit_user_message_with_mode(text, collaboration_mode);
             }
+            AppEvent::OpenPlanDoSomethingElsePrompt => {
+                self.chat_widget.show_plan_do_something_else_prompt();
+            }
+            AppEvent::ReopenPlanNextStepPromptAfterTurn => {
+                self.chat_widget.reopen_plan_prompt_after_turn();
+            }
+            AppEvent::PauseActivePlanRun => {
+                crate::xcodex_plugins::plan::pause_active_plan_run_action(&mut self.chat_widget);
+            }
             AppEvent::ManageSkillsClosed => {
                 self.chat_widget.handle_manage_skills_closed();
             }
@@ -2674,6 +2686,11 @@ impl App {
             event.msg,
             EventMsg::SessionConfigured(_) | EventMsg::TokenCount(_)
         );
+        let is_session_configured = matches!(event.msg, EventMsg::SessionConfigured(_));
+        let turn_complete_message = match &event.msg {
+            EventMsg::TurnComplete(turn) => Some(turn.last_agent_message.clone()),
+            _ => None,
+        };
         if self.suppress_shutdown_complete && matches!(event.msg, EventMsg::ShutdownComplete) {
             self.suppress_shutdown_complete = false;
             return;
@@ -2685,6 +2702,28 @@ impl App {
         }
         self.handle_backtrack_event(&event.msg);
         self.chat_widget.handle_codex_event(event);
+        if is_session_configured
+            && let Some(update) =
+                crate::xcodex_plugins::plan::sync_active_plan_session_state(&mut self.chat_widget)
+        {
+            self.app_event_tx.send(AppEvent::PlanFileUiUpdated {
+                path: update.path,
+                todos_remaining: update.todos_remaining,
+                is_done: update.is_done,
+            });
+        }
+        if let Some(last_agent_message) = turn_complete_message
+            && let Some(update) = crate::xcodex_plugins::plan::sync_active_plan_turn_end(
+                &mut self.chat_widget,
+                last_agent_message.as_deref(),
+            )
+        {
+            self.app_event_tx.send(AppEvent::PlanFileUiUpdated {
+                path: update.path,
+                todos_remaining: update.todos_remaining,
+                is_done: update.is_done,
+            });
+        }
 
         if needs_refresh {
             self.refresh_status_line();
@@ -2846,6 +2885,44 @@ impl App {
                     )));
             }
         }
+        tui.frame_requester().schedule_frame();
+    }
+
+    async fn launch_external_editor_for_path(&mut self, tui: &mut tui::Tui, path: &Path) {
+        let editor_cmd = match external_editor::resolve_editor_command() {
+            Ok(cmd) => cmd,
+            Err(external_editor::EditorError::MissingEditor) => {
+                self.chat_widget
+                    .add_to_history(history_cell::new_error_event(
+                    "Cannot open external editor: set $VISUAL or $EDITOR before starting Codex."
+                        .to_string(),
+                ));
+                tui.frame_requester().schedule_frame();
+                return;
+            }
+            Err(err) => {
+                self.chat_widget
+                    .add_to_history(history_cell::new_error_event(format!(
+                        "Failed to open editor: {err}",
+                    )));
+                tui.frame_requester().schedule_frame();
+                return;
+            }
+        };
+
+        let editor_result = tui
+            .with_restored(tui::RestoreMode::KeepRaw, || async {
+                external_editor::run_editor_for_path(path, &editor_cmd).await
+            })
+            .await;
+
+        if let Err(err) = editor_result {
+            self.chat_widget
+                .add_to_history(history_cell::new_error_event(format!(
+                    "Failed to open editor: {err}",
+                )));
+        }
+
         tui.frame_requester().schedule_frame();
     }
 
