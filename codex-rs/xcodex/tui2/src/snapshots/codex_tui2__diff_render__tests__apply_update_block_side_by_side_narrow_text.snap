@@ -1,0 +1,13 @@
+---
+source: xcodex/tui2/src/diff_render.rs
+expression: text
+---
+• Edited narrow.txt (+1 -1)
+    1  1   │ 1  1
+    2 -2   │ 2 +2 ch
+           │    ange
+           │    d an
+           │    d wr
+           │    appe
+           │    d
+    3  3   │ 3  3

@@ -10,6 +10,7 @@ use ratatui::widgets::Paragraph;
 use std::collections::HashMap;
 use std::path::Path;
 use std::path::PathBuf;
+use unicode_width::UnicodeWidthChar;
 
 use crate::exec_command::relativize_to_home;
 use crate::render::Insets;
@@ -44,15 +45,22 @@ pub struct DiffSummary {
     changes: HashMap<PathBuf, FileChange>,
     cwd: PathBuf,
     diff_highlight: bool,
+    side_by_side: bool,
     surface: DiffSurface,
 }
 
 impl DiffSummary {
-    pub fn new(changes: HashMap<PathBuf, FileChange>, cwd: PathBuf, diff_highlight: bool) -> Self {
+    pub fn new(
+        changes: HashMap<PathBuf, FileChange>,
+        cwd: PathBuf,
+        diff_highlight: bool,
+        side_by_side: bool,
+    ) -> Self {
         Self {
             changes,
             cwd,
             diff_highlight,
+            side_by_side,
             surface: DiffSurface::Transcript,
         }
     }
@@ -61,11 +69,13 @@ impl DiffSummary {
         changes: HashMap<PathBuf, FileChange>,
         cwd: PathBuf,
         diff_highlight: bool,
+        side_by_side: bool,
     ) -> Self {
         Self {
             changes,
             cwd,
             diff_highlight,
+            side_by_side,
             surface: DiffSurface::Popup,
         }
     }
@@ -79,6 +89,7 @@ impl Renderable for FileChange {
             &mut lines,
             area.width as usize,
             false,
+            false,
             None,
             DiffSurface::Transcript,
         );
@@ -91,6 +102,7 @@ impl Renderable for FileChange {
             self,
             &mut lines,
             width as usize,
+            false,
             false,
             None,
             DiffSurface::Transcript,
@@ -112,7 +124,7 @@ impl From<DiffSummary> for Box<dyn Renderable> {
             path.extend(render_line_count_summary(
                 row.added,
                 row.removed,
-                false,
+                val.diff_highlight,
                 val.surface,
             ));
             rows.push(Box::new(path));
@@ -121,6 +133,7 @@ impl From<DiffSummary> for Box<dyn Renderable> {
                 Box::new(ChangeRenderable::new(
                     row.change,
                     val.diff_highlight,
+                    val.side_by_side,
                     row.lang.clone(),
                     val.surface,
                 )) as Box<dyn Renderable>,
@@ -137,9 +150,10 @@ pub(crate) fn create_diff_summary(
     cwd: &Path,
     wrap_cols: usize,
     diff_highlight: bool,
+    side_by_side: bool,
 ) -> Vec<RtLine<'static>> {
     let rows = collect_rows(changes);
-    render_changes_block(rows, wrap_cols, cwd, diff_highlight)
+    render_changes_block(rows, wrap_cols, cwd, diff_highlight, side_by_side)
 }
 
 // Shared row for per-file presentation
@@ -157,6 +171,7 @@ struct Row {
 struct ChangeRenderable {
     change: FileChange,
     diff_highlight: bool,
+    side_by_side: bool,
     lang: Option<String>,
     surface: DiffSurface,
 }
@@ -165,12 +180,14 @@ impl ChangeRenderable {
     fn new(
         change: FileChange,
         diff_highlight: bool,
+        side_by_side: bool,
         lang: Option<String>,
         surface: DiffSurface,
     ) -> Self {
         Self {
             change,
             diff_highlight,
+            side_by_side,
             lang,
             surface,
         }
@@ -185,6 +202,7 @@ impl Renderable for ChangeRenderable {
             &mut lines,
             area.width as usize,
             self.diff_highlight,
+            self.side_by_side,
             self.lang.as_deref(),
             self.surface,
         );
@@ -198,6 +216,7 @@ impl Renderable for ChangeRenderable {
             &mut lines,
             width as usize,
             self.diff_highlight,
+            self.side_by_side,
             self.lang.as_deref(),
             self.surface,
         );
@@ -274,6 +293,7 @@ fn render_changes_block(
     wrap_cols: usize,
     cwd: &Path,
     diff_highlight: bool,
+    side_by_side: bool,
 ) -> Vec<RtLine<'static>> {
     let mut out: Vec<RtLine<'static>> = Vec::new();
 
@@ -348,6 +368,7 @@ fn render_changes_block(
             &mut lines,
             wrap_cols - 4,
             diff_highlight,
+            side_by_side,
             r.lang.as_deref(),
             DiffSurface::Transcript,
         );
@@ -362,12 +383,25 @@ fn render_change(
     out: &mut Vec<RtLine<'static>>,
     width: usize,
     diff_highlight: bool,
+    side_by_side: bool,
     lang: Option<&str>,
     surface: DiffSurface,
 ) {
     let use_diff_background = diff_highlight;
     let highlight_lang = lang.filter(|value| supports_highlighting(value));
     let use_syntax = syntax_highlighting_enabled() && highlight_lang.is_some();
+    if side_by_side {
+        render_change_side_by_side(
+            change,
+            out,
+            width,
+            use_diff_background,
+            use_syntax,
+            highlight_lang,
+            surface,
+        );
+        return;
+    }
     match change {
         FileChange::Add { content } => {
             let line_number_width = line_number_width(content.lines().count());
@@ -496,6 +530,323 @@ fn render_change(
     }
 }
 
+#[derive(Clone)]
+enum SideBySideCell {
+    Empty,
+    Break,
+    Diff {
+        line_number: usize,
+        kind: DiffLineType,
+        text: String,
+    },
+}
+
+#[derive(Clone)]
+struct SideBySideRow {
+    left: SideBySideCell,
+    right: SideBySideCell,
+}
+
+fn flush_side_by_side_pending_rows(
+    rows: &mut Vec<SideBySideRow>,
+    pending_deletes: &mut Vec<(usize, String)>,
+    pending_inserts: &mut Vec<(usize, String)>,
+) {
+    let mut deletes = pending_deletes.drain(..);
+    let mut inserts = pending_inserts.drain(..);
+
+    loop {
+        let left = match deletes.next() {
+            Some((line_number, text)) => SideBySideCell::Diff {
+                line_number,
+                kind: DiffLineType::Delete,
+                text,
+            },
+            None => SideBySideCell::Empty,
+        };
+        let right = match inserts.next() {
+            Some((line_number, text)) => SideBySideCell::Diff {
+                line_number,
+                kind: DiffLineType::Insert,
+                text,
+            },
+            None => SideBySideCell::Empty,
+        };
+
+        if matches!(left, SideBySideCell::Empty) && matches!(right, SideBySideCell::Empty) {
+            break;
+        }
+
+        rows.push(SideBySideRow { left, right });
+    }
+}
+
+fn render_change_side_by_side(
+    change: &FileChange,
+    out: &mut Vec<RtLine<'static>>,
+    width: usize,
+    diff_highlight: bool,
+    syntax_highlight: bool,
+    lang: Option<&str>,
+    surface: DiffSurface,
+) {
+    let mut rows: Vec<SideBySideRow> = Vec::new();
+    let mut max_left_line_number = 0usize;
+    let mut max_right_line_number = 0usize;
+
+    match change {
+        FileChange::Add { content } => {
+            for (i, raw) in content.lines().enumerate() {
+                let line_number = i + 1;
+                max_right_line_number = max_right_line_number.max(line_number);
+                rows.push(SideBySideRow {
+                    left: SideBySideCell::Empty,
+                    right: SideBySideCell::Diff {
+                        line_number,
+                        kind: DiffLineType::Insert,
+                        text: raw.to_string(),
+                    },
+                });
+            }
+        }
+        FileChange::Delete { content } => {
+            for (i, raw) in content.lines().enumerate() {
+                let line_number = i + 1;
+                max_left_line_number = max_left_line_number.max(line_number);
+                rows.push(SideBySideRow {
+                    left: SideBySideCell::Diff {
+                        line_number,
+                        kind: DiffLineType::Delete,
+                        text: raw.to_string(),
+                    },
+                    right: SideBySideCell::Empty,
+                });
+            }
+        }
+        FileChange::Update { unified_diff, .. } => {
+            let Ok(patch) = diffy::Patch::from_str(unified_diff) else {
+                return;
+            };
+            let mut is_first_hunk = true;
+            for h in patch.hunks() {
+                if !is_first_hunk {
+                    rows.push(SideBySideRow {
+                        left: SideBySideCell::Break,
+                        right: SideBySideCell::Break,
+                    });
+                }
+                is_first_hunk = false;
+
+                let mut old_ln = h.old_range().start();
+                let mut new_ln = h.new_range().start();
+                let mut pending_deletes: Vec<(usize, String)> = Vec::new();
+                let mut pending_inserts: Vec<(usize, String)> = Vec::new();
+                for l in h.lines() {
+                    match l {
+                        diffy::Line::Insert(text) => {
+                            let s = text.trim_end_matches('\n');
+                            max_right_line_number = max_right_line_number.max(new_ln);
+                            pending_inserts.push((new_ln, s.to_string()));
+                            new_ln += 1;
+                        }
+                        diffy::Line::Delete(text) => {
+                            let s = text.trim_end_matches('\n');
+                            max_left_line_number = max_left_line_number.max(old_ln);
+                            pending_deletes.push((old_ln, s.to_string()));
+                            old_ln += 1;
+                        }
+                        diffy::Line::Context(text) => {
+                            flush_side_by_side_pending_rows(
+                                &mut rows,
+                                &mut pending_deletes,
+                                &mut pending_inserts,
+                            );
+                            let s = text.trim_end_matches('\n');
+                            max_left_line_number = max_left_line_number.max(old_ln);
+                            max_right_line_number = max_right_line_number.max(new_ln);
+                            rows.push(SideBySideRow {
+                                left: SideBySideCell::Diff {
+                                    line_number: old_ln,
+                                    kind: DiffLineType::Context,
+                                    text: s.to_string(),
+                                },
+                                right: SideBySideCell::Diff {
+                                    line_number: new_ln,
+                                    kind: DiffLineType::Context,
+                                    text: s.to_string(),
+                                },
+                            });
+                            old_ln += 1;
+                            new_ln += 1;
+                        }
+                    }
+                }
+                flush_side_by_side_pending_rows(
+                    &mut rows,
+                    &mut pending_deletes,
+                    &mut pending_inserts,
+                );
+            }
+        }
+    }
+
+    let left_line_number_width = line_number_width(max_left_line_number);
+    let right_line_number_width = line_number_width(max_right_line_number);
+    let (left_width, right_width) = side_by_side_column_widths(width);
+    let separator_style = style_gutter(surface);
+    let separator = RtSpan::styled(" │ ", separator_style);
+
+    for row in rows {
+        let left_lines = render_side_by_side_cell(
+            &row.left,
+            left_width,
+            left_line_number_width,
+            diff_highlight,
+            syntax_highlight,
+            lang,
+            surface,
+        );
+        let right_lines = render_side_by_side_cell(
+            &row.right,
+            right_width,
+            right_line_number_width,
+            diff_highlight,
+            syntax_highlight,
+            lang,
+            surface,
+        );
+        let row_count = left_lines.len().max(right_lines.len());
+        for row_index in 0..row_count {
+            let left_line = left_lines
+                .get(row_index)
+                .cloned()
+                .unwrap_or_else(|| blank_side_line(left_width, surface));
+            let right_line = right_lines
+                .get(row_index)
+                .cloned()
+                .unwrap_or_else(|| blank_side_line(right_width, surface));
+            let left_line = truncate_line_to_width(left_line, left_width);
+            let right_line = truncate_line_to_width(right_line, right_width);
+            let mut left_line = pad_line_to_width(left_line, left_width, style_context(surface));
+            let right_line = pad_line_to_width(right_line, right_width, style_context(surface));
+            left_line.spans.push(separator.clone());
+            left_line.spans.extend(right_line.spans);
+            out.push(truncate_line_to_width(left_line, width));
+        }
+    }
+}
+
+fn side_by_side_column_widths(width: usize) -> (usize, usize) {
+    let separator_width = " │ ".chars().count();
+    if width <= separator_width {
+        return (1, 1);
+    }
+
+    let available_width = width.saturating_sub(separator_width);
+    let mut left_width = available_width / 2;
+    let mut right_width = available_width.saturating_sub(left_width);
+    if left_width == 0 {
+        left_width = 1;
+    }
+    if right_width == 0 {
+        right_width = 1;
+    }
+    (left_width, right_width)
+}
+
+fn render_side_by_side_cell(
+    cell: &SideBySideCell,
+    width: usize,
+    line_number_width: usize,
+    diff_highlight: bool,
+    syntax_highlight: bool,
+    lang: Option<&str>,
+    surface: DiffSurface,
+) -> Vec<RtLine<'static>> {
+    match cell {
+        SideBySideCell::Empty => vec![blank_side_line(width, surface)],
+        SideBySideCell::Break => vec![side_by_side_break_line(
+            width,
+            line_number_width,
+            diff_highlight,
+            surface,
+        )],
+        SideBySideCell::Diff {
+            line_number,
+            kind,
+            text,
+        } => push_wrapped_diff_line(
+            *line_number,
+            *kind,
+            text,
+            width,
+            line_number_width,
+            diff_highlight,
+            syntax_highlight,
+            lang,
+            surface,
+        ),
+    }
+}
+
+fn side_by_side_break_line(
+    width: usize,
+    line_number_width: usize,
+    diff_highlight: bool,
+    surface: DiffSurface,
+) -> RtLine<'static> {
+    let spacer = format!("{:width$} ", "", width = line_number_width.max(1));
+    let line = RtLine::from(vec![
+        RtSpan::styled(spacer, style_gutter(surface)),
+        RtSpan::styled("⋮", style_hunk(diff_highlight)),
+    ]);
+    pad_line_to_width(line, width, style_context(surface))
+}
+
+fn blank_side_line(width: usize, surface: DiffSurface) -> RtLine<'static> {
+    RtLine::from(RtSpan::styled(" ".repeat(width), style_context(surface)))
+}
+
+fn pad_line_to_width(mut line: RtLine<'static>, width: usize, style: Style) -> RtLine<'static> {
+    let line_width = line.width();
+    if line_width < width {
+        line.spans
+            .push(RtSpan::styled(" ".repeat(width - line_width), style));
+    }
+    line
+}
+
+fn truncate_line_to_width(mut line: RtLine<'static>, max_width: usize) -> RtLine<'static> {
+    if line.width() <= max_width {
+        return line;
+    }
+
+    let mut used = 0usize;
+    let mut spans: Vec<RtSpan<'static>> = Vec::with_capacity(line.spans.len());
+    for span in line.spans {
+        if used >= max_width {
+            break;
+        }
+
+        let mut kept = String::new();
+        for ch in span.content.chars() {
+            let ch_width = UnicodeWidthChar::width(ch).unwrap_or(0);
+            if used.saturating_add(ch_width) > max_width {
+                break;
+            }
+            kept.push(ch);
+            used = used.saturating_add(ch_width);
+        }
+
+        if !kept.is_empty() {
+            spans.push(RtSpan::styled(kept, span.style));
+        }
+    }
+
+    line.spans = spans;
+    line
+}
+
 /// Format a path for display relative to the current working directory when
 /// possible, keeping output stable in jj/no-`.git` workspaces (e.g. image
 /// tool calls should show `example.png` instead of an absolute path).
@@ -506,17 +857,6 @@ pub(crate) fn display_path_for(path: &Path, cwd: &Path) -> String {
 
     if let Ok(stripped) = path.strip_prefix(cwd) {
         return stripped.display().to_string();
-    }
-
-    // Prefer a stable, user-local relative path when the file is under the current working
-    // directory. This keeps output deterministic in jj-only repos (no `.git`) and matches user
-    // expectations for "files in this project".
-    if let Some(rel) = pathdiff::diff_paths(path, cwd)
-        && !rel
-            .components()
-            .any(|c| matches!(c, std::path::Component::ParentDir))
-    {
-        return rel.display().to_string();
     }
 
     let path_in_same_repo = match (get_git_repo_root(cwd), get_git_repo_root(path)) {
@@ -533,7 +873,7 @@ pub(crate) fn display_path_for(path: &Path, cwd: &Path) -> String {
     chosen.display().to_string()
 }
 
-fn calculate_add_remove_from_diff(diff: &str) -> (usize, usize) {
+pub(crate) fn calculate_add_remove_from_diff(diff: &str) -> (usize, usize) {
     if let Ok(patch) = diffy::Patch::from_str(diff) {
         patch
             .hunks()
@@ -608,7 +948,7 @@ fn push_wrapped_diff_line(
             let gutter = if is_first {
                 format!("{ln_str:>gutter_width$} ")
             } else {
-                format!("{:gutter_width$}  ", "")
+                format!("{:gutter_width$} ", "")
             };
             let sign = if is_first { sign_char } else { ' ' };
             let mut spans: Vec<RtSpan<'static>> = Vec::with_capacity(chunk.spans.len() + 2);
@@ -787,7 +1127,7 @@ mod tests {
     use ratatui::widgets::WidgetRef;
     use ratatui::widgets::Wrap;
     fn diff_summary_for_tests(changes: &HashMap<PathBuf, FileChange>) -> Vec<RtLine<'static>> {
-        create_diff_summary(changes, &PathBuf::from("/"), 80, false)
+        create_diff_summary(changes, &PathBuf::from("/"), 80, false, false)
     }
 
     fn snapshot_lines(name: &str, lines: Vec<RtLine<'static>>, width: u16, height: u16) {
@@ -974,7 +1314,7 @@ mod tests {
             },
         );
 
-        let lines = create_diff_summary(&changes, &PathBuf::from("/"), 72, false);
+        let lines = create_diff_summary(&changes, &PathBuf::from("/"), 72, false, false);
 
         // Render with backend width wider than wrap width to avoid Paragraph auto-wrap.
         snapshot_lines("apply_update_block_wraps_long_lines", lines, 80, 12);
@@ -997,7 +1337,7 @@ mod tests {
             },
         );
 
-        let lines = create_diff_summary(&changes, &PathBuf::from("/"), 28, false);
+        let lines = create_diff_summary(&changes, &PathBuf::from("/"), 28, false, false);
         snapshot_lines_text("apply_update_block_wraps_long_lines_text", &lines);
     }
 
@@ -1024,7 +1364,7 @@ mod tests {
             },
         );
 
-        let lines = create_diff_summary(&changes, &PathBuf::from("/"), 80, false);
+        let lines = create_diff_summary(&changes, &PathBuf::from("/"), 80, false, false);
         snapshot_lines_text("apply_update_block_line_numbers_three_digits_text", &lines);
     }
 
@@ -1047,8 +1387,77 @@ mod tests {
             },
         );
 
-        let lines = create_diff_summary(&changes, &cwd, 80, false);
+        let lines = create_diff_summary(&changes, &cwd, 80, false, false);
 
         snapshot_lines("apply_update_block_relativizes_path", lines, 80, 10);
+    }
+
+    #[test]
+    fn ui_snapshot_apply_update_block_side_by_side_text() {
+        let mut changes: HashMap<PathBuf, FileChange> = HashMap::new();
+        let original = "line one\nline two\nline three\n";
+        let modified = "line one\nline two changed\nline three\n";
+        let patch = diffy::create_patch(original, modified).to_string();
+
+        changes.insert(
+            PathBuf::from("example.txt"),
+            FileChange::Update {
+                unified_diff: patch,
+                move_path: None,
+            },
+        );
+
+        let lines = create_diff_summary(&changes, &PathBuf::from("/"), 80, false, true);
+        snapshot_lines_text("apply_update_block_side_by_side_text", &lines);
+    }
+
+    #[test]
+    fn ui_snapshot_apply_update_block_side_by_side_narrow_text() {
+        let mut changes: HashMap<PathBuf, FileChange> = HashMap::new();
+        let original = "1\n2\n3\n";
+        let modified = "1\n2 changed and wrapped\n3\n";
+        let patch = diffy::create_patch(original, modified).to_string();
+
+        changes.insert(
+            PathBuf::from("narrow.txt"),
+            FileChange::Update {
+                unified_diff: patch,
+                move_path: None,
+            },
+        );
+
+        let lines = create_diff_summary(&changes, &PathBuf::from("/"), 20, false, true);
+        snapshot_lines_text("apply_update_block_side_by_side_narrow_text", &lines);
+    }
+
+    #[test]
+    fn side_by_side_syntax_rows_stay_within_width() {
+        let original = "fn a() {}\n";
+        let modified = "fn a() { let x = crate::theme::preview_definition(&ThemeCatalog::built_in_default()); }\n";
+        let patch = diffy::create_patch(original, modified).to_string();
+        let change = FileChange::Update {
+            unified_diff: patch,
+            move_path: None,
+        };
+
+        let width = 40usize;
+        let mut lines = Vec::new();
+        render_change_side_by_side(
+            &change,
+            &mut lines,
+            width,
+            false,
+            true,
+            Some("rust"),
+            DiffSurface::Transcript,
+        );
+
+        for (idx, line) in lines.iter().enumerate() {
+            assert!(
+                line.width() <= width,
+                "line {idx} exceeded width {} > {width}",
+                line.width()
+            );
+        }
     }
 }

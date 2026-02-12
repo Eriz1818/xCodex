@@ -59,6 +59,14 @@ const SETTINGS_TRANSCRIPT_CHILDREN: &[SubcommandNode] = &[
         children: &[],
     },
     SubcommandNode {
+        token: "side-by-side",
+        full_name: "settings transcript side-by-side",
+        description: "toggle/show side-by-side diffs in transcript",
+        run_on_enter: false,
+        insert_trailing_space: true,
+        children: &[],
+    },
+    SubcommandNode {
         token: "highlight-past-prompts",
         full_name: "settings transcript highlight-past-prompts",
         description: "toggle/show past prompt highlights in transcript",

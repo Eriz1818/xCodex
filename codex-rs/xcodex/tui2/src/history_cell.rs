@@ -884,6 +884,7 @@ pub(crate) struct PatchHistoryCell {
     changes: HashMap<PathBuf, FileChange>,
     cwd: PathBuf,
     diff_highlight: bool,
+    side_by_side: bool,
 }
 
 impl HistoryCell for PatchHistoryCell {
@@ -893,6 +894,7 @@ impl HistoryCell for PatchHistoryCell {
             &self.cwd,
             width as usize,
             self.diff_highlight,
+            self.side_by_side,
         )
     }
 }
@@ -2540,11 +2542,13 @@ pub(crate) fn new_patch_event(
     changes: HashMap<PathBuf, FileChange>,
     cwd: &Path,
     diff_highlight: bool,
+    side_by_side: bool,
 ) -> PatchHistoryCell {
     PatchHistoryCell {
         changes,
         cwd: cwd.to_path_buf(),
         diff_highlight,
+        side_by_side,
     }
 }
 

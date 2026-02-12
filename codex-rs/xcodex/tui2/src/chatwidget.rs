@@ -1227,6 +1227,7 @@ impl ChatWidget {
             event.changes,
             &self.config.cwd,
             self.config.tui_transcript_diff_highlight,
+            self.config.tui_transcript_side_by_side,
         ));
     }
 
@@ -1665,6 +1666,7 @@ impl ChatWidget {
             changes: ev.changes.clone(),
             cwd: self.config.cwd.clone(),
             diff_highlight: self.config.tui_transcript_diff_highlight,
+            side_by_side: self.config.tui_transcript_side_by_side,
         };
         self.bottom_pane
             .push_approval_request(request, &self.config.features);
@@ -2199,6 +2201,7 @@ impl ChatWidget {
                 self.config.tui_status_bar_show_worktree,
                 self.config.tui_transcript_syntax_highlight,
                 self.config.tui_transcript_diff_highlight,
+                self.config.tui_transcript_side_by_side,
                 self.config.tui_transcript_user_prompt_highlight,
                 self.config.tui_minimal_composer,
                 self.config.xcodex.tui_xtreme_mode,
@@ -2970,6 +2973,15 @@ impl ChatWidget {
                     self.app_event_tx
                         .send(AppEvent::PersistTranscriptDiffHighlight(next));
                 }
+                ["transcript", "side-by-side"] | ["transcript", "side-by-side", "toggle"] => {
+                    let next = !self.config.tui_transcript_side_by_side;
+                    let status = if next { "enabled" } else { "disabled" };
+                    self.add_info_message(format!("Side-by-side diff {status}."), None);
+                    self.app_event_tx
+                        .send(AppEvent::UpdateTranscriptSideBySide(next));
+                    self.app_event_tx
+                        .send(AppEvent::PersistTranscriptSideBySide(next));
+                }
                 ["transcript", "syntax-highlight"]
                 | ["transcript", "syntax-highlight", "toggle"] => {
                     let next = !self.config.tui_transcript_syntax_highlight;
@@ -3018,6 +3030,38 @@ impl ChatWidget {
                         let status = if current { "enabled" } else { "disabled" };
                         self.add_info_message(
                             format!("Diff highlight is currently {status}."),
+                            None,
+                        );
+                    }
+                }
+                ["transcript", "side-by-side", action] => {
+                    let current = self.config.tui_transcript_side_by_side;
+                    let next = match action.to_ascii_lowercase().as_str() {
+                        "on" | "enable" | "true" => Some(true),
+                        "off" | "disable" | "false" => Some(false),
+                        "toggle" => Some(!current),
+                        "status" | "show" => None,
+                        _ => {
+                            self.add_info_message(
+                                "Usage: /settings transcript side-by-side [on|off|toggle|status]"
+                                    .to_string(),
+                                None,
+                            );
+                            return;
+                        }
+                    };
+
+                    if let Some(next) = next {
+                        let status = if next { "enabled" } else { "disabled" };
+                        self.add_info_message(format!("Side-by-side diff {status}."), None);
+                        self.app_event_tx
+                            .send(AppEvent::UpdateTranscriptSideBySide(next));
+                        self.app_event_tx
+                            .send(AppEvent::PersistTranscriptSideBySide(next));
+                    } else {
+                        let status = if current { "enabled" } else { "disabled" };
+                        self.add_info_message(
+                            format!("Side-by-side diff is currently {status}."),
                             None,
                         );
                     }
@@ -3543,6 +3587,7 @@ impl ChatWidget {
             self.config.tui_status_bar_show_worktree,
             self.config.tui_transcript_syntax_highlight,
             self.config.tui_transcript_diff_highlight,
+            self.config.tui_transcript_side_by_side,
             self.config.tui_transcript_user_prompt_highlight,
             self.config.tui_minimal_composer,
             self.config.xcodex.tui_xtreme_mode,
@@ -5102,6 +5147,14 @@ impl ChatWidget {
 
     pub(crate) fn set_transcript_syntax_highlight(&mut self, enabled: bool) {
         self.config.tui_transcript_syntax_highlight = enabled;
+    }
+
+    pub(crate) fn set_transcript_diff_highlight(&mut self, enabled: bool) {
+        self.config.tui_transcript_diff_highlight = enabled;
+    }
+
+    pub(crate) fn set_transcript_side_by_side(&mut self, enabled: bool) {
+        self.config.tui_transcript_side_by_side = enabled;
     }
 
     pub(crate) fn set_minimal_composer(&mut self, enabled: bool) {

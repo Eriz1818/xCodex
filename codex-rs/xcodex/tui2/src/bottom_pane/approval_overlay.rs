@@ -54,6 +54,7 @@ pub(crate) enum ApprovalRequest {
         cwd: PathBuf,
         changes: HashMap<PathBuf, FileChange>,
         diff_highlight: bool,
+        side_by_side: bool,
     },
     McpElicitation {
         server_name: String,
@@ -428,6 +429,7 @@ impl From<ApprovalRequest> for ApprovalRequestState {
                 cwd,
                 changes,
                 diff_highlight,
+                side_by_side,
             } => {
                 let mut header: Vec<Box<dyn Renderable>> = Vec::new();
                 if let Some(reason) = reason
@@ -439,7 +441,9 @@ impl From<ApprovalRequest> for ApprovalRequestState {
                     ));
                     header.push(Box::new(Line::from("")));
                 }
-                header.push(DiffSummary::new_popup(changes, cwd, diff_highlight).into());
+                header.push(
+                    DiffSummary::new_popup(changes, cwd, diff_highlight, side_by_side).into(),
+                );
                 Self {
                     variant: ApprovalVariant::ApplyPatch { id },
                     header: Box::new(ColumnRenderable::with(header)),
@@ -782,6 +786,7 @@ mod tests {
             cwd: PathBuf::from("/"),
             changes,
             diff_highlight: false,
+            side_by_side: false,
         };
 
         let view = ApprovalOverlay::new(req, tx, Features::with_defaults());

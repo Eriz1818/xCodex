@@ -118,6 +118,9 @@ pub(crate) enum AppEvent {
     /// Update whether transcript diffs use background highlight (runtime).
     UpdateTranscriptDiffHighlight(bool),
 
+    /// Update whether transcript diffs render side-by-side (runtime).
+    UpdateTranscriptSideBySide(bool),
+
     /// Update whether fenced code blocks render with syntax highlighting (runtime).
     UpdateTranscriptSyntaxHighlight(bool),
 
@@ -238,6 +241,9 @@ pub(crate) enum AppEvent {
 
     /// Persist whether transcript diffs use background highlight.
     PersistTranscriptDiffHighlight(bool),
+
+    /// Persist whether transcript diffs render side-by-side.
+    PersistTranscriptSideBySide(bool),
 
     /// Persist whether fenced code blocks render with syntax highlighting.
     PersistTranscriptSyntaxHighlight(bool),

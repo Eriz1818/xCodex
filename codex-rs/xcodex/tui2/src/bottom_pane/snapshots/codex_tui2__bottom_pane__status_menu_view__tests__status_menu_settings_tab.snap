@@ -1,5 +1,5 @@
 ---
-source: tui2/src/bottom_pane/status_menu_view.rs
+source: xcodex/tui2/src/bottom_pane/status_menu_view.rs
 expression: "render_lines(&view, 60)"
 ---
                                                             
@@ -13,6 +13,7 @@ expression: "render_lines(&view, 60)"
   › [x] Transcript: verbose tool output                     
     [x] Transcript: syntax highlight                        
     [ ] Transcript: diff highlight                          
+    [ ] Transcript: side-by-side diff                       
     [ ] Transcript: highlight past prompts                  
     [ ] Composer: minimal borders                           
     Worktrees…                                              
