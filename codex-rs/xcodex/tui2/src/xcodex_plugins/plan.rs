@@ -190,7 +190,7 @@ const PLAN_MODE_CHILDREN: &[PluginSubcommandNode] = &[
     PluginSubcommandNode {
         token: "adr-lite",
         full_name: "plan settings mode adr-lite",
-        description: "use repo-local adr-lite workflow defaults",
+        description: "use adr-lite workflow defaults",
         run_on_enter: true,
         insert_trailing_space: false,
         children: &[],
@@ -2777,13 +2777,9 @@ fn read_plan_naming_strategy(chat: &ChatWidget) -> String {
 
 fn mode_default_plan_base_dir(chat: &ChatWidget, mode: &str) -> PathBuf {
     match mode {
-        PLAN_MODE_ADR_LITE => repo_impl_plans_dir(chat).unwrap_or_else(|| plan_state_dir(chat)),
+        PLAN_MODE_ADR_LITE => plan_state_dir(chat),
         _ => plan_state_dir(chat),
     }
-}
-
-fn repo_impl_plans_dir(chat: &ChatWidget) -> Option<PathBuf> {
-    get_git_repo_root(chat.session_cwd()).map(|repo_root| repo_root.join("docs/impl-plans"))
 }
 
 fn discover_plans(chat: &ChatWidget) -> Vec<PlanEntry> {

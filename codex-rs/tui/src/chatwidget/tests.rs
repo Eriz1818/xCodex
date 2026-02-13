@@ -5022,7 +5022,7 @@ async fn plan_mode_adr_lite_changes_default_base_dir_and_template() {
         .expect("read active pointer")
         .trim()
         .to_string();
-    let expected_base = repo_path.join("docs/impl-plans");
+    let expected_base = chat.codex_home().join("plans");
     assert!(
         active_plan.starts_with(&expected_base.display().to_string()),
         "expected adr-lite default base dir, got: {active_plan:?}"

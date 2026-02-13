@@ -46,12 +46,6 @@ By default, plan files live under:
 $CODEX_HOME/plans
 ```
 
-When `mode = adr-lite` and no explicit `base_dir` is set, xcodex defaults to:
-
-```text
-<git_repo_root>/docs/impl-plans
-```
-
 The active plan pointer is persisted in:
 
 ```text

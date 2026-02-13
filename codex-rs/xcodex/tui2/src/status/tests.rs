@@ -140,6 +140,7 @@ async fn status_snapshot_includes_reasoning_details() {
     config.model_reasoning_effort = Some(ReasoningEffort::High);
     config.model_reasoning_summary = ReasoningSummary::Detailed;
     config
+        .permissions
         .sandbox_policy
         .set(SandboxPolicy::WorkspaceWrite {
             writable_roots: Vec::new(),
