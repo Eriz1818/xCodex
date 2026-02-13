@@ -3101,15 +3101,6 @@ impl App {
                         .add_error_message(format!("Failed to set sandbox policy: {err}"));
                     return Ok(AppRunControl::Continue);
                 }
-                #[cfg(target_os = "windows")]
-                if !matches!(
-                    &policy,
-                    codex_core::protocol::SandboxPolicy::ReadOnly { .. }
-                ) || WindowsSandboxLevel::from_config(&self.config)
-                    != WindowsSandboxLevel::Disabled
-                {
-                    self.config.forced_auto_mode_downgraded_on_windows = false;
-                }
                 if let Err(err) = self.chat_widget.set_sandbox_policy(policy) {
                     tracing::warn!(%err, "failed to set sandbox policy on chat config");
                     self.chat_widget

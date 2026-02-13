@@ -378,6 +378,9 @@ pub(crate) struct ChatWidget {
     /// where the overlay may briefly treat new tail content as already cached.
     active_cell_revision: u64,
     config: Config,
+    #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+    // Windows-only downgrade prompt state.
+    forced_auto_mode_downgraded_on_windows: bool,
     model: Option<String>,
     stored_collaboration_mode: CollaborationMode,
     active_collaboration_mask: Option<CollaborationModeMask>,
@@ -541,6 +544,24 @@ fn create_initial_user_message(text: String, image_paths: Vec<PathBuf>) -> Optio
 }
 
 impl ChatWidget {
+    fn should_prompt_windows_sandbox_enable_from_config(config: &Config) -> bool {
+        #[cfg(target_os = "windows")]
+        {
+            !config.did_user_set_custom_approval_policy_or_sandbox_mode
+                && config.permissions.approval_policy.value() == AskForApproval::OnRequest
+                && matches!(
+                    config.permissions.sandbox_policy.get(),
+                    SandboxPolicy::ReadOnly { .. }
+                )
+                && WindowsSandboxLevel::from_config(config) == WindowsSandboxLevel::Disabled
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            let _ = config;
+            false
+        }
+    }
+
     /// Synchronize the bottom-pane "task running" indicator with the current lifecycles.
     ///
     /// The bottom pane only has one running flag, but this module treats it as a derived state of
@@ -1960,6 +1981,8 @@ impl ChatWidget {
         let mut config = config;
         let model = model.filter(|m| !m.trim().is_empty());
         config.model = model.clone();
+        let forced_auto_mode_downgraded_on_windows =
+            Self::should_prompt_windows_sandbox_enable_from_config(&config);
         let xtreme_ui_enabled = crate::xtreme::xtreme_ui_enabled(&config);
         let mut rng = rand::rng();
         let placeholder = PLACEHOLDERS[rng.random_range(0..PLACEHOLDERS.len())].to_string();
@@ -2007,6 +2030,7 @@ impl ChatWidget {
             active_cell,
             active_cell_revision: 0,
             config,
+            forced_auto_mode_downgraded_on_windows,
             model,
             stored_collaboration_mode,
             active_collaboration_mask,
@@ -2108,6 +2132,8 @@ impl ChatWidget {
         let mut config = config;
         let header_model = session_configured.model.clone();
         config.model = Some(header_model.clone());
+        let forced_auto_mode_downgraded_on_windows =
+            Self::should_prompt_windows_sandbox_enable_from_config(&config);
         let xtreme_ui_enabled = crate::xtreme::xtreme_ui_enabled(&config);
         let mut rng = rand::rng();
         let placeholder = PLACEHOLDERS[rng.random_range(0..PLACEHOLDERS.len())].to_string();
@@ -2150,6 +2176,7 @@ impl ChatWidget {
             active_cell: None,
             active_cell_revision: 0,
             config,
+            forced_auto_mode_downgraded_on_windows,
             model: Some(header_model.clone()),
             stored_collaboration_mode,
             active_collaboration_mask,
@@ -5230,7 +5257,7 @@ impl ChatWidget {
 
     #[cfg(target_os = "windows")]
     pub(crate) fn maybe_prompt_windows_sandbox_enable(&mut self) {
-        if self.config.forced_auto_mode_downgraded_on_windows
+        if self.forced_auto_mode_downgraded_on_windows
             && WindowsSandboxLevel::from_config(&self.config) == WindowsSandboxLevel::Disabled
             && let Some(preset) = builtin_approval_presets()
                 .into_iter()
@@ -5273,7 +5300,7 @@ impl ChatWidget {
 
     #[cfg(target_os = "windows")]
     pub(crate) fn clear_forced_auto_mode_downgrade(&mut self) {
-        self.config.forced_auto_mode_downgraded_on_windows = false;
+        self.forced_auto_mode_downgraded_on_windows = false;
     }
 
     #[cfg(not(target_os = "windows"))]
@@ -5297,7 +5324,7 @@ impl ChatWidget {
 
         #[cfg(target_os = "windows")]
         if should_clear_downgrade {
-            self.config.forced_auto_mode_downgraded_on_windows = false;
+            self.forced_auto_mode_downgraded_on_windows = false;
         }
 
         Ok(())
