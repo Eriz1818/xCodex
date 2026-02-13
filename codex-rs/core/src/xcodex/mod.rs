@@ -47,6 +47,7 @@ pub(crate) fn build_user_hooks(config: &Config, tx_event: Sender<Event>) -> User
     )
 }
 
+#[allow(dead_code)] // Upstream parity seam: notifier wiring is preserved while rollout is staged.
 pub(crate) fn build_user_notifier(config: &Config) -> UserNotifier {
     UserNotifier::new(config.xcodex.notify.clone())
 }

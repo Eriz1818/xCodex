@@ -2539,7 +2539,6 @@ impl Session {
             proposed_execpolicy_amendment.clone(),
         );
 
-        let sub_id = turn_context.sub_id.clone();
         // Add the tx_approve callback to the map before sending the request.
         let (tx_approve, rx_approve) = oneshot::channel();
         let approval_id = call_id.clone();
@@ -2597,7 +2596,6 @@ impl Session {
             grant_root.as_ref().map(|path| path.display().to_string()),
         );
 
-        let sub_id = turn_context.sub_id.clone();
         // Add the tx_approve callback to the map before sending the request.
         let (tx_approve, rx_approve) = oneshot::channel();
         let approval_id = call_id.clone();
@@ -3111,6 +3109,7 @@ impl Session {
         prompt.estimate_token_count()
     }
 
+    #[allow(dead_code)] // Upstream parity seam: kept until auto-compact uses encrypted-reasoning-aware estimation.
     async fn estimate_prompt_token_count_for_auto_compact<'a, I>(
         &self,
         turn_context: &TurnContext,

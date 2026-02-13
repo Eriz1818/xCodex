@@ -261,28 +261,6 @@ fn truncate_preview(text: &str, max_bytes: usize) -> String {
     text[..end].to_string()
 }
 
-fn append_truncated(preview: &mut String, text: &str, max_bytes: usize) {
-    if preview.len() >= max_bytes || text.is_empty() {
-        return;
-    }
-
-    let remaining = max_bytes - preview.len();
-    if text.len() <= remaining {
-        preview.push_str(text);
-        return;
-    }
-
-    let mut end = remaining;
-    while !text.is_char_boundary(end) {
-        end = end.saturating_sub(1);
-        if end == 0 {
-            return;
-        }
-    }
-
-    preview.push_str(&text[..end]);
-}
-
 fn summarize_mcp_tool_output(
     result: &CallToolResult,
     max_preview_bytes: usize,

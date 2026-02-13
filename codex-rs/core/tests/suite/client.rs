@@ -15,7 +15,6 @@ use codex_core::auth::AuthCredentialsStoreMode;
 use codex_core::built_in_model_providers;
 use codex_core::default_client::originator;
 use codex_core::features::Feature;
-use codex_core::models_manager::manager::ModelsManager;
 use codex_core::protocol::CodexErrorInfo;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::Op;

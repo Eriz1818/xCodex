@@ -5,11 +5,13 @@ use tracing::warn;
 ///
 /// Each notification is serialized as JSON and passed as an argument to the
 /// configured program.
+#[allow(dead_code)] // Upstream parity seam: type kept for staged notifier integration.
 #[derive(Debug, Default)]
 pub(crate) struct UserNotifier {
     notify_command: Option<Vec<String>>,
 }
 
+#[allow(dead_code)] // Upstream parity seam: methods kept for staged notifier integration.
 impl UserNotifier {
     pub(crate) fn new(notify: Option<Vec<String>>) -> Self {
         Self {
@@ -43,6 +45,7 @@ impl UserNotifier {
     }
 }
 
+#[allow(dead_code)] // Upstream parity seam: event payload retained for notifier compatibility.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(tag = "type", rename_all = "kebab-case")]
 pub(crate) enum UserNotification {

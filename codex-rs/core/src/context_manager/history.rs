@@ -235,6 +235,7 @@ impl ContextManager {
         );
     }
 
+    #[cfg(test)]
     pub(crate) fn non_last_encrypted_reasoning_tokens(&self) -> i64 {
         // Ignore encrypted reasoning emitted after the most recent user message.
         // This keeps auto-compact gating aligned with prompt composition.
@@ -267,6 +268,7 @@ impl ContextManager {
             .fold(0i64, i64::saturating_add)
     }
 
+    #[allow(dead_code)] // Upstream parity seam: used by auto-compact estimator wiring retained across syncs.
     pub(crate) fn drop_encrypted_reasoning_after_last_user(&mut self) {
         // Keep reasoning emitted before the most recent user message, but drop later
         // encrypted reasoning to avoid over-counting in auto-compact estimates.
@@ -300,6 +302,7 @@ impl ContextManager {
             .collect();
     }
 
+    #[allow(dead_code)] // Upstream parity seam: helper for encrypted-reasoning trimming in auto-compact flow.
     fn get_trailing_codex_generated_items_tokens(&self) -> i64 {
         let mut total = 0i64;
         for item in self.items.iter().rev() {

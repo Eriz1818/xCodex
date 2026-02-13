@@ -41,7 +41,6 @@ mod desktop_app;
 mod mcp_cmd;
 #[cfg(not(windows))]
 mod wsl_paths;
-mod xcodex_entrypoints;
 mod xcodex_subcommands;
 
 use crate::config_cmd::ConfigCli;

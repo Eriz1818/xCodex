@@ -4,7 +4,6 @@ use codex_core::config::find_codex_home;
 use codex_core::config::load_config_as_toml_with_cli_overrides;
 use codex_core::git_info::get_git_repo_root;
 use codex_core::plan_file;
-use codex_tui::AppExitInfo;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use rand::Rng;
 use std::ffi::OsStr;
@@ -16,7 +15,6 @@ use std::time::Duration;
 use crate::config_cmd::ConfigCli;
 use crate::mcp_cmd::McpCli;
 use crate::prepend_config_flags;
-use crate::xcodex_entrypoints;
 
 #[derive(Debug, Parser)]
 #[command(disable_help_subcommand = true)]
@@ -958,18 +956,6 @@ pub(crate) async fn run_config_command(
         root_config_overrides.clone(),
     );
     config_cli.run().await
-}
-
-pub(crate) async fn run_tui2_command(
-    root_config_overrides: &CliConfigOverrides,
-    mut tui2_cli: codex_tui::Cli,
-    codex_linux_sandbox_exe: Option<PathBuf>,
-) -> anyhow::Result<AppExitInfo> {
-    prepend_config_flags(
-        &mut tui2_cli.config_overrides,
-        root_config_overrides.clone(),
-    );
-    xcodex_entrypoints::run_tui2(tui2_cli, codex_linux_sandbox_exe).await
 }
 
 const PLAN_BASE_DIR_FILE: &str = ".base-dir";
