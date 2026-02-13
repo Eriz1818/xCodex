@@ -1,16 +1,16 @@
 ---
-source: tui2/src/chatwidget/tests.rs
+source: xcodex/tui2/src/chatwidget/tests.rs
 expression: contents
 ---
-
-
-  Would you like to run the following command?
-
-  $ python - <<'PY'
-  print('hello')
-  PY
-
-› 1. Yes, proceed (y)
-  2. No, and tell xcodex what to do differently (esc)
-
+                                                                                                    
+                                                                                                    
+  Would you like to run the following command?                                                      
+                                                                                                    
+  $ python - <<'PY'                                                                                 
+  print('hello')                                                                                    
+  PY                                                                                                
+                                                                                                    
+› 1. Yes, proceed (y)                                                                               
+  2. No, and tell xcodex what to do differently (esc)                                               
+                                                                                                    
   Press enter to confirm, esc to cancel, or ctrl + y to copy command
