@@ -321,6 +321,14 @@ jobs:
           TARGET: ${{ matrix.target }}
         run: bash "${GITHUB_WORKSPACE}/.github/scripts/install-musl-build-tools.sh"
 
+      - if: ${{ contains(matrix.target, 'unknown-linux-gnu') }}
+        name: Install Linux sandbox deps
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y libcap-dev pkg-config
+
       - if: ${{ contains(matrix.target, 'pc-windows') }}
         name: Reduce Windows link load
         shell: bash
