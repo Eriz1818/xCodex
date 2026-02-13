@@ -123,7 +123,11 @@ fn lock_if_runtime<K, V>(m: &Mutex<LruCache<K, V>>) -> Option<MutexGuard<'_, Lru
 where
     K: Eq + Hash,
 {
-    tokio::runtime::Handle::try_current().ok()?;
+    let handle = tokio::runtime::Handle::try_current().ok()?;
+    if handle.runtime_flavor() != tokio::runtime::RuntimeFlavor::MultiThread {
+        return None;
+    }
+
     Some(tokio::task::block_in_place(|| m.blocking_lock()))
 }
 
@@ -167,6 +171,17 @@ mod tests {
         assert!(cache.get(&"b").is_none());
         assert_eq!(cache.get(&"a"), Some(1));
         assert_eq!(cache.get(&"c"), Some(3));
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn current_thread_runtime_disables_cache_without_panicking() {
+        let cache = BlockingLruCache::new(NonZeroUsize::new(2).expect("capacity"));
+
+        cache.insert("first", 1);
+        assert!(cache.get(&"first").is_none());
+
+        assert_eq!(cache.get_or_insert_with("first", || 2), 2);
+        assert!(cache.blocking_lock().is_none());
     }
 
     #[test]

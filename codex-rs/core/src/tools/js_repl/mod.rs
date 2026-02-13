@@ -1204,7 +1204,7 @@ const png = Buffer.from(
 await fs.writeFile(imagePath, png);
 const out = await codex.tool("view_image", { path: imagePath });
 console.log(out.type);
-console.log(out.output?.body?.text ?? "");
+console.log(JSON.stringify(out));
 "#;
 
         let result = manager

@@ -100,21 +100,19 @@ pub fn load_and_resize_to_fit(path: &Path) -> Result<EncodedImage, ImageProcessi
 }
 
 fn read_file_bytes(path: &Path, path_for_error: &Path) -> Result<Vec<u8>, ImageProcessingError> {
-    match tokio::runtime::Handle::try_current() {
-        // If we're inside a Tokio runtime, avoid block_on (it panics on worker threads).
-        // Use block_in_place and do a standard blocking read safely.
-        Ok(_) => tokio::task::block_in_place(|| std::fs::read(path)).map_err(|source| {
-            ImageProcessingError::Read {
-                path: path_for_error.to_path_buf(),
-                source,
-            }
-        }),
-        // Outside a runtime, just read synchronously.
-        Err(_) => std::fs::read(path).map_err(|source| ImageProcessingError::Read {
-            path: path_for_error.to_path_buf(),
-            source,
-        }),
-    }
+    let file_bytes = match tokio::runtime::Handle::try_current() {
+        Ok(handle) if handle.runtime_flavor() == tokio::runtime::RuntimeFlavor::MultiThread => {
+            // On multi-thread Tokio runtimes we can safely block in place.
+            tokio::task::block_in_place(|| std::fs::read(path))
+        }
+        // Outside Tokio, or on current-thread runtimes, use a plain sync read.
+        _ => std::fs::read(path),
+    };
+
+    file_bytes.map_err(|source| ImageProcessingError::Read {
+        path: path_for_error.to_path_buf(),
+        source,
+    })
 }
 
 fn encode_image(
@@ -176,6 +174,24 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn returns_original_image_when_within_bounds() {
+        let temp_file = NamedTempFile::new().expect("temp file");
+        let image = ImageBuffer::from_pixel(64, 32, Rgba([10u8, 20, 30, 255]));
+        image
+            .save_with_format(temp_file.path(), ImageFormat::Png)
+            .expect("write png to temp file");
+
+        let original_bytes = std::fs::read(temp_file.path()).expect("read written image");
+
+        let encoded = load_and_resize_to_fit(temp_file.path()).expect("process image");
+
+        assert_eq!(encoded.width, 64);
+        assert_eq!(encoded.height, 32);
+        assert_eq!(encoded.mime, "image/png");
+        assert_eq!(encoded.bytes, original_bytes);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn returns_original_image_on_current_thread_runtime() {
         let temp_file = NamedTempFile::new().expect("temp file");
         let image = ImageBuffer::from_pixel(64, 32, Rgba([10u8, 20, 30, 255]));
         image
