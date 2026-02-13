@@ -1,5 +1,17 @@
 exports_files([
+    "hooks_samples_install.rs",
     "hooks_sdk_install.rs",
     "tui_theme.rs",
     "tui_xcodex_first_run_wizard.rs",
+    "whats_new.md",
+    "whats_new.rs",
 ])
+
+filegroup(
+    name = "hooks_assets",
+    srcs = glob([
+        "hooks_samples_assets/**",
+        "hooks_sdk_assets/**",
+    ]),
+    visibility = ["//visibility:public"],
+)

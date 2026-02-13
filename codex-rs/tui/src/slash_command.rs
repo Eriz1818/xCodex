@@ -15,7 +15,7 @@ pub enum SlashCommand {
     Model,
     Approvals,
     Permissions,
-    #[strum(serialize = "setup-elevated-sandbox")]
+    #[strum(serialize = "setup-default-sandbox")]
     ElevateSandbox,
     Experimental,
     Skills,
@@ -53,8 +53,14 @@ pub enum SlashCommand {
     Rollout,
     Ps,
     PsKill,
+    Clean,
     Personality,
     TestApproval,
+    // Debugging commands.
+    #[strum(serialize = "debug-m-drop")]
+    MemoryDrop,
+    #[strum(serialize = "debug-m-update")]
+    MemoryUpdate,
 }
 
 impl SlashCommand {
@@ -87,6 +93,9 @@ impl SlashCommand {
             SlashCommand::Statusline => "configure which items appear in the status line",
             SlashCommand::Ps => "list background terminals",
             SlashCommand::PsKill => "terminate background terminals",
+            SlashCommand::Clean => "stop all background terminals",
+            SlashCommand::MemoryDrop => "DO NOT USE",
+            SlashCommand::MemoryUpdate => "DO NOT USE",
             SlashCommand::Model => "choose what model and reasoning effort to use",
             SlashCommand::Approvals => "choose what xcodex can do without approval",
             SlashCommand::Permissions => "choose what xcodex is allowed to do",
@@ -139,7 +148,9 @@ impl SlashCommand {
             | SlashCommand::ElevateSandbox
             | SlashCommand::Experimental
             | SlashCommand::Review
-            | SlashCommand::Logout => false,
+            | SlashCommand::Logout
+            | SlashCommand::MemoryDrop
+            | SlashCommand::MemoryUpdate => false,
             SlashCommand::Diff
             | SlashCommand::Plan
             | SlashCommand::Rename
@@ -156,6 +167,7 @@ impl SlashCommand {
             | SlashCommand::DebugConfig
             | SlashCommand::Ps
             | SlashCommand::PsKill
+            | SlashCommand::Clean
             | SlashCommand::Mcp
             | SlashCommand::Apps
             | SlashCommand::Feedback

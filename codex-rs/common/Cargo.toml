@@ -8,24 +8,19 @@ license.workspace = true
 workspace = true
 
 [dependencies]
-clap = { workspace = true, features = ["derive", "wrap_help"], optional = true }
-codex-core = { workspace = true }
-codex-lmstudio = { workspace = true }
-codex-ollama = { workspace = true }
-codex-protocol = { workspace = true }
-serde = { workspace = true, optional = true }
-toml = { workspace = true, optional = true }
+codex-utils-approval-presets = { workspace = true }
+codex-utils-cli = { workspace = true, optional = true }
+codex-utils-elapsed = { workspace = true, optional = true }
+codex-utils-fuzzy-match = { workspace = true }
+codex-utils-oss = { workspace = true }
+codex-utils-sandbox-summary = { workspace = true, optional = true }
 
 [features]
-# Separate feature so that `clap` is not a mandatory dependency.
-cli = ["clap", "serde", "toml"]
-elapsed = []
-sandbox_summary = []
+cli = ["dep:codex-utils-cli"]
+elapsed = ["dep:codex-utils-elapsed"]
+sandbox_summary = ["dep:codex-utils-sandbox-summary"]
 
 [dev-dependencies]
-clap = { workspace = true, features = ["derive", "wrap_help"] }
 codex-utils-absolute-path = { workspace = true }
 pretty_assertions = { workspace = true }
-serde = { workspace = true }
 tempfile = { workspace = true }
-toml = { workspace = true }

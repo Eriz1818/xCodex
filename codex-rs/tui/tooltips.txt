@@ -17,7 +17,7 @@ Run `codex app` to open Codex Desktop (it installs on macOS if needed).
 Use /personality to customize how Codex communicates.
 Use /rename to rename your threads for easier thread resuming.
 When the composer is empty, press Esc to step back and edit your last message; Enter confirms.
-Press Tab to queue a message instead of sending it immediately; Enter always sends immediately.
+Press Tab to queue a message when a task is running; otherwise it sends immediately (except `!`).
 Paste an image with Ctrl+V to attach it to your next message.
 You can resume a previous conversation with /resume
 In the resume picker, press Ctrl+Y to copy the continuation command for the selected session.

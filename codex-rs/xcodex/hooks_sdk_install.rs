@@ -268,110 +268,110 @@ fn assets_for(sdk: HookSdk) -> Vec<Asset> {
         HookSdk::Python => vec![
             Asset {
                 rel_path: "xcodex_hooks.py",
-                content: include_str!("../common/src/hooks_sdk_assets/python/xcodex_hooks.py"),
+                content: include_str!("hooks_sdk_assets/python/xcodex_hooks.py"),
                 executable: false,
             },
             Asset {
                 rel_path: "xcodex_hooks_types.py",
-                content: include_str!("../common/src/hooks_sdk_assets/python/xcodex_hooks_types.py"),
+                content: include_str!("hooks_sdk_assets/python/xcodex_hooks_types.py"),
                 executable: false,
             },
             Asset {
                 rel_path: "xcodex_hooks_models.py",
-                content: include_str!("../common/src/hooks_sdk_assets/python/xcodex_hooks_models.py"),
+                content: include_str!("hooks_sdk_assets/python/xcodex_hooks_models.py"),
                 executable: false,
             },
             Asset {
                 rel_path: "xcodex_hooks_runtime.py",
-                content: include_str!("../common/src/hooks_sdk_assets/python/xcodex_hooks_runtime.py"),
+                content: include_str!("hooks_sdk_assets/python/xcodex_hooks_runtime.py"),
                 executable: false,
             },
             Asset {
                 rel_path: "host/python/host.py",
-                content: include_str!("../common/src/hooks_sdk_assets/python/hook_host.py"),
+                content: include_str!("hooks_sdk_assets/python/hook_host.py"),
                 executable: true,
             },
             Asset {
                 rel_path: "host/python/example_hook.py",
-                content: include_str!("../common/src/hooks_sdk_assets/python/hook_host_example.py"),
+                content: include_str!("hooks_sdk_assets/python/hook_host_example.py"),
                 executable: false,
             },
             Asset {
                 rel_path: "templates/python/log_jsonl.py",
-                content: include_str!("../common/src/hooks_sdk_assets/python/template_hook.py"),
+                content: include_str!("hooks_sdk_assets/python/template_hook.py"),
                 executable: true,
             },
         ],
         HookSdk::JavaScript => vec![
             Asset {
                 rel_path: "xcodex_hooks.mjs",
-                content: include_str!("../common/src/hooks_sdk_assets/js/xcodex_hooks.mjs"),
+                content: include_str!("hooks_sdk_assets/js/xcodex_hooks.mjs"),
                 executable: false,
             },
             Asset {
                 rel_path: "xcodex_hooks.d.ts",
-                content: include_str!("../common/src/hooks_sdk_assets/js/xcodex_hooks.d.ts"),
+                content: include_str!("hooks_sdk_assets/js/xcodex_hooks.d.ts"),
                 executable: false,
             },
             Asset {
                 rel_path: "templates/js/log_jsonl.mjs",
-                content: include_str!("../common/src/hooks_sdk_assets/js/template_hook.mjs"),
+                content: include_str!("hooks_sdk_assets/js/template_hook.mjs"),
                 executable: true,
             },
         ],
         HookSdk::TypeScript => vec![
             Asset {
                 rel_path: "xcodex_hooks.mjs",
-                content: include_str!("../common/src/hooks_sdk_assets/js/xcodex_hooks.mjs"),
+                content: include_str!("hooks_sdk_assets/js/xcodex_hooks.mjs"),
                 executable: false,
             },
             Asset {
                 rel_path: "xcodex_hooks.d.ts",
-                content: include_str!("../common/src/hooks_sdk_assets/js/xcodex_hooks.d.ts"),
+                content: include_str!("hooks_sdk_assets/js/xcodex_hooks.d.ts"),
                 executable: false,
             },
             Asset {
                 rel_path: "templates/ts/log_jsonl.ts",
-                content: include_str!("../common/src/hooks_sdk_assets/js/template_hook.ts"),
+                content: include_str!("hooks_sdk_assets/js/template_hook.ts"),
                 executable: false,
             },
         ],
         HookSdk::Ruby => vec![
             Asset {
                 rel_path: "xcodex_hooks.rb",
-                content: include_str!("../common/src/hooks_sdk_assets/ruby/xcodex_hooks.rb"),
+                content: include_str!("hooks_sdk_assets/ruby/xcodex_hooks.rb"),
                 executable: false,
             },
             Asset {
                 rel_path: "templates/ruby/log_jsonl.rb",
-                content: include_str!("../common/src/hooks_sdk_assets/ruby/template_hook.rb"),
+                content: include_str!("hooks_sdk_assets/ruby/template_hook.rb"),
                 executable: true,
             },
         ],
         HookSdk::Go => vec![
             Asset {
                 rel_path: "templates/go/go.mod",
-                content: include_str!("../common/src/hooks_sdk_assets/go/go.mod"),
+                content: include_str!("hooks_sdk_assets/go/go.mod"),
                 executable: false,
             },
             Asset {
                 rel_path: "templates/go/README.md",
-                content: include_str!("../common/src/hooks_sdk_assets/go/README.md"),
+                content: include_str!("hooks_sdk_assets/go/README.md"),
                 executable: false,
             },
             Asset {
                 rel_path: "templates/go/hooksdk/hooksdk.go",
-                content: include_str!("../common/src/hooks_sdk_assets/go/hooksdk/hooksdk.go"),
+                content: include_str!("hooks_sdk_assets/go/hooksdk/hooksdk.go"),
                 executable: false,
             },
             Asset {
                 rel_path: "templates/go/hooksdk/types.go",
-                content: include_str!("../common/src/hooks_sdk_assets/go/hooksdk/types.go"),
+                content: include_str!("hooks_sdk_assets/go/hooksdk/types.go"),
                 executable: false,
             },
             Asset {
                 rel_path: "templates/go/cmd/log_jsonl/main.go",
-                content: include_str!("../common/src/hooks_sdk_assets/go/cmd/log_jsonl/main.go"),
+                content: include_str!("hooks_sdk_assets/go/cmd/log_jsonl/main.go"),
                 executable: false,
             },
         ],
@@ -393,136 +393,136 @@ fn assets_for(sdk: HookSdk) -> Vec<Asset> {
             },
             Asset {
                 rel_path: "templates/rust/Cargo.toml",
-                content: include_str!("../common/src/hooks_sdk_assets/rust/Cargo.install.toml"),
+                content: include_str!("hooks_sdk_assets/rust/Cargo.install.toml"),
                 executable: false,
             },
             Asset {
                 rel_path: "templates/rust/README.md",
-                content: include_str!("../common/src/hooks_sdk_assets/rust/README.md"),
+                content: include_str!("hooks_sdk_assets/rust/README.md"),
                 executable: false,
             },
             Asset {
                 rel_path: "templates/rust/src/main.rs",
-                content: include_str!("../common/src/hooks_sdk_assets/rust/src/main.rs"),
+                content: include_str!("hooks_sdk_assets/rust/src/main.rs"),
                 executable: false,
             },
         ],
         HookSdk::Java => vec![
             Asset {
                 rel_path: "templates/java/pom.xml",
-                content: include_str!("../common/src/hooks_sdk_assets/java/pom.xml"),
+                content: include_str!("hooks_sdk_assets/java/pom.xml"),
                 executable: false,
             },
             Asset {
                 rel_path: "templates/java/README.md",
-                content: include_str!("../common/src/hooks_sdk_assets/java/README.md"),
+                content: include_str!("hooks_sdk_assets/java/README.md"),
                 executable: false,
             },
             Asset {
                 rel_path: "templates/java/sdk/pom.xml",
-                content: include_str!("../common/src/hooks_sdk_assets/java/sdk/pom.xml"),
+                content: include_str!("hooks_sdk_assets/java/sdk/pom.xml"),
                 executable: false,
             },
             Asset {
                 rel_path: "templates/java/sdk/src/main/java/dev/xcodex/hooks/sdk/HookReader.java",
                 content: include_str!(
-                    "../common/src/hooks_sdk_assets/java/sdk/src/main/java/dev/xcodex/hooks/sdk/HookReader.java"
+                    "hooks_sdk_assets/java/sdk/src/main/java/dev/xcodex/hooks/sdk/HookReader.java"
                 ),
                 executable: false,
             },
             Asset {
                 rel_path: "templates/java/sdk/src/main/java/dev/xcodex/hooks/sdk/HookParser.java",
                 content: include_str!(
-                    "../common/src/hooks_sdk_assets/java/sdk/src/main/java/dev/xcodex/hooks/sdk/HookParser.java"
+                    "hooks_sdk_assets/java/sdk/src/main/java/dev/xcodex/hooks/sdk/HookParser.java"
                 ),
                 executable: false,
             },
             Asset {
                 rel_path: "templates/java/sdk/src/main/java/dev/xcodex/hooks/sdk/HookEvent.java",
                 content: include_str!(
-                    "../common/src/hooks_sdk_assets/java/sdk/src/main/java/dev/xcodex/hooks/sdk/HookEvent.java"
+                    "hooks_sdk_assets/java/sdk/src/main/java/dev/xcodex/hooks/sdk/HookEvent.java"
                 ),
                 executable: false,
             },
             Asset {
                 rel_path: "templates/java/sdk/src/main/java/dev/xcodex/hooks/sdk/UnknownHookEvent.java",
                 content: include_str!(
-                    "../common/src/hooks_sdk_assets/java/sdk/src/main/java/dev/xcodex/hooks/sdk/UnknownHookEvent.java"
+                    "hooks_sdk_assets/java/sdk/src/main/java/dev/xcodex/hooks/sdk/UnknownHookEvent.java"
                 ),
                 executable: false,
             },
             Asset {
                 rel_path: "templates/java/sdk/src/main/java/dev/xcodex/hooks/sdk/AgentTurnCompleteEvent.java",
                 content: include_str!(
-                    "../common/src/hooks_sdk_assets/java/sdk/src/main/java/dev/xcodex/hooks/sdk/AgentTurnCompleteEvent.java"
+                    "hooks_sdk_assets/java/sdk/src/main/java/dev/xcodex/hooks/sdk/AgentTurnCompleteEvent.java"
                 ),
                 executable: false,
             },
             Asset {
                 rel_path: "templates/java/sdk/src/main/java/dev/xcodex/hooks/sdk/ApprovalRequestedEvent.java",
                 content: include_str!(
-                    "../common/src/hooks_sdk_assets/java/sdk/src/main/java/dev/xcodex/hooks/sdk/ApprovalRequestedEvent.java"
+                    "hooks_sdk_assets/java/sdk/src/main/java/dev/xcodex/hooks/sdk/ApprovalRequestedEvent.java"
                 ),
                 executable: false,
             },
             Asset {
                 rel_path: "templates/java/sdk/src/main/java/dev/xcodex/hooks/sdk/SessionStartEvent.java",
                 content: include_str!(
-                    "../common/src/hooks_sdk_assets/java/sdk/src/main/java/dev/xcodex/hooks/sdk/SessionStartEvent.java"
+                    "hooks_sdk_assets/java/sdk/src/main/java/dev/xcodex/hooks/sdk/SessionStartEvent.java"
                 ),
                 executable: false,
             },
             Asset {
                 rel_path: "templates/java/sdk/src/main/java/dev/xcodex/hooks/sdk/SessionEndEvent.java",
                 content: include_str!(
-                    "../common/src/hooks_sdk_assets/java/sdk/src/main/java/dev/xcodex/hooks/sdk/SessionEndEvent.java"
+                    "hooks_sdk_assets/java/sdk/src/main/java/dev/xcodex/hooks/sdk/SessionEndEvent.java"
                 ),
                 executable: false,
             },
             Asset {
                 rel_path: "templates/java/sdk/src/main/java/dev/xcodex/hooks/sdk/ModelRequestStartedEvent.java",
                 content: include_str!(
-                    "../common/src/hooks_sdk_assets/java/sdk/src/main/java/dev/xcodex/hooks/sdk/ModelRequestStartedEvent.java"
+                    "hooks_sdk_assets/java/sdk/src/main/java/dev/xcodex/hooks/sdk/ModelRequestStartedEvent.java"
                 ),
                 executable: false,
             },
             Asset {
                 rel_path: "templates/java/sdk/src/main/java/dev/xcodex/hooks/sdk/ModelResponseCompletedEvent.java",
                 content: include_str!(
-                    "../common/src/hooks_sdk_assets/java/sdk/src/main/java/dev/xcodex/hooks/sdk/ModelResponseCompletedEvent.java"
+                    "hooks_sdk_assets/java/sdk/src/main/java/dev/xcodex/hooks/sdk/ModelResponseCompletedEvent.java"
                 ),
                 executable: false,
             },
             Asset {
                 rel_path: "templates/java/sdk/src/main/java/dev/xcodex/hooks/sdk/ToolCallStartedEvent.java",
                 content: include_str!(
-                    "../common/src/hooks_sdk_assets/java/sdk/src/main/java/dev/xcodex/hooks/sdk/ToolCallStartedEvent.java"
+                    "hooks_sdk_assets/java/sdk/src/main/java/dev/xcodex/hooks/sdk/ToolCallStartedEvent.java"
                 ),
                 executable: false,
             },
             Asset {
                 rel_path: "templates/java/sdk/src/main/java/dev/xcodex/hooks/sdk/ToolCallFinishedEvent.java",
                 content: include_str!(
-                    "../common/src/hooks_sdk_assets/java/sdk/src/main/java/dev/xcodex/hooks/sdk/ToolCallFinishedEvent.java"
+                    "hooks_sdk_assets/java/sdk/src/main/java/dev/xcodex/hooks/sdk/ToolCallFinishedEvent.java"
                 ),
                 executable: false,
             },
             Asset {
                 rel_path: "templates/java/sdk/src/main/java/dev/xcodex/hooks/sdk/TokenUsage.java",
                 content: include_str!(
-                    "../common/src/hooks_sdk_assets/java/sdk/src/main/java/dev/xcodex/hooks/sdk/TokenUsage.java"
+                    "hooks_sdk_assets/java/sdk/src/main/java/dev/xcodex/hooks/sdk/TokenUsage.java"
                 ),
                 executable: false,
             },
             Asset {
                 rel_path: "templates/java/template/pom.xml",
-                content: include_str!("../common/src/hooks_sdk_assets/java/template/pom.xml"),
+                content: include_str!("hooks_sdk_assets/java/template/pom.xml"),
                 executable: false,
             },
             Asset {
                 rel_path: "templates/java/template/src/main/java/dev/xcodex/hooks/LogJsonlHook.java",
                 content: include_str!(
-                    "../common/src/hooks_sdk_assets/java/template/src/main/java/dev/xcodex/hooks/LogJsonlHook.java"
+                    "hooks_sdk_assets/java/template/src/main/java/dev/xcodex/hooks/LogJsonlHook.java"
                 ),
                 executable: false,
             },

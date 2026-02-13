@@ -1,5 +1,6 @@
 use async_trait::async_trait;
 use codex_protocol::models::FunctionCallOutputBody;
+use codex_protocol::openai_models::InputModality;
 use serde::Deserialize;
 use tokio::fs;
 
@@ -23,6 +24,9 @@ use codex_protocol::request_user_input::RequestUserInputQuestionOption;
 
 pub struct ViewImageHandler;
 
+const VIEW_IMAGE_UNSUPPORTED_MESSAGE: &str =
+    "view_image is not allowed because you do not support image inputs";
+
 #[derive(Deserialize)]
 struct ViewImageArgs {
     path: String,
@@ -35,6 +39,17 @@ impl ToolHandler for ViewImageHandler {
     }
 
     async fn handle(&self, invocation: ToolInvocation) -> Result<ToolOutput, FunctionCallError> {
+        if !invocation
+            .turn
+            .model_info
+            .input_modalities
+            .contains(&InputModality::Image)
+        {
+            return Err(FunctionCallError::RespondToModel(
+                VIEW_IMAGE_UNSUPPORTED_MESSAGE.to_string(),
+            ));
+        }
+
         let ToolInvocation {
             session,
             turn,

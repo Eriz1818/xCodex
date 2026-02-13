@@ -5,7 +5,6 @@ use crate::version::CODEX_CLI_VERSION;
 use crate::xtreme;
 use chrono::DateTime;
 use chrono::Local;
-use codex_common::summarize_sandbox_policy;
 use codex_core::WireApi;
 use codex_core::config::Config;
 use codex_core::protocol::AskForApproval;
@@ -16,6 +15,7 @@ use codex_core::protocol::TokenUsageInfo;
 use codex_protocol::ThreadId;
 use codex_protocol::account::PlanType;
 use codex_protocol::openai_models::ReasoningEffort;
+use codex_utils_sandbox_summary::summarize_sandbox_policy;
 use ratatui::prelude::*;
 use ratatui::style::Stylize;
 use std::collections::BTreeSet;
@@ -37,6 +37,7 @@ use super::rate_limits::StatusRateLimitData;
 use super::rate_limits::StatusRateLimitRow;
 use super::rate_limits::StatusRateLimitValue;
 use super::rate_limits::compose_rate_limit_data;
+use super::rate_limits::compose_rate_limit_data_many;
 use super::rate_limits::format_status_limit_summary;
 use super::rate_limits::render_status_limit_progress_bar;
 use crate::wrapping::RtOptions;
@@ -144,6 +145,7 @@ struct StatusHistoryCell {
     xtreme_ui_enabled: bool,
 }
 
+#[cfg(test)]
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn new_status_output(
     config: &Config,
@@ -189,6 +191,76 @@ pub(crate) fn new_status_output_with_session_stats(
     session_stats: Option<&SessionStats>,
     forked_from: Option<ThreadId>,
     rate_limits: Option<&RateLimitSnapshotDisplay>,
+    plan_type: Option<PlanType>,
+    now: DateTime<Local>,
+    model_name: &str,
+    collaboration_mode: Option<&str>,
+    reasoning_effort_override: Option<Option<ReasoningEffort>>,
+) -> CompositeHistoryCell {
+    let snapshots = rate_limits.map(std::slice::from_ref).unwrap_or_default();
+    new_status_output_inner(
+        config,
+        auth_manager,
+        token_info,
+        total_usage,
+        session_id,
+        thread_name,
+        session_stats,
+        forked_from,
+        snapshots,
+        plan_type,
+        now,
+        model_name,
+        collaboration_mode,
+        reasoning_effort_override,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn new_status_output_with_rate_limits(
+    config: &Config,
+    auth_manager: &AuthManager,
+    token_info: Option<&TokenUsageInfo>,
+    total_usage: &TokenUsage,
+    session_id: &Option<ThreadId>,
+    thread_name: Option<String>,
+    forked_from: Option<ThreadId>,
+    rate_limits: &[RateLimitSnapshotDisplay],
+    plan_type: Option<PlanType>,
+    now: DateTime<Local>,
+    model_name: &str,
+    collaboration_mode: Option<&str>,
+    reasoning_effort_override: Option<Option<ReasoningEffort>>,
+) -> CompositeHistoryCell {
+    new_status_output_inner(
+        config,
+        auth_manager,
+        token_info,
+        total_usage,
+        session_id,
+        thread_name,
+        None,
+        forked_from,
+        rate_limits,
+        plan_type,
+        now,
+        model_name,
+        collaboration_mode,
+        reasoning_effort_override,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn new_status_output_inner(
+    config: &Config,
+    auth_manager: &AuthManager,
+    token_info: Option<&TokenUsageInfo>,
+    total_usage: &TokenUsage,
+    session_id: &Option<ThreadId>,
+    thread_name: Option<String>,
+    session_stats: Option<&SessionStats>,
+    forked_from: Option<ThreadId>,
+    rate_limits: &[RateLimitSnapshotDisplay],
     plan_type: Option<PlanType>,
     now: DateTime<Local>,
     model_name: &str,
@@ -268,6 +340,7 @@ pub(crate) fn new_status_menu_summary_card_with_session_stats(
     collaboration_mode: Option<&str>,
     reasoning_effort_override: Option<Option<ReasoningEffort>>,
 ) -> Box<dyn HistoryCell> {
+    let snapshots = rate_limits.map(std::slice::from_ref).unwrap_or_default();
     Box::new(StatusMenuSummaryCell(StatusHistoryCell::new(
         config,
         auth_manager,
@@ -277,7 +350,7 @@ pub(crate) fn new_status_menu_summary_card_with_session_stats(
         thread_name,
         session_stats,
         forked_from,
-        rate_limits,
+        snapshots,
         plan_type,
         now,
         model_name,
@@ -571,7 +644,7 @@ impl StatusHistoryCell {
         thread_name: Option<String>,
         session_stats: Option<&SessionStats>,
         forked_from: Option<ThreadId>,
-        rate_limits: Option<&RateLimitSnapshotDisplay>,
+        rate_limits: &[RateLimitSnapshotDisplay],
         plan_type: Option<PlanType>,
         now: DateTime<Local>,
         model_name: &str,
@@ -609,7 +682,11 @@ impl StatusHistoryCell {
             .unwrap_or_else(|| "<unknown>".to_string());
         let sandbox = match &sandbox_policy {
             SandboxPolicy::DangerFullAccess => "danger-full-access".to_string(),
-            SandboxPolicy::ReadOnly => "read-only".to_string(),
+            SandboxPolicy::ReadOnly { .. } => "read-only".to_string(),
+            SandboxPolicy::WorkspaceWrite {
+                network_access: true,
+                ..
+            } => "workspace-write with network access".to_string(),
             SandboxPolicy::WorkspaceWrite { .. } => "workspace-write".to_string(),
             SandboxPolicy::ExternalSandbox { network_access } => {
                 if matches!(network_access, NetworkAccess::Enabled) {
@@ -618,6 +695,17 @@ impl StatusHistoryCell {
                     "external-sandbox".to_string()
                 }
             }
+        };
+        let permissions = if config.approval_policy.value() == AskForApproval::OnRequest
+            && *config.sandbox_policy.get() == SandboxPolicy::new_workspace_write_policy()
+        {
+            "Default".to_string()
+        } else if config.approval_policy.value() == AskForApproval::Never
+            && *config.sandbox_policy.get() == SandboxPolicy::DangerFullAccess
+        {
+            "Full Access".to_string()
+        } else {
+            format!("Custom ({sandbox}, {approval})")
         };
         let agents_summary = compose_agents_summary(config);
         let auto_compact_enabled =
@@ -653,7 +741,11 @@ impl StatusHistoryCell {
             output: total_usage.output_tokens,
             context_window,
         };
-        let rate_limits = compose_rate_limit_data(rate_limits, now);
+        let rate_limits = if rate_limits.len() <= 1 {
+            compose_rate_limit_data(rate_limits.first(), now)
+        } else {
+            compose_rate_limit_data_many(rate_limits, now)
+        };
 
         Self {
             ui_frontend: "tui".to_string(),

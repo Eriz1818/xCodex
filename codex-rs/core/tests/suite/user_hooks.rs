@@ -157,7 +157,11 @@ async fn hooks_approval_requested_invoked_for_exec() -> Result<()> {
         })
         .await?;
 
-    wait_for_event(&codex, |ev| matches!(ev, EventMsg::ExecApprovalRequest(_))).await;
+    let approval_event =
+        wait_for_event(&codex, |ev| matches!(ev, EventMsg::ExecApprovalRequest(_))).await;
+    let EventMsg::ExecApprovalRequest(approval) = approval_event else {
+        unreachable!("event guard ensures ExecApprovalRequest")
+    };
     fs_wait::wait_for_path_exists(&hook_file, Duration::from_secs(5)).await?;
 
     let hook_payload_raw = tokio::fs::read_to_string(&hook_file).await?;
@@ -171,7 +175,8 @@ async fn hooks_approval_requested_invoked_for_exec() -> Result<()> {
 
     codex
         .submit(Op::ExecApproval {
-            id: "0".into(),
+            id: approval.call_id.clone(),
+            turn_id: Some(approval.turn_id.clone()),
             decision: ReviewDecision::Approved,
         })
         .await?;

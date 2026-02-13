@@ -417,7 +417,6 @@ async fn remote_compact_trims_function_call_history_to_fit_context_window() -> R
                 responses::ev_shell_command_call(trimmed_call_id, trimmed_command),
                 responses::ev_completed("trimmed-call-response"),
             ]),
-            sse(vec![responses::ev_completed("trimmed-final-response")]),
         ],
     )
     .await;
@@ -537,10 +536,6 @@ async fn auto_remote_compact_trims_function_call_history_to_fit_context_window()
                 "trimmed-final-response",
                 500_000,
             )]),
-            sse(vec![
-                responses::ev_assistant_message("post-compact-assistant", "post compact complete"),
-                responses::ev_completed("post-compact-final-response"),
-            ]),
         ],
     )
     .await;

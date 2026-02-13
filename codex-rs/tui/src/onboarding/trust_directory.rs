@@ -27,7 +27,8 @@ use super::onboarding_screen::StepState;
 pub(crate) struct TrustDirectoryWidget {
     pub codex_home: PathBuf,
     pub cwd: PathBuf,
-    pub is_git_repo: bool,
+    pub show_windows_create_sandbox_hint: bool,
+    pub should_quit: bool,
     pub selection: Option<TrustDirectorySelection>,
     pub highlighted: TrustDirectorySelection,
     pub error: Option<String>,
@@ -36,7 +37,7 @@ pub(crate) struct TrustDirectoryWidget {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TrustDirectorySelection {
     Trust,
-    DontTrust,
+    Quit,
 }
 
 impl WidgetRef for &TrustDirectoryWidget {
@@ -55,6 +56,14 @@ impl WidgetRef for &TrustDirectoryWidget {
         } else {
             "Since this folder is not version controlled, we recommend requiring approval of all edits and commands."
         };
+        column.push(
+            Paragraph::new(
+                "Do you trust the contents of this directory? Working with untrusted contents comes with higher risk of prompt injection.".to_string(),
+            )
+                .wrap(Wrap { trim: true })
+                .inset(Insets::tlbr(0, 2, 0, 0)),
+        );
+        column.push("");
 
         column.push(
             Paragraph::new(guidance.to_string())
@@ -63,26 +72,15 @@ impl WidgetRef for &TrustDirectoryWidget {
         );
         column.push("");
 
-        let mut options: Vec<(&str, TrustDirectorySelection)> = Vec::new();
-        if self.is_git_repo {
-            options.push((
-                "Yes, allow xcodex to work in this folder without asking for approval",
-                TrustDirectorySelection::Trust,
-            ));
-            options.push((
-                "No, ask me to approve edits and commands",
-                TrustDirectorySelection::DontTrust,
-            ));
+        let trust_label = if self.is_git_repo {
+            "Yes, allow xcodex to work in this folder without asking for approval"
         } else {
-            options.push((
-                "Allow xcodex to work in this folder without asking for approval",
-                TrustDirectorySelection::Trust,
-            ));
-            options.push((
-                "Require approval of edits and commands",
-                TrustDirectorySelection::DontTrust,
-            ));
-        }
+            "Yes, continue"
+        };
+        let options: Vec<(&str, TrustDirectorySelection)> = vec![
+            (trust_label, TrustDirectorySelection::Trust),
+            ("No, quit", TrustDirectorySelection::Quit),
+        ];
 
         for (idx, (text, selection)) in options.iter().enumerate() {
             column.push(selection_option_row(
@@ -108,7 +106,11 @@ impl WidgetRef for &TrustDirectoryWidget {
             Line::from(vec![
                 "Press ".dim(),
                 key_hint::plain(KeyCode::Enter).into(),
-                " to continue".dim(),
+                if self.show_windows_create_sandbox_hint {
+                    " to continue and create a sandbox...".dim()
+                } else {
+                    " to continue".dim()
+                },
             ])
             .inset(Insets::tlbr(0, 2, 0, 0)),
         );
@@ -128,13 +130,13 @@ impl KeyboardHandler for TrustDirectoryWidget {
                 self.highlighted = TrustDirectorySelection::Trust;
             }
             KeyCode::Down | KeyCode::Char('j') => {
-                self.highlighted = TrustDirectorySelection::DontTrust;
+                self.highlighted = TrustDirectorySelection::Quit;
             }
             KeyCode::Char('1') | KeyCode::Char('y') => self.handle_trust(),
-            KeyCode::Char('2') | KeyCode::Char('n') => self.handle_dont_trust(),
+            KeyCode::Char('2') | KeyCode::Char('n') => self.handle_quit(),
             KeyCode::Enter => match self.highlighted {
                 TrustDirectorySelection::Trust => self.handle_trust(),
-                TrustDirectorySelection::DontTrust => self.handle_dont_trust(),
+                TrustDirectorySelection::Quit => self.handle_quit(),
             },
             _ => {}
         }
@@ -143,9 +145,10 @@ impl KeyboardHandler for TrustDirectoryWidget {
 
 impl StepStateProvider for TrustDirectoryWidget {
     fn get_step_state(&self) -> StepState {
-        match self.selection {
-            Some(_) => StepState::Complete,
-            None => StepState::InProgress,
+        if self.selection.is_some() || self.should_quit {
+            StepState::Complete
+        } else {
+            StepState::InProgress
         }
     }
 }
@@ -162,19 +165,13 @@ impl TrustDirectoryWidget {
         self.selection = Some(TrustDirectorySelection::Trust);
     }
 
-    fn handle_dont_trust(&mut self) {
-        self.highlighted = TrustDirectorySelection::DontTrust;
-        let target =
-            resolve_root_git_project_for_trust(&self.cwd).unwrap_or_else(|| self.cwd.clone());
-        if let Err(e) = set_project_trust_level(&self.codex_home, &target, TrustLevel::Untrusted) {
-            tracing::error!("Failed to set project untrusted: {e:?}");
-            self.error = Some(format!(
-                "Failed to set untrusted for {}: {e}",
-                target.display()
-            ));
-        }
+    fn handle_quit(&mut self) {
+        self.highlighted = TrustDirectorySelection::Quit;
+        self.should_quit = true;
+    }
 
-        self.selection = Some(TrustDirectorySelection::DontTrust);
+    pub fn should_quit(&self) -> bool {
+        self.should_quit
     }
 }
 
@@ -198,9 +195,10 @@ mod tests {
         let mut widget = TrustDirectoryWidget {
             codex_home: codex_home.path().to_path_buf(),
             cwd: PathBuf::from("."),
-            is_git_repo: false,
+            show_windows_create_sandbox_hint: false,
+            should_quit: false,
             selection: None,
-            highlighted: TrustDirectorySelection::DontTrust,
+            highlighted: TrustDirectorySelection::Quit,
             error: None,
         };
 
@@ -213,7 +211,7 @@ mod tests {
 
         let press = KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE);
         widget.handle_key_event(press);
-        assert_eq!(widget.selection, Some(TrustDirectorySelection::DontTrust));
+        assert!(widget.should_quit);
     }
 
     #[test]
@@ -222,7 +220,8 @@ mod tests {
         let widget = TrustDirectoryWidget {
             codex_home: codex_home.path().to_path_buf(),
             cwd: PathBuf::from("/workspace/project"),
-            is_git_repo: true,
+            show_windows_create_sandbox_hint: false,
+            should_quit: false,
             selection: None,
             highlighted: TrustDirectorySelection::Trust,
             error: None,

@@ -57,6 +57,7 @@ pub(crate) async fn run_compact_task(
     input: Vec<UserInput>,
 ) -> CodexResult<()> {
     let start_event = EventMsg::TurnStarted(TurnStartedEvent {
+        turn_id: turn_context.sub_id.clone(),
         model_context_window: turn_context.model_context_window(),
         collaboration_mode_kind: turn_context.collaboration_mode.mode,
     });
@@ -95,6 +96,7 @@ async fn run_compact_task_inner(
     // session config before this write occurs.
     let collaboration_mode = sess.current_collaboration_mode().await;
     let rollout_item = RolloutItem::TurnContext(TurnContextItem {
+        turn_id: Some(turn_context.sub_id.clone()),
         cwd: turn_context.cwd.clone(),
         approval_policy: turn_context.approval_policy,
         sandbox_policy: turn_context.sandbox_policy.clone(),
@@ -112,7 +114,9 @@ async fn run_compact_task_inner(
 
     loop {
         // Clone is required because of the loop
-        let turn_input = history.clone().for_prompt();
+        let turn_input = history
+            .clone()
+            .for_prompt(&turn_context.model_info.input_modalities);
         let turn_input_len = turn_input.len();
         let prompt = Prompt {
             input: turn_input,
@@ -491,11 +495,15 @@ mod tests {
                 id: None,
                 role: "user".to_string(),
                 content: vec![ContentItem::InputText {
-                    text: "# AGENTS.md instructions for project\n\n<INSTRUCTIONS>\ndo things\n</INSTRUCTIONS>"
+                    text: r#"# AGENTS.md instructions for project
+
+<INSTRUCTIONS>
+do things
+</INSTRUCTIONS>"#
                         .to_string(),
                 }],
                 end_turn: None,
-            phase: None,
+                phase: None,
             },
             ResponseItem::Message {
                 id: None,
@@ -504,7 +512,7 @@ mod tests {
                     text: "<ENVIRONMENT_CONTEXT>cwd=/tmp</ENVIRONMENT_CONTEXT>".to_string(),
                 }],
                 end_turn: None,
-            phase: None,
+                phase: None,
             },
             ResponseItem::Message {
                 id: None,
@@ -513,7 +521,7 @@ mod tests {
                     text: "real user message".to_string(),
                 }],
                 end_turn: None,
-            phase: None,
+                phase: None,
             },
         ];
 
@@ -631,7 +639,11 @@ mod tests {
                 id: None,
                 role: "user".to_string(),
                 content: vec![ContentItem::InputText {
-                    text: "<environment_context>cwd=/tmp</environment_context>".to_string(),
+                    text: r#"<environment_context>
+  <cwd>/tmp</cwd>
+  <shell>zsh</shell>
+</environment_context>"#
+                        .to_string(),
                 }],
                 end_turn: None,
                 phase: None,
@@ -662,7 +674,11 @@ mod tests {
                 id: None,
                 role: "user".to_string(),
                 content: vec![ContentItem::InputText {
-                    text: "<environment_context>cwd=/tmp</environment_context>".to_string(),
+                    text: r#"<environment_context>
+  <cwd>/tmp</cwd>
+  <shell>zsh</shell>
+</environment_context>"#
+                        .to_string(),
                 }],
                 end_turn: None,
                 phase: None,
@@ -714,7 +730,12 @@ mod tests {
                 id: None,
                 role: "user".to_string(),
                 content: vec![ContentItem::InputText {
-                    text: "# AGENTS.md instructions for /repo\n\n<INSTRUCTIONS>\nkeep me updated\n</INSTRUCTIONS>".to_string(),
+                    text: r#"# AGENTS.md instructions for /repo
+
+<INSTRUCTIONS>
+keep me updated
+</INSTRUCTIONS>"#
+                        .to_string(),
                 }],
                 end_turn: None,
                 phase: None,
@@ -723,7 +744,11 @@ mod tests {
                 id: None,
                 role: "user".to_string(),
                 content: vec![ContentItem::InputText {
-                    text: "<environment_context>\n  <cwd>/repo</cwd>\n  <shell>zsh</shell>\n</environment_context>".to_string(),
+                    text: r#"<environment_context>
+  <cwd>/repo</cwd>
+  <shell>zsh</shell>
+</environment_context>"#
+                        .to_string(),
                 }],
                 end_turn: None,
                 phase: None,
@@ -732,7 +757,11 @@ mod tests {
                 id: None,
                 role: "user".to_string(),
                 content: vec![ContentItem::InputText {
-                    text: "<turn_aborted>\n  <turn_id>turn-1</turn_id>\n  <reason>interrupted</reason>\n</turn_aborted>".to_string(),
+                    text: r#"<turn_aborted>
+  <turn_id>turn-1</turn_id>
+  <reason>interrupted</reason>
+</turn_aborted>"#
+                        .to_string(),
                 }],
                 end_turn: None,
                 phase: None,
@@ -754,7 +783,12 @@ mod tests {
                 id: None,
                 role: "user".to_string(),
                 content: vec![ContentItem::InputText {
-                    text: "# AGENTS.md instructions for /repo\n\n<INSTRUCTIONS>\nkeep me updated\n</INSTRUCTIONS>".to_string(),
+                    text: r#"# AGENTS.md instructions for /repo
+
+<INSTRUCTIONS>
+keep me updated
+</INSTRUCTIONS>"#
+                        .to_string(),
                 }],
                 end_turn: None,
                 phase: None,
@@ -763,7 +797,11 @@ mod tests {
                 id: None,
                 role: "user".to_string(),
                 content: vec![ContentItem::InputText {
-                    text: "<environment_context>\n  <cwd>/repo</cwd>\n  <shell>zsh</shell>\n</environment_context>".to_string(),
+                    text: r#"<environment_context>
+  <cwd>/repo</cwd>
+  <shell>zsh</shell>
+</environment_context>"#
+                        .to_string(),
                 }],
                 end_turn: None,
                 phase: None,
@@ -772,7 +810,10 @@ mod tests {
                 id: None,
                 role: "user".to_string(),
                 content: vec![ContentItem::InputText {
-                    text: "<turn_aborted>\n  <turn_id>turn-1</turn_id>\n  <reason>interrupted</reason>\n</turn_aborted>"
+                    text: r#"<turn_aborted>
+  <turn_id>turn-1</turn_id>
+  <reason>interrupted</reason>
+</turn_aborted>"#
                         .to_string(),
                 }],
                 end_turn: None,
@@ -798,7 +839,12 @@ mod tests {
                 id: None,
                 role: "user".to_string(),
                 content: vec![ContentItem::InputText {
-                    text: "# AGENTS.md instructions for /repo\n\n<INSTRUCTIONS>\nkeep me updated\n</INSTRUCTIONS>".to_string(),
+                    text: r#"# AGENTS.md instructions for /repo
+
+<INSTRUCTIONS>
+keep me updated
+</INSTRUCTIONS>"#
+                        .to_string(),
                 }],
                 end_turn: None,
                 phase: None,
@@ -807,7 +853,11 @@ mod tests {
                 id: None,
                 role: "user".to_string(),
                 content: vec![ContentItem::InputText {
-                    text: "<environment_context>\n  <cwd>/repo</cwd>\n  <shell>zsh</shell>\n</environment_context>".to_string(),
+                    text: r#"<environment_context>
+  <cwd>/repo</cwd>
+  <shell>zsh</shell>
+</environment_context>"#
+                        .to_string(),
                 }],
                 end_turn: None,
                 phase: None,
@@ -816,7 +866,11 @@ mod tests {
                 id: None,
                 role: "user".to_string(),
                 content: vec![ContentItem::InputText {
-                    text: "<turn_aborted>\n  <turn_id>turn-1</turn_id>\n  <reason>interrupted</reason>\n</turn_aborted>".to_string(),
+                    text: r#"<turn_aborted>
+  <turn_id>turn-1</turn_id>
+  <reason>interrupted</reason>
+</turn_aborted>"#
+                        .to_string(),
                 }],
                 end_turn: None,
                 phase: None,

@@ -9,7 +9,7 @@ use rmcp::Service;
 use rmcp::model::ClientCapabilities;
 use rmcp::model::ClientInfo;
 use rmcp::model::ClientRequest;
-use rmcp::model::CreateElicitationRequestParam;
+use rmcp::model::CreateElicitationRequestParams;
 use rmcp::model::CreateElicitationResult;
 use rmcp::model::CustomRequest;
 use rmcp::model::ElicitationAction;
@@ -26,6 +26,8 @@ use std::process::Stdio;
 use std::sync::Arc;
 use std::sync::Mutex;
 use tokio::process::Command;
+
+mod xcodex_elicitation;
 
 pub async fn create_transport<P>(
     codex_home: P,
@@ -100,7 +102,7 @@ where
     S: Service<RoleClient> + ClientHandler,
 {
     let sandbox_state = SandboxState {
-        sandbox_policy: SandboxPolicy::ReadOnly,
+        sandbox_policy: SandboxPolicy::new_read_only_policy(),
         codex_linux_sandbox_exe,
         sandbox_cwd: sandbox_cwd.as_ref().to_path_buf(),
         use_linux_sandbox_bwrap: false,
@@ -122,6 +124,7 @@ where
             // Note that sandbox_cwd will already be included as a writable root
             // when the sandbox policy is expanded.
             writable_roots: vec![],
+            read_only_access: Default::default(),
             network_access: false,
             // Disable writes to temp dir because this is a test, so
             // writable_folder is likely also under /tmp and we want to be
@@ -155,7 +158,7 @@ where
 pub struct InteractiveClient {
     pub elicitations_to_accept: HashSet<String>,
     pub accept_all_elicitations: bool,
-    pub elicitation_requests: Arc<Mutex<Vec<CreateElicitationRequestParam>>>,
+    pub elicitation_requests: Arc<Mutex<Vec<CreateElicitationRequestParams>>>,
 }
 
 impl ClientHandler for InteractiveClient {
@@ -169,7 +172,7 @@ impl ClientHandler for InteractiveClient {
 
     fn create_elicitation(
         &self,
-        request: CreateElicitationRequestParam,
+        request: CreateElicitationRequestParams,
         _context: rmcp::service::RequestContext<RoleClient>,
     ) -> impl std::future::Future<Output = Result<CreateElicitationResult, McpError>> + Send + '_
     {
@@ -178,8 +181,11 @@ impl ClientHandler for InteractiveClient {
             .unwrap()
             .push(request.clone());
 
-        let accept =
-            self.accept_all_elicitations || self.elicitations_to_accept.contains(&request.message);
+        let accept = xcodex_elicitation::should_accept_elicitation_request(
+            &request,
+            &self.elicitations_to_accept,
+            self.accept_all_elicitations,
+        );
         async move {
             if accept {
                 Ok(CreateElicitationResult {

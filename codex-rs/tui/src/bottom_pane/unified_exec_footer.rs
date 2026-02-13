@@ -1,3 +1,9 @@
+//! Renders and formats unified-exec background session summary text.
+//!
+//! This module provides one canonical summary string so the bottom pane can
+//! either render a dedicated footer row or reuse the same text inline in the
+//! status row without duplicating copy/grammar logic.
+
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::Stylize;
@@ -7,6 +13,7 @@ use ratatui::widgets::Paragraph;
 use crate::live_wrap::take_prefix_by_width;
 use crate::render::renderable::Renderable;
 
+/// Tracks active unified-exec processes and renders a compact summary.
 pub(crate) struct UnifiedExecFooter {
     hooks: Vec<String>,
     processes: Vec<String>,
@@ -40,9 +47,14 @@ impl UnifiedExecFooter {
         self.processes.is_empty() && self.hooks.is_empty()
     }
 
-    fn render_lines(&self, width: u16) -> Vec<Line<'static>> {
-        if (self.processes.is_empty() && self.hooks.is_empty()) || width < 4 {
-            return Vec::new();
+    /// Returns the unindented summary text used by both footer and status-row rendering.
+    ///
+    /// The returned string intentionally omits leading spaces and separators so
+    /// callers can choose layout-specific framing (inline separator vs. row
+    /// indentation). Returning `None` means there is nothing to surface.
+    pub(crate) fn summary_text(&self) -> Option<String> {
+        if self.processes.is_empty() && self.hooks.is_empty() {
+            return None;
         }
 
         let mut parts = Vec::new();
@@ -62,8 +74,21 @@ impl UnifiedExecFooter {
         if hook_count > 0 {
             parts.push(String::from("/hooks to view"));
         }
+        if count > 0 {
+            parts.push(String::from("/clean to close"));
+        }
 
-        let message = format!("  {}", parts.join(" · "));
+        Some(parts.join(" · "))
+    }
+
+    fn render_lines(&self, width: u16) -> Vec<Line<'static>> {
+        if width < 4 {
+            return Vec::new();
+        }
+        let Some(summary) = self.summary_text() else {
+            return Vec::new();
+        };
+        let message = format!("  {summary}");
         let (truncated, _, _) = take_prefix_by_width(&message, width as usize);
         vec![Line::from(truncated.dim())]
     }

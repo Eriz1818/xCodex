@@ -293,7 +293,10 @@ pub(crate) struct BottomPane {
     mcp_startup_banner: Option<McpStartupBannerWidget>,
     /// Ephemeral sensitive-path exclusion summary (not part of the transcript).
     exclusion_summary_banner: Option<ExclusionSummaryBannerWidget>,
-    /// Unified exec session summary shown above the composer.
+    /// Unified exec session summary source.
+    ///
+    /// When a status row exists, this summary is mirrored inline in that row;
+    /// when no status row exists, it renders as its own footer row.
     unified_exec_footer: UnifiedExecFooter,
     /// Queued user messages to show above the composer while a turn is running.
     queued_user_messages: QueuedUserMessages,
@@ -802,6 +805,7 @@ impl BottomPane {
                 if let Some(status) = self.status.as_mut() {
                     status.set_interrupt_hint_visible(true);
                 }
+                self.sync_status_inline_message();
                 self.request_redraw();
             }
         } else {
@@ -829,6 +833,7 @@ impl BottomPane {
             {
                 status.update_header("Charging".to_string());
             }
+            self.sync_status_inline_message();
             self.request_redraw();
         }
     }
@@ -891,6 +896,26 @@ impl BottomPane {
         self.push_view(Box::new(view));
     }
 
+    /// Replace the active selection view when it matches `view_id`.
+    pub(crate) fn replace_selection_view_if_active(
+        &mut self,
+        view_id: &'static str,
+        params: list_selection_view::SelectionViewParams,
+    ) -> bool {
+        let is_match = self
+            .view_stack
+            .last()
+            .is_some_and(|view| view.view_id() == Some(view_id));
+        if !is_match {
+            return false;
+        }
+
+        self.view_stack.pop();
+        let view = list_selection_view::ListSelectionView::new(params, self.app_event_tx.clone());
+        self.push_view(Box::new(view));
+        true
+    }
+
     /// Update the queued messages preview shown above the composer.
     pub(crate) fn set_queued_user_messages(&mut self, queued: Vec<String>) {
         self.queued_user_messages.messages = queued;
@@ -906,17 +931,31 @@ impl BottomPane {
         }
     }
 
-    #[allow(dead_code)]
+    /// Update the unified-exec process set and refresh whichever summary surface is active.
+    ///
+    /// The summary may be displayed inline in the status row or as a dedicated
+    /// footer row depending on whether a status indicator is currently visible.
     pub(crate) fn set_unified_exec_processes(&mut self, processes: Vec<String>) {
         if self.unified_exec_footer.set_processes(processes) {
+            self.sync_status_inline_message();
             self.request_redraw();
         }
     }
 
-    #[allow(dead_code)]
     pub(crate) fn set_unified_exec_hooks(&mut self, hooks: Vec<String>) {
         if self.unified_exec_footer.set_hooks(hooks) {
+            self.sync_status_inline_message();
             self.request_redraw();
+        }
+    }
+
+    /// Copy unified-exec summary text into the active status row, if any.
+    ///
+    /// This keeps status-line inline text synchronized without forcing the
+    /// standalone unified-exec footer row to be visible.
+    fn sync_status_inline_message(&mut self) {
+        if let Some(status) = self.status.as_mut() {
+            status.update_inline_message(self.unified_exec_footer.summary_text());
         }
     }
 
@@ -1136,7 +1175,9 @@ impl BottomPane {
                 }
                 flex.push(0, RenderableItem::Borrowed(banner));
             }
-            if !self.unified_exec_footer.is_empty() {
+            // Avoid double-surfacing the same summary and avoid adding an extra
+            // row while the status line is already visible.
+            if self.status.is_none() && !self.unified_exec_footer.is_empty() {
                 flex.push(0, RenderableItem::Borrowed(&self.unified_exec_footer));
             }
             let has_queued_messages = !self.queued_user_messages.messages.is_empty();
@@ -1159,13 +1200,15 @@ impl BottomPane {
     }
 
     pub(crate) fn set_status_line(&mut self, status_line: Option<Line<'static>>) {
-        self.composer.set_status_line(status_line);
-        self.request_redraw();
+        if self.composer.set_status_line(status_line) {
+            self.request_redraw();
+        }
     }
 
     pub(crate) fn set_status_line_enabled(&mut self, enabled: bool) {
-        self.composer.set_status_line_enabled(enabled);
-        self.request_redraw();
+        if self.composer.set_status_line_enabled(enabled) {
+            self.request_redraw();
+        }
     }
 }
 
@@ -1459,6 +1502,35 @@ mod tests {
     }
 
     #[test]
+    fn unified_exec_summary_does_not_increase_height_when_status_visible() {
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let mut pane = BottomPane::new(BottomPaneParams {
+            app_event_tx: tx,
+            frame_requester: FrameRequester::test_dummy(),
+            has_input_focus: true,
+            enhanced_keys_supported: false,
+            placeholder_text: "Ask Codex to do anything".to_string(),
+            disable_paste_burst: false,
+            animations_enabled: true,
+            skills: Some(Vec::new()),
+        });
+
+        pane.set_task_running(true);
+        let width = 120;
+        let before = pane.desired_height(width);
+
+        pane.set_unified_exec_processes(vec!["sleep 5".to_string()]);
+        let after = pane.desired_height(width);
+
+        assert_eq!(after, before);
+
+        let area = Rect::new(0, 0, width, after);
+        let rendered = render_snapshot(&pane, area);
+        assert!(rendered.contains("background terminal running · /ps to view"));
+    }
+
+    #[test]
     fn status_with_details_and_queued_messages_snapshot() {
         let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
         let tx = AppEventSender::new(tx_raw);
@@ -1596,6 +1668,7 @@ mod tests {
                 short_description: None,
                 interface: None,
                 dependencies: None,
+                policy: None,
                 path: PathBuf::from("test-skill"),
                 scope: SkillScope::User,
             }]),

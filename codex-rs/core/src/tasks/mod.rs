@@ -46,7 +46,7 @@ pub(crate) use user_shell::UserShellCommandTask;
 pub(crate) use user_shell::execute_user_shell_command;
 
 const GRACEFULL_INTERRUPTION_TIMEOUT_MS: u64 = 100;
-const TURN_ABORTED_INTERRUPTED_GUIDANCE: &str = "The user interrupted the previous turn on purpose. If any tools/commands were aborted, they may have partially executed; verify current state before retrying.";
+const TURN_ABORTED_INTERRUPTED_GUIDANCE: &str = "The user interrupted the previous turn on purpose. Any running unified exec processes were terminated. If any tools/commands were aborted, they may have partially executed; verify current state before retrying.";
 
 /// Thin wrapper that exposes the parts of [`Session`] task runners need.
 #[derive(Clone)]
@@ -120,6 +120,7 @@ impl Session {
         task: T,
     ) {
         self.abort_all_tasks(TurnAbortReason::Replaced).await;
+        self.clear_mcp_tool_selection().await;
         self.seed_initial_context_if_needed(turn_context.as_ref())
             .await;
 
@@ -139,6 +140,7 @@ impl Session {
             tokio::spawn(
                 async move {
                     let ctx_for_finish = Arc::clone(&ctx);
+                    let model_slug = ctx_for_finish.model_info.slug.clone();
                     let last_agent_message = task_for_run
                         .run(
                             Arc::clone(&session_ctx),
@@ -151,9 +153,14 @@ impl Session {
                     if !task_cancellation_token.is_cancelled() {
                         // Emit completion uniformly from spawn site so all tasks share the same lifecycle.
                         let sess = session_ctx.clone_session();
-                        sess.on_task_finished(ctx_for_finish, last_agent_message)
+                        sess.on_task_finished(Arc::clone(&ctx_for_finish), last_agent_message)
                             .await;
                     }
+                    // Set previous model regardless of completion or interruption for model-switch handling.
+                    session_ctx
+                        .clone_session()
+                        .set_previous_model(Some(model_slug))
+                        .await;
                     done_clone.notify_waiters();
                 }
                 .instrument(session_span),
@@ -181,7 +188,9 @@ impl Session {
         for task in self.take_all_running_tasks().await {
             self.handle_task_abort(task, reason.clone()).await;
         }
-        self.close_unified_exec_processes().await;
+        if reason == TurnAbortReason::Interrupted {
+            self.close_unified_exec_processes().await;
+        }
     }
 
     pub async fn on_task_finished(
@@ -223,7 +232,10 @@ impl Session {
             self.send_event(turn_context.as_ref(), EventMsg::ExclusionSummary(summary))
                 .await;
         }
-        let event = EventMsg::TurnComplete(TurnCompleteEvent { last_agent_message });
+        let event = EventMsg::TurnComplete(TurnCompleteEvent {
+            turn_id: turn_context.sub_id.clone(),
+            last_agent_message,
+        });
         self.send_event(turn_context.as_ref(), event).await;
     }
 
@@ -246,7 +258,7 @@ impl Session {
         }
     }
 
-    async fn close_unified_exec_processes(&self) {
+    pub(crate) async fn close_unified_exec_processes(&self) {
         self.services
             .unified_exec_manager
             .terminate_all_processes()
@@ -272,6 +284,10 @@ impl Session {
         }
 
         task.handle.abort();
+
+        // Set previous model even when interrupted so model-switch handling stays correct.
+        self.set_previous_model(Some(task.turn_context.model_info.slug.clone()))
+            .await;
 
         let session_ctx = Arc::new(SessionTaskContext::new(Arc::clone(self)));
         session_task
@@ -299,7 +315,10 @@ impl Session {
             self.flush_rollout().await;
         }
 
-        let event = EventMsg::TurnAborted(TurnAbortedEvent { reason });
+        let event = EventMsg::TurnAborted(TurnAbortedEvent {
+            turn_id: Some(task.turn_context.sub_id.clone()),
+            reason,
+        });
         self.send_event(task.turn_context.as_ref(), event).await;
     }
 }

@@ -118,8 +118,8 @@ pub enum CodexErr {
     #[error("{0}")]
     UsageLimitReached(UsageLimitReachedError),
 
-    #[error("{0}")]
-    ModelCap(ModelCapError),
+    #[error("Selected model is at capacity. Please try a different model.")]
+    ServerOverloaded,
 
     #[error("{0}")]
     ResponseStreamFailed(ResponseStreamFailed),
@@ -215,7 +215,7 @@ impl CodexErr {
             | CodexErr::Spawn
             | CodexErr::SessionConfiguredNotFirstEvent
             | CodexErr::UsageLimitReached(_)
-            | CodexErr::ModelCap(_) => false,
+            | CodexErr::ServerOverloaded => false,
             CodexErr::Stream(..)
             | CodexErr::Timeout
             | CodexErr::UnexpectedStatus(_)
@@ -415,12 +415,23 @@ impl std::fmt::Display for RetryLimitReachedError {
 pub struct UsageLimitReachedError {
     pub(crate) plan_type: Option<PlanType>,
     pub(crate) resets_at: Option<DateTime<Utc>>,
-    pub(crate) rate_limits: Option<RateLimitSnapshot>,
+    pub(crate) rate_limits: Option<Box<RateLimitSnapshot>>,
     pub(crate) promo_message: Option<String>,
+    pub(crate) limit_name: Option<String>,
 }
 
 impl std::fmt::Display for UsageLimitReachedError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if let Some(limit_name) = self.limit_name.as_deref()
+            && !limit_name.eq_ignore_ascii_case("codex")
+        {
+            return write!(
+                f,
+                "You've hit your usage limit for {limit_name}.{}",
+                retry_suffix(self.resets_at.as_ref())
+            );
+        }
+
         if let Some(promo_message) = &self.promo_message {
             return write!(
                 f,
@@ -465,30 +476,6 @@ impl std::fmt::Display for UsageLimitReachedError {
     }
 }
 
-#[derive(Debug)]
-pub struct ModelCapError {
-    pub(crate) model: String,
-    pub(crate) reset_after_seconds: Option<u64>,
-}
-
-impl std::fmt::Display for ModelCapError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let mut message = format!(
-            "Model {} is at capacity. Please try a different model.",
-            self.model
-        );
-        if let Some(seconds) = self.reset_after_seconds {
-            message.push_str(&format!(
-                " Try again in {}.",
-                format_duration_short(seconds)
-            ));
-        } else {
-            message.push_str(" Try again later.");
-        }
-        write!(f, "{message}")
-    }
-}
-
 fn retry_suffix(resets_at: Option<&DateTime<Utc>>) -> String {
     if let Some(resets_at) = resets_at {
         let formatted = format_retry_timestamp(resets_at);
@@ -517,18 +504,6 @@ fn format_retry_timestamp(resets_at: &DateTime<Utc>) -> String {
         local_reset
             .format(&format!("%b %-d{suffix}, %Y %-I:%M %p"))
             .to_string()
-    }
-}
-
-fn format_duration_short(seconds: u64) -> String {
-    if seconds < 60 {
-        "less than a minute".to_string()
-    } else if seconds < 3600 {
-        format!("{}m", seconds / 60)
-    } else if seconds < 86_400 {
-        format!("{}h", seconds / 3600)
-    } else {
-        format!("{}d", seconds / 86_400)
     }
 }
 
@@ -597,10 +572,7 @@ impl CodexErr {
             CodexErr::UsageLimitReached(_)
             | CodexErr::QuotaExceeded
             | CodexErr::UsageNotIncluded => CodexErrorInfo::UsageLimitExceeded,
-            CodexErr::ModelCap(err) => CodexErrorInfo::ModelCap {
-                model: err.model.clone(),
-                reset_after_seconds: err.reset_after_seconds,
-            },
+            CodexErr::ServerOverloaded => CodexErrorInfo::ServerOverloaded,
             CodexErr::RetryLimit(_) => CodexErrorInfo::ResponseTooManyFailedAttempts {
                 http_status_code: self.http_status_code_value(),
             },
@@ -707,6 +679,8 @@ mod tests {
             .unwrap()
             .timestamp();
         RateLimitSnapshot {
+            limit_id: None,
+            limit_name: None,
             primary: Some(RateLimitWindow {
                 used_percent: 50.0,
                 window_minutes: Some(60),
@@ -736,8 +710,9 @@ mod tests {
         let err = UsageLimitReachedError {
             plan_type: Some(PlanType::Known(KnownPlan::Plus)),
             resets_at: None,
-            rate_limits: Some(rate_limit_snapshot()),
+            rate_limits: Some(Box::new(rate_limit_snapshot())),
             promo_message: None,
+            limit_name: None,
         };
         assert_eq!(
             err.to_string(),
@@ -746,41 +721,11 @@ mod tests {
     }
 
     #[test]
-    fn model_cap_error_formats_message() {
-        let err = ModelCapError {
-            model: "boomslang".to_string(),
-            reset_after_seconds: Some(120),
-        };
-        assert_eq!(
-            err.to_string(),
-            "Model boomslang is at capacity. Please try a different model. Try again in 2m."
-        );
-    }
-
-    #[test]
-    fn model_cap_error_formats_message_without_reset() {
-        let err = ModelCapError {
-            model: "boomslang".to_string(),
-            reset_after_seconds: None,
-        };
-        assert_eq!(
-            err.to_string(),
-            "Model boomslang is at capacity. Please try a different model. Try again later."
-        );
-    }
-
-    #[test]
-    fn model_cap_error_maps_to_protocol() {
-        let err = CodexErr::ModelCap(ModelCapError {
-            model: "boomslang".to_string(),
-            reset_after_seconds: Some(30),
-        });
+    fn server_overloaded_maps_to_protocol() {
+        let err = CodexErr::ServerOverloaded;
         assert_eq!(
             err.to_codex_protocol_error(),
-            CodexErrorInfo::ModelCap {
-                model: "boomslang".to_string(),
-                reset_after_seconds: Some(30),
-            }
+            CodexErrorInfo::ServerOverloaded
         );
     }
 
@@ -905,8 +850,9 @@ mod tests {
         let err = UsageLimitReachedError {
             plan_type: Some(PlanType::Known(KnownPlan::Free)),
             resets_at: None,
-            rate_limits: Some(rate_limit_snapshot()),
+            rate_limits: Some(Box::new(rate_limit_snapshot())),
             promo_message: None,
+            limit_name: None,
         };
         assert_eq!(
             err.to_string(),
@@ -919,8 +865,9 @@ mod tests {
         let err = UsageLimitReachedError {
             plan_type: Some(PlanType::Known(KnownPlan::Go)),
             resets_at: None,
-            rate_limits: Some(rate_limit_snapshot()),
+            rate_limits: Some(Box::new(rate_limit_snapshot())),
             promo_message: None,
+            limit_name: None,
         };
         assert_eq!(
             err.to_string(),
@@ -933,8 +880,9 @@ mod tests {
         let err = UsageLimitReachedError {
             plan_type: None,
             resets_at: None,
-            rate_limits: Some(rate_limit_snapshot()),
+            rate_limits: Some(Box::new(rate_limit_snapshot())),
             promo_message: None,
+            limit_name: None,
         };
         assert_eq!(
             err.to_string(),
@@ -951,8 +899,9 @@ mod tests {
             let err = UsageLimitReachedError {
                 plan_type: Some(PlanType::Known(KnownPlan::Team)),
                 resets_at: Some(resets_at),
-                rate_limits: Some(rate_limit_snapshot()),
+                rate_limits: Some(Box::new(rate_limit_snapshot())),
                 promo_message: None,
+                limit_name: None,
             };
             let expected = format!(
                 "You've hit your usage limit. To get more access now, send a request to your admin or try again at {expected_time}."
@@ -966,8 +915,9 @@ mod tests {
         let err = UsageLimitReachedError {
             plan_type: Some(PlanType::Known(KnownPlan::Business)),
             resets_at: None,
-            rate_limits: Some(rate_limit_snapshot()),
+            rate_limits: Some(Box::new(rate_limit_snapshot())),
             promo_message: None,
+            limit_name: None,
         };
         assert_eq!(
             err.to_string(),
@@ -980,8 +930,9 @@ mod tests {
         let err = UsageLimitReachedError {
             plan_type: Some(PlanType::Known(KnownPlan::Enterprise)),
             resets_at: None,
-            rate_limits: Some(rate_limit_snapshot()),
+            rate_limits: Some(Box::new(rate_limit_snapshot())),
             promo_message: None,
+            limit_name: None,
         };
         assert_eq!(
             err.to_string(),
@@ -998,11 +949,35 @@ mod tests {
             let err = UsageLimitReachedError {
                 plan_type: Some(PlanType::Known(KnownPlan::Pro)),
                 resets_at: Some(resets_at),
-                rate_limits: Some(rate_limit_snapshot()),
+                rate_limits: Some(Box::new(rate_limit_snapshot())),
                 promo_message: None,
+                limit_name: None,
             };
             let expected = format!(
                 "You've hit your usage limit. Visit https://chatgpt.com/codex/settings/usage to purchase more credits or try again at {expected_time}."
+            );
+            assert_eq!(err.to_string(), expected);
+        });
+    }
+
+    #[test]
+    fn usage_limit_reached_error_hides_upsell_for_non_codex_limit_name() {
+        let base = Utc.with_ymd_and_hms(2024, 1, 1, 0, 0, 0).unwrap();
+        let resets_at = base + ChronoDuration::hours(1);
+        with_now_override(base, move || {
+            let expected_time = format_retry_timestamp(&resets_at);
+            let err = UsageLimitReachedError {
+                plan_type: Some(PlanType::Known(KnownPlan::Plus)),
+                resets_at: Some(resets_at),
+                rate_limits: Some(Box::new(rate_limit_snapshot())),
+                promo_message: Some(
+                    "Visit https://chatgpt.com/codex/settings/usage to purchase more credits"
+                        .to_string(),
+                ),
+                limit_name: Some("codex_other".to_string()),
+            };
+            let expected = format!(
+                "You've hit your usage limit for codex_other. Try again at {expected_time}."
             );
             assert_eq!(err.to_string(), expected);
         });
@@ -1017,8 +992,9 @@ mod tests {
             let err = UsageLimitReachedError {
                 plan_type: None,
                 resets_at: Some(resets_at),
-                rate_limits: Some(rate_limit_snapshot()),
+                rate_limits: Some(Box::new(rate_limit_snapshot())),
                 promo_message: None,
+                limit_name: None,
             };
             let expected = format!("You've hit your usage limit. Try again at {expected_time}.");
             assert_eq!(err.to_string(), expected);
@@ -1126,8 +1102,9 @@ mod tests {
             let err = UsageLimitReachedError {
                 plan_type: Some(PlanType::Known(KnownPlan::Plus)),
                 resets_at: Some(resets_at),
-                rate_limits: Some(rate_limit_snapshot()),
+                rate_limits: Some(Box::new(rate_limit_snapshot())),
                 promo_message: None,
+                limit_name: None,
             };
             let expected = format!(
                 "You've hit your usage limit. Upgrade to Pro (https://chatgpt.com/explore/pro), visit https://chatgpt.com/codex/settings/usage to purchase more credits or try again at {expected_time}."
@@ -1146,8 +1123,9 @@ mod tests {
             let err = UsageLimitReachedError {
                 plan_type: None,
                 resets_at: Some(resets_at),
-                rate_limits: Some(rate_limit_snapshot()),
+                rate_limits: Some(Box::new(rate_limit_snapshot())),
                 promo_message: None,
+                limit_name: None,
             };
             let expected = format!("You've hit your usage limit. Try again at {expected_time}.");
             assert_eq!(err.to_string(), expected);
@@ -1163,8 +1141,9 @@ mod tests {
             let err = UsageLimitReachedError {
                 plan_type: None,
                 resets_at: Some(resets_at),
-                rate_limits: Some(rate_limit_snapshot()),
+                rate_limits: Some(Box::new(rate_limit_snapshot())),
                 promo_message: None,
+                limit_name: None,
             };
             let expected = format!("You've hit your usage limit. Try again at {expected_time}.");
             assert_eq!(err.to_string(), expected);
@@ -1180,10 +1159,11 @@ mod tests {
             let err = UsageLimitReachedError {
                 plan_type: None,
                 resets_at: Some(resets_at),
-                rate_limits: Some(rate_limit_snapshot()),
+                rate_limits: Some(Box::new(rate_limit_snapshot())),
                 promo_message: Some(
                     "To continue using Codex, start a free trial of <PLAN> today".to_string(),
                 ),
+                limit_name: None,
             };
             let expected = format!(
                 "You've hit your usage limit. To continue using Codex, start a free trial of <PLAN> today, or try again at {expected_time}."

@@ -9,13 +9,12 @@ mod event_processor;
 mod event_processor_with_human_output;
 pub mod event_processor_with_jsonl_output;
 pub mod exec_events;
+mod xcodex_non_interactive;
 
 pub use cli::Cli;
 pub use cli::Command;
 pub use cli::ReviewArgs;
 use codex_cloud_requirements::cloud_requirements_loader;
-use codex_common::oss::ensure_oss_provider_ready;
-use codex_common::oss::get_default_model_for_oss_provider;
 use codex_core::AuthManager;
 use codex_core::LMSTUDIO_OSS_PROVIDER_ID;
 use codex_core::NewThread;
@@ -36,14 +35,14 @@ use codex_core::protocol::AskForApproval;
 use codex_core::protocol::Event;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::Op;
-use codex_core::protocol::ReviewDecision;
 use codex_core::protocol::ReviewRequest;
 use codex_core::protocol::ReviewTarget;
 use codex_core::protocol::SessionSource;
-use codex_protocol::approvals::ElicitationAction;
 use codex_protocol::config_types::SandboxMode;
 use codex_protocol::user_input::UserInput;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use codex_utils_oss::ensure_oss_provider_ready;
+use codex_utils_oss::get_default_model_for_oss_provider;
 use event_processor_with_human_output::EventProcessorWithHumanOutput;
 use event_processor_with_jsonl_output::EventProcessorWithJsonOutput;
 use serde_json::Value;
@@ -211,7 +210,8 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         .clone()
         .unwrap_or_else(|| "https://chatgpt.com/backend-api/".to_string());
     // TODO(gt): Make cloud requirements failures blocking once we can fail-closed.
-    let cloud_requirements = cloud_requirements_loader(cloud_auth_manager, chatgpt_base_url);
+    let cloud_requirements =
+        cloud_requirements_loader(cloud_auth_manager, chatgpt_base_url, codex_home.clone());
 
     let model_provider = if oss {
         let resolved = resolve_oss_provider(
@@ -266,6 +266,7 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         cwd: resolved_cwd,
         model_provider: model_provider.clone(),
         codex_linux_sandbox_exe,
+        js_repl_node_path: None,
         base_instructions: None,
         developer_instructions: None,
         personality: None,
@@ -548,36 +549,14 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
             thread,
             event,
         } = envelope;
-        match &event.msg {
-            EventMsg::ElicitationRequest(ev) => {
-                // Automatically cancel elicitation requests in exec mode.
-                thread
-                    .submit(Op::ResolveElicitation {
-                        server_name: ev.server_name.clone(),
-                        request_id: ev.id.clone(),
-                        decision: ElicitationAction::Cancel,
-                    })
-                    .await?;
-            }
-            EventMsg::ExecApprovalRequest(ev) => {
-                // Exec mode does not support interactive approvals.
-                thread
-                    .submit(Op::ExecApproval {
-                        id: ev.call_id.clone(),
-                        decision: ReviewDecision::Denied,
-                    })
-                    .await?;
-            }
-            EventMsg::ApplyPatchApprovalRequest(ev) => {
-                // Exec mode does not support interactive approvals.
-                thread
-                    .submit(Op::PatchApproval {
-                        id: ev.call_id.clone(),
-                        decision: ReviewDecision::Denied,
-                    })
-                    .await?;
-            }
-            _ => {}
+        xcodex_non_interactive::handle_xcodex_non_interactive_event(&thread, &event.msg).await?;
+        if matches!(&event.msg, EventMsg::Error(_)) {
+            error_seen = true;
+        }
+        if shutdown_requested
+            && !matches!(&event.msg, EventMsg::ShutdownComplete | EventMsg::Error(_))
+        {
+            continue;
         }
         if let EventMsg::McpStartupUpdate(update) = &event.msg
             && required_mcp_servers.contains(&update.server)
@@ -592,9 +571,6 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
                 thread.submit(Op::Shutdown).await?;
                 shutdown_requested = true;
             }
-        }
-        if matches!(event.msg, EventMsg::Error(_)) {
-            error_seen = true;
         }
         if thread_id != primary_thread_id && matches!(&event.msg, EventMsg::TurnComplete(_)) {
             continue;
@@ -671,7 +647,7 @@ async fn resolve_resume_path(
             Some(config.cwd.as_path())
         };
         match codex_core::RolloutRecorder::find_latest_thread_path(
-            &config.codex_home,
+            config,
             1,
             None,
             codex_core::ThreadSortKey::UpdatedAt,

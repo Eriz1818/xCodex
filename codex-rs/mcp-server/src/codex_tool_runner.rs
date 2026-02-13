@@ -279,7 +279,9 @@ async fn run_codex_tool_session_inner(
                         .await;
                         continue;
                     }
-                    EventMsg::TurnComplete(TurnCompleteEvent { last_agent_message }) => {
+                    EventMsg::TurnComplete(TurnCompleteEvent {
+                        last_agent_message, ..
+                    }) => {
                         let text = match last_agent_message {
                             Some(msg) => msg,
                             None => "".to_string(),
@@ -367,6 +369,8 @@ async fn run_codex_tool_session_inner(
                     | EventMsg::CollabCloseBegin(_)
                     | EventMsg::CollabCloseEnd(_)
                     | EventMsg::ExclusionSummary(_)
+                    | EventMsg::CollabResumeBegin(_)
+                    | EventMsg::CollabResumeEnd(_)
                     | EventMsg::DeprecationNotice(_) => {
                         // For now, we do not do anything extra for these
                         // events. Note that

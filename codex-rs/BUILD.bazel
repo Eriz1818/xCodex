@@ -1,4 +1,3 @@
-
 # Generates a Rust `rustc_env_files` file containing Cargo-style version env vars
 # based on `codex-rs/Cargo.toml`'s `[workspace.package]` version.
 genrule(
@@ -45,3 +44,6 @@ out="$@"
 """,
     visibility = ["//visibility:public"],
 )
+exports_files([
+    "node-version.txt",
+])

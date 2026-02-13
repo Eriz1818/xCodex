@@ -17,9 +17,9 @@ use exec_server_test_support::notify_readable_sandbox;
 use exec_server_test_support::write_default_execpolicy;
 use pretty_assertions::assert_eq;
 use rmcp::ServiceExt;
-use rmcp::model::CallToolRequestParam;
+use rmcp::model::CallToolRequestParams;
 use rmcp::model::CallToolResult;
-use rmcp::model::CreateElicitationRequestParam;
+use rmcp::model::CreateElicitationRequestParams;
 use rmcp::model::EmptyResult;
 use rmcp::model::ServerResult;
 use rmcp::model::object;
@@ -63,10 +63,16 @@ prefix_rule(pattern = ["git"], decision = "prompt")
     // Create an MCP client that approves expected elicitation messages.
     let project_root = TempDir::new()?;
     let project_root_path = project_root.path().canonicalize().unwrap();
-    let elicitation_requests: Arc<Mutex<Vec<CreateElicitationRequestParam>>> = Default::default();
+    let git_path = resolve_git_path(USE_LOGIN_SHELL).await?;
+    let expected_elicitation_message = format!(
+        "Allow agent to run `{} init .` in `{}`?",
+        git_path,
+        project_root_path.display()
+    );
+    let elicitation_requests: Arc<Mutex<Vec<CreateElicitationRequestParams>>> = Default::default();
     let client = InteractiveClient {
-        elicitations_to_accept: HashSet::new(),
-        accept_all_elicitations: true,
+        elicitations_to_accept: HashSet::from([expected_elicitation_message.clone()]),
+        accept_all_elicitations: false,
         elicitation_requests: elicitation_requests.clone(),
     };
 
@@ -96,7 +102,8 @@ prefix_rule(pattern = ["git"], decision = "prompt")
     let CallToolResult {
         content, is_error, ..
     } = service
-        .call_tool(CallToolRequestParam {
+        .call_tool(CallToolRequestParams {
+            meta: None,
             name: Cow::Borrowed("shell"),
             arguments: Some(object(json!(
                 {
@@ -105,6 +112,7 @@ prefix_rule(pattern = ["git"], decision = "prompt")
                     "workdir": project_root_path.to_string_lossy(),
                 }
             ))),
+            task: None,
         })
         .await?;
     let tool_call_content = content
@@ -136,19 +144,16 @@ prefix_rule(pattern = ["git"], decision = "prompt")
         .lock()
         .unwrap()
         .iter()
-        .map(|r| r.message.clone())
+        .map(|r| match r {
+            rmcp::model::CreateElicitationRequestParams::FormElicitationParams {
+                message, ..
+            }
+            | rmcp::model::CreateElicitationRequestParams::UrlElicitationParams {
+                message, ..
+            } => message.clone(),
+        })
         .collect::<Vec<_>>();
-    assert!(
-        !elicitation_messages.is_empty(),
-        "expected at least one elicitation prompt"
-    );
-    let project_root_display = project_root_path.display().to_string();
-    assert!(
-        elicitation_messages.iter().any(
-            |message| message.contains("git init .") && message.contains(&project_root_display)
-        ),
-        "expected an elicitation message for `git init .` in `{project_root_display}`, got {elicitation_messages:?}"
-    );
+    assert_eq!(vec![expected_elicitation_message], elicitation_messages);
 
     Ok(())
 }
@@ -162,6 +167,25 @@ async fn has_dotslash(use_login_shell: bool) -> Result<bool> {
         .await
         .context("failed to check dotslash availability")?;
     Ok(status.success())
+}
+
+async fn resolve_git_path(use_login_shell: bool) -> Result<String> {
+    let bash_flag = if use_login_shell { "-lc" } else { "-c" };
+    let output = Command::new("bash")
+        .arg(bash_flag)
+        .arg("command -v git")
+        .output()
+        .await
+        .context("failed to resolve git path")?;
+    ensure!(
+        output.status.success(),
+        "failed to resolve git path with `command -v git` (status: {})",
+        output.status
+    );
+    let git_path = String::from_utf8(output.stdout).context("git path is not utf-8")?;
+    let git_path = git_path.trim().to_string();
+    ensure!(!git_path.is_empty(), "resolved git path was empty");
+    Ok(git_path)
 }
 
 fn ensure_codex_cli() -> Result<PathBuf> {

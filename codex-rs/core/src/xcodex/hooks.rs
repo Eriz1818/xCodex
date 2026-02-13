@@ -1444,6 +1444,8 @@ fn build_hook_host_spawn_invocation(
                 wrapped,
                 sandbox_policy,
                 sandbox_policy_cwd,
+                false,
+                None,
             );
             HookHostSpawnInvocation {
                 program: crate::seatbelt::MACOS_PATH_TO_SEATBELT_EXECUTABLE.to_string(),
@@ -1466,6 +1468,7 @@ fn build_hook_host_spawn_invocation(
                 wrapped,
                 sandbox_policy,
                 sandbox_policy_cwd,
+                false,
                 false,
             );
             HookHostSpawnInvocation {
