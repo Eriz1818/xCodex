@@ -11,6 +11,7 @@ use codex_core::RolloutRecorder;
 use codex_core::ThreadItem;
 use codex_core::ThreadSortKey;
 use codex_core::ThreadsPage;
+use codex_core::config::Config;
 use codex_core::path_utils;
 use codex_protocol::items::TurnItem;
 use color_eyre::eyre::Result;
@@ -110,56 +111,42 @@ enum BackgroundEvent {
 /// time (e.g., "5 seconds ago"), and the absolute path.
 pub async fn run_resume_picker(
     tui: &mut Tui,
-    codex_home: &Path,
-    default_provider: &str,
+    config: &Config,
     show_all: bool,
 ) -> Result<SessionSelection> {
-    run_session_picker(
-        tui,
-        codex_home,
-        default_provider,
-        show_all,
-        SessionPickerAction::Resume,
-    )
-    .await
+    run_session_picker(tui, config, show_all, SessionPickerAction::Resume).await
 }
 
 pub async fn run_fork_picker(
     tui: &mut Tui,
-    codex_home: &Path,
-    default_provider: &str,
+    config: &Config,
     show_all: bool,
 ) -> Result<SessionSelection> {
-    run_session_picker(
-        tui,
-        codex_home,
-        default_provider,
-        show_all,
-        SessionPickerAction::Fork,
-    )
-    .await
+    run_session_picker(tui, config, show_all, SessionPickerAction::Fork).await
 }
 
 async fn run_session_picker(
     tui: &mut Tui,
-    codex_home: &Path,
-    default_provider: &str,
+    config: &Config,
     show_all: bool,
     action: SessionPickerAction,
 ) -> Result<SessionSelection> {
     let alt = AltScreenGuard::enter(tui);
     let (bg_tx, bg_rx) = mpsc::unbounded_channel();
 
-    let default_provider = default_provider.to_string();
+    let default_provider = config.model_provider_id.to_string();
+    let codex_home = config.codex_home.as_path();
     let filter_cwd = std::env::current_dir().ok();
 
+    let config = config.clone();
     let loader_tx = bg_tx.clone();
     let page_loader: PageLoader = Arc::new(move |request: PageLoadRequest| {
         let tx = loader_tx.clone();
+        let config = config.clone();
         tokio::spawn(async move {
             let provider_filter = vec![request.default_provider.clone()];
             let page = RolloutRecorder::list_threads(
-                &request.codex_home,
+                &config,
                 PAGE_SIZE,
                 request.cursor.as_ref(),
                 ThreadSortKey::CreatedAt,
@@ -1311,6 +1298,7 @@ fn calculate_column_metrics(rows: &[Row], include_cwd: bool) -> ColumnMetrics {
 mod tests {
     use super::*;
     use chrono::Duration;
+    use codex_core::config::ConfigBuilder;
     use crossterm::event::KeyCode;
     use crossterm::event::KeyEvent;
     use crossterm::event::KeyModifiers;
@@ -1628,8 +1616,14 @@ mod tests {
             SessionPickerAction::Resume,
         );
 
+        let config = ConfigBuilder::default()
+            .codex_home(tempdir.path().to_path_buf())
+            .build()
+            .await
+            .expect("build config");
+
         let page = RolloutRecorder::list_threads(
-            &state.codex_home,
+            &config,
             PAGE_SIZE,
             None,
             ThreadSortKey::CreatedAt,

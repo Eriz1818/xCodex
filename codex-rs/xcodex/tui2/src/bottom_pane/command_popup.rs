@@ -5,6 +5,7 @@ use ratatui::widgets::WidgetRef;
 use super::scroll_state::ScrollState;
 use super::selection_popup_common::GenericDisplayRow;
 use super::selection_popup_common::render_rows;
+use super::selection_popup_common::transcript_popup_surface_style;
 use super::slash_arg_hints;
 use super::slash_subcommands::SubcommandMatch;
 use super::slash_subcommands::build_subcommand_matches;
@@ -575,7 +576,7 @@ fn sanitize_worktree_path_slug(name: &str) -> String {
 
 impl WidgetRef for CommandPopup {
     fn render_ref(&self, area: Rect, buf: &mut Buffer) {
-        let base_style = crate::theme::transcript_style();
+        let base_style = transcript_popup_surface_style();
         for y in area.top()..area.bottom() {
             for x in area.left()..area.right() {
                 buf[(x, y)].set_symbol(" ");
@@ -598,7 +599,10 @@ impl WidgetRef for CommandPopup {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::bottom_pane::selection_popup_common::assert_transcript_surface_bg;
     use pretty_assertions::assert_eq;
+    use ratatui::layout::Rect;
+    use ratatui::widgets::WidgetRef;
 
     #[test]
     fn filter_includes_init_when_typing_prefix() {
@@ -756,6 +760,15 @@ mod tests {
             description,
             Some("Create feature branch, commit and open draft PR.")
         );
+    }
+
+    #[test]
+    fn subcommand_popup_uses_transcript_background() {
+        let mut popup = CommandPopup::new(Vec::new(), false, DEFAULT_SLASH_POPUP_ROWS);
+        popup.on_composer_text_change("/worktree ".to_string());
+        assert_transcript_surface_bg(Rect::new(0, 0, 32, 6), |area, buf| {
+            popup.render_ref(area, buf);
+        });
     }
 
     #[test]

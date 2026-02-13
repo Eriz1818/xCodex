@@ -6,6 +6,7 @@ use super::popup_consts::MAX_POPUP_ROWS;
 use super::scroll_state::ScrollState;
 use super::selection_popup_common::GenericDisplayRow;
 use super::selection_popup_common::render_rows;
+use super::selection_popup_common::transcript_popup_surface_style;
 use super::slash_arg_hints;
 use super::slash_commands;
 use super::slash_subcommands::build_subcommand_matches;
@@ -457,7 +458,7 @@ impl CommandPopup {
 
 impl WidgetRef for CommandPopup {
     fn render_ref(&self, area: Rect, buf: &mut Buffer) {
-        let base_style = crate::theme::transcript_style();
+        let base_style = transcript_popup_surface_style();
         for y in area.top()..area.bottom() {
             for x in area.left()..area.right() {
                 buf[(x, y)].set_symbol(" ");

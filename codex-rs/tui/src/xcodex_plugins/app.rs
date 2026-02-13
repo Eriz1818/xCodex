@@ -731,7 +731,11 @@ async fn handle_codex_op(app: &mut App, op: Op) {
         // directly. This support both command and patch approval. In such case
         // the approval get transferred to the corresponding thread and the external
         // approval map (`external_approval_routes`) is updated.
-        Op::ExecApproval { id, decision } => {
+        Op::ExecApproval {
+            id,
+            turn_id,
+            decision,
+        } => {
             if let Some((thread_id, original_id)) =
                 app.xcodex_state.external_approval_routes.remove(&id)
             {
@@ -741,6 +745,7 @@ async fn handle_codex_op(app: &mut App, op: Op) {
                     thread_id,
                     Op::ExecApproval {
                         id: original_id,
+                        turn_id,
                         decision,
                     },
                 )
@@ -748,7 +753,11 @@ async fn handle_codex_op(app: &mut App, op: Op) {
                 finish_external_approval(app);
             } else {
                 // This is an approval but not external.
-                app.chat_widget.submit_op(Op::ExecApproval { id, decision });
+                app.chat_widget.submit_op(Op::ExecApproval {
+                    id,
+                    turn_id,
+                    decision,
+                });
             }
         }
         Op::PatchApproval { id, decision } => {

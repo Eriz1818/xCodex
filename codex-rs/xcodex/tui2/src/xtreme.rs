@@ -39,7 +39,7 @@ fn approval_score(approval: AskForApproval) -> u8 {
 
 fn sandbox_score(sandbox: &SandboxPolicy) -> u8 {
     match sandbox {
-        SandboxPolicy::ReadOnly => 1,
+        SandboxPolicy::ReadOnly { .. } => 1,
         SandboxPolicy::WorkspaceWrite { .. } | SandboxPolicy::ExternalSandbox { .. } => 2,
         SandboxPolicy::DangerFullAccess => 3,
     }

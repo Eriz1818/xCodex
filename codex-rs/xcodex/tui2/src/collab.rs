@@ -5,6 +5,8 @@ use codex_core::protocol::AgentStatus;
 use codex_core::protocol::CollabAgentInteractionEndEvent;
 use codex_core::protocol::CollabAgentSpawnEndEvent;
 use codex_core::protocol::CollabCloseEndEvent;
+use codex_core::protocol::CollabResumeBeginEvent;
+use codex_core::protocol::CollabResumeEndEvent;
 use codex_core::protocol::CollabWaitingBeginEvent;
 use codex_core::protocol::CollabWaitingEndEvent;
 use ratatui::style::Stylize;
@@ -97,6 +99,36 @@ pub(crate) fn close_end(ev: CollabCloseEndEvent) -> PlainHistoryCell {
         status_line(&status),
     ];
     collab_event("Collab close", details)
+}
+
+pub(crate) fn resume_begin(ev: CollabResumeBeginEvent) -> PlainHistoryCell {
+    let CollabResumeBeginEvent {
+        call_id,
+        sender_thread_id,
+        receiver_thread_id,
+    } = ev;
+    let details = vec![
+        detail_line("call", call_id),
+        detail_line("sender", sender_thread_id),
+        detail_line("receiver", receiver_thread_id),
+    ];
+    collab_event("Collab resume begin", details)
+}
+
+pub(crate) fn resume_end(ev: CollabResumeEndEvent) -> PlainHistoryCell {
+    let CollabResumeEndEvent {
+        call_id,
+        sender_thread_id,
+        receiver_thread_id,
+        status,
+    } = ev;
+    let details = vec![
+        detail_line("call", call_id),
+        detail_line("sender", sender_thread_id),
+        detail_line("receiver", receiver_thread_id),
+        status_line(&status),
+    ];
+    collab_event("Collab resume", details)
 }
 
 fn collab_event(title: impl Into<String>, details: Vec<Line<'static>>) -> PlainHistoryCell {

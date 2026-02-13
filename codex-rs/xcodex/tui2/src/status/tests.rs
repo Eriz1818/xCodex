@@ -25,6 +25,27 @@ use ratatui::prelude::*;
 use std::path::PathBuf;
 use tempfile::TempDir;
 
+trait ModelsManagerTestCompat {
+    fn get_model_offline(model: Option<&str>) -> String;
+    fn construct_model_info_offline(
+        model_slug: &str,
+        config: &Config,
+    ) -> codex_protocol::openai_models::ModelInfo;
+}
+
+impl ModelsManagerTestCompat for ModelsManager {
+    fn get_model_offline(model: Option<&str>) -> String {
+        codex_core::test_support::get_model_offline(model)
+    }
+
+    fn construct_model_info_offline(
+        model_slug: &str,
+        config: &Config,
+    ) -> codex_protocol::openai_models::ModelInfo {
+        codex_core::test_support::construct_model_info_offline(model_slug, config)
+    }
+}
+
 async fn test_config(temp_home: &TempDir) -> Config {
     ConfigBuilder::default()
         .codex_home(temp_home.path().to_path_buf())
@@ -122,6 +143,7 @@ async fn status_snapshot_includes_reasoning_details() {
         .sandbox_policy
         .set(SandboxPolicy::WorkspaceWrite {
             writable_roots: Vec::new(),
+            read_only_access: Default::default(),
             network_access: false,
             exclude_tmpdir_env_var: false,
             exclude_slash_tmp: false,
@@ -144,6 +166,8 @@ async fn status_snapshot_includes_reasoning_details() {
         .single()
         .expect("timestamp");
     let snapshot = RateLimitSnapshot {
+        limit_id: None,
+        limit_name: None,
         primary: Some(RateLimitWindow {
             used_percent: 72.5,
             window_minutes: Some(300),
@@ -207,6 +231,8 @@ async fn status_menu_summary_snapshot_includes_limit_bars() {
         .single()
         .expect("timestamp");
     let snapshot = RateLimitSnapshot {
+        limit_id: None,
+        limit_name: None,
         primary: Some(RateLimitWindow {
             used_percent: 72.5,
             window_minutes: Some(300),
@@ -266,6 +292,8 @@ async fn status_menu_summary_snapshot_includes_forked_from() {
         .single()
         .expect("timestamp");
     let snapshot = RateLimitSnapshot {
+        limit_id: None,
+        limit_name: None,
         primary: Some(RateLimitWindow {
             used_percent: 72.5,
             window_minutes: Some(300),
@@ -327,6 +355,8 @@ async fn status_snapshot_includes_monthly_limit() {
         .single()
         .expect("timestamp");
     let snapshot = RateLimitSnapshot {
+        limit_id: None,
+        limit_name: None,
         primary: Some(RateLimitWindow {
             used_percent: 12.0,
             window_minutes: Some(43_200),
@@ -372,6 +402,8 @@ async fn status_snapshot_shows_unlimited_credits() {
         .single()
         .expect("timestamp");
     let snapshot = RateLimitSnapshot {
+        limit_id: None,
+        limit_name: None,
         primary: None,
         secondary: None,
         credits: Some(CreditsSnapshot {
@@ -416,6 +448,8 @@ async fn status_snapshot_shows_positive_credits() {
         .single()
         .expect("timestamp");
     let snapshot = RateLimitSnapshot {
+        limit_id: None,
+        limit_name: None,
         primary: None,
         secondary: None,
         credits: Some(CreditsSnapshot {
@@ -460,6 +494,8 @@ async fn status_snapshot_hides_zero_credits() {
         .single()
         .expect("timestamp");
     let snapshot = RateLimitSnapshot {
+        limit_id: None,
+        limit_name: None,
         primary: None,
         secondary: None,
         credits: Some(CreditsSnapshot {
@@ -502,6 +538,8 @@ async fn status_snapshot_hides_when_has_no_credits_flag() {
         .single()
         .expect("timestamp");
     let snapshot = RateLimitSnapshot {
+        limit_id: None,
+        limit_name: None,
         primary: None,
         secondary: None,
         credits: Some(CreditsSnapshot {
@@ -600,6 +638,8 @@ async fn status_snapshot_truncates_in_narrow_terminal() {
         .single()
         .expect("timestamp");
     let snapshot = RateLimitSnapshot {
+        limit_id: None,
+        limit_name: None,
         primary: Some(RateLimitWindow {
             used_percent: 72.5,
             window_minutes: Some(300),
@@ -701,6 +741,8 @@ async fn status_snapshot_includes_credits_and_limits() {
         .single()
         .expect("timestamp");
     let snapshot = RateLimitSnapshot {
+        limit_id: None,
+        limit_name: None,
         primary: Some(RateLimitWindow {
             used_percent: 45.0,
             window_minutes: Some(300),
@@ -761,6 +803,8 @@ async fn status_snapshot_shows_empty_limits_message() {
     };
 
     let snapshot = RateLimitSnapshot {
+        limit_id: None,
+        limit_name: None,
         primary: None,
         secondary: None,
         credits: None,
@@ -817,6 +861,8 @@ async fn status_snapshot_shows_stale_limits_message() {
         .single()
         .expect("timestamp");
     let snapshot = RateLimitSnapshot {
+        limit_id: None,
+        limit_name: None,
         primary: Some(RateLimitWindow {
             used_percent: 72.5,
             window_minutes: Some(300),
@@ -878,6 +924,8 @@ async fn status_snapshot_cached_limits_hide_credits_without_flag() {
         .single()
         .expect("timestamp");
     let snapshot = RateLimitSnapshot {
+        limit_id: None,
+        limit_name: None,
         primary: Some(RateLimitWindow {
             used_percent: 60.0,
             window_minutes: Some(300),

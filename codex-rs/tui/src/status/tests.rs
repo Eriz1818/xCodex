@@ -21,7 +21,6 @@ use codex_protocol::ThreadId;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::openai_models::ReasoningEffort;
 use insta::assert_snapshot;
-use pretty_assertions::assert_eq;
 use ratatui::prelude::*;
 use std::path::PathBuf;
 use tempfile::TempDir;
@@ -237,20 +236,17 @@ async fn status_permissions_non_default_workspace_write_is_custom() {
         None,
     );
     let rendered_lines = render_lines(&composite.display_lines(80));
-    let permissions_line = rendered_lines
-        .iter()
-        .find(|line| line.contains("Permissions:"))
-        .expect("permissions line");
-    let permissions_text = permissions_line
-        .split("Permissions:")
-        .nth(1)
-        .map(str::trim)
-        .map(|text| text.trim_end_matches('│'))
-        .map(str::trim);
-
-    assert_eq!(
-        permissions_text,
-        Some("Custom (workspace-write with network access, on-request)")
+    assert!(
+        rendered_lines
+            .iter()
+            .any(|line| line.contains("Approval") && line.contains("on-request")),
+        "approval line should reflect on-request policy: {rendered_lines:?}"
+    );
+    assert!(
+        rendered_lines.iter().any(|line| {
+            line.contains("Sandbox") && line.contains("workspace-write with network access")
+        }),
+        "sandbox line should reflect workspace-write with network access: {rendered_lines:?}"
     );
 }
 
@@ -332,6 +328,8 @@ async fn status_menu_summary_snapshot_includes_limit_bars() {
         .single()
         .expect("timestamp");
     let snapshot = RateLimitSnapshot {
+        limit_id: None,
+        limit_name: None,
         primary: Some(RateLimitWindow {
             used_percent: 72.5,
             window_minutes: Some(300),

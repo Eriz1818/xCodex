@@ -2,6 +2,8 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 // Note: Table-based layout previously used Constraint; the manual renderer
 // below no longer requires it.
+#[cfg(test)]
+use ratatui::style::Color;
 use ratatui::style::Modifier;
 use ratatui::style::Style;
 use ratatui::style::Stylize;
@@ -14,6 +16,14 @@ use unicode_width::UnicodeWidthStr;
 use crate::key_hint::KeyBinding;
 
 use super::scroll_state::ScrollState;
+#[cfg(test)]
+use codex_core::themes::ThemeCatalog;
+#[cfg(test)]
+use codex_core::themes::ThemeColor;
+#[cfg(test)]
+use codex_core::themes::ThemeDefinition;
+#[cfg(test)]
+use codex_core::themes::ThemeVariant;
 
 /// A generic representation of a display row for selection popups.
 pub(crate) struct GenericDisplayRow {
@@ -24,6 +34,72 @@ pub(crate) struct GenericDisplayRow {
     pub disabled_reason: Option<String>,   // optional disabled message
     pub is_dimmed: bool,
     pub wrap_indent: Option<usize>, // optional indent for wrapped lines
+}
+
+/// Shared popup style for overlays that must use transcript surface colors.
+pub(crate) fn transcript_popup_surface_style() -> Style {
+    crate::theme::transcript_style()
+}
+
+#[cfg(test)]
+fn test_popup_surface_theme() -> ThemeDefinition {
+    let mut theme = ThemeCatalog::built_in_default();
+    theme.name = "test-popup-surface".to_string();
+    theme.variant = ThemeVariant::Dark;
+    theme.roles.transcript_bg = Some(ThemeColor::new("#000000"));
+    theme.roles.composer_bg = Some(ThemeColor::new("#2050ff"));
+    theme
+}
+
+#[cfg(test)]
+fn normalize_expected_bg(primary: Option<Color>, fallback: Option<Color>) -> Option<Color> {
+    fn normalize(color: Option<Color>) -> Option<Color> {
+        match color {
+            Some(Color::Reset) => None,
+            other => other,
+        }
+    }
+
+    normalize(primary).or_else(|| normalize(fallback))
+}
+
+#[cfg(test)]
+fn assert_popup_bg(area: Rect, render: impl FnOnce(Rect, &mut Buffer), expected_bg: Option<Color>) {
+    let expected_bg = match expected_bg {
+        Some(Color::Reset) => None,
+        other => other,
+    };
+    if expected_bg.is_none() {
+        return;
+    }
+    let mut buf = Buffer::empty(area);
+    render(area, &mut buf);
+
+    for y in area.top()..area.bottom() {
+        for x in area.left()..area.right() {
+            let cell = &buf[(x, y)];
+            let actual_bg = normalize_expected_bg(cell.style().bg, None);
+            pretty_assertions::assert_eq!(
+                actual_bg,
+                expected_bg,
+                "popup surface bg mismatch at ({x},{y})"
+            );
+        }
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn assert_transcript_surface_bg(area: Rect, render: impl FnOnce(Rect, &mut Buffer)) {
+    let _guard = crate::theme::test_style_guard();
+    crate::theme::preview_definition(&test_popup_surface_theme());
+    assert_popup_bg(
+        area,
+        render,
+        normalize_expected_bg(
+            transcript_popup_surface_style().bg,
+            crate::theme::composer_style().bg,
+        ),
+    );
 }
 
 pub(crate) fn wrap_styled_line<'a>(line: &'a Line<'a>, width: u16) -> Vec<Line<'a>> {

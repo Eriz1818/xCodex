@@ -387,6 +387,7 @@ impl crate::render::renderable::Renderable for AppLinkView {
                 &action_rows,
                 &action_state,
                 action_rows.len().max(1),
+                user_message_style(),
                 "No actions",
             );
         }

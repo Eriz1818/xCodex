@@ -51,7 +51,8 @@ impl WidgetRef for &TrustDirectoryWidget {
         ]));
         column.push("");
 
-        let guidance = if self.is_git_repo {
+        let is_git_repo = resolve_root_git_project_for_trust(&self.cwd).is_some();
+        let guidance = if is_git_repo {
             "Since this folder is version controlled, you may wish to allow xcodex to work in this folder without asking for approval."
         } else {
             "Since this folder is not version controlled, we recommend requiring approval of all edits and commands."
@@ -72,7 +73,7 @@ impl WidgetRef for &TrustDirectoryWidget {
         );
         column.push("");
 
-        let trust_label = if self.is_git_repo {
+        let trust_label = if is_git_repo {
             "Yes, allow xcodex to work in this folder without asking for approval"
         } else {
             "Yes, continue"
@@ -187,6 +188,7 @@ mod tests {
     use pretty_assertions::assert_eq;
     use ratatui::Terminal;
     use std::path::PathBuf;
+    use std::process::Command;
     use tempfile::TempDir;
 
     #[test]
@@ -233,5 +235,42 @@ mod tests {
             .expect("draw");
 
         insta::assert_snapshot!(terminal.backend());
+    }
+
+    #[test]
+    fn git_repo_guidance_mentions_trusted_flow() {
+        let codex_home = TempDir::new().expect("temp home");
+        let repo_dir = codex_home.path().join("git-repo");
+        std::fs::create_dir_all(&repo_dir).expect("create git repo dir");
+        let status = Command::new("git")
+            .args(["init"])
+            .current_dir(&repo_dir)
+            .status()
+            .expect("run git init");
+        assert!(status.success(), "git init should succeed");
+
+        let widget = TrustDirectoryWidget {
+            codex_home: codex_home.path().to_path_buf(),
+            cwd: repo_dir,
+            show_windows_create_sandbox_hint: false,
+            should_quit: false,
+            selection: None,
+            highlighted: TrustDirectorySelection::Trust,
+            error: None,
+        };
+
+        let mut terminal = Terminal::new(VT100Backend::new(70, 14)).expect("terminal");
+        terminal
+            .draw(|f| (&widget).render_ref(f.area(), f.buffer_mut()))
+            .expect("draw");
+        let rendered = terminal.backend().to_string();
+        assert!(
+            rendered.contains("version controlled"),
+            "expected version-controlled guidance, got: {rendered}"
+        );
+        assert!(
+            rendered.contains("without asking for approval"),
+            "expected trust option copy for git repos, got: {rendered}"
+        );
     }
 }

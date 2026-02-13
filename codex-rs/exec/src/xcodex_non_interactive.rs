@@ -15,6 +15,7 @@ pub(crate) fn xcodex_auto_op_for_event(event: &EventMsg) -> Option<Op> {
         }),
         EventMsg::ExecApprovalRequest(ev) => Some(Op::ExecApproval {
             id: ev.call_id.clone(),
+            turn_id: Some(ev.turn_id.clone()),
             decision: ReviewDecision::Denied,
         }),
         EventMsg::ApplyPatchApprovalRequest(ev) => Some(Op::PatchApproval {
@@ -86,6 +87,7 @@ mod tests {
             json!({
                 "type": "exec_approval",
                 "id": "call-1",
+                "turn_id": "turn-1",
                 "decision": "denied",
             })
         );

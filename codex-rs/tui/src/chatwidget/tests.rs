@@ -936,7 +936,7 @@ async fn token_count_none_does_not_reset_context_indicator() {
     });
     assert_eq!(chat.bottom_pane.context_window_percent(), before);
     assert_eq!(
-        chat.rate_limit_snapshot
+        chat.rate_limit_snapshot()
             .as_ref()
             .and_then(|snapshot| snapshot.primary.as_ref())
             .map(|window| window.used_percent),
@@ -3458,7 +3458,12 @@ async fn steer_enter_submits_when_plan_stream_is_not_active() {
     assert!(chat.queued_user_messages.is_empty());
     match next_submit_op(&mut op_rx) {
         Op::UserTurn {
-            personality: Some(Personality::Pragmatic),
+            collaboration_mode:
+                Some(CollaborationMode {
+                    mode: ModeKind::Plan,
+                    ..
+                }),
+            personality: None,
             ..
         } => {}
         other => panic!("expected Op::UserTurn, got {other:?}"),
@@ -3739,6 +3744,7 @@ async fn orphaned_exec_end_counts_toward_turn_summary_for_separator() {
     chat.handle_codex_event(Event {
         id: "turn-complete-after-orphan".to_string(),
         msg: EventMsg::TurnComplete(TurnCompleteEvent {
+            turn_id: "turn-id".to_string(),
             last_agent_message: None,
         }),
     });
@@ -3784,6 +3790,7 @@ async fn final_message_separator_is_emitted_without_phase_markers() {
     chat.handle_codex_event(Event {
         id: "turn-complete-no-phase".to_string(),
         msg: EventMsg::TurnComplete(TurnCompleteEvent {
+            turn_id: "turn-id".to_string(),
             last_agent_message: None,
         }),
     });
@@ -3879,6 +3886,7 @@ async fn final_message_separator_is_emitted_when_phase_arrives_only_on_completio
     chat.handle_codex_event(Event {
         id: "turn-complete-phase-only".to_string(),
         msg: EventMsg::TurnComplete(TurnCompleteEvent {
+            turn_id: "turn-id".to_string(),
             last_agent_message: None,
         }),
     });
@@ -4364,7 +4372,6 @@ async fn collab_slash_command_opens_picker_and_updates_mode() {
                     mode: ModeKind::Default,
                     ..
                 }),
-            personality: Some(Personality::Pragmatic),
             ..
         } => {}
         other => {
@@ -4382,7 +4389,6 @@ async fn collab_slash_command_opens_picker_and_updates_mode() {
                     mode: ModeKind::Default,
                     ..
                 }),
-            personality: Some(Personality::Pragmatic),
             ..
         } => {}
         other => {
@@ -4448,6 +4454,8 @@ async fn plan_settings_popup_snapshot() {
         .set_composer_text("/plan settings".to_string(), Vec::new(), Vec::new());
     chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
 
+    assert_matches!(op_rx.try_recv(), Ok(Op::ListCustomPrompts));
+    assert_matches!(op_rx.try_recv(), Ok(Op::ListSkills { .. }));
     assert_matches!(op_rx.try_recv(), Err(TryRecvError::Empty));
     let popup = render_bottom_popup(&chat, 120);
     assert_snapshot!("plan_settings_popup", popup);
@@ -5292,7 +5300,6 @@ async fn collab_mode_is_sent_after_enabling() {
                     mode: ModeKind::Default,
                     ..
                 }),
-            personality: Some(Personality::Pragmatic),
             ..
         } => {}
         other => {
@@ -5312,7 +5319,7 @@ async fn collab_mode_toggle_on_applies_default_preset() {
     match next_submit_op(&mut op_rx) {
         Op::UserTurn {
             collaboration_mode: None,
-            personality: Some(Personality::Pragmatic),
+            personality: None,
             ..
         } => {}
         other => panic!("expected Op::UserTurn without collaboration_mode, got {other:?}"),
@@ -5330,7 +5337,7 @@ async fn collab_mode_toggle_on_applies_default_preset() {
                     mode: ModeKind::Default,
                     ..
                 }),
-            personality: Some(Personality::Pragmatic),
+            personality: None,
             ..
         } => {}
         other => {
@@ -6592,6 +6599,7 @@ async fn user_shell_command_emits_separator_before_final_message() {
     chat.handle_codex_event(Event {
         id: "turn-complete-user-shell".to_string(),
         msg: EventMsg::TurnComplete(TurnCompleteEvent {
+            turn_id: "turn-id".to_string(),
             last_agent_message: None,
         }),
     });

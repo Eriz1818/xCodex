@@ -12,7 +12,6 @@ use crate::test_backend::VT100Backend;
 use crate::tui::FrameRequester;
 use assert_matches::assert_matches;
 use codex_common::approval_presets::builtin_approval_presets;
-use codex_core::AuthManager;
 use codex_core::CodexAuth;
 use codex_core::config::Config;
 use codex_core::config::ConfigBuilder;
@@ -120,6 +119,8 @@ async fn test_config() -> Config {
 
 fn snapshot(percent: f64) -> RateLimitSnapshot {
     RateLimitSnapshot {
+        limit_id: None,
+        limit_name: None,
         primary: Some(RateLimitWindow {
             used_percent: percent,
             window_minutes: Some(60),
@@ -142,7 +143,7 @@ async fn resumed_initial_messages_render_history() {
         model: "test-model".to_string(),
         model_provider_id: "test-provider".to_string(),
         approval_policy: AskForApproval::Never,
-        sandbox_policy: SandboxPolicy::ReadOnly,
+        sandbox_policy: SandboxPolicy::new_read_only_policy(),
         cwd: PathBuf::from("/home/user/project"),
         reasoning_effort: Some(ReasoningEffortConfig::default()),
         history_log_id: 0,
@@ -158,6 +159,7 @@ async fn resumed_initial_messages_render_history() {
                 message: "assistant reply".to_string(),
             }),
         ]),
+        network_proxy: None,
         rollout_path: Some(rollout_file.path().to_path_buf()),
         forked_from_id: None,
         thread_name: None,
@@ -358,11 +360,14 @@ async fn helpers_are_available_and_do_not_panic() {
     let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
     let tx = AppEventSender::new(tx_raw);
     let cfg = test_config().await;
-    let thread_manager = Arc::new(ThreadManager::with_models_provider(
-        CodexAuth::from_api_key("test"),
-        cfg.model_provider.clone(),
-    ));
-    let auth_manager = AuthManager::from_auth_for_testing(CodexAuth::from_api_key("test"));
+    let thread_manager = Arc::new(
+        codex_core::test_support::thread_manager_with_models_provider(
+            CodexAuth::from_api_key("test"),
+            cfg.model_provider.clone(),
+        ),
+    );
+    let auth_manager =
+        codex_core::test_support::auth_manager_from_auth(CodexAuth::from_api_key("test"));
     let init = ChatWidgetInit {
         config: cfg.clone(),
         frame_requester: FrameRequester::test_dummy(),
@@ -395,7 +400,7 @@ async fn make_chatwidget_manual(
     let mut cfg = test_config().await;
     let resolved_model = model_override
         .map(str::to_owned)
-        .unwrap_or_else(|| ModelsManager::get_model_offline(cfg.model.as_deref()));
+        .unwrap_or_else(|| codex_core::test_support::get_model_offline(cfg.model.as_deref()));
     if let Some(model) = model_override {
         cfg.model = Some(model.to_string());
     }
@@ -412,7 +417,8 @@ async fn make_chatwidget_manual(
         skills: None,
     });
     bottom.set_steer_enabled(true);
-    let auth_manager = AuthManager::from_auth_for_testing(CodexAuth::from_api_key("test"));
+    let auth_manager =
+        codex_core::test_support::auth_manager_from_auth(CodexAuth::from_api_key("test"));
     let codex_home = cfg.codex_home.clone();
     let widget = ChatWidget {
         app_event_tx,
@@ -1105,8 +1111,9 @@ async fn exclusion_summary_banner_is_ephemeral() {
 }
 
 fn set_chatgpt_auth(chat: &mut ChatWidget) {
-    chat.auth_manager =
-        AuthManager::from_auth_for_testing(CodexAuth::create_dummy_chatgpt_auth_for_testing());
+    chat.auth_manager = codex_core::test_support::auth_manager_from_auth(
+        CodexAuth::create_dummy_chatgpt_auth_for_testing(),
+    );
     chat.models_manager = Arc::new(ModelsManager::new(
         chat.config.codex_home.clone(),
         chat.auth_manager.clone(),
@@ -1317,6 +1324,8 @@ async fn rate_limit_snapshot_keeps_prior_credits_when_missing_from_headers() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
 
     chat.on_rate_limit_snapshot(Some(RateLimitSnapshot {
+        limit_id: None,
+        limit_name: None,
         primary: None,
         secondary: None,
         credits: Some(CreditsSnapshot {
@@ -1334,6 +1343,8 @@ async fn rate_limit_snapshot_keeps_prior_credits_when_missing_from_headers() {
     assert_eq!(initial_balance, Some("17.5"));
 
     chat.on_rate_limit_snapshot(Some(RateLimitSnapshot {
+        limit_id: None,
+        limit_name: None,
         primary: Some(RateLimitWindow {
             used_percent: 80.0,
             window_minutes: Some(60),
@@ -1366,6 +1377,8 @@ async fn rate_limit_snapshot_updates_and_retains_plan_type() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
 
     chat.on_rate_limit_snapshot(Some(RateLimitSnapshot {
+        limit_id: None,
+        limit_name: None,
         primary: Some(RateLimitWindow {
             used_percent: 10.0,
             window_minutes: Some(60),
@@ -1382,6 +1395,8 @@ async fn rate_limit_snapshot_updates_and_retains_plan_type() {
     assert_eq!(chat.plan_type, Some(PlanType::Plus));
 
     chat.on_rate_limit_snapshot(Some(RateLimitSnapshot {
+        limit_id: None,
+        limit_name: None,
         primary: Some(RateLimitWindow {
             used_percent: 25.0,
             window_minutes: Some(30),
@@ -1398,6 +1413,8 @@ async fn rate_limit_snapshot_updates_and_retains_plan_type() {
     assert_eq!(chat.plan_type, Some(PlanType::Pro));
 
     chat.on_rate_limit_snapshot(Some(RateLimitSnapshot {
+        limit_id: None,
+        limit_name: None,
         primary: Some(RateLimitWindow {
             used_percent: 30.0,
             window_minutes: Some(60),
@@ -1417,8 +1434,9 @@ async fn rate_limit_snapshot_updates_and_retains_plan_type() {
 #[tokio::test]
 async fn rate_limit_switch_prompt_skips_when_on_lower_cost_model() {
     let (mut chat, _, _) = make_chatwidget_manual(Some(NUDGE_MODEL_SLUG)).await;
-    chat.auth_manager =
-        AuthManager::from_auth_for_testing(CodexAuth::create_dummy_chatgpt_auth_for_testing());
+    chat.auth_manager = codex_core::test_support::auth_manager_from_auth(
+        CodexAuth::create_dummy_chatgpt_auth_for_testing(),
+    );
 
     chat.on_rate_limit_snapshot(Some(snapshot(95.0)));
 
@@ -1432,7 +1450,7 @@ async fn rate_limit_switch_prompt_skips_when_on_lower_cost_model() {
 async fn rate_limit_switch_prompt_shows_once_per_session() {
     let auth = CodexAuth::create_dummy_chatgpt_auth_for_testing();
     let (mut chat, _, _) = make_chatwidget_manual(Some("gpt-5")).await;
-    chat.auth_manager = AuthManager::from_auth_for_testing(auth);
+    chat.auth_manager = codex_core::test_support::auth_manager_from_auth(auth);
 
     chat.on_rate_limit_snapshot(Some(snapshot(90.0)));
     assert!(
@@ -1456,7 +1474,7 @@ async fn rate_limit_switch_prompt_shows_once_per_session() {
 async fn rate_limit_switch_prompt_respects_hidden_notice() {
     let auth = CodexAuth::create_dummy_chatgpt_auth_for_testing();
     let (mut chat, _, _) = make_chatwidget_manual(Some("gpt-5")).await;
-    chat.auth_manager = AuthManager::from_auth_for_testing(auth);
+    chat.auth_manager = codex_core::test_support::auth_manager_from_auth(auth);
     chat.config.notices.hide_rate_limit_model_nudge = Some(true);
 
     chat.on_rate_limit_snapshot(Some(snapshot(95.0)));
@@ -1471,7 +1489,7 @@ async fn rate_limit_switch_prompt_respects_hidden_notice() {
 async fn rate_limit_switch_prompt_defers_until_task_complete() {
     let auth = CodexAuth::create_dummy_chatgpt_auth_for_testing();
     let (mut chat, _, _) = make_chatwidget_manual(Some("gpt-5")).await;
-    chat.auth_manager = AuthManager::from_auth_for_testing(auth);
+    chat.auth_manager = codex_core::test_support::auth_manager_from_auth(auth);
 
     chat.bottom_pane.set_task_running(true);
     chat.on_rate_limit_snapshot(Some(snapshot(90.0)));
@@ -1491,8 +1509,9 @@ async fn rate_limit_switch_prompt_defers_until_task_complete() {
 #[tokio::test]
 async fn rate_limit_switch_prompt_popup_snapshot() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
-    chat.auth_manager =
-        AuthManager::from_auth_for_testing(CodexAuth::create_dummy_chatgpt_auth_for_testing());
+    chat.auth_manager = codex_core::test_support::auth_manager_from_auth(
+        CodexAuth::create_dummy_chatgpt_auth_for_testing(),
+    );
 
     chat.on_rate_limit_snapshot(Some(snapshot(92.0)));
     chat.maybe_show_pending_rate_limit_prompt();
@@ -1505,6 +1524,14 @@ async fn rate_limit_switch_prompt_popup_snapshot() {
 
 #[tokio::test]
 async fn exec_approval_emits_proposed_command_and_decision_history() {
+    let _theme_guard = crate::theme::test_style_guard();
+    let saved_transcript_style = crate::theme::transcript_style();
+    let saved_composer_style = crate::theme::composer_style();
+    crate::theme::set_test_surface_styles(
+        ratatui::style::Style::default(),
+        ratatui::style::Style::default(),
+    );
+
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
 
     // Trigger an exec approval request with a short, single-line command
@@ -1545,6 +1572,8 @@ async fn exec_approval_emits_proposed_command_and_decision_history() {
         "exec_approval_history_decision_approved_short",
         lines_to_single_string(&decision)
     );
+
+    crate::theme::set_test_surface_styles(saved_transcript_style, saved_composer_style);
 }
 
 #[tokio::test]
@@ -2026,6 +2055,7 @@ async fn final_message_separator_is_emitted_immediately_before_final_answer() {
     chat.handle_codex_event(Event {
         id: "turn-start".to_string(),
         msg: EventMsg::TurnStarted(TurnStartedEvent {
+            turn_id: "turn-id".to_string(),
             model_context_window: None,
             collaboration_mode_kind: ModeKind::Default,
         }),
@@ -2109,6 +2139,7 @@ async fn final_message_separator_is_emitted_immediately_before_final_answer() {
     chat.handle_codex_event(Event {
         id: "turn-complete".to_string(),
         msg: EventMsg::TurnComplete(TurnCompleteEvent {
+            turn_id: "turn-id".to_string(),
             last_agent_message: None,
         }),
     });
@@ -2126,6 +2157,7 @@ async fn final_message_separator_is_emitted_without_phase_markers() {
     chat.handle_codex_event(Event {
         id: "turn-start".to_string(),
         msg: EventMsg::TurnStarted(TurnStartedEvent {
+            turn_id: "turn-id".to_string(),
             model_context_window: None,
             collaboration_mode_kind: ModeKind::Default,
         }),
@@ -2160,6 +2192,7 @@ async fn final_message_separator_is_emitted_without_phase_markers() {
     chat.handle_codex_event(Event {
         id: "turn-complete-no-phase".to_string(),
         msg: EventMsg::TurnComplete(TurnCompleteEvent {
+            turn_id: "turn-id".to_string(),
             last_agent_message: None,
         }),
     });
@@ -2618,6 +2651,7 @@ async fn interrupt_exec_marks_failed_snapshot() {
     chat.handle_codex_event(Event {
         id: "call-int".into(),
         msg: EventMsg::TurnAborted(codex_core::protocol::TurnAbortedEvent {
+            turn_id: None,
             reason: TurnAbortReason::Interrupted,
         }),
     });
@@ -2643,6 +2677,7 @@ async fn interrupted_turn_error_message_snapshot() {
     chat.handle_codex_event(Event {
         id: "task-1".into(),
         msg: EventMsg::TurnStarted(TurnStartedEvent {
+            turn_id: "turn-id".to_string(),
             model_context_window: None,
             collaboration_mode_kind: ModeKind::Default,
         }),
@@ -2652,6 +2687,7 @@ async fn interrupted_turn_error_message_snapshot() {
     chat.handle_codex_event(Event {
         id: "task-1".into(),
         msg: EventMsg::TurnAborted(codex_core::protocol::TurnAbortedEvent {
+            turn_id: None,
             reason: TurnAbortReason::Interrupted,
         }),
     });
@@ -2890,6 +2926,7 @@ async fn preset_matching_ignores_extra_writable_roots() {
         .expect("auto preset exists");
     let current_sandbox = SandboxPolicy::WorkspaceWrite {
         writable_roots: vec![AbsolutePathBuf::try_from("C:\\extra").unwrap()],
+        read_only_access: Default::default(),
         network_access: false,
         exclude_tmpdir_env_var: false,
         exclude_slash_tmp: false,
@@ -3155,6 +3192,7 @@ async fn user_shell_command_emits_separator_before_final_message() {
     chat.handle_codex_event(Event {
         id: "turn-start-user-shell".to_string(),
         msg: EventMsg::TurnStarted(TurnStartedEvent {
+            turn_id: "turn-id".to_string(),
             model_context_window: None,
             collaboration_mode_kind: ModeKind::Default,
         }),
@@ -3214,6 +3252,7 @@ async fn user_shell_command_emits_separator_before_final_message() {
     chat.handle_codex_event(Event {
         id: "turn-complete-user-shell".to_string(),
         msg: EventMsg::TurnComplete(TurnCompleteEvent {
+            turn_id: "turn-id".to_string(),
             last_agent_message: None,
         }),
     });
@@ -3437,6 +3476,7 @@ async fn interrupt_restores_queued_messages_into_composer() {
     chat.handle_codex_event(Event {
         id: "turn-1".into(),
         msg: EventMsg::TurnAborted(codex_core::protocol::TurnAbortedEvent {
+            turn_id: None,
             reason: TurnAbortReason::Interrupted,
         }),
     });
@@ -3475,6 +3515,7 @@ async fn interrupt_prepends_queued_messages_before_existing_composer_text() {
     chat.handle_codex_event(Event {
         id: "turn-1".into(),
         msg: EventMsg::TurnAborted(codex_core::protocol::TurnAbortedEvent {
+            turn_id: None,
             reason: TurnAbortReason::Interrupted,
         }),
     });
@@ -3520,6 +3561,7 @@ async fn ui_snapshots_small_heights_task_running() {
     chat.handle_codex_event(Event {
         id: "task-1".into(),
         msg: EventMsg::TurnStarted(TurnStartedEvent {
+            turn_id: "turn-id".to_string(),
             model_context_window: None,
             collaboration_mode_kind: ModeKind::Default,
         }),
@@ -3552,6 +3594,7 @@ async fn status_widget_and_approval_modal_snapshot() {
     chat.handle_codex_event(Event {
         id: "task-1".into(),
         msg: EventMsg::TurnStarted(TurnStartedEvent {
+            turn_id: "turn-id".to_string(),
             model_context_window: None,
             collaboration_mode_kind: ModeKind::Default,
         }),
@@ -3605,6 +3648,7 @@ async fn status_widget_active_snapshot() {
     chat.handle_codex_event(Event {
         id: "task-1".into(),
         msg: EventMsg::TurnStarted(TurnStartedEvent {
+            turn_id: "turn-id".to_string(),
             model_context_window: None,
             collaboration_mode_kind: ModeKind::Default,
         }),
@@ -3655,6 +3699,7 @@ async fn mcp_startup_complete_does_not_clear_running_task() {
     chat.handle_codex_event(Event {
         id: "task-1".into(),
         msg: EventMsg::TurnStarted(TurnStartedEvent {
+            turn_id: "turn-id".to_string(),
             model_context_window: None,
             collaboration_mode_kind: ModeKind::Default,
         }),
@@ -4164,6 +4209,7 @@ async fn plan_item_completed_renders_proposed_plan_cell() {
     chat.handle_codex_event(Event {
         id: "turn-start".into(),
         msg: EventMsg::TurnStarted(TurnStartedEvent {
+            turn_id: "turn-id".to_string(),
             model_context_window: None,
             collaboration_mode_kind: ModeKind::Plan,
         }),
@@ -4203,6 +4249,7 @@ async fn empty_plan_item_falls_back_to_plan_delta_buffer() {
     chat.handle_codex_event(Event {
         id: "turn-start".into(),
         msg: EventMsg::TurnStarted(TurnStartedEvent {
+            turn_id: "turn-id".to_string(),
             model_context_window: None,
             collaboration_mode_kind: ModeKind::Plan,
         }),
@@ -4249,6 +4296,7 @@ async fn plan_turn_complete_opens_next_step_prompt() {
     chat.handle_codex_event(Event {
         id: "turn-start".into(),
         msg: EventMsg::TurnStarted(TurnStartedEvent {
+            turn_id: "turn-id".to_string(),
             model_context_window: None,
             collaboration_mode_kind: ModeKind::Plan,
         }),
@@ -4271,6 +4319,7 @@ async fn plan_turn_complete_opens_next_step_prompt() {
     chat.handle_codex_event(Event {
         id: "turn-complete".into(),
         msg: EventMsg::TurnComplete(TurnCompleteEvent {
+            turn_id: "turn-id".to_string(),
             last_agent_message: Some("done".to_string()),
         }),
     });
@@ -4388,6 +4437,7 @@ async fn plan_next_step_prompt_cancel_emits_pause_event() {
     chat.handle_codex_event(Event {
         id: "turn-start".into(),
         msg: EventMsg::TurnStarted(TurnStartedEvent {
+            turn_id: "turn-id".to_string(),
             model_context_window: None,
             collaboration_mode_kind: ModeKind::Plan,
         }),
@@ -4408,6 +4458,7 @@ async fn plan_next_step_prompt_cancel_emits_pause_event() {
     chat.handle_codex_event(Event {
         id: "turn-complete".into(),
         msg: EventMsg::TurnComplete(TurnCompleteEvent {
+            turn_id: "turn-id".to_string(),
             last_agent_message: Some("done".to_string()),
         }),
     });
@@ -4432,6 +4483,7 @@ async fn plan_next_step_prompt_discuss_further_emits_reopen_event() {
     chat.handle_codex_event(Event {
         id: "turn-start".into(),
         msg: EventMsg::TurnStarted(TurnStartedEvent {
+            turn_id: "turn-id".to_string(),
             model_context_window: None,
             collaboration_mode_kind: ModeKind::Plan,
         }),
@@ -4452,6 +4504,7 @@ async fn plan_next_step_prompt_discuss_further_emits_reopen_event() {
     chat.handle_codex_event(Event {
         id: "turn-complete".into(),
         msg: EventMsg::TurnComplete(TurnCompleteEvent {
+            turn_id: "turn-id".to_string(),
             last_agent_message: Some("done".to_string()),
         }),
     });
@@ -4475,6 +4528,7 @@ async fn plan_next_step_prompt_do_something_else_emits_prompt_event() {
     chat.handle_codex_event(Event {
         id: "turn-start".into(),
         msg: EventMsg::TurnStarted(TurnStartedEvent {
+            turn_id: "turn-id".to_string(),
             model_context_window: None,
             collaboration_mode_kind: ModeKind::Plan,
         }),
@@ -4495,6 +4549,7 @@ async fn plan_next_step_prompt_do_something_else_emits_prompt_event() {
     chat.handle_codex_event(Event {
         id: "turn-complete".into(),
         msg: EventMsg::TurnComplete(TurnCompleteEvent {
+            turn_id: "turn-id".to_string(),
             last_agent_message: Some("done".to_string()),
         }),
     });
@@ -4520,6 +4575,7 @@ async fn plan_next_step_prompt_reopens_after_discuss_further_on_next_turn() {
     chat.handle_codex_event(Event {
         id: "turn-start".into(),
         msg: EventMsg::TurnStarted(TurnStartedEvent {
+            turn_id: "turn-id".to_string(),
             model_context_window: None,
             collaboration_mode_kind: ModeKind::Plan,
         }),
@@ -4527,6 +4583,7 @@ async fn plan_next_step_prompt_reopens_after_discuss_further_on_next_turn() {
     chat.handle_codex_event(Event {
         id: "turn-complete".into(),
         msg: EventMsg::TurnComplete(TurnCompleteEvent {
+            turn_id: "turn-id".to_string(),
             last_agent_message: Some("follow-up".to_string()),
         }),
     });
@@ -4843,6 +4900,7 @@ async fn stream_recovery_restores_previous_status_header() {
     chat.handle_codex_event(Event {
         id: "task".into(),
         msg: EventMsg::TurnStarted(TurnStartedEvent {
+            turn_id: "turn-id".to_string(),
             model_context_window: None,
             collaboration_mode_kind: ModeKind::Default,
         }),
@@ -4886,6 +4944,7 @@ async fn multiple_agent_messages_in_single_turn_emit_multiple_headers() {
     chat.handle_codex_event(Event {
         id: "s1".into(),
         msg: EventMsg::TurnStarted(TurnStartedEvent {
+            turn_id: "turn-id".to_string(),
             model_context_window: None,
             collaboration_mode_kind: ModeKind::Default,
         }),
@@ -4911,6 +4970,7 @@ async fn multiple_agent_messages_in_single_turn_emit_multiple_headers() {
     chat.handle_codex_event(Event {
         id: "s1".into(),
         msg: EventMsg::TurnComplete(TurnCompleteEvent {
+            turn_id: "turn-id".to_string(),
             last_agent_message: None,
         }),
     });
@@ -5081,6 +5141,7 @@ async fn chatwidget_exec_and_status_layout_vt100_snapshot() {
     chat.handle_codex_event(Event {
         id: "t1".into(),
         msg: EventMsg::TurnStarted(TurnStartedEvent {
+            turn_id: "turn-id".to_string(),
             model_context_window: None,
             collaboration_mode_kind: ModeKind::Default,
         }),
@@ -5126,6 +5187,7 @@ async fn chatwidget_markdown_code_blocks_vt100_snapshot() {
     chat.handle_codex_event(Event {
         id: "t1".into(),
         msg: EventMsg::TurnStarted(TurnStartedEvent {
+            turn_id: "turn-id".to_string(),
             model_context_window: None,
             collaboration_mode_kind: ModeKind::Default,
         }),
@@ -5198,6 +5260,7 @@ printf 'fenced within fenced\n'
     chat.handle_codex_event(Event {
         id: "t1".into(),
         msg: EventMsg::TurnComplete(TurnCompleteEvent {
+            turn_id: "turn-id".to_string(),
             last_agent_message: None,
         }),
     });
@@ -5216,6 +5279,7 @@ async fn chatwidget_tall() {
     chat.handle_codex_event(Event {
         id: "t1".into(),
         msg: EventMsg::TurnStarted(TurnStartedEvent {
+            turn_id: "turn-id".to_string(),
             model_context_window: None,
             collaboration_mode_kind: ModeKind::Default,
         }),

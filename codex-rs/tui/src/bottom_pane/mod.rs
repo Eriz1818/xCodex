@@ -1512,6 +1512,8 @@ mod tests {
             enhanced_keys_supported: false,
             placeholder_text: "Ask Codex to do anything".to_string(),
             disable_paste_burst: false,
+            minimal_composer_borders: false,
+            xtreme_ui_enabled: false,
             animations_enabled: true,
             skills: Some(Vec::new()),
         });

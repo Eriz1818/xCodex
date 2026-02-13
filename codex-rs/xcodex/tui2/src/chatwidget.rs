@@ -3425,9 +3425,9 @@ impl ChatWidget {
             }
             EventMsg::AgentReasoningSectionBreak(_) => self.on_reasoning_section_break(),
             EventMsg::TurnStarted(ev) => self.on_task_started(ev.collaboration_mode_kind),
-            EventMsg::TurnComplete(TurnCompleteEvent { last_agent_message }) => {
-                self.on_task_complete(last_agent_message)
-            }
+            EventMsg::TurnComplete(TurnCompleteEvent {
+                last_agent_message, ..
+            }) => self.on_task_complete(last_agent_message),
             EventMsg::TokenCount(ev) => {
                 if let Some(info) = ev.info {
                     self.set_token_info(Some(info));
@@ -3521,6 +3521,8 @@ impl ChatWidget {
             EventMsg::CollabWaitingEnd(ev) => self.on_collab_event(collab::waiting_end(ev)),
             EventMsg::CollabCloseBegin(_) => {}
             EventMsg::CollabCloseEnd(ev) => self.on_collab_event(collab::close_end(ev)),
+            EventMsg::CollabResumeBegin(ev) => self.on_collab_event(collab::resume_begin(ev)),
+            EventMsg::CollabResumeEnd(ev) => self.on_collab_event(collab::resume_end(ev)),
             EventMsg::ItemStarted(event) => {
                 if let codex_protocol::items::TurnItem::AgentMessage(item) = event.item {
                     self.on_agent_message_item_started(item);
@@ -4765,18 +4767,34 @@ impl ChatWidget {
         if current_approval != preset.approval {
             return false;
         }
-        matches!(
-            (&preset.sandbox, current_sandbox),
-            (SandboxPolicy::ReadOnly, SandboxPolicy::ReadOnly)
-                | (
-                    SandboxPolicy::DangerFullAccess,
-                    SandboxPolicy::DangerFullAccess
-                )
-                | (
-                    SandboxPolicy::WorkspaceWrite { .. },
-                    SandboxPolicy::WorkspaceWrite { .. }
-                )
-        )
+
+        match (current_sandbox, &preset.sandbox) {
+            (
+                SandboxPolicy::WorkspaceWrite {
+                    writable_roots: current_roots,
+                    read_only_access: current_read_only,
+                    network_access: current_network,
+                    exclude_tmpdir_env_var: current_exclude_tmpdir,
+                    exclude_slash_tmp: current_exclude_slash_tmp,
+                },
+                SandboxPolicy::WorkspaceWrite {
+                    writable_roots: preset_roots,
+                    read_only_access: preset_read_only,
+                    network_access: preset_network,
+                    exclude_tmpdir_env_var: preset_exclude_tmpdir,
+                    exclude_slash_tmp: preset_exclude_slash_tmp,
+                },
+            ) => {
+                current_read_only == preset_read_only
+                    && current_network == preset_network
+                    && current_exclude_tmpdir == preset_exclude_tmpdir
+                    && current_exclude_slash_tmp == preset_exclude_slash_tmp
+                    && preset_roots
+                        .iter()
+                        .all(|preset_root| current_roots.contains(preset_root))
+            }
+            _ => *current_sandbox == preset.sandbox,
+        }
     }
 
     #[cfg(target_os = "windows")]
@@ -4887,7 +4905,7 @@ impl ChatWidget {
         let mut header_children: Vec<Box<dyn Renderable>> = Vec::new();
         let describe_policy = |policy: &SandboxPolicy| match policy {
             SandboxPolicy::WorkspaceWrite { .. } => "Agent mode",
-            SandboxPolicy::ReadOnly => "Read-Only mode",
+            SandboxPolicy::ReadOnly { .. } => "Read-Only mode",
             _ => "Agent mode",
         };
         let mode_label = preset
@@ -5267,7 +5285,7 @@ impl ChatWidget {
     /// Set the sandbox policy in the widget's config copy.
     pub(crate) fn set_sandbox_policy(&mut self, policy: SandboxPolicy) -> ConstraintResult<()> {
         #[cfg(target_os = "windows")]
-        let should_clear_downgrade = !matches!(&policy, SandboxPolicy::ReadOnly)
+        let should_clear_downgrade = !matches!(&policy, SandboxPolicy::ReadOnly { .. })
             || WindowsSandboxLevel::from_config(&self.config) != WindowsSandboxLevel::Disabled;
 
         self.config.sandbox_policy.set(policy)?;
@@ -6467,6 +6485,7 @@ fn skills_for_cwd(cwd: &Path, skills_entries: &[SkillsListEntry]) -> Vec<SkillMe
                                 .collect(),
                         }
                     }),
+                    policy: None,
                     path: skill.path.clone(),
                     scope: skill.scope,
                 })

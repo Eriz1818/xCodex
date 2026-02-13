@@ -214,6 +214,7 @@ impl ApprovalOverlay {
         self.app_event_tx.send(AppEvent::InsertHistoryCell(cell));
         self.app_event_tx.send(AppEvent::CodexOp(Op::ExecApproval {
             id: id.to_string(),
+            turn_id: None,
             decision,
         }));
     }
@@ -604,10 +605,10 @@ mod tests {
     use super::*;
     use crate::app_event::AppEvent;
     use crate::style::user_message_style;
+    use codex_core::features::Feature;
     use codex_core::themes::ThemeCatalog;
+    use codex_core::themes::ThemeColor;
     use pretty_assertions::assert_eq;
-    use ratatui::style::Color;
-    use ratatui::style::Style;
     use tokio::sync::mpsc::unbounded_channel;
 
     struct ThemeReset;
@@ -751,25 +752,20 @@ mod tests {
         let _guard = crate::theme::test_style_guard();
         let _reset = ThemeReset;
 
-        // Force distinct transcript/composer backgrounds to catch style regressions
-        // deterministically, even when terminal color probing is unavailable in tests.
-        crate::theme::set_test_surface_styles(
-            Style::default().bg(Color::Blue),
-            Style::default().bg(Color::Yellow),
+        let mut theme = ThemeCatalog::built_in_default();
+        theme.roles.transcript_bg = Some(ThemeColor::new("#1a1a1a"));
+        theme.roles.composer_bg = Some(ThemeColor::new("#003355"));
+        let resolved_composer_bg = theme.resolve_composer_bg();
+        let resolved_transcript_bg = theme.resolve_transcript_bg();
+        assert_ne!(
+            resolved_composer_bg, resolved_transcript_bg,
+            "expected transcript and popup backgrounds to differ for the guardrail test"
         );
+        crate::theme::preview_definition(&theme);
 
         let expected_bg = user_message_style()
             .patch(crate::theme::composer_style())
             .bg;
-        let transcript_bg = crate::theme::transcript_style().bg;
-        assert!(
-            matches!((expected_bg, transcript_bg), (Some(_), Some(_))),
-            "expected explicit transcript + popup backgrounds for the guardrail test"
-        );
-        assert_ne!(
-            expected_bg, transcript_bg,
-            "expected transcript and popup backgrounds to differ for the guardrail test"
-        );
 
         let (tx, _rx) = unbounded_channel::<AppEvent>();
         let tx = AppEventSender::new(tx);

@@ -319,7 +319,7 @@ impl RequestUserInputOverlay {
                         let check = if selected { 'x' } else { ' ' };
                         let label = opt.label.as_str();
                         let number = idx + 1;
-                        let prefix_label = format!("{prefix} {number}. ");
+                        let prefix_label = format!("{cursor} {number}. [{check}] ");
                         let wrap_indent = UnicodeWidthStr::width(prefix_label.as_str());
                         GenericDisplayRow {
                             name: format!("{cursor} {number}. [{check}] {label}"),
@@ -337,7 +337,7 @@ impl RequestUserInputOverlay {
                     let cursor = if focused { '›' } else { ' ' };
                     let check = if selected { 'x' } else { ' ' };
                     let number = idx + 1;
-                    let prefix_label = format!("{prefix} {number}. ");
+                    let prefix_label = format!("{cursor} {number}. [{check}] ");
                     let wrap_indent = UnicodeWidthStr::width(prefix_label.as_str());
                     rows.push(GenericDisplayRow {
                         name: format!("{cursor} {number}. [{check}] {OTHER_OPTION_LABEL}"),
@@ -3005,7 +3005,7 @@ mod tests {
 
         let rendered = render_snapshot(&overlay, Rect::new(0, 0, 80, 20));
         assert!(
-            rendered.contains("› 3. Use Detailed Hint C"),
+            rendered.contains("› 3. [ ] Use Detailed Hint C"),
             "expected selected option to be visible in viewport\n{rendered}"
         );
     }

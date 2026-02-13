@@ -1507,6 +1507,7 @@ fn column_visibility(
 mod tests {
     use super::*;
     use chrono::Duration;
+    use codex_core::config::ConfigBuilder;
     use codex_protocol::ThreadId;
 
     use crossterm::event::KeyCode;
@@ -1945,8 +1946,13 @@ mod tests {
             SessionPickerAction::Resume,
         );
 
+        let config = ConfigBuilder::default()
+            .codex_home(state.codex_home.clone())
+            .build()
+            .await
+            .expect("config");
         let page = RolloutRecorder::list_threads(
-            &state.codex_home,
+            &config,
             PAGE_SIZE,
             None,
             ThreadSortKey::CreatedAt,

@@ -3430,7 +3430,7 @@ mod tests {
             std::env::temp_dir(),
             "test",
             AskForApproval::OnRequest,
-            SandboxPolicy::ReadOnly,
+            SandboxPolicy::new_read_only_policy(),
             true,
         );
 

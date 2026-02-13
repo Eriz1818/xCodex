@@ -2,6 +2,7 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 // Note: Table-based layout previously used Constraint; the manual renderer
 // below no longer requires it.
+use ratatui::style::Color;
 use ratatui::style::Modifier;
 use ratatui::style::Style;
 use ratatui::style::Stylize;
@@ -28,9 +29,6 @@ use codex_core::themes::ThemeColor;
 use codex_core::themes::ThemeDefinition;
 #[cfg(test)]
 use codex_core::themes::ThemeVariant;
-#[cfg(test)]
-use ratatui::style::Color;
-
 /// Render-ready representation of one row in a selection popup.
 ///
 /// This type contains presentation-focused fields that are intentionally more
@@ -89,6 +87,11 @@ pub(crate) const fn menu_surface_padding_height() -> u16 {
 /// Shared popup surface style (composer background + user message base).
 pub(crate) fn popup_surface_style() -> Style {
     user_message_style().patch(crate::theme::composer_style())
+}
+
+/// Shared popup style for overlays that must use transcript surface colors.
+pub(crate) fn transcript_popup_surface_style() -> Style {
+    crate::theme::transcript_style()
 }
 
 /// Paint the shared menu background and return the inset content area.
@@ -170,7 +173,7 @@ pub(crate) fn assert_transcript_surface_bg(area: Rect, render: impl FnOnce(Rect,
 }
 
 #[cfg(test)]
-mod tests {
+mod narrow_width_tests {
     use super::*;
     use crate::theme;
 
@@ -179,6 +182,16 @@ mod tests {
         let _guard = theme::test_style_guard();
         theme::preview_definition(&test_popup_surface_theme());
         pretty_assertions::assert_eq!(popup_surface_style().bg, crate::theme::composer_style().bg);
+    }
+
+    #[test]
+    fn transcript_popup_surface_uses_transcript_background() {
+        let _guard = theme::test_style_guard();
+        theme::preview_definition(&test_popup_surface_theme());
+        pretty_assertions::assert_eq!(
+            transcript_popup_surface_style().bg,
+            crate::theme::transcript_style().bg
+        );
     }
 }
 

@@ -645,7 +645,7 @@ impl App {
                 && matches!(
                     app.config.sandbox_policy.get(),
                     codex_core::protocol::SandboxPolicy::WorkspaceWrite { .. }
-                        | codex_core::protocol::SandboxPolicy::ReadOnly
+                        | codex_core::protocol::SandboxPolicy::ReadOnly { .. }
                 )
                 && !app
                     .config
@@ -1822,14 +1822,7 @@ impl App {
                 tui.frame_requester().schedule_frame();
             }
             AppEvent::OpenResumePicker => {
-                match crate::resume_picker::run_resume_picker(
-                    tui,
-                    &self.config.codex_home,
-                    &self.config.model_provider_id,
-                    false,
-                )
-                .await?
-                {
+                match crate::resume_picker::run_resume_picker(tui, &self.config, false).await? {
                     SessionSelection::Resume(path) => {
                         let summary = session_summary(
                             self.chat_widget.token_usage(),
@@ -3099,7 +3092,7 @@ impl App {
                 let policy_is_workspace_write_or_ro = matches!(
                     &policy,
                     codex_core::protocol::SandboxPolicy::WorkspaceWrite { .. }
-                        | codex_core::protocol::SandboxPolicy::ReadOnly
+                        | codex_core::protocol::SandboxPolicy::ReadOnly { .. }
                 );
 
                 if let Err(err) = self.config.sandbox_policy.set(policy.clone()) {
@@ -3109,9 +3102,11 @@ impl App {
                     return Ok(AppRunControl::Continue);
                 }
                 #[cfg(target_os = "windows")]
-                if !matches!(&policy, codex_core::protocol::SandboxPolicy::ReadOnly)
-                    || WindowsSandboxLevel::from_config(&self.config)
-                        != WindowsSandboxLevel::Disabled
+                if !matches!(
+                    &policy,
+                    codex_core::protocol::SandboxPolicy::ReadOnly { .. }
+                ) || WindowsSandboxLevel::from_config(&self.config)
+                    != WindowsSandboxLevel::Disabled
                 {
                     self.config.forced_auto_mode_downgraded_on_windows = false;
                 }
@@ -3762,15 +3757,16 @@ mod tests {
     use crate::history_cell::new_session_info;
     use crate::transcript_copy_ui::CopySelectionShortcut;
     use crate::tui::scrolling::TranscriptLineMeta;
-    use codex_core::AuthManager;
     use codex_core::CodexAuth;
-    use codex_core::ThreadManager;
     use codex_core::config::ConfigBuilder;
     use codex_core::protocol::AskForApproval;
     use codex_core::protocol::Event;
     use codex_core::protocol::EventMsg;
     use codex_core::protocol::SandboxPolicy;
     use codex_core::protocol::SessionConfiguredEvent;
+    use codex_core::test_support::all_model_presets as all_model_presets_for_tests;
+    use codex_core::test_support::auth_manager_from_auth;
+    use codex_core::test_support::thread_manager_with_models_provider;
     use codex_protocol::ThreadId;
     use insta::assert_snapshot;
     use pretty_assertions::assert_eq;
@@ -3784,12 +3780,11 @@ mod tests {
         let (chat_widget, app_event_tx, _rx, _op_rx) = make_chatwidget_manual_with_sender().await;
         let config = chat_widget.config_ref().clone();
         let current_model = "gpt-5.2-codex".to_string();
-        let server = Arc::new(ThreadManager::with_models_provider(
+        let server = Arc::new(thread_manager_with_models_provider(
             CodexAuth::from_api_key("Test API Key"),
             config.model_provider.clone(),
         ));
-        let auth_manager =
-            AuthManager::from_auth_for_testing(CodexAuth::from_api_key("Test API Key"));
+        let auth_manager = auth_manager_from_auth(CodexAuth::from_api_key("Test API Key"));
         let file_search = FileSearchManager::new(
             config.cwd.clone(),
             config.exclusion.files.clone(),
@@ -3843,12 +3838,11 @@ mod tests {
         let (chat_widget, app_event_tx, rx, op_rx) = make_chatwidget_manual_with_sender().await;
         let config = chat_widget.config_ref().clone();
         let current_model = "gpt-5.2-codex".to_string();
-        let server = Arc::new(ThreadManager::with_models_provider(
+        let server = Arc::new(thread_manager_with_models_provider(
             CodexAuth::from_api_key("Test API Key"),
             config.model_provider.clone(),
         ));
-        let auth_manager =
-            AuthManager::from_auth_for_testing(CodexAuth::from_api_key("Test API Key"));
+        let auth_manager = auth_manager_from_auth(CodexAuth::from_api_key("Test API Key"));
         let file_search = FileSearchManager::new(
             config.cwd.clone(),
             config.exclusion.files.clone(),
@@ -3899,7 +3893,7 @@ mod tests {
     }
 
     fn all_model_presets() -> Vec<ModelPreset> {
-        codex_core::models_manager::model_presets::all_model_presets().clone()
+        all_model_presets_for_tests().clone()
     }
 
     fn model_migration_copy_to_plain_text(
@@ -4106,12 +4100,13 @@ mod tests {
                 model: "gpt-test".to_string(),
                 model_provider_id: "test-provider".to_string(),
                 approval_policy: AskForApproval::Never,
-                sandbox_policy: SandboxPolicy::ReadOnly,
+                sandbox_policy: SandboxPolicy::new_read_only_policy(),
                 cwd: PathBuf::from("/home/user/project"),
                 reasoning_effort: None,
                 history_log_id: 0,
                 history_entry_count: 0,
                 initial_messages: None,
+                network_proxy: None,
                 rollout_path: None,
                 forked_from_id: None,
                 thread_name: None,
@@ -4149,12 +4144,13 @@ mod tests {
                 model: "gpt-test".to_string(),
                 model_provider_id: "test-provider".to_string(),
                 approval_policy: AskForApproval::Never,
-                sandbox_policy: SandboxPolicy::ReadOnly,
+                sandbox_policy: SandboxPolicy::new_read_only_policy(),
                 cwd: PathBuf::from("/home/user/project"),
                 reasoning_effort: None,
                 history_log_id: 0,
                 history_entry_count: 0,
                 initial_messages: None,
+                network_proxy: None,
                 rollout_path: None,
                 forked_from_id: None,
                 thread_name: None,
@@ -4439,12 +4435,13 @@ mod tests {
             model: "gpt-test".to_string(),
             model_provider_id: "test-provider".to_string(),
             approval_policy: AskForApproval::Never,
-            sandbox_policy: SandboxPolicy::ReadOnly,
+            sandbox_policy: SandboxPolicy::new_read_only_policy(),
             cwd: PathBuf::from("/home/user/project"),
             reasoning_effort: None,
             history_log_id: 0,
             history_entry_count: 0,
             initial_messages: None,
+            network_proxy: None,
             rollout_path: None,
             forked_from_id: None,
             thread_name: None,
