@@ -2,6 +2,7 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 // Note: Table-based layout previously used Constraint; the manual renderer
 // below no longer requires it.
+#[cfg(test)]
 use ratatui::style::Color;
 use ratatui::style::Modifier;
 use ratatui::style::Style;
@@ -495,23 +496,6 @@ fn wrap_row_lines(row: &GenericDisplayRow, desc_col: usize, width: u16) -> Vec<L
     }
 
     wrap_standard_row(row, desc_col, width)
-}
-
-fn apply_row_state_style(lines: &mut [Line<'static>], selected: bool, is_disabled: bool) {
-    if selected {
-        for line in lines.iter_mut() {
-            line.spans.iter_mut().for_each(|span| {
-                span.style = Style::default().fg(Color::Cyan).bold();
-            });
-        }
-    }
-    if is_disabled {
-        for line in lines.iter_mut() {
-            line.spans.iter_mut().for_each(|span| {
-                span.style = span.style.dim();
-            });
-        }
-    }
 }
 
 fn compute_item_window_start(

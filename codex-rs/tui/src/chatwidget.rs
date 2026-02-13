@@ -5132,36 +5132,6 @@ impl ChatWidget {
         self.request_redraw();
     }
 
-    pub(crate) fn add_status_output(&mut self) {
-        let default_usage = TokenUsage::default();
-        let token_info = self.token_info.as_ref();
-        let total_usage = token_info
-            .map(|ti| &ti.total_token_usage)
-            .unwrap_or(&default_usage);
-        let collaboration_mode = self.collaboration_mode_label();
-        let reasoning_effort_override = Some(self.effective_reasoning_effort());
-        let rate_limit_snapshots: Vec<RateLimitSnapshotDisplay> = self
-            .rate_limit_snapshots_by_limit_id
-            .values()
-            .cloned()
-            .collect();
-        self.add_to_history(crate::status::new_status_output_with_rate_limits(
-            &self.config,
-            self.auth_manager.as_ref(),
-            token_info,
-            total_usage,
-            &self.thread_id,
-            self.thread_name.clone(),
-            self.forked_from,
-            rate_limit_snapshots.as_slice(),
-            self.plan_type,
-            Local::now(),
-            self.model_display_name(),
-            collaboration_mode,
-            reasoning_effort_override,
-        ));
-    }
-
     pub(crate) fn add_debug_config_output(&mut self) {
         self.add_to_history(crate::debug_config::new_debug_config_output(
             &self.config,

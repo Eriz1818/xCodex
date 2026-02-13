@@ -36,6 +36,7 @@ pub(crate) fn mask_for_kind(
 }
 
 /// Cycle to the next collaboration mode preset in list order.
+#[allow(dead_code)] // Upstream parity seam: mode-cycling helper kept aligned with tui2 collaboration UX.
 pub(crate) fn next_mask(
     models_manager: &ModelsManager,
     current: Option<&CollaborationModeMask>,

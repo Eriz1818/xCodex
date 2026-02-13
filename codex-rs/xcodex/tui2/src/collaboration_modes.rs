@@ -10,6 +10,7 @@ fn filtered_presets(models_manager: &ModelsManager) -> Vec<CollaborationModeMask
         .collect()
 }
 
+#[allow(dead_code)] // Upstream parity seam: picker/listing helpers are kept aligned with tui.
 pub(crate) fn presets_for_tui(models_manager: &ModelsManager) -> Vec<CollaborationModeMask> {
     filtered_presets(models_manager)
 }
@@ -36,6 +37,7 @@ pub(crate) fn mask_for_kind(
 }
 
 /// Cycle to the next collaboration mode preset in list order.
+#[allow(dead_code)] // Upstream parity seam: mode-cycling helper retained for pending picker wiring.
 pub(crate) fn next_mask(
     models_manager: &ModelsManager,
     current: Option<&CollaborationModeMask>,

@@ -13,7 +13,6 @@ use codex_core::ThreadSortKey;
 use codex_core::ThreadsPage;
 use codex_core::config::Config;
 use codex_core::path_utils;
-use codex_protocol::items::TurnItem;
 use color_eyre::eyre::Result;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
@@ -38,8 +37,10 @@ use crate::text_formatting::truncate_text;
 use crate::tui::FrameRequester;
 use crate::tui::Tui;
 use crate::tui::TuiEvent;
+#[cfg(test)]
+use codex_protocol::items::TurnItem;
+#[cfg(test)]
 use codex_protocol::models::ResponseItem;
-use codex_protocol::protocol::SessionMetaLine;
 
 const PAGE_SIZE: usize = 25;
 const LOAD_NEAR_THRESHOLD: usize = 5;
@@ -89,7 +90,6 @@ impl SessionPickerAction {
 
 #[derive(Clone)]
 struct PageLoadRequest {
-    codex_home: PathBuf,
     cursor: Option<Cursor>,
     request_token: usize,
     search_token: Option<usize>,
@@ -135,7 +135,6 @@ async fn run_session_picker(
     let (bg_tx, bg_rx) = mpsc::unbounded_channel();
 
     let default_provider = config.model_provider_id.to_string();
-    let codex_home = config.codex_home.as_path();
     let filter_cwd = std::env::current_dir().ok();
 
     let config = config.clone();
@@ -164,7 +163,6 @@ async fn run_session_picker(
     });
 
     let mut state = PickerState::new(
-        codex_home.to_path_buf(),
         alt.tui.frame_requester(),
         page_loader,
         default_provider.clone(),
@@ -231,7 +229,6 @@ impl Drop for AltScreenGuard<'_> {
 }
 
 struct PickerState {
-    codex_home: PathBuf,
     requester: FrameRequester,
     pagination: PaginationState,
     all_rows: Vec<Row>,
@@ -313,7 +310,6 @@ struct Row {
 
 impl PickerState {
     fn new(
-        codex_home: PathBuf,
         requester: FrameRequester,
         page_loader: PageLoader,
         default_provider: String,
@@ -322,7 +318,6 @@ impl PickerState {
         action: SessionPickerAction,
     ) -> Self {
         Self {
-            codex_home,
             requester,
             pagination: PaginationState {
                 next_cursor: None,
@@ -495,7 +490,6 @@ impl PickerState {
         self.request_frame();
 
         (self.page_loader)(PageLoadRequest {
-            codex_home: self.codex_home.clone(),
             cursor: None,
             request_token,
             search_token: None,
@@ -725,7 +719,6 @@ impl PickerState {
         self.request_frame();
 
         (self.page_loader)(PageLoadRequest {
-            codex_home: self.codex_home.clone(),
             cursor: Some(cursor),
             request_token,
             search_token,
@@ -776,17 +769,6 @@ fn head_to_row(item: &ThreadItem) -> Row {
     }
 }
 
-fn extract_session_meta_from_head(head: &[serde_json::Value]) -> (Option<PathBuf>, Option<String>) {
-    for value in head {
-        if let Ok(meta_line) = serde_json::from_value::<SessionMetaLine>(value.clone()) {
-            let cwd = Some(meta_line.meta.cwd);
-            let git_branch = meta_line.git.and_then(|git| git.branch);
-            return (cwd, git_branch);
-        }
-    }
-    (None, None)
-}
-
 fn session_id_from_rollout_path(path: &Path) -> Option<String> {
     // Expected: rollout-YYYY-MM-DDThh-mm-ss-<uuid>.jsonl
     let name = path.file_name()?.to_str()?;
@@ -832,14 +814,7 @@ fn parse_timestamp_str(ts: &str) -> Option<DateTime<Utc>> {
         .ok()
 }
 
-fn extract_timestamp(value: &serde_json::Value) -> Option<DateTime<Utc>> {
-    value
-        .get("timestamp")
-        .and_then(|v| v.as_str())
-        .and_then(|t| chrono::DateTime::parse_from_rfc3339(t).ok())
-        .map(|dt| dt.with_timezone(&Utc))
-}
-
+#[cfg(test)]
 fn preview_from_head(head: &[serde_json::Value]) -> Option<String> {
     head.iter()
         .filter_map(|value| serde_json::from_value::<ResponseItem>(value.clone()).ok())
@@ -1308,20 +1283,6 @@ mod tests {
     use std::sync::Arc;
     use std::sync::Mutex;
 
-    fn head_with_ts_and_user_text(ts: &str, texts: &[&str]) -> Vec<serde_json::Value> {
-        vec![
-            json!({ "timestamp": ts }),
-            json!({
-                "type": "message",
-                "role": "user",
-                "content": texts
-                    .iter()
-                    .map(|t| json!({ "type": "input_text", "text": *t }))
-                    .collect::<Vec<_>>()
-            }),
-        ]
-    }
-
     fn make_item(path: &str, ts: &str, preview: &str) -> ThreadItem {
         ThreadItem {
             path: PathBuf::from(path),
@@ -1457,7 +1418,6 @@ mod tests {
 
         let loader: PageLoader = Arc::new(|_| {});
         let mut state = PickerState::new(
-            PathBuf::from("/tmp"),
             FrameRequester::test_dummy(),
             loader,
             String::from("openai"),
@@ -1607,7 +1567,6 @@ mod tests {
 
         let loader: PageLoader = Arc::new(|_| {});
         let mut state = PickerState::new(
-            PathBuf::from("/tmp"),
             FrameRequester::test_dummy(),
             loader,
             String::from("openai"),
@@ -1693,7 +1652,6 @@ mod tests {
     fn pageless_scrolling_deduplicates_and_keeps_order() {
         let loader: PageLoader = Arc::new(|_| {});
         let mut state = PickerState::new(
-            PathBuf::from("/tmp"),
             FrameRequester::test_dummy(),
             loader,
             String::from("openai"),
@@ -1762,7 +1720,6 @@ mod tests {
         });
 
         let mut state = PickerState::new(
-            PathBuf::from("/tmp"),
             FrameRequester::test_dummy(),
             loader,
             String::from("openai"),
@@ -1794,7 +1751,6 @@ mod tests {
     async fn page_navigation_uses_view_rows() {
         let loader: PageLoader = Arc::new(|_| {});
         let mut state = PickerState::new(
-            PathBuf::from("/tmp"),
             FrameRequester::test_dummy(),
             loader,
             String::from("openai"),
@@ -1839,7 +1795,6 @@ mod tests {
     async fn up_at_bottom_does_not_scroll_when_visible() {
         let loader: PageLoader = Arc::new(|_| {});
         let mut state = PickerState::new(
-            PathBuf::from("/tmp"),
             FrameRequester::test_dummy(),
             loader,
             String::from("openai"),
@@ -1884,7 +1839,6 @@ mod tests {
         });
 
         let mut state = PickerState::new(
-            PathBuf::from("/tmp"),
             FrameRequester::test_dummy(),
             loader,
             String::from("openai"),

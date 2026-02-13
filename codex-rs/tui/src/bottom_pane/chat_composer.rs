@@ -809,6 +809,7 @@ impl ChatComposer {
         self.show_context_right = show;
     }
 
+    #[allow(dead_code)] // Upstream parity seam: footer flash pathway kept for pending bottom-pane hint wiring.
     pub(crate) fn show_footer_flash(&mut self, line: Line<'static>, duration: Duration) {
         let expires_at = Instant::now()
             .checked_add(duration)
@@ -3340,18 +3341,6 @@ impl ChatComposer {
                 }
             }
         }
-    }
-    fn built_in_slash_commands_for_input(
-        collaboration_modes_enabled: bool,
-        allow_elevate_sandbox: bool,
-    ) -> impl Iterator<Item = (&'static str, SlashCommand)> {
-        slash_commands::builtins_for_input(
-            collaboration_modes_enabled,
-            false,
-            true,
-            allow_elevate_sandbox,
-        )
-        .into_iter()
     }
     pub(crate) fn set_custom_prompts(&mut self, prompts: Vec<CustomPrompt>) {
         self.custom_prompts = prompts.clone();

@@ -39,6 +39,7 @@ pub(crate) trait BottomPaneView: Renderable {
 
     /// Return true if Esc should be routed through `handle_key_event` instead
     /// of the `on_ctrl_c` cancellation path.
+    #[allow(dead_code)] // Upstream parity seam: modal views can opt into Esc handling as integrations land.
     fn prefer_esc_to_handle_key_event(&self) -> bool {
         false
     }
@@ -53,6 +54,7 @@ pub(crate) trait BottomPaneView: Renderable {
     ///
     /// This lets a modal that reuses `ChatComposer` participate in the same
     /// time-based paste burst flushing as the primary composer.
+    #[allow(dead_code)] // Upstream parity seam: shared paste-burst controls are retained for future modal reuse.
     fn flush_paste_burst_if_due(&mut self) -> bool {
         false
     }
@@ -61,6 +63,7 @@ pub(crate) trait BottomPaneView: Renderable {
     ///
     /// When `true`, the bottom pane will schedule a short delayed redraw to
     /// give the burst time window a chance to flush.
+    #[allow(dead_code)] // Upstream parity seam: shared paste-burst controls are retained for future modal reuse.
     fn is_in_paste_burst(&self) -> bool {
         false
     }

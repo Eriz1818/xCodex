@@ -79,6 +79,7 @@ use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 
 #[derive(Clone, Copy, Default)]
+#[allow(dead_code)] // Upstream parity seam: startup render payload retained while xcodex plugin path is primary.
 pub(crate) struct McpStartupRenderInfo<'a> {
     pub(crate) statuses: Option<&'a HashMap<String, McpStartupStatus>>,
     pub(crate) durations: Option<&'a HashMap<String, Duration>>,
@@ -646,6 +647,7 @@ impl HistoryCell for UnifiedExecWaitCell {
     }
 }
 
+#[allow(dead_code)] // Upstream parity seam: live wait cell retained for unified-exec transcript compatibility.
 pub(crate) fn new_unified_exec_wait_live(
     command_display: Option<String>,
     animations_enabled: bool,
@@ -654,17 +656,20 @@ pub(crate) fn new_unified_exec_wait_live(
 }
 
 #[derive(Debug)]
+#[allow(dead_code)] // Upstream parity seam: process summary cell retained for unified-exec transcript compatibility.
 struct UnifiedExecProcessesCell {
     processes: Vec<UnifiedExecProcessDetails>,
 }
 
 impl UnifiedExecProcessesCell {
+    #[allow(dead_code)] // Upstream parity seam: constructor retained for unified-exec transcript compatibility.
     fn new(processes: Vec<UnifiedExecProcessDetails>) -> Self {
         Self { processes }
     }
 }
 
 #[derive(Debug, Clone)]
+#[allow(dead_code)] // Upstream parity seam: process row payload retained for unified-exec transcript compatibility.
 pub(crate) struct UnifiedExecProcessDetails {
     pub(crate) command_display: String,
     pub(crate) recent_chunks: Vec<String>,
@@ -780,6 +785,7 @@ impl HistoryCell for UnifiedExecProcessesCell {
     }
 }
 
+#[allow(dead_code)] // Upstream parity seam: output builder retained for unified-exec transcript compatibility.
 pub(crate) fn new_unified_exec_processes_output(
     processes: Vec<UnifiedExecProcessDetails>,
 ) -> CompositeHistoryCell {
@@ -1813,6 +1819,7 @@ pub(crate) fn empty_mcp_output() -> PlainHistoryCell {
 }
 
 /// Render MCP tools grouped by connection using the fully-qualified tool names.
+#[allow(dead_code)] // Upstream parity seam: MCP tools transcript view retained for plugin parity.
 pub(crate) fn new_mcp_tools_output(
     config: &Config,
     tools: HashMap<String, codex_protocol::mcp::Tool>,

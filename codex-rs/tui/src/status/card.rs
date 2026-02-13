@@ -181,6 +181,7 @@ pub(crate) fn new_status_output(
 }
 
 #[allow(clippy::too_many_arguments)]
+#[allow(dead_code)] // Upstream parity seam: transcript status output retained for `/status`-style integrations.
 pub(crate) fn new_status_output_with_session_stats(
     config: &Config,
     auth_manager: &AuthManager,
@@ -217,6 +218,7 @@ pub(crate) fn new_status_output_with_session_stats(
 }
 
 #[allow(clippy::too_many_arguments)]
+#[allow(dead_code)] // Upstream parity seam: transcript status output retained for `/status`-style integrations.
 pub(crate) fn new_status_output_with_rate_limits(
     config: &Config,
     auth_manager: &AuthManager,
@@ -251,6 +253,7 @@ pub(crate) fn new_status_output_with_rate_limits(
 }
 
 #[allow(clippy::too_many_arguments)]
+#[allow(dead_code)] // Upstream parity seam: shared transcript status renderer retained for `/status`-style integrations.
 fn new_status_output_inner(
     config: &Config,
     auth_manager: &AuthManager,
@@ -698,18 +701,6 @@ impl StatusHistoryCell {
                     "external-sandbox".to_string()
                 }
             }
-        };
-        let permissions = if config.permissions.approval_policy.value() == AskForApproval::OnRequest
-            && *config.permissions.sandbox_policy.get()
-                == SandboxPolicy::new_workspace_write_policy()
-        {
-            "Default".to_string()
-        } else if config.permissions.approval_policy.value() == AskForApproval::Never
-            && *config.permissions.sandbox_policy.get() == SandboxPolicy::DangerFullAccess
-        {
-            "Full Access".to_string()
-        } else {
-            format!("Custom ({sandbox}, {approval})")
         };
         let agents_summary = compose_agents_summary(config);
         let auto_compact_enabled =

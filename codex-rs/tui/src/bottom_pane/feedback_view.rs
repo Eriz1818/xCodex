@@ -40,7 +40,7 @@ pub(crate) struct FeedbackNoteView {
     rollout_path: Option<PathBuf>,
     app_event_tx: AppEventSender,
     include_logs: bool,
-    feedback_audience: FeedbackAudience,
+    _feedback_audience: FeedbackAudience,
 
     // UI state
     textarea: TextArea,
@@ -63,7 +63,7 @@ impl FeedbackNoteView {
             rollout_path,
             app_event_tx,
             include_logs,
-            feedback_audience,
+            _feedback_audience: feedback_audience,
             textarea: TextArea::new(),
             textarea_state: RefCell::new(TextAreaState::default()),
             complete: false,

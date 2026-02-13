@@ -936,6 +936,7 @@ impl BottomPane {
     ///
     /// The summary may be displayed inline in the status row or as a dedicated
     /// footer row depending on whether a status indicator is currently visible.
+    #[allow(dead_code)] // Upstream parity seam: unified-exec footer API retained for pending producer wiring.
     pub(crate) fn set_unified_exec_processes(&mut self, processes: Vec<String>) {
         if self.unified_exec_footer.set_processes(processes) {
             self.sync_status_inline_message();
@@ -943,6 +944,7 @@ impl BottomPane {
         }
     }
 
+    #[allow(dead_code)] // Upstream parity seam: unified-exec footer API retained for pending producer wiring.
     pub(crate) fn set_unified_exec_hooks(&mut self, hooks: Vec<String>) {
         if self.unified_exec_footer.set_hooks(hooks) {
             self.sync_status_inline_message();
@@ -971,6 +973,7 @@ impl BottomPane {
         self.request_redraw();
     }
 
+    #[allow(dead_code)] // Upstream parity seam: footer hint API retained for pending UX integration.
     pub(crate) fn flash_footer_hint(&mut self, line: Line<'static>, duration: Duration) {
         self.composer.show_footer_flash(line, duration);
         let frame_requester = self.frame_requester.clone();
