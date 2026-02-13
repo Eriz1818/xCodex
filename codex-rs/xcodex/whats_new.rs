@@ -41,16 +41,21 @@ mod tests {
 
     #[test]
     fn extracts_bullets_for_matching_version() {
-        let bullets = whats_new_bullets_for_version("0.3.6").expect("expected bullets");
+        let bullets = whats_new_bullets_for_version("0.4.0").expect("expected bullets");
         assert_eq!(
             bullets,
             vec![
-                "New `/exclusion` command for managing exclusions directly from the TUI."
+                "New side-by-side diff view for clearer, faster review workflows.".to_string(),
+                "Plan mode now toggles with `Shift+Tab` (no `/plan` command needed).".to_string(),
+                "Plan mode now supports `default` (Codex-style), `adr-lite`, and `custom` workflows."
                     .to_string(),
-                "Fixed theme-related transcript rendering gaps.".to_string(),
-                "OpenAI `gpt-5.3-codex` is now available in xcodex.".to_string(),
-                "Upstream sync with additional stability and infrastructure fixes across core, TUI, and app-server.".to_string(),
-                "Read more: docs/xcodex/releases/0.3.6.md".to_string(),
+                "You can customize and seed your own Plan workflow template from `default` or `adr-lite`."
+                    .to_string(),
+                "Expanded Plan mode with richer options for planning and execution.".to_string(),
+                "Improved mode UX and discoverability across TUI/TUI2.".to_string(),
+                "Durable plan-file CLI commands are available (`xcodex plan status|list|open|done|archive`)."
+                    .to_string(),
+                "Read more: docs/xcodex/releases/0.4.0.md".to_string(),
             ]
         );
     }

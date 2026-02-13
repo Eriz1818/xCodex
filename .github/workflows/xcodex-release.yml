@@ -91,9 +91,7 @@ jobs:
             re.findall(r"^[ \t]*target:\s*([A-Za-z0-9_-]+)", workflow_src, flags=re.MULTILINE)
           )
 
-          ref_name = os.environ.get("GITHUB_REF_NAME", "")
-          tag_version = ref_name.removeprefix("xcodex-v")
-          allow_musl_omission = tag_version == "0.3.6" or tag_version.startswith("0.3.6-alpha.")
+          allow_musl_omission = True
 
           expected = set(binary_targets)
           if allow_musl_omission:
@@ -140,7 +138,7 @@ jobs:
       - name: Preflight Windows split artifacts
         shell: bash
         env:
-          XCODEX_ALLOW_MUSL_OMISSION: ${{ startsWith(github.ref_name, 'xcodex-v0.3.6') && '1' || '0' }}
+          XCODEX_ALLOW_MUSL_OMISSION: "1"
         run: |
           set -euo pipefail
           python3 scripts/xcodex_release_preflight.py
@@ -178,7 +176,7 @@ jobs:
             target: x86_64-unknown-linux-gnu
           - runner: ubuntu-24.04-arm
             target: aarch64-unknown-linux-gnu
-          # Temporarily disabled for the 0.3.6 release.
+          # Temporarily disabled while we keep npm payload size under registry limits.
           # - runner: ubuntu-latest
           #   target: x86_64-unknown-linux-musl
           # - runner: ubuntu-24.04-arm
@@ -514,7 +512,7 @@ jobs:
       - name: Stage npm packages
         env:
           GH_TOKEN: ${{ github.token }}
-          XCODEX_ALLOW_MUSL_OMISSION: ${{ startsWith(steps.release_name.outputs.name, '0.3.6') && '1' || '0' }}
+          XCODEX_ALLOW_MUSL_OMISSION: "1"
         run: |
           ./scripts/stage_npm_packages.py \
             --release-version "${{ steps.release_name.outputs.name }}" \
