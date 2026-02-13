@@ -9,12 +9,18 @@ This project follows SemVer (`xcodex-vX.Y.Z` / `xcodex-vX.Y.Z-alpha.N` tags) and
 
 ## Unreleased
 
-Plan mode and durable planning workflow improvements.
+## 0.4.0
 
-- Added durable plan-file workflows in TUI/TUI2 and CLI (`xcodex plan status|list|open|done`).
-- Added `/plan` menu/settings UX updates and plan-mode clarity improvements (including active-state visual treatment).
-- Added repo-aware plan base-dir `.gitignore` guidance (one-time prompt behavior) for in-repo plan paths.
-- Added clarification UX improvements in Plan mode (review step + multi-select parity in TUI/TUI2).
+Side-by-side diff and major Plan mode workflow upgrades.
+
+- Added side-by-side diff view for clearer comparisons during reviews.
+- Plan mode can now be toggled directly with `Shift+Tab`, so you no longer need to type `/plan`.
+- Added workflow modes for Plan mode: `default` (Codex-style), `adr-lite`, and `custom`.
+- Added custom workflow templating for Plan mode, including seed options from `default` or `adr-lite`.
+- Expanded Plan mode with richer options and controls for planning and execution.
+- Improved mode ergonomics and clarity across TUI/TUI2, including stronger active-state cues.
+- Added durable plan-file operations in CLI (`xcodex plan status|list|open|done|archive`).
+- Added one-time `.gitignore` guidance when plan base-dir is inside a repo and not ignored.
 
 ## 0.3.6
 

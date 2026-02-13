@@ -1,6 +1,9 @@
-What's new in ⚡xtreme-Codex v0.3.6
-- New `/exclusion` command for managing exclusions directly from the TUI.
-- Fixed theme-related transcript rendering gaps.
-- OpenAI `gpt-5.3-codex` is now available in xcodex.
-- Upstream sync with additional stability and infrastructure fixes across core, TUI, and app-server.
-- Read more: docs/xcodex/releases/0.3.6.md
+What's new in ⚡xtreme-Codex v0.4.0
+- New side-by-side diff view for clearer, faster review workflows.
+- Plan mode now toggles with `Shift+Tab` (no `/plan` command needed).
+- Plan mode now supports `default` (Codex-style), `adr-lite`, and `custom` workflows.
+- You can customize and seed your own Plan workflow template from `default` or `adr-lite`.
+- Expanded Plan mode with richer options for planning and execution.
+- Improved mode UX and discoverability across TUI/TUI2.
+- Durable plan-file CLI commands are available (`xcodex plan status|list|open|done|archive`).
+- Read more: docs/xcodex/releases/0.4.0.md
