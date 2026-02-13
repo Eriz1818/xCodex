@@ -145,7 +145,7 @@ impl ExclusionFileSearch {
             session_token,
         });
         let session = file_search::create_session(
-            &self.search_dir,
+            vec![self.search_dir.clone()],
             file_search::FileSearchOptions {
                 limit: MAX_FILE_SEARCH_RESULTS,
                 exclude: Vec::new(),
@@ -155,6 +155,7 @@ impl ExclusionFileSearch {
                 respect_gitignore: true,
             },
             reporter,
+            None,
         );
         match session {
             Ok(session) => state.session = Some(session),

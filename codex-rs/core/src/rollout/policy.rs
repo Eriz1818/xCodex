@@ -2,12 +2,20 @@ use crate::protocol::EventMsg;
 use crate::protocol::RolloutItem;
 use codex_protocol::models::ResponseItem;
 
-/// Whether a rollout `item` should be persisted in rollout files.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum EventPersistenceMode {
+    #[default]
+    Limited,
+    Extended,
+}
+
+/// Whether a rollout `item` should be persisted in rollout files for the
+/// provided persistence `mode`.
 #[inline]
-pub(crate) fn is_persisted_response_item(item: &RolloutItem) -> bool {
+pub(crate) fn is_persisted_response_item(item: &RolloutItem, mode: EventPersistenceMode) -> bool {
     match item {
         RolloutItem::ResponseItem(item) => should_persist_response_item(item),
-        RolloutItem::EventMsg(ev) => should_persist_event_msg(ev),
+        RolloutItem::EventMsg(ev) => should_persist_event_msg(ev, mode),
         // Persist Codex executive markers so we can analyze flows (e.g., compaction, API turns).
         RolloutItem::Compacted(_) | RolloutItem::TurnContext(_) | RolloutItem::SessionMeta(_) => {
             true
@@ -33,9 +41,51 @@ pub(crate) fn should_persist_response_item(item: &ResponseItem) -> bool {
     }
 }
 
-/// Whether an `EventMsg` should be persisted in rollout files.
+/// Whether a `ResponseItem` should be persisted for the memories.
 #[inline]
-pub(crate) fn should_persist_event_msg(ev: &EventMsg) -> bool {
+pub(crate) fn should_persist_response_item_for_memories(item: &ResponseItem) -> bool {
+    match item {
+        ResponseItem::Message { role, .. } => role != "developer",
+        ResponseItem::LocalShellCall { .. }
+        | ResponseItem::FunctionCall { .. }
+        | ResponseItem::FunctionCallOutput { .. }
+        | ResponseItem::CustomToolCall { .. }
+        | ResponseItem::CustomToolCallOutput { .. }
+        | ResponseItem::WebSearchCall { .. } => true,
+        ResponseItem::Reasoning { .. }
+        | ResponseItem::GhostSnapshot { .. }
+        | ResponseItem::Compaction { .. }
+        | ResponseItem::Other => false,
+    }
+}
+
+/// Whether an `EventMsg` should be persisted in rollout files for the
+/// provided persistence `mode`.
+#[inline]
+pub(crate) fn should_persist_event_msg(ev: &EventMsg, mode: EventPersistenceMode) -> bool {
+    match mode {
+        EventPersistenceMode::Limited => should_persist_event_msg_limited(ev),
+        EventPersistenceMode::Extended => should_persist_event_msg_extended(ev),
+    }
+}
+
+fn should_persist_event_msg_limited(ev: &EventMsg) -> bool {
+    matches!(
+        event_msg_persistence_mode(ev),
+        Some(EventPersistenceMode::Limited)
+    )
+}
+
+fn should_persist_event_msg_extended(ev: &EventMsg) -> bool {
+    matches!(
+        event_msg_persistence_mode(ev),
+        Some(EventPersistenceMode::Limited) | Some(EventPersistenceMode::Extended)
+    )
+}
+
+/// Returns the minimum persistence mode that includes this event.
+/// `None` means the event should never be persisted.
+fn event_msg_persistence_mode(ev: &EventMsg) -> Option<EventPersistenceMode> {
     match ev {
         EventMsg::UserMessage(_)
         | EventMsg::AgentMessage(_)
@@ -49,15 +99,29 @@ pub(crate) fn should_persist_event_msg(ev: &EventMsg) -> bool {
         | EventMsg::UndoCompleted(_)
         | EventMsg::TurnAborted(_)
         | EventMsg::TurnStarted(_)
-        | EventMsg::TurnComplete(_) => true,
+        | EventMsg::TurnComplete(_) => Some(EventPersistenceMode::Limited),
         EventMsg::ItemCompleted(event) => {
             // Plan items are derived from streaming tags and are not part of the
             // raw ResponseItem history, so we persist their completion to replay
             // them on resume without bloating rollouts with every item lifecycle.
-            matches!(event.item, codex_protocol::items::TurnItem::Plan(_))
+            if matches!(event.item, codex_protocol::items::TurnItem::Plan(_)) {
+                Some(EventPersistenceMode::Limited)
+            } else {
+                None
+            }
         }
         EventMsg::Error(_)
-        | EventMsg::Warning(_)
+        | EventMsg::WebSearchEnd(_)
+        | EventMsg::ExecCommandEnd(_)
+        | EventMsg::PatchApplyEnd(_)
+        | EventMsg::McpToolCallEnd(_)
+        | EventMsg::ViewImageToolCall(_)
+        | EventMsg::CollabAgentSpawnEnd(_)
+        | EventMsg::CollabAgentInteractionEnd(_)
+        | EventMsg::CollabWaitingEnd(_)
+        | EventMsg::CollabCloseEnd(_)
+        | EventMsg::CollabResumeEnd(_) => Some(EventPersistenceMode::Extended),
+        EventMsg::Warning(_)
         | EventMsg::AgentMessageDelta(_)
         | EventMsg::AgentReasoningDelta(_)
         | EventMsg::AgentReasoningRawContentDelta(_)
@@ -66,15 +130,12 @@ pub(crate) fn should_persist_event_msg(ev: &EventMsg) -> bool {
         | EventMsg::SessionConfigured(_)
         | EventMsg::ThreadNameUpdated(_)
         | EventMsg::McpToolCallBegin(_)
-        | EventMsg::McpToolCallEnd(_)
         | EventMsg::WebSearchBegin(_)
-        | EventMsg::WebSearchEnd(_)
         | EventMsg::ExecCommandBegin(_)
         | EventMsg::TerminalInteraction(_)
         | EventMsg::HookProcessBegin(_)
         | EventMsg::HookProcessEnd(_)
         | EventMsg::ExecCommandOutputDelta(_)
-        | EventMsg::ExecCommandEnd(_)
         | EventMsg::ExecApprovalRequest(_)
         | EventMsg::RequestUserInput(_)
         | EventMsg::DynamicToolCallRequest(_)
@@ -83,7 +144,6 @@ pub(crate) fn should_persist_event_msg(ev: &EventMsg) -> bool {
         | EventMsg::BackgroundEvent(_)
         | EventMsg::StreamError(_)
         | EventMsg::PatchApplyBegin(_)
-        | EventMsg::PatchApplyEnd(_)
         | EventMsg::TurnDiff(_)
         | EventMsg::GetHistoryEntryResponse(_)
         | EventMsg::UndoStarted(_)
@@ -96,7 +156,6 @@ pub(crate) fn should_persist_event_msg(ev: &EventMsg) -> bool {
         | EventMsg::RemoteSkillDownloaded(_)
         | EventMsg::PlanUpdate(_)
         | EventMsg::ShutdownComplete
-        | EventMsg::ViewImageToolCall(_)
         | EventMsg::DeprecationNotice(_)
         | EventMsg::ItemStarted(_)
         | EventMsg::AgentMessageContentDelta(_)
@@ -105,15 +164,56 @@ pub(crate) fn should_persist_event_msg(ev: &EventMsg) -> bool {
         | EventMsg::ReasoningRawContentDelta(_)
         | EventMsg::SkillsUpdateAvailable
         | EventMsg::CollabAgentSpawnBegin(_)
-        | EventMsg::CollabAgentSpawnEnd(_)
         | EventMsg::CollabAgentInteractionBegin(_)
-        | EventMsg::CollabAgentInteractionEnd(_)
         | EventMsg::CollabWaitingBegin(_)
-        | EventMsg::CollabWaitingEnd(_)
         | EventMsg::CollabCloseBegin(_)
-        | EventMsg::CollabCloseEnd(_)
         | EventMsg::CollabResumeBegin(_)
-        | EventMsg::CollabResumeEnd(_)
-        | EventMsg::ExclusionSummary(_) => false,
+        | EventMsg::ExclusionSummary(_) => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::EventPersistenceMode;
+    use super::should_persist_event_msg;
+    use codex_protocol::ThreadId;
+    use codex_protocol::protocol::CollabResumeBeginEvent;
+    use codex_protocol::protocol::EventMsg;
+    use codex_protocol::protocol::ExclusionLayerCounts;
+    use codex_protocol::protocol::ExclusionSourceCounts;
+    use codex_protocol::protocol::ExclusionSummaryEvent;
+    use pretty_assertions::assert_eq;
+
+    #[test]
+    fn exclusion_summary_and_collab_resume_begin_are_not_persisted() {
+        let exclusion_summary = EventMsg::ExclusionSummary(ExclusionSummaryEvent {
+            total_redacted: 0,
+            total_blocked: 0,
+            layers: ExclusionLayerCounts::default(),
+            sources: ExclusionSourceCounts::default(),
+            per_tool: vec![],
+        });
+        let collab_resume_begin = EventMsg::CollabResumeBegin(CollabResumeBeginEvent {
+            call_id: "call-1".to_string(),
+            sender_thread_id: ThreadId::default(),
+            receiver_thread_id: ThreadId::default(),
+        });
+
+        assert_eq!(
+            should_persist_event_msg(&exclusion_summary, EventPersistenceMode::Limited),
+            false
+        );
+        assert_eq!(
+            should_persist_event_msg(&exclusion_summary, EventPersistenceMode::Extended),
+            false
+        );
+        assert_eq!(
+            should_persist_event_msg(&collab_resume_begin, EventPersistenceMode::Limited),
+            false
+        );
+        assert_eq!(
+            should_persist_event_msg(&collab_resume_begin, EventPersistenceMode::Extended),
+            false
+        );
     }
 }

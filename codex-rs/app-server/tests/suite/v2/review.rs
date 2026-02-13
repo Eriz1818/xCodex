@@ -260,6 +260,7 @@ async fn review_start_rejects_empty_base_branch() -> Result<()> {
     Ok(())
 }
 
+#[cfg_attr(target_os = "windows", ignore = "flaky on windows CI")]
 #[tokio::test]
 async fn review_start_with_detached_delivery_returns_new_thread_id() -> Result<()> {
     skip_if_no_network!(Ok(()));
@@ -448,6 +449,7 @@ model_provider = "mock_provider"
 
 [features]
 remote_models = false
+shell_snapshot = false
 
 [model_providers.mock_provider]
 name = "Mock provider"

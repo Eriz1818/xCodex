@@ -118,9 +118,14 @@ impl ToolCallRuntime {
                     } else {
                         Either::Right(lock.write().await)
                     };
-
                     router
-                        .dispatch_tool_call(session, turn_for_task, tracker, call_for_task.clone())
+                        .dispatch_tool_call(
+                            session,
+                            turn_for_task,
+                            tracker,
+                            call_for_task.clone(),
+                            crate::tools::router::ToolCallSource::Direct,
+                        )
                         .instrument(dispatch_span.clone())
                         .await
                 } => res.map(|response| (ToolCallStatus::Completed, response)),

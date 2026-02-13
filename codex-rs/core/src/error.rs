@@ -417,18 +417,22 @@ pub struct UsageLimitReachedError {
     pub(crate) resets_at: Option<DateTime<Utc>>,
     pub(crate) rate_limits: Option<Box<RateLimitSnapshot>>,
     pub(crate) promo_message: Option<String>,
-    pub(crate) limit_name: Option<String>,
 }
 
 impl std::fmt::Display for UsageLimitReachedError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        if let Some(limit_name) = self.limit_name.as_deref()
+        if let Some(limit_name) = self
+            .rate_limits
+            .as_ref()
+            .and_then(|snapshot| snapshot.limit_name.as_deref())
+            .map(str::trim)
+            .filter(|name| !name.is_empty())
             && !limit_name.eq_ignore_ascii_case("codex")
         {
             return write!(
                 f,
-                "You've hit your usage limit for {limit_name}.{}",
-                retry_suffix(self.resets_at.as_ref())
+                "You've hit your usage limit for {limit_name}. Switch to another model now,{}",
+                retry_suffix_after_or(self.resets_at.as_ref())
             );
         }
 
@@ -712,7 +716,6 @@ mod tests {
             resets_at: None,
             rate_limits: Some(Box::new(rate_limit_snapshot())),
             promo_message: None,
-            limit_name: None,
         };
         assert_eq!(
             err.to_string(),
@@ -852,7 +855,6 @@ mod tests {
             resets_at: None,
             rate_limits: Some(Box::new(rate_limit_snapshot())),
             promo_message: None,
-            limit_name: None,
         };
         assert_eq!(
             err.to_string(),
@@ -867,7 +869,6 @@ mod tests {
             resets_at: None,
             rate_limits: Some(Box::new(rate_limit_snapshot())),
             promo_message: None,
-            limit_name: None,
         };
         assert_eq!(
             err.to_string(),
@@ -882,7 +883,6 @@ mod tests {
             resets_at: None,
             rate_limits: Some(Box::new(rate_limit_snapshot())),
             promo_message: None,
-            limit_name: None,
         };
         assert_eq!(
             err.to_string(),
@@ -901,7 +901,6 @@ mod tests {
                 resets_at: Some(resets_at),
                 rate_limits: Some(Box::new(rate_limit_snapshot())),
                 promo_message: None,
-                limit_name: None,
             };
             let expected = format!(
                 "You've hit your usage limit. To get more access now, send a request to your admin or try again at {expected_time}."
@@ -917,7 +916,6 @@ mod tests {
             resets_at: None,
             rate_limits: Some(Box::new(rate_limit_snapshot())),
             promo_message: None,
-            limit_name: None,
         };
         assert_eq!(
             err.to_string(),
@@ -932,7 +930,6 @@ mod tests {
             resets_at: None,
             rate_limits: Some(Box::new(rate_limit_snapshot())),
             promo_message: None,
-            limit_name: None,
         };
         assert_eq!(
             err.to_string(),
@@ -951,7 +948,6 @@ mod tests {
                 resets_at: Some(resets_at),
                 rate_limits: Some(Box::new(rate_limit_snapshot())),
                 promo_message: None,
-                limit_name: None,
             };
             let expected = format!(
                 "You've hit your usage limit. Visit https://chatgpt.com/codex/settings/usage to purchase more credits or try again at {expected_time}."
@@ -969,15 +965,18 @@ mod tests {
             let err = UsageLimitReachedError {
                 plan_type: Some(PlanType::Known(KnownPlan::Plus)),
                 resets_at: Some(resets_at),
-                rate_limits: Some(Box::new(rate_limit_snapshot())),
+                rate_limits: Some(Box::new(RateLimitSnapshot {
+                    limit_id: Some("codex_other".to_string()),
+                    limit_name: Some("codex_other".to_string()),
+                    ..rate_limit_snapshot()
+                })),
                 promo_message: Some(
                     "Visit https://chatgpt.com/codex/settings/usage to purchase more credits"
                         .to_string(),
                 ),
-                limit_name: Some("codex_other".to_string()),
             };
             let expected = format!(
-                "You've hit your usage limit for codex_other. Try again at {expected_time}."
+                "You've hit your usage limit for codex_other. Switch to another model now, or try again at {expected_time}."
             );
             assert_eq!(err.to_string(), expected);
         });
@@ -994,7 +993,6 @@ mod tests {
                 resets_at: Some(resets_at),
                 rate_limits: Some(Box::new(rate_limit_snapshot())),
                 promo_message: None,
-                limit_name: None,
             };
             let expected = format!("You've hit your usage limit. Try again at {expected_time}.");
             assert_eq!(err.to_string(), expected);
@@ -1104,7 +1102,6 @@ mod tests {
                 resets_at: Some(resets_at),
                 rate_limits: Some(Box::new(rate_limit_snapshot())),
                 promo_message: None,
-                limit_name: None,
             };
             let expected = format!(
                 "You've hit your usage limit. Upgrade to Pro (https://chatgpt.com/explore/pro), visit https://chatgpt.com/codex/settings/usage to purchase more credits or try again at {expected_time}."
@@ -1125,7 +1122,6 @@ mod tests {
                 resets_at: Some(resets_at),
                 rate_limits: Some(Box::new(rate_limit_snapshot())),
                 promo_message: None,
-                limit_name: None,
             };
             let expected = format!("You've hit your usage limit. Try again at {expected_time}.");
             assert_eq!(err.to_string(), expected);
@@ -1143,7 +1139,6 @@ mod tests {
                 resets_at: Some(resets_at),
                 rate_limits: Some(Box::new(rate_limit_snapshot())),
                 promo_message: None,
-                limit_name: None,
             };
             let expected = format!("You've hit your usage limit. Try again at {expected_time}.");
             assert_eq!(err.to_string(), expected);
@@ -1163,7 +1158,6 @@ mod tests {
                 promo_message: Some(
                     "To continue using Codex, start a free trial of <PLAN> today".to_string(),
                 ),
-                limit_name: None,
             };
             let expected = format!(
                 "You've hit your usage limit. To continue using Codex, start a free trial of <PLAN> today, or try again at {expected_time}."

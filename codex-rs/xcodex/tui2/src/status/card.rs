@@ -441,8 +441,8 @@ impl StatusHistoryCell {
     ) -> Self {
         let config_entries = create_config_summary_entries(config, model_name);
         let (model_name, model_details) = compose_model_display(model_name, &config_entries);
-        let approval_policy = config.approval_policy.value();
-        let sandbox_policy = config.sandbox_policy.get().clone();
+        let approval_policy = config.permissions.approval_policy.value();
+        let sandbox_policy = config.permissions.sandbox_policy.get().clone();
         let approval = config_entries
             .iter()
             .find(|(k, _)| *k == "approval")

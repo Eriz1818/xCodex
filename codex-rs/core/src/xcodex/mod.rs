@@ -40,7 +40,7 @@ pub(crate) fn build_user_hooks(config: &Config, tx_event: Sender<Event>) -> User
         config.codex_home.clone(),
         config.xcodex.hooks.clone(),
         Some(tx_event),
-        config.sandbox_policy.get().clone(),
+        config.permissions.sandbox_policy.get().clone(),
         config.codex_linux_sandbox_exe.clone(),
         config.exclusion.clone(),
         config.cwd.clone(),

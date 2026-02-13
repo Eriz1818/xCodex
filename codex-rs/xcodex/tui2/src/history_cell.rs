@@ -1104,8 +1104,8 @@ pub(crate) fn new_session_info(
         reasoning_effort,
         config.cwd.clone(),
         CODEX_CLI_VERSION,
-        config.approval_policy.value(),
-        config.sandbox_policy.get().clone(),
+        config.permissions.approval_policy.value(),
+        config.permissions.sandbox_policy.get().clone(),
         xtreme::xtreme_ui_enabled(config),
     );
     let mut parts: Vec<Box<dyn HistoryCell>> = vec![Box::new(header)];
@@ -1159,8 +1159,8 @@ pub(crate) fn new_session_info_with_help_lines(
         reasoning_effort,
         config.cwd.clone(),
         CODEX_CLI_VERSION,
-        config.approval_policy.value(),
-        config.sandbox_policy.get().clone(),
+        config.permissions.approval_policy.value(),
+        config.permissions.sandbox_policy.get().clone(),
         xtreme::xtreme_ui_enabled(config),
     );
 

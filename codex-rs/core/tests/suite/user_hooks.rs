@@ -142,7 +142,7 @@ async fn hooks_approval_requested_invoked_for_exec() -> Result<()> {
     let TestCodex { codex, .. } = test_codex()
         .with_config(move |cfg| {
             cfg.xcodex.hooks.approval_requested = vec![vec![hook_script]];
-            cfg.approval_policy = Constrained::allow_any(AskForApproval::UnlessTrusted);
+            cfg.permissions.approval_policy = Constrained::allow_any(AskForApproval::UnlessTrusted);
         })
         .build(&server)
         .await?;
@@ -352,7 +352,7 @@ async fn hooks_tool_call_started_and_finished_invoked() -> Result<()> {
         .with_config(move |cfg| {
             cfg.xcodex.hooks.tool_call_started = vec![vec![started_hook_script]];
             cfg.xcodex.hooks.tool_call_finished = vec![vec![finished_hook_script]];
-            cfg.approval_policy = Constrained::allow_any(AskForApproval::Never);
+            cfg.permissions.approval_policy = Constrained::allow_any(AskForApproval::Never);
         })
         .build(&server)
         .await?;
@@ -465,7 +465,7 @@ async fn hooks_tool_call_finished_emits_hook_process_events() -> Result<()> {
     let TestCodex { codex, .. } = test_codex()
         .with_config(move |cfg| {
             cfg.xcodex.hooks.tool_call_finished = vec![vec![hook_script]];
-            cfg.approval_policy = Constrained::allow_any(AskForApproval::Never);
+            cfg.permissions.approval_policy = Constrained::allow_any(AskForApproval::Never);
         })
         .build(&server)
         .await?;

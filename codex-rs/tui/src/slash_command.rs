@@ -17,6 +17,8 @@ pub enum SlashCommand {
     Permissions,
     #[strum(serialize = "setup-default-sandbox")]
     ElevateSandbox,
+    #[strum(serialize = "sandbox-add-read-dir")]
+    SandboxReadRoot,
     Experimental,
     Skills,
     Help,
@@ -104,6 +106,9 @@ impl SlashCommand {
             SlashCommand::Collab => "change collaboration mode (experimental)",
             SlashCommand::Agent => "switch the active agent thread",
             SlashCommand::ElevateSandbox => "set up elevated agent sandbox",
+            SlashCommand::SandboxReadRoot => {
+                "let sandbox read a directory: /sandbox-add-read-dir <absolute_path>"
+            }
             SlashCommand::Experimental => "toggle experimental features",
             SlashCommand::Mcp => "list configured MCP tools",
             SlashCommand::Logout => "log out of xcodex",
@@ -128,6 +133,7 @@ impl SlashCommand {
                 | SlashCommand::Plan
                 | SlashCommand::Theme
                 | SlashCommand::Worktree
+                | SlashCommand::SandboxReadRoot
         )
     }
 
@@ -146,6 +152,7 @@ impl SlashCommand {
             | SlashCommand::Approvals
             | SlashCommand::Permissions
             | SlashCommand::ElevateSandbox
+            | SlashCommand::SandboxReadRoot
             | SlashCommand::Experimental
             | SlashCommand::Review
             | SlashCommand::Logout
@@ -183,6 +190,7 @@ impl SlashCommand {
 
     fn is_visible(self) -> bool {
         match self {
+            SlashCommand::SandboxReadRoot => cfg!(target_os = "windows"),
             SlashCommand::Rollout | SlashCommand::TestApproval => cfg!(debug_assertions),
             _ => true,
         }

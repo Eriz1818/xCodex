@@ -1402,6 +1402,7 @@ dependencies = [
  "schemars 0.8.22",
  "serde",
  "serde_json",
+ "shlex",
  "similar",
  "strum_macros 0.27.2",
  "tempfile",
@@ -1720,6 +1721,7 @@ dependencies = [
  "codex-utils-home-dir",
  "codex-utils-pty",
  "codex-utils-readiness",
+ "codex-utils-sanitizer",
  "codex-utils-string",
  "codex-windows-sandbox",
  "core-foundation 0.9.4",
@@ -2074,6 +2076,7 @@ version = "0.3.6"
 dependencies = [
  "anyhow",
  "async-trait",
+ "base64 0.22.1",
  "clap",
  "codex-utils-absolute-path",
  "codex-utils-rustls-provider",
@@ -2634,6 +2637,13 @@ dependencies = [
  "codex-core",
  "codex-utils-absolute-path",
  "pretty_assertions",
+]
+
+[[package]]
+name = "codex-utils-sanitizer"
+version = "0.3.6"
+dependencies = [
+ "regex",
 ]
 
 [[package]]

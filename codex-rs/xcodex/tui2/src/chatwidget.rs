@@ -2508,7 +2508,12 @@ impl ChatWidget {
                         return;
                     };
 
-                    if let Err(err) = self.config.approval_policy.can_set(&preset.approval) {
+                    if let Err(err) = self
+                        .config
+                        .permissions
+                        .approval_policy
+                        .can_set(&preset.approval)
+                    {
                         self.add_error_message(err.to_string());
                         return;
                     }
@@ -3333,8 +3338,8 @@ impl ChatWidget {
             .send(Op::UserTurn {
                 items,
                 cwd: self.config.cwd.clone(),
-                approval_policy: self.config.approval_policy.value(),
-                sandbox_policy: self.config.sandbox_policy.get().clone(),
+                approval_policy: self.config.permissions.approval_policy.value(),
+                sandbox_policy: self.config.permissions.sandbox_policy.get().clone(),
                 model: effective_mode.model().to_string(),
                 effort: effective_mode.reasoning_effort(),
                 summary: self.config.model_reasoning_summary,
@@ -4620,8 +4625,8 @@ impl ChatWidget {
 
     /// Open a popup to choose the approvals mode (ask for approval policy + sandbox policy).
     pub(crate) fn open_approvals_popup(&mut self) {
-        let current_approval = self.config.approval_policy.value();
-        let current_sandbox = self.config.sandbox_policy.get();
+        let current_approval = self.config.permissions.approval_policy.value();
+        let current_sandbox = self.config.permissions.sandbox_policy.get();
         let mut items: Vec<SelectionItem> = Vec::new();
         let presets: Vec<ApprovalPreset> = builtin_approval_presets();
 
@@ -4813,7 +4818,7 @@ impl ChatWidget {
             self.config.codex_home.as_path(),
             cwd.as_path(),
             &env_map,
-            self.config.sandbox_policy.get(),
+            self.config.permissions.sandbox_policy.get(),
             Some(self.config.codex_home.as_path()),
         ) {
             Ok(_) => None,
@@ -4911,7 +4916,7 @@ impl ChatWidget {
         let mode_label = preset
             .as_ref()
             .map(|p| describe_policy(&p.sandbox))
-            .unwrap_or_else(|| describe_policy(self.config.sandbox_policy.get()));
+            .unwrap_or_else(|| describe_policy(self.config.permissions.sandbox_policy.get()));
         let info_line = if failed_scan {
             Line::from(vec![
                 "We couldn't complete the world-writable scan, so protections cannot be verified. "
@@ -5052,8 +5057,8 @@ impl ChatWidget {
             return;
         }
 
-        let current_approval = self.config.approval_policy.value();
-        let current_sandbox = self.config.sandbox_policy.get();
+        let current_approval = self.config.permissions.approval_policy.value();
+        let current_sandbox = self.config.permissions.sandbox_policy.get();
         let presets = builtin_approval_presets();
         let stay_full_access = presets
             .iter()
@@ -5132,8 +5137,8 @@ impl ChatWidget {
 
         let _ = reason;
 
-        let current_approval = self.config.approval_policy.value();
-        let current_sandbox = self.config.sandbox_policy.get();
+        let current_approval = self.config.permissions.approval_policy.value();
+        let current_sandbox = self.config.permissions.sandbox_policy.get();
         let presets = builtin_approval_presets();
         let stay_full_access = presets
             .iter()
@@ -5277,7 +5282,7 @@ impl ChatWidget {
 
     /// Set the approval policy in the widget's config copy.
     pub(crate) fn set_approval_policy(&mut self, policy: AskForApproval) {
-        if let Err(err) = self.config.approval_policy.set(policy) {
+        if let Err(err) = self.config.permissions.approval_policy.set(policy) {
             tracing::warn!(%err, "failed to set approval_policy on chat config");
         }
     }
@@ -5288,7 +5293,7 @@ impl ChatWidget {
         let should_clear_downgrade = !matches!(&policy, SandboxPolicy::ReadOnly { .. })
             || WindowsSandboxLevel::from_config(&self.config) != WindowsSandboxLevel::Disabled;
 
-        self.config.sandbox_policy.set(policy)?;
+        self.config.permissions.sandbox_policy.set(policy)?;
 
         #[cfg(target_os = "windows")]
         if should_clear_downgrade {
@@ -5622,8 +5627,8 @@ impl ChatWidget {
             None,
             config.cwd.clone(),
             CODEX_CLI_VERSION,
-            config.approval_policy.value(),
-            config.sandbox_policy.get().clone(),
+            config.permissions.approval_policy.value(),
+            config.permissions.sandbox_policy.get().clone(),
             crate::xtreme::xtreme_ui_enabled(config),
         ))
     }
