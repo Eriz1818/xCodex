@@ -209,6 +209,7 @@ pub(crate) mod announcement {
         response.error_for_status().ok()?.text().ok()
     }
 
+    #[cfg(test)]
     pub(crate) fn parse_announcement_tip_toml(text: &str) -> Option<String> {
         parse_announcement_tip_toml_for_target(text, "cli")
     }

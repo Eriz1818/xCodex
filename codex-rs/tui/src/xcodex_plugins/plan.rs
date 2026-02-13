@@ -1036,7 +1036,7 @@ fn open_plan_settings_with_selected(
     let mode_hint = if mode_is_custom {
         "Tab: cycle. Press Enter for custom mode setup."
     } else {
-        "Tab: cycle. Press Enter to apply and close."
+        "Tab: cycle. Press Enter to open mode picker."
     };
     let mode_enter_actions = if mode_is_custom {
         vec![apply_plan_settings_action(
@@ -1044,7 +1044,7 @@ fn open_plan_settings_with_selected(
             false,
         )]
     } else {
-        Vec::new()
+        vec![open_plan_mode_picker_action()]
     };
     let mode_dismiss_on_enter = !mode_is_custom;
     let mut items = vec![

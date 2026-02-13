@@ -690,17 +690,13 @@ fn exclusion_to_item(
     Ok(toml_edit::Item::Table(document.as_table().clone()))
 }
 
-pub(crate) fn resume_command(thread_id: ThreadId) -> String {
-    format!("xcodex resume {thread_id}")
-}
-
 /// Routes external approval request events through the chat widget by
 /// rewriting the event id to include the originating thread.
 ///
 /// `thread_id` is the external thread that issued the approval request.
 /// `event` is the approval request event whose id is rewritten so replies
 /// can be routed back to the correct thread.
-#[allow(dead_code)]
+#[allow(dead_code)] // Upstream parity seam: external approval routing remains available for multi-thread integrations.
 fn handle_external_approval_request(app: &mut App, thread_id: ThreadId, mut event: Event) {
     match &mut event.msg {
         EventMsg::RequestUserInput(ev) => {
