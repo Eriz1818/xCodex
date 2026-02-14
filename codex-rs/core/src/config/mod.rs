@@ -582,6 +582,7 @@ impl ConfigBuilder {
             fallback_cwd,
         } = self;
         let codex_home = codex_home.map_or_else(find_codex_home, std::io::Result::Ok)?;
+        migrate_legacy_exclusion_settings_on_disk(&codex_home)?;
         let cli_overrides = cli_overrides.unwrap_or_default();
         let mut harness_overrides = harness_overrides.unwrap_or_default();
         let loader_overrides = loader_overrides.unwrap_or_default();
@@ -712,7 +713,7 @@ pub(crate) fn deserialize_config_toml_with_base(
     config_base_dir: &Path,
 ) -> std::io::Result<ConfigToml> {
     let mut root_value = root_value;
-    migrate_legacy_exclusion_settings(&mut root_value);
+    let _ = migrate_legacy_exclusion_settings(&mut root_value);
 
     // This guard ensures that any relative paths that is deserialized into an
     // [AbsolutePathBuf] is resolved against `config_base_dir`.
@@ -722,10 +723,48 @@ pub(crate) fn deserialize_config_toml_with_base(
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
 }
 
-fn migrate_legacy_exclusion_settings(root_value: &mut TomlValue) {
+fn migrate_legacy_exclusion_settings_on_disk(codex_home: &Path) -> std::io::Result<()> {
+    let config_path = codex_home.join(CONFIG_TOML_FILE);
+    if !config_path.exists() {
+        return Ok(());
+    }
+
+    let contents = std::fs::read_to_string(&config_path)?;
+    let mut root_value: TomlValue = toml::from_str(&contents).map_err(|err| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!(
+                "failed to parse config.toml at {} for migration: {err}",
+                config_path.display()
+            ),
+        )
+    })?;
+
+    if !migrate_legacy_exclusion_settings(&mut root_value) {
+        return Ok(());
+    }
+
+    let mut serialized = toml::to_string_pretty(&root_value).map_err(|err| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!(
+                "failed to serialize migrated config.toml at {}: {err}",
+                config_path.display()
+            ),
+        )
+    })?;
+    if !serialized.ends_with('\n') {
+        serialized.push('\n');
+    }
+
+    std::fs::write(&config_path, serialized)
+}
+
+fn migrate_legacy_exclusion_settings(root_value: &mut TomlValue) -> bool {
     let Some(root_table) = root_value.as_table_mut() else {
-        return;
+        return false;
     };
+    let mut changed = false;
 
     let hooks_sanitize = root_table
         .get("hooks")
@@ -738,48 +777,63 @@ fn migrate_legacy_exclusion_settings(root_value: &mut TomlValue) {
         .and_then(TomlValue::as_bool);
     let legacy_sanitize = hooks_sanitize.or(legacy_xcodex_sanitize);
 
-    let exclusion_entry = root_table
-        .entry("exclusion")
-        .or_insert_with(|| TomlValue::Table(Default::default()));
-    let Some(exclusion_table) = exclusion_entry.as_table_mut() else {
-        return;
-    };
-    if exclusion_table.get("layer_hook_sanitization").is_none()
-        && let Some(legacy_sanitize) = legacy_sanitize
-    {
-        exclusion_table.insert(
-            "layer_hook_sanitization".to_string(),
-            TomlValue::Boolean(legacy_sanitize),
-        );
+    if let Some(legacy_sanitize) = legacy_sanitize {
+        let has_target_key = root_table
+            .get("exclusion")
+            .and_then(TomlValue::as_table)
+            .and_then(|table| table.get("layer_hook_sanitization"))
+            .is_some();
+        if !has_target_key {
+            let exclusion_entry = root_table
+                .entry("exclusion")
+                .or_insert_with(|| TomlValue::Table(Default::default()));
+            if let Some(exclusion_table) = exclusion_entry.as_table_mut() {
+                exclusion_table.insert(
+                    "layer_hook_sanitization".to_string(),
+                    TomlValue::Boolean(legacy_sanitize),
+                );
+                changed = true;
+            }
+        }
     }
 
     // Semantic migration:
     // v1: allowlist => additional scans, blocklist => suppressions
     // v2: allowlist => suppressions, blocklist => additional scans
-    let semantics_version = exclusion_table
-        .get("secret_patterns_semantics_version")
-        .and_then(TomlValue::as_integer)
-        .unwrap_or(1);
-    if semantics_version < 2 {
-        let allowlist = exclusion_table.remove("secret_patterns_allowlist");
-        let blocklist = exclusion_table.remove("secret_patterns_blocklist");
-        if let Some(allowlist) = allowlist {
-            exclusion_table.insert("secret_patterns_blocklist".to_string(), allowlist);
+    if let Some(exclusion_table) = root_table
+        .get_mut("exclusion")
+        .and_then(TomlValue::as_table_mut)
+    {
+        let semantics_version = exclusion_table
+            .get("secret_patterns_semantics_version")
+            .and_then(TomlValue::as_integer)
+            .unwrap_or(1);
+        let has_legacy_lists = exclusion_table.get("secret_patterns_allowlist").is_some()
+            || exclusion_table.get("secret_patterns_blocklist").is_some();
+        if has_legacy_lists && semantics_version < 2 {
+            let allowlist = exclusion_table.remove("secret_patterns_allowlist");
+            let blocklist = exclusion_table.remove("secret_patterns_blocklist");
+            if let Some(allowlist) = allowlist {
+                exclusion_table.insert("secret_patterns_blocklist".to_string(), allowlist);
+            }
+            if let Some(blocklist) = blocklist {
+                exclusion_table.insert("secret_patterns_allowlist".to_string(), blocklist);
+            }
+            exclusion_table.insert(
+                "secret_patterns_semantics_version".to_string(),
+                TomlValue::Integer(2),
+            );
+            changed = true;
         }
-        if let Some(blocklist) = blocklist {
-            exclusion_table.insert("secret_patterns_allowlist".to_string(), blocklist);
-        }
-        exclusion_table.insert(
-            "secret_patterns_semantics_version".to_string(),
-            TomlValue::Integer(2),
-        );
     }
 
     if let Some(hooks_table) = root_table
         .get_mut("hooks")
         .and_then(TomlValue::as_table_mut)
     {
-        hooks_table.remove("sanitize_payloads");
+        if hooks_table.remove("sanitize_payloads").is_some() {
+            changed = true;
+        }
     }
     if let Some(xcodex_hooks_table) = root_table
         .get_mut("xcodex")
@@ -787,8 +841,12 @@ fn migrate_legacy_exclusion_settings(root_value: &mut TomlValue) {
         .and_then(|table| table.get_mut("hooks"))
         .and_then(TomlValue::as_table_mut)
     {
-        xcodex_hooks_table.remove("sanitize_payloads");
+        if xcodex_hooks_table.remove("sanitize_payloads").is_some() {
+            changed = true;
+        }
     }
+
+    changed
 }
 
 fn filter_mcp_servers_by_requirements(
@@ -5929,6 +5987,38 @@ secret_patterns_blocklist = ["foo123"]
             vec!["foo\\d+".to_string()]
         );
         assert_eq!(exclusion.secret_patterns_semantics_version, 2);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn config_builder_migrates_legacy_hook_sanitize_keys_on_disk() -> std::io::Result<()> {
+        let codex_home = TempDir::new()?;
+        std::fs::write(
+            codex_home.path().join(CONFIG_TOML_FILE),
+            r#"
+[hooks]
+sanitize_payloads = false
+
+[xcodex.hooks]
+sanitize_payloads = true
+"#,
+        )?;
+
+        let _ = ConfigBuilder::default()
+            .codex_home(codex_home.path().to_path_buf())
+            .fallback_cwd(Some(codex_home.path().to_path_buf()))
+            .build()
+            .await?;
+
+        let serialized = std::fs::read_to_string(codex_home.path().join(CONFIG_TOML_FILE))?;
+        assert!(
+            !serialized.contains("sanitize_payloads"),
+            "legacy sanitize_payloads keys should be removed:\n{serialized}"
+        );
+        assert!(
+            serialized.contains("layer_hook_sanitization = false"),
+            "migrated exclusion key should be persisted:\n{serialized}"
+        );
         Ok(())
     }
 
