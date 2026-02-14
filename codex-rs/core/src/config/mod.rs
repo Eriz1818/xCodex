@@ -835,13 +835,24 @@ fn migrate_legacy_exclusion_settings(root_value: &mut TomlValue) -> bool {
             changed = true;
         }
     }
-    if let Some(xcodex_hooks_table) = root_table
+    if let Some(xcodex_table) = root_table
         .get_mut("xcodex")
         .and_then(TomlValue::as_table_mut)
-        .and_then(|table| table.get_mut("hooks"))
-        .and_then(TomlValue::as_table_mut)
     {
-        if xcodex_hooks_table.remove("sanitize_payloads").is_some() {
+        if let Some(xcodex_hooks_table) = xcodex_table
+            .get_mut("hooks")
+            .and_then(TomlValue::as_table_mut)
+        {
+            if xcodex_hooks_table.remove("sanitize_payloads").is_some() {
+                changed = true;
+            }
+            if xcodex_hooks_table.is_empty() {
+                xcodex_table.remove("hooks");
+                changed = true;
+            }
+        }
+        if xcodex_table.is_empty() {
+            root_table.remove("xcodex");
             changed = true;
         }
     }
@@ -6014,6 +6025,10 @@ sanitize_payloads = true
         assert!(
             !serialized.contains("sanitize_payloads"),
             "legacy sanitize_payloads keys should be removed:\n{serialized}"
+        );
+        assert!(
+            !serialized.contains("[xcodex.hooks]"),
+            "legacy [xcodex.hooks] table should be removed when empty:\n{serialized}"
         );
         assert!(
             serialized.contains("layer_hook_sanitization = false"),
