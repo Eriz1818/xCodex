@@ -553,11 +553,8 @@ pub(crate) async fn try_handle_event(
                         value: exclusion_value,
                     },
                     ConfigEdit::SetPath {
-                        segments: vec![
-                            "xcodex".to_string(),
-                            "hooks".to_string(),
-                            "sanitize_payloads".to_string(),
-                        ],
+                        segments:
+                            codex_core::xcodex::config::hooks_sanitize_payloads_config_segments(),
                         value: toml_edit::value(hooks_sanitize_payloads),
                     },
                 ])

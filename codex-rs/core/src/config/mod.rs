@@ -711,12 +711,50 @@ pub(crate) fn deserialize_config_toml_with_base(
     root_value: TomlValue,
     config_base_dir: &Path,
 ) -> std::io::Result<ConfigToml> {
+    let mut root_value = root_value;
+    migrate_legacy_xcodex_hooks_sanitize_payloads(&mut root_value);
+
     // This guard ensures that any relative paths that is deserialized into an
     // [AbsolutePathBuf] is resolved against `config_base_dir`.
     let _guard = AbsolutePathBufGuard::new(config_base_dir);
     root_value
         .try_into()
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
+}
+
+fn migrate_legacy_xcodex_hooks_sanitize_payloads(root_value: &mut TomlValue) {
+    let Some(legacy_sanitize_payloads) = root_value
+        .get("xcodex")
+        .and_then(|value| value.get("hooks"))
+        .and_then(|value| value.get("sanitize_payloads"))
+        .and_then(TomlValue::as_bool)
+    else {
+        return;
+    };
+
+    if root_value
+        .get("hooks")
+        .and_then(|value| value.get("sanitize_payloads"))
+        .is_some()
+    {
+        return;
+    }
+
+    let Some(root_table) = root_value.as_table_mut() else {
+        return;
+    };
+
+    let hooks_entry = root_table
+        .entry("hooks")
+        .or_insert_with(|| TomlValue::Table(Default::default()));
+    let Some(hooks_table) = hooks_entry.as_table_mut() else {
+        return;
+    };
+
+    hooks_table.insert(
+        "sanitize_payloads".to_string(),
+        TomlValue::Boolean(legacy_sanitize_payloads),
+    );
 }
 
 fn filter_mcp_servers_by_requirements(
@@ -5777,6 +5815,62 @@ base_dir = "{}"
         )?;
 
         assert_eq!(config.xcodex.plan_base_dir, Some(plan_base_dir));
+        Ok(())
+    }
+
+    #[test]
+    fn deserialize_migrates_legacy_xcodex_hooks_sanitize_payloads() -> std::io::Result<()> {
+        let codex_home = TempDir::new()?;
+        let root_value: TomlValue = toml::from_str(
+            r#"
+[xcodex.hooks]
+sanitize_payloads = true
+"#,
+        )
+        .expect("legacy xcodex hooks table should parse");
+
+        let cfg = deserialize_config_toml_with_base(root_value, codex_home.path())?;
+        assert!(cfg.hooks.sanitize_payloads);
+        Ok(())
+    }
+
+    #[test]
+    fn deserialize_prefers_explicit_hooks_sanitize_payloads_over_legacy() -> std::io::Result<()> {
+        let codex_home = TempDir::new()?;
+        let root_value: TomlValue = toml::from_str(
+            r#"
+[hooks]
+sanitize_payloads = false
+
+[xcodex.hooks]
+sanitize_payloads = true
+"#,
+        )
+        .expect("hooks config should parse");
+
+        let cfg = deserialize_config_toml_with_base(root_value, codex_home.path())?;
+        assert!(!cfg.hooks.sanitize_payloads);
+        Ok(())
+    }
+
+    #[test]
+    fn deserialize_migrates_legacy_sanitize_payloads_with_hooks_host() -> std::io::Result<()> {
+        let codex_home = TempDir::new()?;
+        let root_value: TomlValue = toml::from_str(
+            r#"
+[hooks.host]
+enabled = true
+command = ["python3", "-u", "/tmp/host.py"]
+
+[xcodex.hooks]
+sanitize_payloads = true
+"#,
+        )
+        .expect("hooks host with legacy xcodex hooks should parse");
+
+        let cfg = deserialize_config_toml_with_base(root_value, codex_home.path())?;
+        assert!(cfg.hooks.sanitize_payloads);
+        assert!(cfg.hooks.host.enabled);
         Ok(())
     }
 
