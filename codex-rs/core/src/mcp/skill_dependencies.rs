@@ -99,14 +99,14 @@ async fn should_install_mcp_dependencies(
     };
     let sub_id = &turn_context.sub_id;
     let call_id = format!("mcp-deps-{sub_id}");
-    let response_fut = sess.request_user_input(turn_context, call_id, args);
+    let response_fut = sess.request_user_input(turn_context, call_id.clone(), args);
     let response = tokio::select! {
         biased;
         _ = cancellation_token.cancelled() => {
             let empty = RequestUserInputResponse {
                 answers: HashMap::new(),
             };
-            sess.notify_user_input_response(sub_id, empty.clone()).await;
+            sess.notify_user_input_response(&call_id, empty.clone()).await;
             empty
         }
         response = response_fut => response.unwrap_or_else(|| RequestUserInputResponse {

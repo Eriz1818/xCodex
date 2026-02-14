@@ -418,7 +418,7 @@ async fn handle_request_user_input(
 async fn await_user_input_with_cancel<F>(
     fut: F,
     parent_session: &Session,
-    sub_id: &str,
+    id: &str,
     cancel_token: &CancellationToken,
 ) -> RequestUserInputResponse
 where
@@ -431,7 +431,7 @@ where
                 answers: HashMap::new(),
             };
             parent_session
-                .notify_user_input_response(sub_id, empty.clone())
+                .notify_user_input_response(id, empty.clone())
                 .await;
             empty
         }

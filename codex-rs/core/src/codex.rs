@@ -2633,21 +2633,20 @@ impl Session {
         call_id: String,
         args: RequestUserInputArgs,
     ) -> Option<RequestUserInputResponse> {
-        let sub_id = turn_context.sub_id.clone();
         let (tx_response, rx_response) = oneshot::channel();
-        let event_id = sub_id.clone();
+        let request_id = call_id.clone();
         let prev_entry = {
             let mut active = self.active_turn.lock().await;
             match active.as_mut() {
                 Some(at) => {
                     let mut ts = at.turn_state.lock().await;
-                    ts.insert_pending_user_input(sub_id, tx_response)
+                    ts.insert_pending_user_input(request_id.clone(), tx_response)
                 }
                 None => None,
             }
         };
         if prev_entry.is_some() {
-            warn!("Overwriting existing pending user input for sub_id: {event_id}");
+            warn!("Overwriting existing pending user input for id: {request_id}");
         }
 
         let event = EventMsg::RequestUserInput(RequestUserInputEvent {
@@ -2659,17 +2658,13 @@ impl Session {
         rx_response.await.ok()
     }
 
-    pub async fn notify_user_input_response(
-        &self,
-        sub_id: &str,
-        response: RequestUserInputResponse,
-    ) {
+    pub async fn notify_user_input_response(&self, id: &str, response: RequestUserInputResponse) {
         let entry = {
             let mut active = self.active_turn.lock().await;
             match active.as_mut() {
                 Some(at) => {
                     let mut ts = at.turn_state.lock().await;
-                    ts.remove_pending_user_input(sub_id)
+                    ts.remove_pending_user_input(id)
                 }
                 None => None,
             }
@@ -2679,7 +2674,7 @@ impl Session {
                 tx_response.send(response).ok();
             }
             None => {
-                warn!("No pending user input found for sub_id: {sub_id}");
+                warn!("No pending user input found for id: {id}");
             }
         }
     }
