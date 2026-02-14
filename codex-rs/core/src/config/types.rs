@@ -118,12 +118,21 @@ pub struct ExclusionConfig {
     pub secret_patterns_builtin: bool,
 
     /// Optional secret patterns to add on top of built-ins.
+    ///
+    /// Semantics v2: patterns that are allowed to pass through (skip redaction/blocking).
     #[serde(default)]
     pub secret_patterns_allowlist: Vec<String>,
 
-    /// Patterns that suppress matches from built-ins and allowlist.
+    /// Semantics v2: additional secret patterns to scan, on top of built-ins.
     #[serde(default)]
     pub secret_patterns_blocklist: Vec<String>,
+
+    /// Secret-pattern semantics migration version.
+    ///
+    /// v1 (legacy): allowlist = additional scan patterns, blocklist = suppressions.
+    /// v2 (current): allowlist = suppressions, blocklist = additional scan patterns.
+    #[serde(default = "default_secret_patterns_semantics_version")]
+    pub secret_patterns_semantics_version: u8,
 
     /// Layer 2: sanitize tool outputs (MCP/shell/custom tool outputs) before they reach the model.
     /// Defaults to `paranoid_mode` when unset.
@@ -139,6 +148,11 @@ pub struct ExclusionConfig {
     /// Defaults to `paranoid_mode` when unset.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub layer_request_interceptor: Option<bool>,
+
+    /// Layer 5: sanitize hook payload strings before dispatch.
+    /// Defaults to `true` when unset.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub layer_hook_sanitization: Option<bool>,
 
     #[serde(default)]
     pub on_match: ExclusionOnMatch,
@@ -188,6 +202,10 @@ fn default_log_redactions_max_files() -> usize {
     2
 }
 
+fn default_secret_patterns_semantics_version() -> u8 {
+    2
+}
+
 impl Default for ExclusionConfig {
     fn default() -> Self {
         Self {
@@ -200,9 +218,11 @@ impl Default for ExclusionConfig {
             secret_patterns_builtin: default_enabled(),
             secret_patterns_allowlist: Vec::new(),
             secret_patterns_blocklist: Vec::new(),
+            secret_patterns_semantics_version: default_secret_patterns_semantics_version(),
             layer_output_sanitization: None,
             layer_send_firewall: None,
             layer_request_interceptor: None,
+            layer_hook_sanitization: None,
             on_match: ExclusionOnMatch::default(),
             log_redactions: LogRedactionsMode::default(),
             log_redactions_max_bytes: default_log_redactions_max_bytes(),
@@ -227,6 +247,10 @@ impl ExclusionConfig {
 
     pub fn layer_request_interceptor_enabled(&self) -> bool {
         self.layer_request_interceptor.unwrap_or(self.paranoid_mode)
+    }
+
+    pub fn layer_hook_sanitization_enabled(&self) -> bool {
+        self.layer_hook_sanitization.unwrap_or(true)
     }
 
     pub fn log_redactions_mode(&self) -> LogRedactionsMode {

@@ -56,7 +56,7 @@ pub(crate) fn open_exclusions_menu_at(
     let search_dir = chat.session_cwd().to_path_buf();
     let view = ExclusionsSettingsView::new(
         config.exclusion.clone(),
-        config.xcodex.hooks.sanitize_payloads,
+        config.exclusion.layer_hook_sanitization_enabled(),
         tab,
         selected_idx,
         search_dir,
@@ -464,7 +464,7 @@ impl ExclusionsSettingsView {
                 "Edit allowlist ({} entries)",
                 self.exclusion.secret_patterns_allowlist.len()
             ),
-            hint: "Add or remove allowlist patterns (one per line).".to_string(),
+            hint: "Add patterns that should bypass exclusion filtering (one per line).".to_string(),
             action: Some(ExclusionAction::EditAllowlist),
             checked: None,
             is_dimmed: false,
@@ -474,7 +474,7 @@ impl ExclusionsSettingsView {
                 "Edit blocklist ({} entries)",
                 self.exclusion.secret_patterns_blocklist.len()
             ),
-            hint: "Add or remove blocklist patterns (one per line).".to_string(),
+            hint: "Add extra secret patterns to scan and block/redact (one per line).".to_string(),
             action: Some(ExclusionAction::EditBlocklist),
             checked: None,
             is_dimmed: false,
@@ -625,17 +625,19 @@ impl ExclusionsSettingsView {
     }
 
     fn apply_update(&mut self, next: NextSettings) {
-        self.exclusion = next.exclusion.clone();
+        let mut exclusion = next.exclusion.clone();
+        exclusion.layer_hook_sanitization = Some(next.hooks_sanitize_payloads);
+        self.exclusion = exclusion.clone();
         self.hooks_sanitize_payloads = next.hooks_sanitize_payloads;
         if let Some(file_search) = self.file_search.as_mut() {
             file_search.update_ignore_filenames(self.exclusion.files.clone());
         }
         self.app_event_tx.send(AppEvent::UpdateExclusionSettings {
-            exclusion: next.exclusion.clone(),
+            exclusion: exclusion.clone(),
             hooks_sanitize_payloads: next.hooks_sanitize_payloads,
         });
         self.app_event_tx.send(AppEvent::PersistExclusionSettings {
-            exclusion: next.exclusion,
+            exclusion,
             hooks_sanitize_payloads: next.hooks_sanitize_payloads,
         });
     }

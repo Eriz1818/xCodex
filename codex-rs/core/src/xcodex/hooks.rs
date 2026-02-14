@@ -1747,7 +1747,7 @@ impl UserHooks {
             providers.push(std::sync::Arc::new(host_provider));
         }
 
-        let payload_sanitizer = if hooks.sanitize_payloads {
+        let payload_sanitizer = if exclusion.layer_hook_sanitization_enabled() {
             HookPayloadSanitizer::new(exclusion, cwd).map(std::sync::Arc::new)
         } else {
             None

@@ -181,7 +181,7 @@ static RE_SECRET_PATTERNS_BUILTIN: Lazy<Vec<Regex>> = Lazy::new(|| {
 pub struct ContentGateway {
     cfg: GatewayConfig,
     secret_patterns: Vec<Regex>,
-    secret_patterns_blocklist: Vec<Regex>,
+    secret_patterns_allowlist: Vec<Regex>,
 }
 
 impl ContentGateway {
@@ -192,13 +192,13 @@ impl ContentGateway {
             Vec::new()
         };
         let secret_patterns =
-            extend_secret_patterns(secret_patterns, &cfg.secret_patterns_allowlist, "allowlist");
-        let secret_patterns_blocklist =
-            compile_secret_patterns(&cfg.secret_patterns_blocklist, "blocklist");
+            extend_secret_patterns(secret_patterns, &cfg.secret_patterns_blocklist, "blocklist");
+        let secret_patterns_allowlist =
+            compile_secret_patterns(&cfg.secret_patterns_allowlist, "allowlist");
         Self {
             cfg,
             secret_patterns,
-            secret_patterns_blocklist,
+            secret_patterns_allowlist,
         }
     }
 
@@ -322,7 +322,7 @@ impl ContentGateway {
             for re in self.secret_patterns.iter() {
                 let mut has_unblocked_match = false;
                 for m in re.find_iter(&out) {
-                    if self.is_blocklisted(m.as_str()) {
+                    if self.is_allowlisted(m.as_str()) {
                         continue;
                     }
                     has_unblocked_match = true;
@@ -337,7 +337,7 @@ impl ContentGateway {
                     if self.cfg.on_match == ExclusionOnMatch::Redact {
                         let replacement = |caps: &regex::Captures<'_>| {
                             let matched = caps.get(0).map(|m| m.as_str()).unwrap_or_default();
-                            if self.is_blocklisted(matched) {
+                            if self.is_allowlisted(matched) {
                                 matched.to_string()
                             } else {
                                 "[REDACTED]".to_string()
@@ -425,8 +425,8 @@ impl ContentGateway {
         combined
     }
 
-    fn is_blocklisted(&self, candidate: &str) -> bool {
-        self.secret_patterns_blocklist
+    fn is_allowlisted(&self, candidate: &str) -> bool {
+        self.secret_patterns_allowlist
             .iter()
             .any(|re| re.is_match(candidate))
     }
@@ -662,13 +662,13 @@ mod tests {
     }
 
     #[test]
-    fn allowlist_secret_patterns_redacts_when_builtins_disabled() {
+    fn blocklist_secret_patterns_redacts_when_builtins_disabled() {
         let tmp = tempdir().expect("tempdir");
         init_repo(tmp.path());
         let policy = SensitivePathPolicy::new(tmp.path().to_path_buf());
         let mut cfg = GatewayConfig::default();
         cfg.secret_patterns_builtin = false;
-        cfg.secret_patterns_allowlist = vec![String::from(r"foo\d+")];
+        cfg.secret_patterns_blocklist = vec![String::from(r"foo\d+")];
         let gateway = ContentGateway::new(cfg);
         let cache = GatewayCache::new();
         let epoch = policy.ignore_epoch();
@@ -679,14 +679,14 @@ mod tests {
     }
 
     #[test]
-    fn blocklist_secret_patterns_suppresses_match() {
+    fn allowlist_secret_patterns_suppresses_match() {
         let tmp = tempdir().expect("tempdir");
         init_repo(tmp.path());
         let policy = SensitivePathPolicy::new(tmp.path().to_path_buf());
         let mut cfg = GatewayConfig::default();
         cfg.secret_patterns_builtin = false;
-        cfg.secret_patterns_allowlist = vec![String::from(r"foo\d+")];
-        cfg.secret_patterns_blocklist = vec![String::from(r"foo123")];
+        cfg.secret_patterns_blocklist = vec![String::from(r"foo\d+")];
+        cfg.secret_patterns_allowlist = vec![String::from(r"foo123")];
         let gateway = ContentGateway::new(cfg);
         let cache = GatewayCache::new();
         let epoch = policy.ignore_epoch();
@@ -703,7 +703,7 @@ mod tests {
         let policy = SensitivePathPolicy::new(tmp.path().to_path_buf());
         let mut cfg = GatewayConfig::default();
         cfg.secret_patterns_builtin = false;
-        cfg.secret_patterns_allowlist = vec![String::from(r"foo\d+")];
+        cfg.secret_patterns_blocklist = vec![String::from(r"foo\d+")];
         cfg.on_match = ExclusionOnMatch::Warn;
         let gateway = ContentGateway::new(cfg);
         let cache = GatewayCache::new();

@@ -324,6 +324,27 @@ fn is_standard_tool_call(parsed_cmd: &[ParsedCommand]) -> bool {
             .all(|parsed| !matches!(parsed, ParsedCommand::Unknown { .. }))
 }
 
+fn exclusion_approval_request(ev: &RequestUserInputEvent) -> Option<ApprovalRequest> {
+    if ev.questions.len() != 1 {
+        return None;
+    }
+    let question = ev.questions.first()?;
+    if !question.id.starts_with("exclusions_") {
+        return None;
+    }
+    let options = question.options.clone()?;
+    if options.is_empty() {
+        return None;
+    }
+    Some(ApprovalRequest::Exclusion {
+        id: ev.call_id.clone(),
+        question_id: question.id.clone(),
+        header: question.header.clone(),
+        question: question.question.clone(),
+        options,
+    })
+}
+
 const RATE_LIMIT_WARNING_THRESHOLDS: [f64; 3] = [75.0, 90.0, 95.0];
 const NUDGE_MODEL_SLUG: &str = "gpt-5.1-codex-mini";
 const RATE_LIMIT_SWITCH_PROMPT_THRESHOLD: f64 = 90.0;
@@ -2863,7 +2884,14 @@ impl ChatWidget {
 
     pub(crate) fn handle_request_user_input_now(&mut self, ev: RequestUserInputEvent) {
         self.flush_answer_stream_with_separator();
-        self.bottom_pane.push_user_input_request(ev);
+        if let Some(request) = exclusion_approval_request(&ev) {
+            self.session_stats.approvals_requested =
+                self.session_stats.approvals_requested.saturating_add(1);
+            self.bottom_pane
+                .push_approval_request(request, &self.config.features);
+        } else {
+            self.bottom_pane.push_user_input_request(ev);
+        }
         self.request_redraw();
     }
 
@@ -7268,7 +7296,7 @@ impl ChatWidget {
         hooks_sanitize_payloads: bool,
     ) {
         self.config.exclusion = exclusion;
-        self.config.xcodex.hooks.sanitize_payloads = hooks_sanitize_payloads;
+        self.config.exclusion.layer_hook_sanitization = Some(hooks_sanitize_payloads);
         self.request_redraw();
     }
 

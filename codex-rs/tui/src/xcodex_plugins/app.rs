@@ -519,8 +519,9 @@ pub(crate) async fn try_handle_event(
             exclusion,
             hooks_sanitize_payloads,
         } => {
+            let mut exclusion = exclusion;
+            exclusion.layer_hook_sanitization = Some(hooks_sanitize_payloads);
             app.config.exclusion = exclusion.clone();
-            app.config.xcodex.hooks.sanitize_payloads = hooks_sanitize_payloads;
             app.chat_widget
                 .set_exclusion_settings(exclusion, hooks_sanitize_payloads);
             Ok(None)
@@ -530,6 +531,8 @@ pub(crate) async fn try_handle_event(
             hooks_sanitize_payloads,
         } => {
             let profile = app.active_profile.as_deref();
+            let mut exclusion = exclusion;
+            exclusion.layer_hook_sanitization = Some(hooks_sanitize_payloads);
             let exclusion_value = match exclusion_to_item(&exclusion) {
                 Ok(value) => value,
                 Err(err) => {
@@ -547,17 +550,10 @@ pub(crate) async fn try_handle_event(
             };
             match ConfigEditsBuilder::new(&app.config.codex_home)
                 .with_profile(profile)
-                .with_edits([
-                    ConfigEdit::SetPath {
-                        segments: vec!["exclusion".to_string()],
-                        value: exclusion_value,
-                    },
-                    ConfigEdit::SetPath {
-                        segments:
-                            codex_core::xcodex::config::hooks_sanitize_payloads_config_segments(),
-                        value: toml_edit::value(hooks_sanitize_payloads),
-                    },
-                ])
+                .with_edits([ConfigEdit::SetPath {
+                    segments: vec!["exclusion".to_string()],
+                    value: exclusion_value,
+                }])
                 .apply()
                 .await
             {

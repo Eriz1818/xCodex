@@ -2827,6 +2827,21 @@ impl App {
                         "E L I C I T A T I O N".to_string(),
                     ));
                 }
+                ApprovalRequest::Exclusion {
+                    header, question, ..
+                } => {
+                    let _ = tui.enter_alt_screen();
+                    let paragraph = Paragraph::new(vec![
+                        Line::from(vec!["Question: ".into(), header.bold()]),
+                        Line::from(""),
+                        Line::from(question),
+                    ])
+                    .wrap(Wrap { trim: false });
+                    self.overlay = Some(Overlay::new_static_with_renderables(
+                        vec![Box::new(paragraph)],
+                        "E X C L U S I O N S".to_string(),
+                    ));
+                }
             },
             AppEvent::StatusLineSetup { items } => {
                 let ids = items.iter().map(ToString::to_string).collect::<Vec<_>>();

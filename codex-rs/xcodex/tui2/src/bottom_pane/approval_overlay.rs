@@ -27,6 +27,9 @@ use codex_core::protocol::FileChange;
 use codex_core::protocol::Op;
 use codex_core::protocol::ReviewDecision;
 use codex_protocol::mcp::RequestId;
+use codex_protocol::request_user_input::RequestUserInputAnswer;
+use codex_protocol::request_user_input::RequestUserInputQuestionOption;
+use codex_protocol::request_user_input::RequestUserInputResponse;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyEventKind;
@@ -60,6 +63,13 @@ pub(crate) enum ApprovalRequest {
         server_name: String,
         request_id: RequestId,
         message: String,
+    },
+    Exclusion {
+        id: String,
+        question_id: String,
+        header: String,
+        question: String,
+        options: Vec<RequestUserInputQuestionOption>,
     },
 }
 
@@ -127,6 +137,10 @@ impl ApprovalOverlay {
             ApprovalVariant::McpElicitation { server_name, .. } => (
                 elicitation_options(),
                 format!("{server_name} needs your approval."),
+            ),
+            ApprovalVariant::Exclusion { options, .. } => (
+                exclusion_options(options),
+                "Exclusions matched content. How should xcodex proceed?".to_string(),
             ),
         };
 
@@ -201,6 +215,14 @@ impl ApprovalOverlay {
                 ) => {
                     self.handle_elicitation_decision(server_name, request_id, *decision);
                 }
+                (
+                    ApprovalVariant::Exclusion {
+                        id, question_id, ..
+                    },
+                    ApprovalDecision::Exclusion(answer),
+                ) => {
+                    self.handle_exclusion_decision(id, question_id, answer);
+                }
                 _ => {}
             }
         }
@@ -237,6 +259,21 @@ impl ApprovalOverlay {
                 server_name: server_name.to_string(),
                 request_id: request_id.clone(),
                 decision,
+            }));
+    }
+
+    fn handle_exclusion_decision(&self, id: &str, question_id: &str, answer: &str) {
+        let mut answers = HashMap::new();
+        answers.insert(
+            question_id.to_string(),
+            RequestUserInputAnswer {
+                answers: vec![answer.to_string()],
+            },
+        );
+        self.app_event_tx
+            .send(AppEvent::CodexOp(Op::UserInputAnswer {
+                id: id.to_string(),
+                response: RequestUserInputResponse { answers },
             }));
     }
 
@@ -340,6 +377,9 @@ impl BottomPaneView for ApprovalOverlay {
                         request_id,
                         ElicitationAction::Cancel,
                     );
+                }
+                ApprovalVariant::Exclusion { .. } => {
+                    self.app_event_tx.send(AppEvent::CodexOp(Op::Interrupt));
                 }
             }
         }
@@ -469,6 +509,28 @@ impl From<ApprovalRequest> for ApprovalRequestState {
                     header: Box::new(header),
                 }
             }
+            ApprovalRequest::Exclusion {
+                id,
+                question_id,
+                header,
+                question,
+                options,
+            } => {
+                let header = Paragraph::new(vec![
+                    Line::from(vec!["Question: ".into(), header.bold()]),
+                    Line::from(""),
+                    Line::from(question),
+                ])
+                .wrap(Wrap { trim: false });
+                Self {
+                    variant: ApprovalVariant::Exclusion {
+                        id,
+                        question_id,
+                        options,
+                    },
+                    header: Box::new(header),
+                }
+            }
         }
     }
 }
@@ -487,12 +549,18 @@ enum ApprovalVariant {
         server_name: String,
         request_id: RequestId,
     },
+    Exclusion {
+        id: String,
+        question_id: String,
+        options: Vec<RequestUserInputQuestionOption>,
+    },
 }
 
 #[derive(Clone)]
 enum ApprovalDecision {
     Review(ReviewDecision),
     McpElicitation(ElicitationAction),
+    Exclusion(String),
 }
 
 #[derive(Clone)]
@@ -598,6 +666,18 @@ fn elicitation_options() -> Vec<ApprovalOption> {
             additional_shortcuts: vec![key_hint::plain(KeyCode::Char('c'))],
         },
     ]
+}
+
+fn exclusion_options(options: &[RequestUserInputQuestionOption]) -> Vec<ApprovalOption> {
+    options
+        .iter()
+        .map(|option| ApprovalOption {
+            label: option.label.clone(),
+            decision: ApprovalDecision::Exclusion(option.label.clone()),
+            display_shortcut: None,
+            additional_shortcuts: Vec::new(),
+        })
+        .collect()
 }
 
 #[cfg(test)]

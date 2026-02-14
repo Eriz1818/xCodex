@@ -360,7 +360,10 @@ enum RedactionDecision {
     AddBlocklist(String),
 }
 
-fn format_redaction_matches(report: &crate::content_gateway::ScanReport) -> Option<String> {
+fn format_redaction_matches(
+    report: &crate::content_gateway::ScanReport,
+    layer_label: &str,
+) -> Option<String> {
     if report.matches.is_empty() {
         return None;
     }
@@ -374,7 +377,7 @@ fn format_redaction_matches(report: &crate::content_gateway::ScanReport) -> Opti
     }
 
     let mut lines = Vec::new();
-    lines.push("Matched content:".to_string());
+    lines.push(format!("Matched content ({layer_label}):"));
     for match_info in report.matches.iter().take(3) {
         let mut value = match_info.value.clone();
         if value.len() > 200 {
@@ -421,7 +424,7 @@ async fn maybe_prompt_for_redaction(
     let match_value = match_info.map(|info| info.value.clone());
     let mut question_text =
         format!("Exclusions matched content in {context_label}. How should xcodex proceed?");
-    if let Some(summary) = format_redaction_matches(report) {
+    if let Some(summary) = format_redaction_matches(report, "L2-output_sanitization") {
         question_text.push('\n');
         question_text.push_str(&summary);
     }
@@ -447,11 +450,11 @@ async fn maybe_prompt_for_redaction(
     ) {
         options.push(RequestUserInputQuestionOption {
             label: "Add to allowlist".to_string(),
-            description: "Skip redaction for this match going forward.".to_string(),
+            description: "Allow this matched value through exclusions going forward.".to_string(),
         });
         options.push(RequestUserInputQuestionOption {
             label: "Add to blocklist".to_string(),
-            description: "Always block this match going forward.".to_string(),
+            description: "Add this value to extra secret patterns to scan.".to_string(),
         });
     }
 
@@ -1134,10 +1137,13 @@ mod tests {
             }],
         };
 
-        let summary = super::format_redaction_matches(&report);
+        let summary = super::format_redaction_matches(&report, "L2-output_sanitization");
         assert_eq!(
             summary,
-            Some("Matched content:\n- token_abc123 (reason: Secret pattern)".to_string())
+            Some(
+                "Matched content (L2-output_sanitization):\n- token_abc123 (reason: Secret pattern)"
+                    .to_string(),
+            )
         );
     }
 

@@ -277,6 +277,7 @@ fn layer_label(layer: ExclusionLayer) -> &'static str {
         ExclusionLayer::Layer2OutputSanitization => "layer2_output_sanitization",
         ExclusionLayer::Layer3SendFirewall => "layer3_send_firewall",
         ExclusionLayer::Layer4RequestInterceptor => "layer4_request_interceptor",
+        ExclusionLayer::Layer5HookSanitization => "layer5_hook_sanitization",
     }
 }
 

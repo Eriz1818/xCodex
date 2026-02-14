@@ -712,7 +712,7 @@ pub(crate) fn deserialize_config_toml_with_base(
     config_base_dir: &Path,
 ) -> std::io::Result<ConfigToml> {
     let mut root_value = root_value;
-    migrate_legacy_xcodex_hooks_sanitize_payloads(&mut root_value);
+    migrate_legacy_exclusion_settings(&mut root_value);
 
     // This guard ensures that any relative paths that is deserialized into an
     // [AbsolutePathBuf] is resolved against `config_base_dir`.
@@ -722,39 +722,73 @@ pub(crate) fn deserialize_config_toml_with_base(
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
 }
 
-fn migrate_legacy_xcodex_hooks_sanitize_payloads(root_value: &mut TomlValue) {
-    let Some(legacy_sanitize_payloads) = root_value
-        .get("xcodex")
-        .and_then(|value| value.get("hooks"))
-        .and_then(|value| value.get("sanitize_payloads"))
-        .and_then(TomlValue::as_bool)
-    else {
-        return;
-    };
-
-    if root_value
-        .get("hooks")
-        .and_then(|value| value.get("sanitize_payloads"))
-        .is_some()
-    {
-        return;
-    }
-
+fn migrate_legacy_exclusion_settings(root_value: &mut TomlValue) {
     let Some(root_table) = root_value.as_table_mut() else {
         return;
     };
 
-    let hooks_entry = root_table
-        .entry("hooks")
+    let hooks_sanitize = root_table
+        .get("hooks")
+        .and_then(|value| value.get("sanitize_payloads"))
+        .and_then(TomlValue::as_bool);
+    let legacy_xcodex_sanitize = root_table
+        .get("xcodex")
+        .and_then(|value| value.get("hooks"))
+        .and_then(|value| value.get("sanitize_payloads"))
+        .and_then(TomlValue::as_bool);
+    let legacy_sanitize = hooks_sanitize.or(legacy_xcodex_sanitize);
+
+    let exclusion_entry = root_table
+        .entry("exclusion")
         .or_insert_with(|| TomlValue::Table(Default::default()));
-    let Some(hooks_table) = hooks_entry.as_table_mut() else {
+    let Some(exclusion_table) = exclusion_entry.as_table_mut() else {
         return;
     };
+    if exclusion_table.get("layer_hook_sanitization").is_none()
+        && let Some(legacy_sanitize) = legacy_sanitize
+    {
+        exclusion_table.insert(
+            "layer_hook_sanitization".to_string(),
+            TomlValue::Boolean(legacy_sanitize),
+        );
+    }
 
-    hooks_table.insert(
-        "sanitize_payloads".to_string(),
-        TomlValue::Boolean(legacy_sanitize_payloads),
-    );
+    // Semantic migration:
+    // v1: allowlist => additional scans, blocklist => suppressions
+    // v2: allowlist => suppressions, blocklist => additional scans
+    let semantics_version = exclusion_table
+        .get("secret_patterns_semantics_version")
+        .and_then(TomlValue::as_integer)
+        .unwrap_or(1);
+    if semantics_version < 2 {
+        let allowlist = exclusion_table.remove("secret_patterns_allowlist");
+        let blocklist = exclusion_table.remove("secret_patterns_blocklist");
+        if let Some(allowlist) = allowlist {
+            exclusion_table.insert("secret_patterns_blocklist".to_string(), allowlist);
+        }
+        if let Some(blocklist) = blocklist {
+            exclusion_table.insert("secret_patterns_allowlist".to_string(), blocklist);
+        }
+        exclusion_table.insert(
+            "secret_patterns_semantics_version".to_string(),
+            TomlValue::Integer(2),
+        );
+    }
+
+    if let Some(hooks_table) = root_table
+        .get_mut("hooks")
+        .and_then(TomlValue::as_table_mut)
+    {
+        hooks_table.remove("sanitize_payloads");
+    }
+    if let Some(xcodex_hooks_table) = root_table
+        .get_mut("xcodex")
+        .and_then(TomlValue::as_table_mut)
+        .and_then(|table| table.get_mut("hooks"))
+        .and_then(TomlValue::as_table_mut)
+    {
+        xcodex_hooks_table.remove("sanitize_payloads");
+    }
 }
 
 fn filter_mcp_servers_by_requirements(
@@ -1609,10 +1643,6 @@ pub struct HooksConfig {
     /// Keep only the most recent N payload/log files (global) under CODEX_HOME.
     #[serde(default = "HooksConfig::default_keep_last_n_payloads")]
     pub keep_last_n_payloads: usize,
-
-    /// When true, redact sensitive content in hook payloads before dispatch.
-    #[serde(default)]
-    pub sanitize_payloads: bool,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema)]
@@ -1816,7 +1846,6 @@ impl Default for HooksConfig {
             host: HookHostConfig::default(),
             max_stdin_payload_bytes: Self::default_max_stdin_payload_bytes(),
             keep_last_n_payloads: Self::default_keep_last_n_payloads(),
-            sanitize_payloads: true,
         }
     }
 }
@@ -5830,7 +5859,8 @@ sanitize_payloads = true
         .expect("legacy xcodex hooks table should parse");
 
         let cfg = deserialize_config_toml_with_base(root_value, codex_home.path())?;
-        assert!(cfg.hooks.sanitize_payloads);
+        let exclusion = cfg.exclusion.expect("exclusion should be present");
+        assert_eq!(exclusion.layer_hook_sanitization, Some(true));
         Ok(())
     }
 
@@ -5849,7 +5879,8 @@ sanitize_payloads = true
         .expect("hooks config should parse");
 
         let cfg = deserialize_config_toml_with_base(root_value, codex_home.path())?;
-        assert!(!cfg.hooks.sanitize_payloads);
+        let exclusion = cfg.exclusion.expect("exclusion should be present");
+        assert_eq!(exclusion.layer_hook_sanitization, Some(false));
         Ok(())
     }
 
@@ -5869,8 +5900,35 @@ sanitize_payloads = true
         .expect("hooks host with legacy xcodex hooks should parse");
 
         let cfg = deserialize_config_toml_with_base(root_value, codex_home.path())?;
-        assert!(cfg.hooks.sanitize_payloads);
+        let exclusion = cfg.exclusion.expect("exclusion should be present");
+        assert_eq!(exclusion.layer_hook_sanitization, Some(true));
         assert!(cfg.hooks.host.enabled);
+        Ok(())
+    }
+
+    #[test]
+    fn deserialize_swaps_secret_pattern_lists_for_v2_semantics() -> std::io::Result<()> {
+        let codex_home = TempDir::new()?;
+        let root_value: TomlValue = toml::from_str(
+            r#"
+[exclusion]
+secret_patterns_allowlist = ["foo\\d+"]
+secret_patterns_blocklist = ["foo123"]
+"#,
+        )
+        .expect("exclusion config should parse");
+
+        let cfg = deserialize_config_toml_with_base(root_value, codex_home.path())?;
+        let exclusion = cfg.exclusion.expect("exclusion should be present");
+        assert_eq!(
+            exclusion.secret_patterns_allowlist,
+            vec!["foo123".to_string()]
+        );
+        assert_eq!(
+            exclusion.secret_patterns_blocklist,
+            vec!["foo\\d+".to_string()]
+        );
+        assert_eq!(exclusion.secret_patterns_semantics_version, 2);
         Ok(())
     }
 

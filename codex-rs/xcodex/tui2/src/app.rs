@@ -2927,8 +2927,9 @@ impl App {
                 exclusion,
                 hooks_sanitize_payloads,
             } => {
+                let mut exclusion = exclusion;
+                exclusion.layer_hook_sanitization = Some(hooks_sanitize_payloads);
                 self.config.exclusion = exclusion.clone();
-                self.config.xcodex.hooks.sanitize_payloads = hooks_sanitize_payloads;
                 self.chat_widget
                     .set_exclusion_settings(exclusion, hooks_sanitize_payloads);
             }
@@ -2937,6 +2938,8 @@ impl App {
                 hooks_sanitize_payloads,
             } => {
                 let profile = self.active_profile.as_deref();
+                let mut exclusion = exclusion;
+                exclusion.layer_hook_sanitization = Some(hooks_sanitize_payloads);
                 let exclusion_value = match exclusion_to_item(&exclusion) {
                     Ok(value) => value,
                     Err(err) => {
@@ -2954,18 +2957,10 @@ impl App {
                 };
                 match ConfigEditsBuilder::new(&self.config.codex_home)
                     .with_profile(profile)
-                    .with_edits([
-                        ConfigEdit::SetPath {
-                            segments: vec!["exclusion".to_string()],
-                            value: exclusion_value,
-                        },
-                        ConfigEdit::SetPath {
-                            segments:
-                                codex_core::xcodex::config::hooks_sanitize_payloads_config_segments(
-                                ),
-                            value: toml_edit::value(hooks_sanitize_payloads),
-                        },
-                    ])
+                    .with_edits([ConfigEdit::SetPath {
+                        segments: vec!["exclusion".to_string()],
+                        value: exclusion_value,
+                    }])
                     .apply()
                     .await
                 {
@@ -3381,6 +3376,21 @@ impl App {
                     self.overlay = Some(Overlay::new_static_with_renderables(
                         vec![Box::new(paragraph)],
                         "E L I C I T A T I O N".to_string(),
+                    ));
+                }
+                ApprovalRequest::Exclusion {
+                    header, question, ..
+                } => {
+                    let _ = tui.enter_alt_screen();
+                    let paragraph = Paragraph::new(vec![
+                        Line::from(vec!["Question: ".into(), header.bold()]),
+                        Line::from(""),
+                        Line::from(question),
+                    ])
+                    .wrap(Wrap { trim: false });
+                    self.overlay = Some(Overlay::new_static_with_renderables(
+                        vec![Box::new(paragraph)],
+                        "E X C L U S I O N S".to_string(),
                     ));
                 }
             },

@@ -53,8 +53,11 @@ pub fn default_exclusion_files() -> Vec<String> {
     Vec::new()
 }
 
-pub fn hooks_sanitize_payloads_config_segments() -> Vec<String> {
-    vec!["hooks".to_string(), "sanitize_payloads".to_string()]
+pub fn exclusion_layer_hook_sanitization_config_segments() -> Vec<String> {
+    vec![
+        "exclusion".to_string(),
+        "layer_hook_sanitization".to_string(),
+    ]
 }
 
 /// Durable plan workflow mode.
@@ -330,10 +333,13 @@ mod tests {
     }
 
     #[test]
-    fn hooks_sanitize_payloads_segments_target_hooks_table() {
+    fn exclusion_layer_hook_sanitization_segments_target_exclusion_table() {
         assert_eq!(
-            vec!["hooks".to_string(), "sanitize_payloads".to_string()],
-            hooks_sanitize_payloads_config_segments()
+            vec![
+                "exclusion".to_string(),
+                "layer_hook_sanitization".to_string()
+            ],
+            exclusion_layer_hook_sanitization_config_segments()
         );
     }
 }

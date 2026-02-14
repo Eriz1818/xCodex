@@ -23,6 +23,7 @@ pub struct ExclusionLayerCounts {
     pub layer2_output_sanitization: ExclusionCounts,
     pub layer3_send_firewall: ExclusionCounts,
     pub layer4_request_interceptor: ExclusionCounts,
+    pub layer5_hook_sanitization: ExclusionCounts,
 }
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
@@ -67,7 +68,8 @@ mod tests {
                 "layer1_input_guards": {"redacted": 1, "blocked": 0},
                 "layer2_output_sanitization": {"redacted": 1, "blocked": 1},
                 "layer3_send_firewall": {"redacted": 1, "blocked": 1},
-                "layer4_request_interceptor": {"redacted": 0, "blocked": 0}
+                "layer4_request_interceptor": {"redacted": 0, "blocked": 0},
+                "layer5_hook_sanitization": {"redacted": 0, "blocked": 0}
             },
             "sources": {
                 "filesystem": {"redacted": 1, "blocked": 0},
@@ -98,6 +100,10 @@ mod tests {
                         blocked: 1,
                     },
                     layer4_request_interceptor: ExclusionCounts {
+                        redacted: 0,
+                        blocked: 0,
+                    },
+                    layer5_hook_sanitization: ExclusionCounts {
                         redacted: 0,
                         blocked: 0,
                     },

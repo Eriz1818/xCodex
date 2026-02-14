@@ -390,6 +390,10 @@
           },
           "type": "array"
         },
+        "layer_hook_sanitization": {
+          "description": "Layer 5: sanitize hook payload strings before dispatch. Defaults to `true` when unset.",
+          "type": "boolean"
+        },
         "layer_output_sanitization": {
           "description": "Layer 2: sanitize tool outputs (MCP/shell/custom tool outputs) before they reach the model. Defaults to `paranoid_mode` when unset.",
           "type": "boolean"
@@ -460,7 +464,7 @@
         },
         "secret_patterns_allowlist": {
           "default": [],
-          "description": "Optional secret patterns to add on top of built-ins.",
+          "description": "Optional secret patterns to add on top of built-ins.\n\nSemantics v2: patterns that are allowed to pass through (skip redaction/blocking).",
           "items": {
             "type": "string"
           },
@@ -468,7 +472,7 @@
         },
         "secret_patterns_blocklist": {
           "default": [],
-          "description": "Patterns that suppress matches from built-ins and allowlist.",
+          "description": "Semantics v2: additional secret patterns to scan, on top of built-ins.",
           "items": {
             "type": "string"
           },
@@ -478,6 +482,13 @@
           "default": true,
           "description": "When true, include built-in secret regexes alongside any allowlist patterns.",
           "type": "boolean"
+        },
+        "secret_patterns_semantics_version": {
+          "default": 2,
+          "description": "Secret-pattern semantics migration version.\n\nv1 (legacy): allowlist = additional scan patterns, blocklist = suppressions. v2 (current): allowlist = suppressions, blocklist = additional scan patterns.",
+          "format": "uint8",
+          "minimum": 0.0,
+          "type": "integer"
         },
         "show_summary_banner": {
           "default": true,
@@ -869,11 +880,6 @@
             "timeout_sec": null
           },
           "description": "Experimental PyO3 hook configuration."
-        },
-        "sanitize_payloads": {
-          "default": false,
-          "description": "When true, redact sensitive content in hook payloads before dispatch.",
-          "type": "boolean"
         },
         "session_end": {
           "default": [],
@@ -2415,7 +2421,6 @@
           "script_path": null,
           "timeout_sec": null
         },
-        "sanitize_payloads": true,
         "session_end": [],
         "session_start": [],
         "subagent_stop": [],

@@ -18,6 +18,7 @@ pub(crate) enum ExclusionLayer {
     Layer2OutputSanitization,
     Layer3SendFirewall,
     Layer4RequestInterceptor,
+    Layer5HookSanitization,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -98,6 +99,7 @@ impl ExclusionTurnCounters {
             ExclusionLayer::Layer2OutputSanitization => &mut self.layers.layer2_output_sanitization,
             ExclusionLayer::Layer3SendFirewall => &mut self.layers.layer3_send_firewall,
             ExclusionLayer::Layer4RequestInterceptor => &mut self.layers.layer4_request_interceptor,
+            ExclusionLayer::Layer5HookSanitization => &mut self.layers.layer5_hook_sanitization,
         }
     }
 

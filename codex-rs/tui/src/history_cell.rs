@@ -1712,13 +1712,15 @@ pub(crate) fn new_exclusion_summary(
 
     let mut details: Vec<String> = Vec::new();
     details.push(format!(
-        "Layers: L1 blocked={}, L2 redacted={}, blocked={}, L3 blocked={}, L4 redacted={}, blocked={}",
+        "Layers: L1 blocked={}, L2 redacted={}, blocked={}, L3 blocked={}, L4 redacted={}, blocked={}, L5 redacted={}, blocked={}",
         event.layers.layer1_input_guards.blocked,
         event.layers.layer2_output_sanitization.redacted,
         event.layers.layer2_output_sanitization.blocked,
         event.layers.layer3_send_firewall.blocked,
         event.layers.layer4_request_interceptor.redacted,
         event.layers.layer4_request_interceptor.blocked,
+        event.layers.layer5_hook_sanitization.redacted,
+        event.layers.layer5_hook_sanitization.blocked,
     ));
     details.push(format!(
         "Sources: filesystem r={} b={}, mcp r={} b={}, shell r={} b={}, prompt r={} b={}",
