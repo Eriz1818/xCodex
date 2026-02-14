@@ -421,7 +421,7 @@ impl RequestUserInputOverlay {
         let answers = self.collect_answers();
         self.app_event_tx
             .send(AppEvent::CodexOp(Op::UserInputAnswer {
-                id: self.request.turn_id.clone(),
+                id: self.request.call_id.clone(),
                 response: RequestUserInputResponse { answers },
             }));
 
@@ -880,9 +880,10 @@ mod tests {
         overlay.handle_key_event(KeyEvent::from(KeyCode::Enter));
 
         let event = rx.try_recv().expect("expected AppEvent");
-        let AppEvent::CodexOp(Op::UserInputAnswer { response, .. }) = event else {
+        let AppEvent::CodexOp(Op::UserInputAnswer { id, response, .. }) = event else {
             panic!("expected UserInputAnswer");
         };
+        assert_eq!(id, "call-1");
         let answer = response.answers.get("q1").expect("answer missing");
         assert_eq!(answer.answers, vec!["Option 3".to_string()]);
     }
