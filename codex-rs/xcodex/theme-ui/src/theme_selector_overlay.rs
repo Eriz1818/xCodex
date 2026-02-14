@@ -1836,11 +1836,12 @@ mod theme_preview_tests {
             approval_bg,
         );
 
-        let (branch_y, branch_x) = find_in_buffer(&buf, "branch: feat/themes");
+        let branch_prefix = " ";
+        let (branch_y, branch_x) = find_in_buffer(&buf, " feat/themes");
         assert_span_fg(
             &buf,
             branch_y,
-            branch_x + "branch: ".len() as u16,
+            branch_x + branch_prefix.chars().count() as u16,
             "feat/themes".len(),
             accent_fg,
         );
@@ -1998,7 +1999,7 @@ mod theme_preview_tests {
         let mut config_minimal = config;
         config_minimal.tui_minimal_composer = true;
         let buf_minimal = render_preview(config_minimal, &test_theme);
-        let (branch_y_minimal, _) = find_in_buffer(&buf_minimal, "branch: feat/themes");
+        let (branch_y_minimal, _) = find_in_buffer(&buf_minimal, " feat/themes");
         assert_ne!(
             branch_y,
             branch_y_minimal,

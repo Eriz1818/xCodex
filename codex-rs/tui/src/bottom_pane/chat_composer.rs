@@ -111,6 +111,8 @@ use ratatui::text::Span;
 use ratatui::widgets::Block;
 use ratatui::widgets::StatefulWidgetRef;
 use ratatui::widgets::WidgetRef;
+use unicode_width::UnicodeWidthChar;
+use unicode_width::UnicodeWidthStr;
 
 use super::chat_composer_history::ChatComposerHistory;
 use super::chat_composer_history::HistoryEntry;
@@ -2983,23 +2985,44 @@ impl ChatComposer {
         }
     }
 
-    fn status_bar_spans(&self) -> Vec<Span<'static>> {
+    fn status_bar_spans(&self, max_width: Option<usize>) -> Vec<Span<'static>> {
+        const BRANCH_ICON: &str = " ";
+        const WORKTREE_ICON: &str = " ";
+        const SECTION_SEPARATOR: &str = " · ";
+
+        let has_branch = self.show_status_bar_git_branch && self.status_bar_git_branch.is_some();
+        let has_worktree = self.show_status_bar_worktree && self.status_bar_worktree.is_some();
+
         let mut spans = Vec::new();
-        if self.show_status_bar_git_branch
-            && let Some(branch) = self.status_bar_git_branch.as_ref()
-        {
-            spans.push("branch: ".dim());
+        let mut used_width = 0usize;
+
+        if has_branch && let Some(branch) = self.status_bar_git_branch.as_ref() {
+            spans.push(Span::styled(
+                BRANCH_ICON.to_string(),
+                crate::theme::accent_style(),
+            ));
             spans.push(Span::styled(branch.clone(), crate::theme::accent_style()));
+            used_width += BRANCH_ICON.width() + branch.as_str().width();
         }
 
-        if self.show_status_bar_worktree
-            && let Some(worktree) = self.status_bar_worktree.as_ref()
-        {
+        if has_worktree && let Some(worktree) = self.status_bar_worktree.as_ref() {
             if !spans.is_empty() {
-                spans.push(" · ".dim());
+                spans.push(SECTION_SEPARATOR.dim());
+                used_width += SECTION_SEPARATOR.width();
             }
-            spans.push("wt: ".dim());
-            spans.push(worktree.clone().dim());
+
+            spans.push(Span::styled(
+                WORKTREE_ICON.to_string(),
+                crate::theme::accent_style(),
+            ));
+            used_width += WORKTREE_ICON.width();
+
+            let worktree_budget = max_width
+                .map(|max| max.saturating_sub(used_width))
+                .map(|max| max.max(1))
+                .unwrap_or(usize::MAX);
+            let worktree_display = Self::compact_worktree_path_for_width(worktree, worktree_budget);
+            spans.push(worktree_display.dim());
         }
 
         spans
@@ -3009,13 +3032,102 @@ impl ChatComposer {
         &self,
         context_window_percent: Option<i64>,
         context_window_used_tokens: Option<i64>,
+        max_width: usize,
     ) -> Line<'static> {
-        let mut spans = self.status_bar_spans();
+        const SECTION_SEPARATOR_WIDTH: usize = 3; // " · "
+
+        let context_line = context_window_line(context_window_percent, context_window_used_tokens);
+        let context_width = context_line.width();
+        let has_status = (self.show_status_bar_git_branch && self.status_bar_git_branch.is_some())
+            || (self.show_status_bar_worktree && self.status_bar_worktree.is_some());
+        let status_width_budget = max_width.saturating_sub(
+            context_width
+                + if has_status {
+                    SECTION_SEPARATOR_WIDTH
+                } else {
+                    0
+                },
+        );
+
+        let mut spans = self.status_bar_spans(Some(status_width_budget));
         if !spans.is_empty() {
             spans.push(" · ".dim());
         }
-        spans.extend(context_window_line(context_window_percent, context_window_used_tokens).spans);
+        spans.extend(context_line.spans);
         Line::from(spans)
+    }
+
+    fn compact_path_with_initials(path: &str) -> String {
+        let normalized = path.replace('\\', "/");
+        let (prefix, segments) = split_normalized_path_segments(&normalized);
+        if segments.len() <= 1 {
+            return normalized;
+        }
+
+        let mut out = prefix;
+        for (idx, segment) in segments.iter().enumerate() {
+            if idx > 0 || (!out.is_empty() && !out.ends_with('/')) {
+                out.push('/');
+            }
+            if idx + 1 == segments.len() {
+                out.push_str(segment);
+            } else {
+                out.push_str(&abbreviate_parent_segment(segment));
+            }
+        }
+        out
+    }
+
+    fn compact_path_to_tail(path: &str) -> String {
+        let normalized = path.replace('\\', "/");
+        let (prefix, segments) = split_normalized_path_segments(&normalized);
+        let Some(leaf) = segments.last() else {
+            return normalized;
+        };
+        if prefix.is_empty() {
+            format!("…/{leaf}")
+        } else {
+            format!("{prefix}…/{leaf}")
+        }
+    }
+
+    fn compact_worktree_path_for_width(path: &str, max_width: usize) -> String {
+        if path.width() <= max_width {
+            return path.to_string();
+        }
+
+        let initials = Self::compact_path_with_initials(path);
+        if initials.width() <= max_width {
+            return initials;
+        }
+
+        let tail = Self::compact_path_to_tail(path);
+        if tail.width() <= max_width {
+            return tail;
+        }
+
+        Self::ellipsize_from_left(&tail, max_width)
+    }
+
+    fn ellipsize_from_left(text: &str, max_width: usize) -> String {
+        if max_width == 0 {
+            return String::new();
+        }
+        if max_width == 1 {
+            return String::from("…");
+        }
+
+        let mut tail = String::new();
+        let mut tail_width = 0usize;
+        for ch in text.chars().rev() {
+            let ch_width = ch.width().unwrap_or(0);
+            if tail_width + ch_width > max_width - 1 {
+                break;
+            }
+            tail.insert(0, ch);
+            tail_width += ch_width;
+        }
+        format!("…{tail}")
     }
 
     /// Resolve the effective footer mode via a small priority waterfall.
@@ -3755,6 +3867,7 @@ impl ChatComposer {
                     Some(self.right_side_line(
                         footer_props.context_window_percent,
                         footer_props.context_window_used_tokens,
+                        hint_rect.width.saturating_sub(FOOTER_INDENT_COLS as u16) as usize,
                     ))
                 };
                 let right_width = right_line.as_ref().map(|l| l.width() as u16).unwrap_or(0);
@@ -3946,6 +4059,51 @@ impl ChatComposer {
             }
         }
     }
+}
+
+fn split_normalized_path_segments(path: &str) -> (String, Vec<&str>) {
+    if path == "~" {
+        return (String::from("~"), Vec::new());
+    }
+
+    if let Some(rest) = path.strip_prefix("~/") {
+        let segments = rest
+            .split('/')
+            .filter(|segment| !segment.is_empty())
+            .collect();
+        return (String::from("~/"), segments);
+    }
+
+    if let Some(rest) = path.strip_prefix('/') {
+        let segments = rest
+            .split('/')
+            .filter(|segment| !segment.is_empty())
+            .collect();
+        return (String::from("/"), segments);
+    }
+
+    let segments = path
+        .split('/')
+        .filter(|segment| !segment.is_empty())
+        .collect();
+    (String::new(), segments)
+}
+
+fn abbreviate_parent_segment(segment: &str) -> String {
+    if segment == "." || segment == ".." {
+        return segment.to_string();
+    }
+
+    let mut chars = segment.chars();
+    let Some(first) = chars.next() else {
+        return String::new();
+    };
+    if first == '.' {
+        let second = chars.next();
+        return second.map_or_else(|| String::from("."), |next| format!(".{next}"));
+    }
+
+    first.to_string()
 }
 
 fn prompt_selection_action(

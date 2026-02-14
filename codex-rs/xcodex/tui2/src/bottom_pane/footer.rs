@@ -24,6 +24,8 @@ use ratatui::text::Line;
 use ratatui::text::Span;
 use ratatui::widgets::Paragraph;
 use ratatui::widgets::Widget;
+use unicode_width::UnicodeWidthChar;
+use unicode_width::UnicodeWidthStr;
 
 /// The rendering inputs for the footer area under the composer.
 ///
@@ -108,7 +110,7 @@ pub(crate) fn reset_mode_after_activity(current: FooterMode) -> FooterMode {
 }
 
 pub(crate) fn footer_height(props: FooterProps<'_>) -> u16 {
-    footer_lines(props).len() as u16
+    footer_lines(props, usize::MAX).len() as u16
 }
 
 pub(crate) fn render_footer(area: Rect, buf: &mut Buffer, props: FooterProps<'_>) {
@@ -118,7 +120,10 @@ pub(crate) fn render_footer(area: Rect, buf: &mut Buffer, props: FooterProps<'_>
         }
     }
     Paragraph::new(prefix_lines(
-        footer_lines(props),
+        footer_lines(
+            props,
+            area.width.saturating_sub(FOOTER_INDENT_COLS as u16) as usize,
+        ),
         " ".repeat(FOOTER_INDENT_COLS).into(),
         " ".repeat(FOOTER_INDENT_COLS).into(),
     ))
@@ -126,7 +131,7 @@ pub(crate) fn render_footer(area: Rect, buf: &mut Buffer, props: FooterProps<'_>
     .render(area, buf);
 }
 
-fn footer_lines(props: FooterProps<'_>) -> Vec<Line<'static>> {
+fn footer_lines(props: FooterProps<'_>, max_width: usize) -> Vec<Line<'static>> {
     fn apply_copy_feedback(lines: &mut [Line<'static>], feedback: Option<TranscriptCopyFeedback>) {
         let Some(line) = lines.first_mut() else {
             return;
@@ -149,28 +154,39 @@ fn footer_lines(props: FooterProps<'_>) -> Vec<Line<'static>> {
         }
     }
 
-    fn apply_status_bar_items(lines: &mut [Line<'static>], props: FooterProps<'_>) {
+    fn apply_status_bar_items(
+        lines: &mut [Line<'static>],
+        branch: Option<String>,
+        worktree: Option<String>,
+        max_width: usize,
+    ) {
+        const BRANCH_ICON: &str = " ";
+        const WORKTREE_ICON: &str = " ";
+        const SECTION_SEPARATOR: &str = " · ";
+
         let Some(line) = lines.first_mut() else {
             return;
         };
 
-        if props.show_status_bar_git_branch
-            && let Some(branch) = props.status_bar_git_branch
-        {
-            line.push_span(Span::styled(" · ", crate::theme::dim_style()));
-            line.push_span(Span::styled("branch: ", crate::theme::dim_style()));
-            line.push_span(Span::styled(
-                branch.to_owned(),
-                crate::theme::accent_style(),
-            ));
+        let has_branch = branch.is_some();
+        let has_worktree = worktree.is_some();
+        let mut used_width = line.width();
+
+        if has_branch && let Some(branch) = branch {
+            line.push_span(Span::styled(SECTION_SEPARATOR, crate::theme::dim_style()));
+            line.push_span(Span::styled(BRANCH_ICON, crate::theme::accent_style()));
+            line.push_span(Span::styled(branch.clone(), crate::theme::accent_style()));
+            used_width += SECTION_SEPARATOR.width() + BRANCH_ICON.width() + branch.width();
         }
 
-        if props.show_status_bar_worktree
-            && let Some(worktree) = props.status_bar_worktree
-        {
-            line.push_span(Span::styled(" · ", crate::theme::dim_style()));
-            line.push_span(Span::styled("wt: ", crate::theme::dim_style()));
-            line.push_span(Span::styled(worktree.to_owned(), crate::theme::dim_style()));
+        if has_worktree && let Some(worktree) = worktree {
+            line.push_span(Span::styled(SECTION_SEPARATOR, crate::theme::dim_style()));
+            line.push_span(Span::styled(WORKTREE_ICON, crate::theme::accent_style()));
+            used_width += SECTION_SEPARATOR.width() + WORKTREE_ICON.width();
+
+            let worktree_budget = max_width.saturating_sub(used_width).max(1);
+            let worktree_display = compact_worktree_path_for_width(&worktree, worktree_budget);
+            line.push_span(Span::styled(worktree_display, crate::theme::dim_style()));
         }
     }
 
@@ -260,9 +276,138 @@ fn footer_lines(props: FooterProps<'_>) -> Vec<Line<'static>> {
         }
     };
 
+    let branch = props
+        .show_status_bar_git_branch
+        .then_some(props.status_bar_git_branch)
+        .flatten()
+        .map(str::to_owned);
+    let worktree = props
+        .show_status_bar_worktree
+        .then_some(props.status_bar_worktree)
+        .flatten()
+        .map(str::to_owned);
+
     apply_copy_feedback(&mut lines, props.transcript_copy_feedback);
-    apply_status_bar_items(&mut lines, props);
+    apply_status_bar_items(&mut lines, branch, worktree, max_width);
     lines
+}
+
+fn compact_worktree_path_for_width(path: &str, max_width: usize) -> String {
+    if path.width() <= max_width {
+        return path.to_string();
+    }
+
+    let initials = compact_path_with_initials(path);
+    if initials.width() <= max_width {
+        return initials;
+    }
+
+    let tail = compact_path_to_tail(path);
+    if tail.width() <= max_width {
+        return tail;
+    }
+
+    ellipsize_from_left(&tail, max_width)
+}
+
+fn compact_path_with_initials(path: &str) -> String {
+    let normalized = path.replace('\\', "/");
+    let (prefix, segments) = split_normalized_path_segments(&normalized);
+    if segments.len() <= 1 {
+        return normalized;
+    }
+
+    let mut out = prefix;
+    for (idx, segment) in segments.iter().enumerate() {
+        if idx > 0 || (!out.is_empty() && !out.ends_with('/')) {
+            out.push('/');
+        }
+        if idx + 1 == segments.len() {
+            out.push_str(segment);
+        } else {
+            out.push_str(&abbreviate_parent_segment(segment));
+        }
+    }
+    out
+}
+
+fn compact_path_to_tail(path: &str) -> String {
+    let normalized = path.replace('\\', "/");
+    let (prefix, segments) = split_normalized_path_segments(&normalized);
+    let Some(leaf) = segments.last() else {
+        return normalized;
+    };
+    if prefix.is_empty() {
+        format!("…/{leaf}")
+    } else {
+        format!("{prefix}…/{leaf}")
+    }
+}
+
+fn split_normalized_path_segments(path: &str) -> (String, Vec<&str>) {
+    if path == "~" {
+        return (String::from("~"), Vec::new());
+    }
+
+    if let Some(rest) = path.strip_prefix("~/") {
+        let segments = rest
+            .split('/')
+            .filter(|segment| !segment.is_empty())
+            .collect();
+        return (String::from("~/"), segments);
+    }
+
+    if let Some(rest) = path.strip_prefix('/') {
+        let segments = rest
+            .split('/')
+            .filter(|segment| !segment.is_empty())
+            .collect();
+        return (String::from("/"), segments);
+    }
+
+    let segments = path
+        .split('/')
+        .filter(|segment| !segment.is_empty())
+        .collect();
+    (String::new(), segments)
+}
+
+fn abbreviate_parent_segment(segment: &str) -> String {
+    if segment == "." || segment == ".." {
+        return segment.to_string();
+    }
+
+    let mut chars = segment.chars();
+    let Some(first) = chars.next() else {
+        return String::new();
+    };
+    if first == '.' {
+        let second = chars.next();
+        return second.map_or_else(|| String::from("."), |next| format!(".{next}"));
+    }
+
+    first.to_string()
+}
+
+fn ellipsize_from_left(text: &str, max_width: usize) -> String {
+    if max_width == 0 {
+        return String::new();
+    }
+    if max_width == 1 {
+        return String::from("…");
+    }
+
+    let mut tail = String::new();
+    let mut tail_width = 0usize;
+    for ch in text.chars().rev() {
+        let ch_width = ch.width().unwrap_or(0);
+        if tail_width + ch_width > max_width - 1 {
+            break;
+        }
+        tail.insert(0, ch);
+        tail_width += ch_width;
+    }
+    format!("…{tail}")
 }
 
 #[derive(Clone, Copy, Debug)]
