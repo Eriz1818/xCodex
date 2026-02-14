@@ -156,7 +156,7 @@ jobs:
     needs: tag-check
     name: Build - ${{ matrix.runner }} - ${{ matrix.target }}${{ matrix.bin && format(' ({0})', matrix.bin) || '' }}
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 40
+    timeout-minutes: ${{ matrix.timeout_minutes || 40 }}
     permissions:
       contents: read
       id-token: write
@@ -176,6 +176,7 @@ jobs:
             target: x86_64-unknown-linux-gnu
           - runner: ubuntu-24.04-arm
             target: aarch64-unknown-linux-gnu
+            timeout_minutes: 60
           # Temporarily disabled while we keep npm payload size under registry limits.
           # - runner: ubuntu-latest
           #   target: x86_64-unknown-linux-musl
@@ -184,6 +185,7 @@ jobs:
           - runner: windows-latest
             target: x86_64-pc-windows-msvc
             bin: codex
+            timeout_minutes: 60
           - runner: windows-latest
             target: x86_64-pc-windows-msvc
             bin: codex-responses-api-proxy
@@ -220,7 +222,8 @@ jobs:
         run: |
           set -euo pipefail
           echo "CACHE_EPOCH=2026-01-24-win-rlib-reset" >> "$GITHUB_ENV"
-      - uses: dtolnay/rust-toolchain@1.92
+      - if: ${{ !contains(matrix.target, 'pc-windows') }}
+        uses: dtolnay/rust-toolchain@1.92
         with:
           targets: ${{ matrix.target }}
       - if: ${{ contains(matrix.target, 'pc-windows') }}
