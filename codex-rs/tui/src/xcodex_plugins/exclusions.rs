@@ -1444,3 +1444,72 @@ impl Preset {
             && next.hooks_sanitize_payloads == hooks_sanitize_payloads
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pretty_assertions::assert_eq;
+
+    #[test]
+    fn preset_allow_all_sets_expected_values() {
+        let current = ExclusionConfig::default();
+        let next = Preset::AllowAll.apply(&current, true);
+
+        assert_eq!(next.exclusion.enabled, false);
+        assert_eq!(next.exclusion.prompt_on_blocked, false);
+        assert_eq!(next.exclusion.on_match, ExclusionOnMatch::Warn);
+        assert_eq!(next.exclusion.layer_output_sanitization, Some(false));
+        assert_eq!(next.exclusion.layer_send_firewall, Some(false));
+        assert_eq!(next.exclusion.layer_request_interceptor, Some(false));
+        assert_eq!(next.hooks_sanitize_payloads, false);
+    }
+
+    #[test]
+    fn preset_block_all_sets_expected_values() {
+        let current = ExclusionConfig::default();
+        let next = Preset::BlockAll.apply(&current, false);
+
+        assert_eq!(next.exclusion.enabled, true);
+        assert_eq!(next.exclusion.prompt_on_blocked, false);
+        assert_eq!(next.exclusion.on_match, ExclusionOnMatch::Block);
+        assert_eq!(next.exclusion.layer_output_sanitization, Some(true));
+        assert_eq!(next.exclusion.layer_send_firewall, Some(true));
+        assert_eq!(next.exclusion.layer_request_interceptor, Some(true));
+        assert_eq!(next.hooks_sanitize_payloads, true);
+    }
+
+    #[test]
+    fn preset_ask_and_allow_sets_expected_values() {
+        let current = ExclusionConfig::default();
+        let next = Preset::AskAndAllow.apply(&current, false);
+
+        assert_eq!(next.exclusion.enabled, true);
+        assert_eq!(next.exclusion.prompt_on_blocked, true);
+        assert_eq!(next.exclusion.on_match, ExclusionOnMatch::Warn);
+        assert_eq!(next.exclusion.layer_output_sanitization, Some(true));
+        assert_eq!(next.exclusion.layer_send_firewall, Some(true));
+        assert_eq!(next.exclusion.layer_request_interceptor, Some(true));
+        assert_eq!(next.hooks_sanitize_payloads, true);
+    }
+
+    #[test]
+    fn preset_matches_returns_true_for_its_own_output() {
+        let current = ExclusionConfig::default();
+        let allow = Preset::AllowAll.apply(&current, true);
+        let block = Preset::BlockAll.apply(&current, false);
+        let ask = Preset::AskAndAllow.apply(&current, false);
+
+        assert_eq!(
+            Preset::AllowAll.matches(&allow.exclusion, allow.hooks_sanitize_payloads),
+            true
+        );
+        assert_eq!(
+            Preset::BlockAll.matches(&block.exclusion, block.hooks_sanitize_payloads),
+            true
+        );
+        assert_eq!(
+            Preset::AskAndAllow.matches(&ask.exclusion, ask.hooks_sanitize_payloads),
+            true
+        );
+    }
+}

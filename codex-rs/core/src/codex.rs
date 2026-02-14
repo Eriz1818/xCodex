@@ -838,7 +838,7 @@ async fn maybe_prompt_for_exclusion_redaction(
     if !turn_context.exclusion.prompt_on_blocked {
         return None;
     }
-    if !report.redacted && !report.blocked {
+    if !report.redacted && !report.blocked && report.matches.is_empty() {
         return None;
     }
 
@@ -6198,6 +6198,11 @@ async fn try_run_sampling_request(
         );
         let should_log = turn_context.exclusion.log_redactions_mode()
             != crate::config::types::LogRedactionsMode::Off;
+        let mut redact_cfg =
+            crate::content_gateway::GatewayConfig::from_exclusion(&turn_context.exclusion);
+        redact_cfg.on_match = crate::config::types::ExclusionOnMatch::Redact;
+        let redaction_gateway = crate::content_gateway::ContentGateway::new(redact_cfg);
+        let redaction_cache = crate::content_gateway::GatewayCache::new();
         let mut log_redaction =
             |original: &str, sanitized: &str, report: &crate::content_gateway::ScanReport| {
                 let log_context = crate::exclusion_log::RedactionLogContext {
@@ -6242,7 +6247,17 @@ async fn try_run_sampling_request(
                         }
                         report = crate::content_gateway::ScanReport::safe();
                     }
-                    ExclusionRedactionDecision::Redact => {}
+                    ExclusionRedactionDecision::Redact => {
+                        if !report.redacted && !report.blocked && !report.matches.is_empty() {
+                            report = redaction_gateway.scan_response_item_text_fields(
+                                item,
+                                &turn_context.sensitive_paths,
+                                &redaction_cache,
+                                epoch,
+                                should_log.then_some(&mut log_redaction),
+                            );
+                        }
+                    }
                     ExclusionRedactionDecision::Block => {
                         block_response_item(item);
                         report.redacted = false;

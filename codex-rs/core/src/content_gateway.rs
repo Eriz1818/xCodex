@@ -261,6 +261,7 @@ impl ContentGateway {
             report.redacted |= r.redacted;
             report.blocked |= r.blocked;
             report.reasons.extend(r.reasons);
+            report.matches.extend(r.matches);
         }
 
         if self.cfg.content_hashing {
@@ -693,6 +694,49 @@ mod tests {
         let (out, report) = gateway.scan_text("token=foo123", &policy, &cache, epoch);
         assert_eq!(out, "token=foo123");
         assert!(!report.redacted);
+    }
+
+    #[test]
+    fn warn_mode_keeps_content_and_records_matches() {
+        let tmp = tempdir().expect("tempdir");
+        init_repo(tmp.path());
+        let policy = SensitivePathPolicy::new(tmp.path().to_path_buf());
+        let mut cfg = GatewayConfig::default();
+        cfg.secret_patterns_builtin = false;
+        cfg.secret_patterns_allowlist = vec![String::from(r"foo\d+")];
+        cfg.on_match = ExclusionOnMatch::Warn;
+        let gateway = ContentGateway::new(cfg);
+        let cache = GatewayCache::new();
+        let epoch = policy.ignore_epoch();
+
+        let input = "token=foo123";
+        let (out, report) = gateway.scan_text(input, &policy, &cache, epoch);
+        assert_eq!(out, input);
+        assert!(!report.redacted);
+        assert!(!report.blocked);
+        assert!(!report.matches.is_empty());
+    }
+
+    #[test]
+    fn block_mode_blocks_matching_content() {
+        let tmp = tempdir().expect("tempdir");
+        init_repo(tmp.path());
+        let policy = SensitivePathPolicy::new(tmp.path().to_path_buf());
+        let mut cfg = GatewayConfig::default();
+        cfg.on_match = ExclusionOnMatch::Block;
+        let gateway = ContentGateway::new(cfg);
+        let cache = GatewayCache::new();
+        let epoch = policy.ignore_epoch();
+
+        let (out, report) = gateway.scan_text(
+            "token=ghp_0123456789abcdef0123456789abcdef0123",
+            &policy,
+            &cache,
+            epoch,
+        );
+        assert_eq!(out, "[BLOCKED]");
+        assert!(!report.redacted);
+        assert!(report.blocked);
     }
 
     #[test]

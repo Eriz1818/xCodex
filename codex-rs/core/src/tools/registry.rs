@@ -411,7 +411,9 @@ async fn maybe_prompt_for_redaction(
     context_label: &str,
     report: &crate::content_gateway::ScanReport,
 ) -> Option<RedactionDecision> {
-    if !turn.exclusion.prompt_on_blocked || (!report.redacted && !report.blocked) {
+    if !turn.exclusion.prompt_on_blocked
+        || (!report.redacted && !report.blocked && report.matches.is_empty())
+    {
         return None;
     }
 
@@ -491,7 +493,20 @@ async fn resolve_redaction_decision(
 
     match decision {
         RedactionDecision::AllowOnce => (original, crate::content_gateway::ScanReport::safe()),
-        RedactionDecision::Redact => (sanitized, report),
+        RedactionDecision::Redact => {
+            if report.redacted || report.blocked || report.matches.is_empty() {
+                return (sanitized, report);
+            }
+
+            let mut redact_cfg =
+                crate::content_gateway::GatewayConfig::from_exclusion(&turn.exclusion);
+            redact_cfg.on_match = crate::config::types::ExclusionOnMatch::Redact;
+            let redact_gateway = crate::content_gateway::ContentGateway::new(redact_cfg);
+            let redact_cache = crate::content_gateway::GatewayCache::new();
+            let epoch = turn.sensitive_paths.ignore_epoch();
+
+            redact_gateway.scan_text(&original, &turn.sensitive_paths, &redact_cache, epoch)
+        }
         RedactionDecision::Block => {
             report.redacted = false;
             report.blocked = true;
