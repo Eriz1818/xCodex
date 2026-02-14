@@ -793,6 +793,7 @@ pub(crate) fn open_post_plan_prompt(
             ("Enter", ": confirm"),
             ("Esc", ": close"),
         ])),
+        undim_footer_hint: true,
         items: vec![
             SelectionItem {
                 name: "Start Implementation".to_string(),
