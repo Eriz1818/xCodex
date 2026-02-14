@@ -72,6 +72,10 @@ impl SensitivePathPolicy {
         self.decision_discover_relative(path, None)
     }
 
+    pub fn is_exclusion_control_path(&self, path: &Path) -> bool {
+        self.is_ignore_file(path)
+    }
+
     pub fn ignore_file_paths(&self) -> Vec<PathBuf> {
         if !self.enabled {
             return Vec::new();

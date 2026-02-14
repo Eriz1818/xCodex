@@ -793,6 +793,7 @@ impl TurnContext {
 
 enum ExclusionRedactionDecision {
     AllowOnce,
+    AllowForSession,
     Redact,
     Block,
     AddAllowlist(String),
@@ -860,6 +861,10 @@ async fn maybe_prompt_for_exclusion_redaction(
             description: "Permit this content for the current request.".to_string(),
         },
         RequestUserInputQuestionOption {
+            label: "Allow for this session".to_string(),
+            description: "Permit this exact content for this xcodex session.".to_string(),
+        },
+        RequestUserInputQuestionOption {
             label: "Redact".to_string(),
             description: "Redact matching content.".to_string(),
         },
@@ -904,6 +909,7 @@ async fn maybe_prompt_for_exclusion_redaction(
 
     match answer.as_str() {
         "Allow once" => Some(ExclusionRedactionDecision::AllowOnce),
+        "Allow for this session" => Some(ExclusionRedactionDecision::AllowForSession),
         "Redact" => Some(ExclusionRedactionDecision::Redact),
         "Block" => Some(ExclusionRedactionDecision::Block),
         "Add to allowlist" => match_value.map(ExclusionRedactionDecision::AddAllowlist),
@@ -6241,6 +6247,17 @@ async fn try_run_sampling_request(
                 match decision {
                     ExclusionRedactionDecision::AllowOnce => {
                         if let Some(original) = prompt.input.get(idx).cloned() {
+                            *item = original;
+                        }
+                        report = crate::content_gateway::ScanReport::safe();
+                    }
+                    ExclusionRedactionDecision::AllowForSession => {
+                        if let Some(original) = prompt.input.get(idx).cloned() {
+                            crate::content_gateway::remember_safe_response_item_text_fields(
+                                &sess.content_gateway_cache,
+                                &original,
+                                epoch,
+                            );
                             *item = original;
                         }
                         report = crate::content_gateway::ScanReport::safe();

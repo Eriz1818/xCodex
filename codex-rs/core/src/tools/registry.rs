@@ -354,6 +354,7 @@ async fn maybe_prompt_for_send(
 
 enum RedactionDecision {
     AllowOnce,
+    AllowForSession,
     Redact,
     Block,
     AddAllowlist(String),
@@ -399,6 +400,7 @@ fn parse_redaction_decision(
 ) -> Option<RedactionDecision> {
     match answer {
         "Allow once" => Some(RedactionDecision::AllowOnce),
+        "Allow for this session" => Some(RedactionDecision::AllowForSession),
         "Redact" => Some(RedactionDecision::Redact),
         "Block" => Some(RedactionDecision::Block),
         "Add to allowlist" => match_value.map(RedactionDecision::AddAllowlist),
@@ -433,6 +435,10 @@ async fn maybe_prompt_for_redaction(
         RequestUserInputQuestionOption {
             label: "Allow once".to_string(),
             description: "Permit this content for the current request.".to_string(),
+        },
+        RequestUserInputQuestionOption {
+            label: "Allow for this session".to_string(),
+            description: "Permit this exact content for this xcodex session.".to_string(),
         },
         RequestUserInputQuestionOption {
             label: "Redact".to_string(),
@@ -496,6 +502,12 @@ async fn resolve_redaction_decision(
 
     match decision {
         RedactionDecision::AllowOnce => (original, crate::content_gateway::ScanReport::safe()),
+        RedactionDecision::AllowForSession => {
+            session
+                .content_gateway_cache
+                .remember_safe_text_for_epoch(&original, turn.sensitive_paths.ignore_epoch());
+            (original, crate::content_gateway::ScanReport::safe())
+        }
         RedactionDecision::Redact => {
             if report.redacted || report.blocked || report.matches.is_empty() {
                 return (sanitized, report);
@@ -1101,6 +1113,10 @@ mod tests {
         assert!(matches!(
             super::parse_redaction_decision("Allow once", None),
             Some(super::RedactionDecision::AllowOnce)
+        ));
+        assert!(matches!(
+            super::parse_redaction_decision("Allow for this session", None),
+            Some(super::RedactionDecision::AllowForSession)
         ));
         assert!(matches!(
             super::parse_redaction_decision("Redact", None),

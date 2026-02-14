@@ -3,6 +3,7 @@ use crate::config::types::ExclusionOnMatch;
 use crate::sensitive_paths::SensitivePathDecision;
 use crate::sensitive_paths::SensitivePathPolicy;
 use codex_protocol::models::ContentItem;
+use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::models::FunctionCallOutputContentItem;
 use codex_protocol::models::ResponseItem;
 use once_cell::sync::Lazy;
@@ -90,6 +91,16 @@ impl GatewayCache {
         Self::default()
     }
 
+    pub fn remember_safe_text_for_epoch(&self, text: &str, epoch: u64) {
+        if text.is_empty() {
+            return;
+        }
+
+        let key = content_fingerprint(text);
+        let mut guard = self.get_or_reset_epoch(epoch);
+        guard.decisions.insert(key, CachedDecision::Safe);
+    }
+
     fn get_or_reset_epoch(&self, epoch: u64) -> std::sync::MutexGuard<'_, GatewayCacheState> {
         let mut guard = self
             .state
@@ -103,7 +114,7 @@ impl GatewayCache {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ScanReport {
     pub layers: Vec<ScanLayer>,
     pub redacted: bool,
@@ -172,9 +183,12 @@ static RE_SECRET_PATTERNS_BUILTIN: Lazy<Vec<Regex>> = Lazy::new(|| {
         // Private keys (PEM blocks).
         Regex::new(r"-----BEGIN[ A-Z0-9_-]*PRIVATE KEY-----")
             .unwrap_or_else(|err| panic!("private key regex: {err}")),
-        // Generic key-value labels.
-        Regex::new(r"(?i)\b(password|secret|api[_-]?key|token)\b\s*[:=]\s*\S+")
+        // Generic key-value labels except token.
+        Regex::new(r"(?i)\b(password|secret|api[_-]?key)\b\s*[:=]\s*\S+")
             .unwrap_or_else(|err| panic!("generic secret kv regex: {err}")),
+        // Token label with stricter value shape to reduce false positives.
+        Regex::new(r#"(?i)\btoken\b\s*[:=]\s*["']?[A-Za-z0-9._-]{16,}["']?"#)
+            .unwrap_or_else(|err| panic!("token kv regex: {err}")),
     ]
 });
 
@@ -478,9 +492,46 @@ fn is_candidate_ignored(candidate: &str, sensitive_paths: &SensitivePathPolicy) 
             if relative.is_empty() {
                 return false;
             }
-            sensitive_paths.decision_send_relative(Path::new(relative))
-                == SensitivePathDecision::Deny
+            let relative_path = Path::new(relative);
+            if sensitive_paths.is_exclusion_control_path(relative_path) {
+                return false;
+            }
+            sensitive_paths.decision_send_relative(relative_path) == SensitivePathDecision::Deny
         })
+}
+
+pub fn remember_safe_response_item_text_fields(
+    cache: &GatewayCache,
+    item: &ResponseItem,
+    epoch: u64,
+) {
+    match item {
+        ResponseItem::Message { content, .. } => {
+            for content_item in content {
+                if let ContentItem::InputText { text } | ContentItem::OutputText { text } =
+                    content_item
+                {
+                    cache.remember_safe_text_for_epoch(text, epoch);
+                }
+            }
+        }
+        ResponseItem::FunctionCallOutput { output, .. } => match &output.body {
+            FunctionCallOutputBody::Text(text) => {
+                cache.remember_safe_text_for_epoch(text, epoch);
+            }
+            FunctionCallOutputBody::ContentItems(items) => {
+                for item in items {
+                    if let FunctionCallOutputContentItem::InputText { text } = item {
+                        cache.remember_safe_text_for_epoch(text, epoch);
+                    }
+                }
+            }
+        },
+        ResponseItem::CustomToolCallOutput { output, .. } => {
+            cache.remember_safe_text_for_epoch(output, epoch);
+        }
+        _ => {}
+    }
 }
 
 pub(crate) fn pathlike_candidates_in_text(text: &str) -> Vec<String> {
@@ -657,7 +708,7 @@ mod tests {
             &cache,
             epoch,
         );
-        assert_eq!(out, "[REDACTED]");
+        assert_eq!(out, "token=[REDACTED]");
         assert!(report.redacted);
     }
 
@@ -756,5 +807,73 @@ mod tests {
         let (out2, report2) = gateway.scan_text(input, &policy, &cache, epoch);
         assert_eq!(out2, input);
         assert!(!report2.redacted);
+    }
+
+    #[test]
+    fn remember_safe_text_for_epoch_overrides_cached_redaction() {
+        let tmp = tempdir().expect("tempdir");
+        init_repo(tmp.path());
+        let policy = SensitivePathPolicy::new(tmp.path().to_path_buf());
+        let gateway = ContentGateway::new(GatewayConfig::default());
+        let cache = GatewayCache::new();
+        let epoch = policy.ignore_epoch();
+
+        let input = "token=ghp_0123456789abcdef0123456789abcdef0123";
+        let (redacted, report1) = gateway.scan_text(input, &policy, &cache, epoch);
+        assert_eq!(redacted, "token=[REDACTED]");
+        assert!(report1.redacted);
+
+        cache.remember_safe_text_for_epoch(input, epoch);
+
+        let (out2, report2) = gateway.scan_text(input, &policy, &cache, epoch);
+        assert_eq!(out2, input);
+        assert_eq!(report2, ScanReport::safe());
+    }
+
+    #[test]
+    fn does_not_treat_exclusion_control_filenames_as_ignored_path_mentions() {
+        let tmp = tempdir().expect("tempdir");
+        init_repo(tmp.path());
+        std::fs::write(tmp.path().join(".aiexclude"), "secrets/\n").expect("write ignore");
+
+        let policy = SensitivePathPolicy::new(tmp.path().to_path_buf());
+        let gateway = ContentGateway::new(GatewayConfig::default());
+        let cache = GatewayCache::new();
+        let epoch = policy.ignore_epoch();
+
+        let input = "the files .aiexclude and .xcodexignore configure exclusions";
+        let (out, report) = gateway.scan_text(input, &policy, &cache, epoch);
+        assert_eq!(out, input);
+        assert_eq!(report, ScanReport::safe());
+    }
+
+    #[test]
+    fn token_label_with_human_readable_value_does_not_trigger_secret_pattern() {
+        let tmp = tempdir().expect("tempdir");
+        init_repo(tmp.path());
+        let policy = SensitivePathPolicy::new(tmp.path().to_path_buf());
+        let gateway = ContentGateway::new(GatewayConfig::default());
+        let cache = GatewayCache::new();
+        let epoch = policy.ignore_epoch();
+
+        let input = r#"token: "git-branch""#;
+        let (out, report) = gateway.scan_text(input, &policy, &cache, epoch);
+        assert_eq!(out, input);
+        assert_eq!(report, ScanReport::safe());
+    }
+
+    #[test]
+    fn token_label_with_long_token_like_value_triggers_secret_pattern() {
+        let tmp = tempdir().expect("tempdir");
+        init_repo(tmp.path());
+        let policy = SensitivePathPolicy::new(tmp.path().to_path_buf());
+        let gateway = ContentGateway::new(GatewayConfig::default());
+        let cache = GatewayCache::new();
+        let epoch = policy.ignore_epoch();
+
+        let (out, report) =
+            gateway.scan_text("token = sk_test_1234567890abcdef", &policy, &cache, epoch);
+        assert_eq!(out, "[REDACTED]");
+        assert!(report.redacted);
     }
 }
