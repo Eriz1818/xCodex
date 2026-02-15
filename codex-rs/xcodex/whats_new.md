@@ -6,4 +6,6 @@ What's new in ⚡xtreme-Codex v0.4.0
 - Expanded Plan mode with richer options for planning and execution.
 - Improved mode UX and discoverability across TUI/TUI2.
 - Durable plan-file CLI commands are available (`xcodex plan status|list|open|done|archive`).
+- Fixed a Plan/exclusion approval routing issue that could cause indefinite waiting after you answer prompts.
+- Improved worktree status dedupe rendering and exclusion approval highlighting for better readability.
 - Read more: docs/xcodex/releases/0.4.0.md

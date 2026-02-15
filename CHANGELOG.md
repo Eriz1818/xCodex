@@ -21,6 +21,9 @@ Side-by-side diff and major Plan mode workflow upgrades.
 - Improved mode ergonomics and clarity across TUI/TUI2, including stronger active-state cues.
 - Added durable plan-file operations in CLI (`xcodex plan status|list|open|done|archive`).
 - Added one-time `.gitignore` guidance when plan base-dir is inside a repo and not ignored.
+- Fixed a response-routing regression where Plan mode and exclusion approvals could wait indefinitely after users submitted answers.
+- Improved worktree/branch dedupe rendering by showing both git and folder context while keeping the deduped leaf visually clear.
+- Improved exclusion approval readability by highlighting matched layer/value/reason fields in the prompt.
 
 ## 0.3.6
 
