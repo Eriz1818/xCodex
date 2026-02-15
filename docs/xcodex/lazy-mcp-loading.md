@@ -26,6 +26,7 @@ Startup mode can be set globally (default for all servers) and overridden per se
 
 - Does not start servers at session start.
 - Starts a server automatically the first time a tool/resource from that server is needed.
+- If a user explicitly asks to use a configured server (for example `use samarth mcp` or a `mcp://samarth` mention), xcodex attempts to start that server before the next model sampling request.
 - Best when you want fast startup and only occasionally use MCP.
 
 ### manual
@@ -155,4 +156,5 @@ If startup is slow or timing out:
 If tools are missing:
 
 - Check `enabled_tools` / `disabled_tools` in `config.toml`.
-- Remember: in `lazy`/`manual`, a server may need to be started before its tool list can be discovered.
+- In `lazy`, ask xcodex to use that server by name (for example `use <server> mcp`) to trigger startup automatically.
+- In `manual`, servers never auto-start; run `/mcp load <name>` first.
