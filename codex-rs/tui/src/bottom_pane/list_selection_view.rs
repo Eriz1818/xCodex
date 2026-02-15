@@ -1,4 +1,3 @@
-use codex_common::fuzzy_match::fuzzy_match;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyModifiers;
@@ -207,18 +206,28 @@ impl ListSelectionView {
             })
             .or_else(|| self.initial_selected_idx.take());
 
-        if self.is_searchable && !self.search_query.is_empty() {
-            let mut matches: Vec<(usize, i32)> = self
+        let filter = self.search_query.trim().to_ascii_lowercase();
+        if self.is_searchable && !filter.is_empty() {
+            let mut matches: Vec<(usize, u8, usize)> = self
                 .items
                 .iter()
                 .enumerate()
                 .filter_map(|(idx, item)| {
                     let haystack = item.search_value.as_deref().unwrap_or(&item.name);
-                    fuzzy_match(haystack, &self.search_query).map(|(_indices, score)| (idx, score))
+                    let haystack = haystack.to_ascii_lowercase();
+                    if haystack.starts_with(&filter) {
+                        Some((idx, 0, 0))
+                    } else {
+                        haystack.find(&filter).map(|pos| (idx, 1, pos))
+                    }
                 })
                 .collect();
-            matches.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
-            self.filtered_indices = matches.into_iter().map(|(idx, _)| idx).collect();
+            matches.sort_by(|a, b| {
+                a.1.cmp(&b.1)
+                    .then_with(|| a.2.cmp(&b.2))
+                    .then_with(|| a.0.cmp(&b.0))
+            });
+            self.filtered_indices = matches.into_iter().map(|(idx, _, _)| idx).collect();
         } else {
             self.filtered_indices = (0..self.items.len()).collect();
         }
@@ -273,25 +282,6 @@ impl ListSelectionView {
                     };
                     let wrap_prefix_width = UnicodeWidthStr::width(wrap_prefix.as_str());
                     let display_name = format!("{wrap_prefix}{name_with_marker}");
-                    let match_indices = if self.is_searchable && !self.search_query.is_empty() {
-                        let haystack = item.search_value.as_deref().unwrap_or(name);
-                        fuzzy_match(haystack, &self.search_query)
-                            .map(|(indices, _score)| {
-                                indices
-                                    .into_iter()
-                                    .filter_map(|idx| {
-                                        if idx < name.len() {
-                                            Some(idx + wrap_prefix.len())
-                                        } else {
-                                            None
-                                        }
-                                    })
-                                    .collect::<Vec<usize>>()
-                            })
-                            .unwrap_or_default()
-                    } else {
-                        Vec::new()
-                    };
                     let description = is_selected
                         .then(|| item.selected_description.clone())
                         .flatten()
@@ -301,11 +291,7 @@ impl ListSelectionView {
                     GenericDisplayRow {
                         name: display_name,
                         display_shortcut: item.display_shortcut,
-                        match_indices: if match_indices.is_empty() {
-                            None
-                        } else {
-                            Some(match_indices)
-                        },
+                        match_indices: None,
                         description,
                         category_tag: None,
                         wrap_indent,
@@ -1039,6 +1025,68 @@ mod tests {
             lines.contains("filters"),
             "expected search query line to include rendered query, got {lines:?}"
         );
+    }
+
+    #[test]
+    fn searchable_filter_uses_contiguous_matches_only() {
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let items = vec![
+            SelectionItem {
+                name: "~/Dev/Pyfun/codex/.worktrees/feat-exclusionsv2".to_string(),
+                search_value: Some(
+                    "feat/exclusionsv2 ~/Dev/Pyfun/codex/.worktrees/feat-exclusionsv2".to_string(),
+                ),
+                ..Default::default()
+            },
+            SelectionItem {
+                name: "Worktrees settings...".to_string(),
+                search_value: Some("Worktrees settings...".to_string()),
+                ..Default::default()
+            },
+        ];
+        let mut view = ListSelectionView::new(
+            SelectionViewParams {
+                items,
+                is_searchable: true,
+                ..Default::default()
+            },
+            tx,
+        );
+
+        view.set_search_query("settin".to_string());
+
+        assert_eq!(view.filtered_indices, vec![1]);
+    }
+
+    #[test]
+    fn searchable_filter_prioritizes_prefix_before_contains() {
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let items = vec![
+            SelectionItem {
+                name: "misc entry".to_string(),
+                search_value: Some("zzz feat trailing".to_string()),
+                ..Default::default()
+            },
+            SelectionItem {
+                name: "feat/project-level-settings".to_string(),
+                search_value: Some("feat/project-level-settings".to_string()),
+                ..Default::default()
+            },
+        ];
+        let mut view = ListSelectionView::new(
+            SelectionViewParams {
+                items,
+                is_searchable: true,
+                ..Default::default()
+            },
+            tx,
+        );
+
+        view.set_search_query("feat".to_string());
+
+        assert_eq!(view.filtered_indices, vec![1, 0]);
     }
 
     #[test]
