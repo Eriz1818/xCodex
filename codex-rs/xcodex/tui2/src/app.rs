@@ -2024,6 +2024,10 @@ impl App {
                     emit_skill_load_warnings(&self.app_event_tx, &errors);
                 }
                 self.chat_widget.handle_codex_event(event);
+                let turn_proposed_plan_text = self
+                    .chat_widget
+                    .turn_proposed_plan_text()
+                    .map(ToString::to_string);
                 if is_session_configured
                     && let Some(update) =
                         crate::xcodex_plugins::plan::sync_active_plan_session_state(
@@ -2040,6 +2044,7 @@ impl App {
                     && let Some(update) = crate::xcodex_plugins::plan::sync_active_plan_turn_end(
                         &mut self.chat_widget,
                         last_agent_message.as_deref(),
+                        turn_proposed_plan_text.as_deref(),
                     )
                 {
                     self.app_event_tx.send(AppEvent::PlanFileUiUpdated {
@@ -3319,6 +3324,30 @@ impl App {
             }
             AppEvent::OpenPlanDoSomethingElsePrompt => {
                 self.chat_widget.show_plan_do_something_else_prompt();
+            }
+            AppEvent::OpenPlanFixAndStartPrompt { default_mode_mask } => {
+                crate::xcodex_plugins::plan::open_plan_fix_and_start_prompt(
+                    &mut self.chat_widget,
+                    default_mode_mask,
+                );
+            }
+            AppEvent::ResolvePlanContextMismatchAndStart {
+                action,
+                collaboration_mode,
+            } => {
+                if let Some(update) =
+                    crate::xcodex_plugins::plan::resolve_plan_context_mismatch_and_start_action(
+                        &mut self.chat_widget,
+                        action,
+                        collaboration_mode,
+                    )
+                {
+                    self.app_event_tx.send(AppEvent::PlanFileUiUpdated {
+                        path: update.path,
+                        todos_remaining: update.todos_remaining,
+                        is_done: update.is_done,
+                    });
+                }
             }
             AppEvent::ReopenPlanNextStepPromptAfterTurn => {
                 self.chat_widget.reopen_plan_prompt_after_turn();

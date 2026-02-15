@@ -453,6 +453,8 @@ pub(crate) struct ChatWidget {
     plan_delta_buffer: String,
     // Marks whether this turn emitted a completed plan item.
     saw_plan_item_this_turn: bool,
+    // Full proposed-plan markdown captured for the current turn (if emitted).
+    turn_proposed_plan_text: Option<String>,
     // True when "Discuss Further" requested re-opening the post-plan prompt after the next turn.
     reopen_plan_prompt_after_turn: bool,
     // Current status header shown in the status indicator.
@@ -839,6 +841,7 @@ impl ChatWidget {
         self.reasoning_buffer.clear();
         self.plan_delta_buffer.clear();
         self.saw_plan_item_this_turn = false;
+        self.turn_proposed_plan_text = None;
         self.request_redraw();
     }
 
@@ -865,6 +868,7 @@ impl ChatWidget {
         if !self.saw_plan_item_this_turn {
             let plan_text = self.plan_delta_buffer.trim();
             if !plan_text.is_empty() {
+                self.turn_proposed_plan_text = Some(plan_text.to_string());
                 self.add_to_history(history_cell::new_proposed_plan(plan_text.to_string()));
             }
         }
@@ -895,6 +899,10 @@ impl ChatWidget {
 
     pub(crate) fn reopen_plan_prompt_after_turn(&mut self) {
         self.reopen_plan_prompt_after_turn = true;
+    }
+
+    pub(crate) fn turn_proposed_plan_text(&self) -> Option<&str> {
+        self.turn_proposed_plan_text.as_deref()
     }
 
     pub(crate) fn set_token_info(&mut self, info: Option<TokenUsageInfo>) {
@@ -1269,6 +1277,7 @@ impl ChatWidget {
         if plan_text.trim().is_empty() {
             return;
         }
+        self.turn_proposed_plan_text = Some(plan_text.clone());
 
         self.flush_active_cell();
         self.add_to_history(history_cell::new_proposed_plan(plan_text));
@@ -2098,6 +2107,7 @@ impl ChatWidget {
             full_reasoning_buffer: String::new(),
             plan_delta_buffer: String::new(),
             saw_plan_item_this_turn: false,
+            turn_proposed_plan_text: None,
             reopen_plan_prompt_after_turn: false,
             current_status_header: String::from("Working"),
             retry_status_header: None,
@@ -2244,6 +2254,7 @@ impl ChatWidget {
             full_reasoning_buffer: String::new(),
             plan_delta_buffer: String::new(),
             saw_plan_item_this_turn: false,
+            turn_proposed_plan_text: None,
             reopen_plan_prompt_after_turn: false,
             current_status_header: String::from("Working"),
             retry_status_header: None,

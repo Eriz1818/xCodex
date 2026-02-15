@@ -42,6 +42,12 @@ pub(crate) enum WindowsSandboxFallbackReason {
     ElevationFailed,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PlanFixAndStartAction {
+    UpdatePlanContextAndStart,
+    StartWithoutContextChange,
+}
+
 #[allow(clippy::large_enum_variant)]
 #[derive(Debug)]
 pub(crate) enum AppEvent {
@@ -221,6 +227,15 @@ pub(crate) enum AppEvent {
 
     /// Open a one-line prompt for the post-plan `Do something else...` action.
     OpenPlanDoSomethingElsePrompt,
+    /// Open the context-resolution popup for blocked `Start Implementation`.
+    OpenPlanFixAndStartPrompt {
+        default_mode_mask: Option<CollaborationModeMask>,
+    },
+    /// Resolve plan context mismatch and start implementation in one step.
+    ResolvePlanContextMismatchAndStart {
+        action: PlanFixAndStartAction,
+        collaboration_mode: CollaborationModeMask,
+    },
     /// Re-open the post-plan next-step prompt after the next assistant turn completes.
     ReopenPlanNextStepPromptAfterTurn,
 
