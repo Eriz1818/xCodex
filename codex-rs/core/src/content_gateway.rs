@@ -11,6 +11,7 @@ use regex::Regex;
 use sha2::Digest;
 use sha2::Sha256;
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::path::Path;
 use std::sync::Mutex;
 
@@ -84,6 +85,7 @@ pub struct GatewayCache {
 struct GatewayCacheState {
     epoch: u64,
     decisions: HashMap<[u8; 16], CachedDecision>,
+    safe_matches: HashSet<String>,
 }
 
 impl GatewayCache {
@@ -99,6 +101,22 @@ impl GatewayCache {
         let key = content_fingerprint(text);
         let mut guard = self.get_or_reset_epoch(epoch);
         guard.decisions.insert(key, CachedDecision::Safe);
+    }
+
+    pub fn remember_safe_match_for_epoch(&self, value: &str, epoch: u64) {
+        if value.is_empty() {
+            return;
+        }
+        let mut guard = self.get_or_reset_epoch(epoch);
+        guard.safe_matches.insert(value.to_string());
+    }
+
+    pub fn is_match_safe_for_epoch(&self, value: &str, epoch: u64) -> bool {
+        if value.is_empty() {
+            return false;
+        }
+        let guard = self.get_or_reset_epoch(epoch);
+        guard.safe_matches.contains(value)
     }
 
     fn get_or_reset_epoch(&self, epoch: u64) -> std::sync::MutexGuard<'_, GatewayCacheState> {
@@ -274,7 +292,7 @@ impl ContentGateway {
         let mut report = ScanReport::safe();
 
         if self.cfg.substring_matching || self.cfg.secret_patterns {
-            let (next, r) = self.l2_scan_and_redact(&out, sensitive_paths);
+            let (next, r) = self.l2_scan_and_redact(&out, sensitive_paths, cache, epoch);
             out = next;
             report.layers.extend(r.layers);
             report.redacted |= r.redacted;
@@ -312,6 +330,8 @@ impl ContentGateway {
         &self,
         text: &str,
         sensitive_paths: &SensitivePathPolicy,
+        cache: &GatewayCache,
+        epoch: u64,
     ) -> (String, ScanReport) {
         let mut report = ScanReport::safe();
         let mut out = text.to_string();
@@ -323,6 +343,11 @@ impl ContentGateway {
         if self.cfg.substring_matching {
             let matches = pathlike_candidates_in_text(text);
             for candidate in matches {
+                if self.is_allowlisted(&candidate)
+                    || cache.is_match_safe_for_epoch(&candidate, epoch)
+                {
+                    continue;
+                }
                 if is_candidate_ignored(&candidate, sensitive_paths) {
                     matched_any = true;
                     matched_path = true;
@@ -341,6 +366,9 @@ impl ContentGateway {
             for re in self.secret_patterns.iter() {
                 let mut has_unblocked_match = false;
                 for m in re.find_iter(&out) {
+                    if cache.is_match_safe_for_epoch(m.as_str(), epoch) {
+                        continue;
+                    }
                     if self.is_allowlisted(m.as_str()) {
                         continue;
                     }
@@ -536,6 +564,16 @@ pub fn remember_safe_response_item_text_fields(
             cache.remember_safe_text_for_epoch(output, epoch);
         }
         _ => {}
+    }
+}
+
+pub fn remember_safe_report_matches_for_epoch(
+    cache: &GatewayCache,
+    report: &ScanReport,
+    epoch: u64,
+) {
+    for match_info in &report.matches {
+        cache.remember_safe_match_for_epoch(&match_info.value, epoch);
     }
 }
 
@@ -833,6 +871,59 @@ mod tests {
         let (out2, report2) = gateway.scan_text(input, &policy, &cache, epoch);
         assert_eq!(out2, input);
         assert_eq!(report2, ScanReport::safe());
+    }
+
+    #[test]
+    fn remember_safe_match_for_epoch_allows_repeated_ignored_path_value() {
+        let tmp = tempdir().expect("tempdir");
+        init_repo(tmp.path());
+        std::fs::write(tmp.path().join(".aiexclude"), "secrets/\n").expect("write ignore");
+
+        let policy = SensitivePathPolicy::new(tmp.path().to_path_buf());
+        let gateway = ContentGateway::new(GatewayConfig::default());
+        let cache = GatewayCache::new();
+        let epoch = policy.ignore_epoch();
+
+        let input = "please open secrets/hidden.db";
+        let (_, report1) = gateway.scan_text(input, &policy, &cache, epoch);
+        assert!(report1.redacted);
+        assert_eq!(
+            report1.matches,
+            vec![RedactionMatch {
+                reason: RedactionReason::IgnoredPath,
+                value: "secrets/hidden.db".to_string(),
+            }]
+        );
+
+        remember_safe_report_matches_for_epoch(&cache, &report1, epoch);
+
+        let (out2, report2) = gateway.scan_text(
+            "please open secrets/hidden.db again",
+            &policy,
+            &cache,
+            epoch,
+        );
+        assert_eq!(out2, "please open secrets/hidden.db again");
+        assert_eq!(report2, ScanReport::safe());
+    }
+
+    #[test]
+    fn allowlist_regex_suppresses_ignored_path_matches() {
+        let tmp = tempdir().expect("tempdir");
+        init_repo(tmp.path());
+        std::fs::write(tmp.path().join(".aiexclude"), "secrets/\n").expect("write ignore");
+
+        let policy = SensitivePathPolicy::new(tmp.path().to_path_buf());
+        let mut cfg = GatewayConfig::default();
+        cfg.secret_patterns_allowlist = vec![regex::escape("secrets/hidden.db")];
+        let gateway = ContentGateway::new(cfg);
+        let cache = GatewayCache::new();
+        let epoch = policy.ignore_epoch();
+
+        let input = "please open secrets/hidden.db";
+        let (out, report) = gateway.scan_text(input, &policy, &cache, epoch);
+        assert_eq!(out, input);
+        assert_eq!(report, ScanReport::safe());
     }
 
     #[test]
