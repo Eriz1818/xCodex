@@ -512,16 +512,79 @@ impl From<ApprovalRequest> for ApprovalRequestState {
             ApprovalRequest::Exclusion {
                 id,
                 question_id,
-                header,
+                header: header_text,
                 question,
                 options,
             } => {
-                let header = Paragraph::new(vec![
-                    Line::from(vec!["Question: ".into(), header.bold()]),
-                    Line::from(""),
-                    Line::from(question),
-                ])
-                .wrap(Wrap { trim: false });
+                let accent = crate::theme::accent_style();
+                let warning = crate::theme::warning_style();
+
+                let mut question_lines: Vec<Line<'static>> = Vec::new();
+                for raw_line in question.lines() {
+                    if let Some((prefix, suffix)) =
+                        raw_line.split_once("How should xcodex proceed?")
+                    {
+                        question_lines.push(Line::from(vec![
+                            Span::from(prefix.to_string()),
+                            Span::styled("How should xcodex proceed?", accent.bold()),
+                            Span::from(suffix.to_string()),
+                        ]));
+                        continue;
+                    }
+
+                    if let Some(layer_label) = raw_line
+                        .strip_prefix("Matched content (")
+                        .and_then(|line| line.strip_suffix("):"))
+                    {
+                        question_lines.push(Line::from(vec![
+                            "Matched content (".into(),
+                            Span::styled(layer_label.to_string(), accent.bold()),
+                            "):".into(),
+                        ]));
+                        continue;
+                    }
+
+                    if let Some(rest) = raw_line.strip_prefix("- ")
+                        && let Some((value, reason_tail)) = rest.rsplit_once(" (reason: ")
+                        && let Some(reason) = reason_tail.strip_suffix(')')
+                    {
+                        question_lines.push(Line::from(vec![
+                            "- ".dim(),
+                            Span::styled(value.to_string(), accent.bold()),
+                            " (reason: ".dim(),
+                            Span::styled(reason.to_string(), warning),
+                            ")".dim(),
+                        ]));
+                        continue;
+                    }
+
+                    if let Some(rest) = raw_line.strip_prefix("...and ")
+                        && let Some(count) = rest.strip_suffix(" more")
+                    {
+                        question_lines.push(Line::from(vec![
+                            "...and ".dim(),
+                            Span::styled(count.to_string(), accent.bold()),
+                            " more".dim(),
+                        ]));
+                        continue;
+                    }
+
+                    question_lines.push(Line::from(raw_line.to_string()));
+                }
+
+                if question_lines.is_empty() {
+                    question_lines.push(Line::from(""));
+                }
+
+                let mut lines: Vec<Line<'static>> = Vec::with_capacity(2 + question_lines.len());
+                lines.push(Line::from(vec![
+                    "Question: ".dim(),
+                    Span::styled(header_text, accent.bold()),
+                ]));
+                lines.push(Line::from(""));
+                lines.extend(question_lines);
+
+                let header = Paragraph::new(lines).wrap(Wrap { trim: false });
                 Self {
                     variant: ApprovalVariant::Exclusion {
                         id,
@@ -688,6 +751,7 @@ mod tests {
     use codex_core::features::Feature;
     use codex_core::themes::ThemeCatalog;
     use codex_core::themes::ThemeColor;
+    use insta::assert_snapshot;
     use pretty_assertions::assert_eq;
     use tokio::sync::mpsc::unbounded_channel;
 
@@ -731,6 +795,25 @@ mod tests {
             command: vec!["echo".to_string(), "hi".to_string()],
             reason: Some("reason".to_string()),
             proposed_execpolicy_amendment: None,
+        }
+    }
+
+    fn make_exclusion_request(question: &str) -> ApprovalRequest {
+        ApprovalRequest::Exclusion {
+            id: "exclusion-test".to_string(),
+            question_id: "exclusions_redaction".to_string(),
+            header: "Exclusions".to_string(),
+            question: question.to_string(),
+            options: vec![
+                RequestUserInputQuestionOption {
+                    label: "Allow once".to_string(),
+                    description: "Permit this content for the current request.".to_string(),
+                },
+                RequestUserInputQuestionOption {
+                    label: "Block".to_string(),
+                    description: "Block matching content.".to_string(),
+                },
+            ],
         }
     }
 
@@ -912,6 +995,49 @@ mod tests {
                 .any(|line| line.contains("echo hello world")),
             "expected header to include command snippet, got {rendered:?}"
         );
+    }
+
+    #[test]
+    fn exclusion_header_highlights_caught_content() {
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx);
+        let question = concat!(
+            "Exclusions matched content in exec_command output. How should xcodex proceed?\n",
+            "Matched content (L2-output_sanitization):\n",
+            "- token: write (reason: Secret pattern)\n",
+            "...and 2 more"
+        );
+        let view = ApprovalOverlay::new(
+            make_exclusion_request(question),
+            tx,
+            Features::with_defaults(),
+        );
+        let area = Rect::new(0, 0, 120, view.desired_height(120));
+        let mut buf = Buffer::empty(area);
+        view.render(area, &mut buf);
+
+        let (layer_y, layer_x) = find_in_buffer(&buf, "L2-output_sanitization")
+            .expect("expected L2 layer label in exclusion header");
+        assert_eq!(
+            buf[(layer_x, layer_y)].style().fg,
+            crate::theme::accent_style().fg
+        );
+
+        let (value_y, value_x) = find_in_buffer(&buf, "token: write")
+            .expect("expected matched value in exclusion header");
+        assert_eq!(
+            buf[(value_x, value_y)].style().fg,
+            crate::theme::accent_style().fg
+        );
+
+        let (reason_y, reason_x) = find_in_buffer(&buf, "Secret pattern")
+            .expect("expected reason label in exclusion header");
+        assert_eq!(
+            buf[(reason_x, reason_y)].style().fg,
+            crate::theme::warning_style().fg
+        );
+
+        assert_snapshot!("approval_overlay_exclusion_highlighted", format!("{buf:?}"));
     }
 
     #[test]

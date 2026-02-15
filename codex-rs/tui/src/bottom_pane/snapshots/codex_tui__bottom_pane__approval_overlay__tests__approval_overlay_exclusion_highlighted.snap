@@ -1,0 +1,48 @@
+---
+source: tui/src/bottom_pane/approval_overlay.rs
+expression: "format!(\"{buf:?}\")"
+---
+Buffer {
+    area: Rect { x: 0, y: 0, width: 120, height: 14 },
+    content: [
+        "                                                                                                                        ",
+        "  Exclusions matched content. How should xcodex proceed?                                                                ",
+        "                                                                                                                        ",
+        "  Question: Exclusions                                                                                                  ",
+        "                                                                                                                        ",
+        "  Exclusions matched content in exec_command output. How should xcodex proceed?                                         ",
+        "  Matched content (L2-output_sanitization):                                                                             ",
+        "  - token: write (reason: Secret pattern)                                                                               ",
+        "  ...and 2 more                                                                                                         ",
+        "                                                                                                                        ",
+        "› 1. Allow once                                                                                                         ",
+        "  2. Block                                                                                                              ",
+        "                                                                                                                        ",
+        "  Press enter to confirm or esc to cancel                                                                               ",
+    ],
+    styles: [
+        x: 0, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 2, y: 1, fg: Reset, bg: Reset, underline: Reset, modifier: BOLD,
+        x: 56, y: 1, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 2, y: 3, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
+        x: 12, y: 3, fg: Cyan, bg: Reset, underline: Reset, modifier: BOLD,
+        x: 22, y: 3, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 53, y: 5, fg: Cyan, bg: Reset, underline: Reset, modifier: BOLD,
+        x: 79, y: 5, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 19, y: 6, fg: Cyan, bg: Reset, underline: Reset, modifier: BOLD,
+        x: 41, y: 6, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 2, y: 7, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
+        x: 4, y: 7, fg: Cyan, bg: Reset, underline: Reset, modifier: BOLD,
+        x: 16, y: 7, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
+        x: 26, y: 7, fg: Cyan, bg: Reset, underline: Reset, modifier: NONE,
+        x: 40, y: 7, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
+        x: 41, y: 7, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 2, y: 8, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
+        x: 9, y: 8, fg: Cyan, bg: Reset, underline: Reset, modifier: BOLD,
+        x: 10, y: 8, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
+        x: 15, y: 8, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 0, y: 10, fg: Cyan, bg: Reset, underline: Reset, modifier: BOLD,
+        x: 15, y: 10, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 2, y: 13, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
+    ]
+}
