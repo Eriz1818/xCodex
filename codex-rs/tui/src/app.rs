@@ -1221,8 +1221,8 @@ impl App {
             if let AppRunControl::Exit(exit_reason) = control {
                 return Ok(AppExitInfo {
                     token_usage: app.token_usage(),
-                    thread_id: app.chat_widget.thread_id(),
-                    thread_name: app.chat_widget.thread_name(),
+                    thread_id: app.effective_thread_id(),
+                    thread_name: app.effective_thread_name(),
                     update_action: app.pending_update_action,
                     exit_reason,
                 });
@@ -1295,8 +1295,8 @@ impl App {
         tui.terminal.clear()?;
         Ok(AppExitInfo {
             token_usage: app.token_usage(),
-            thread_id: app.chat_widget.thread_id(),
-            thread_name: app.chat_widget.thread_name(),
+            thread_id: app.effective_thread_id(),
+            thread_name: app.effective_thread_name(),
             update_action: app.pending_update_action,
             exit_reason,
         })
@@ -1372,8 +1372,8 @@ impl App {
                 let model = self.chat_widget.current_model().to_string();
                 let summary = session_summary(
                     self.chat_widget.token_usage(),
-                    self.chat_widget.thread_id(),
-                    self.chat_widget.thread_name(),
+                    self.effective_thread_id(),
+                    self.effective_thread_name(),
                 );
                 self.shutdown_current_thread().await;
                 if let Err(err) = self.server.remove_and_close_all_threads().await {
@@ -1458,8 +1458,8 @@ impl App {
                         self.apply_runtime_policy_overrides(&mut resume_config);
                         let summary = session_summary(
                             self.chat_widget.token_usage(),
-                            self.chat_widget.thread_id(),
-                            self.chat_widget.thread_name(),
+                            self.effective_thread_id(),
+                            self.effective_thread_name(),
                         );
                         match self
                             .server
@@ -1528,8 +1528,8 @@ impl App {
                     .counter("codex.thread.fork", 1, &[("source", "slash_command")]);
                 let summary = session_summary(
                     self.chat_widget.token_usage(),
-                    self.chat_widget.thread_id(),
-                    self.chat_widget.thread_name(),
+                    self.effective_thread_id(),
+                    self.effective_thread_name(),
                 );
                 self.chat_widget
                     .add_plain_history_lines(vec!["/fork".magenta().into()]);
@@ -3019,6 +3019,17 @@ impl App {
 
     pub(crate) fn token_usage(&self) -> codex_core::protocol::TokenUsage {
         self.chat_widget.token_usage()
+    }
+
+    fn effective_thread_id(&self) -> Option<ThreadId> {
+        self.chat_widget
+            .thread_id()
+            .or(self.active_thread_id)
+            .or(self.primary_thread_id)
+    }
+
+    fn effective_thread_name(&self) -> Option<String> {
+        self.chat_widget.thread_name()
     }
 
     fn on_update_reasoning_effort(&mut self, effort: Option<ReasoningEffortConfig>) {
