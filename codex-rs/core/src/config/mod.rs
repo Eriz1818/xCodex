@@ -830,10 +830,9 @@ fn migrate_legacy_exclusion_settings(root_value: &mut TomlValue) -> bool {
     if let Some(hooks_table) = root_table
         .get_mut("hooks")
         .and_then(TomlValue::as_table_mut)
+        && hooks_table.remove("sanitize_payloads").is_some()
     {
-        if hooks_table.remove("sanitize_payloads").is_some() {
-            changed = true;
-        }
+        changed = true;
     }
     if let Some(xcodex_table) = root_table
         .get_mut("xcodex")
