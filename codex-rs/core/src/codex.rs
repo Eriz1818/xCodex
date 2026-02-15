@@ -5513,6 +5513,76 @@ fn connector_inserted_in_messages(
     connector_count == 1 && skill_count == 0 && mention_names_lower.contains(&mention_slug)
 }
 
+fn collect_explicit_mcp_servers_for_input(
+    input: &[ResponseItem],
+    mcp_server_names: &HashSet<String>,
+) -> HashSet<String> {
+    if mcp_server_names.is_empty() {
+        return HashSet::new();
+    }
+
+    let user_messages = collect_user_messages(input);
+    if user_messages.is_empty() {
+        return HashSet::new();
+    }
+
+    let mentions = collect_tool_mentions_from_messages(&user_messages);
+    let mut selected_servers = mentions
+        .paths
+        .iter()
+        .filter(|path| tool_kind_for_path(path) == ToolMentionKind::Mcp)
+        .filter_map(|path| mcp_server_name_from_path(path))
+        .filter(|name| mcp_server_names.contains(*name))
+        .map(str::to_string)
+        .collect::<HashSet<String>>();
+
+    let mut server_names_by_lower: HashMap<String, Vec<String>> = HashMap::new();
+    for server_name in mcp_server_names {
+        server_names_by_lower
+            .entry(server_name.to_ascii_lowercase())
+            .or_default()
+            .push(server_name.clone());
+    }
+
+    let has_mcp_reference = user_messages
+        .iter()
+        .any(|message| message_has_mcp_reference(message));
+    for message in &user_messages {
+        if !message_has_mcp_reference(message) {
+            continue;
+        }
+
+        let message_lower = message.to_ascii_lowercase();
+        for token in message_lower
+            .split(|c: char| !c.is_ascii_alphanumeric() && c != '_' && c != '-')
+            .filter(|token| !token.is_empty())
+        {
+            if let Some(candidates) = server_names_by_lower.get(token)
+                && candidates.len() == 1
+            {
+                selected_servers.insert(candidates[0].clone());
+            }
+        }
+    }
+
+    if selected_servers.is_empty() && has_mcp_reference && mcp_server_names.len() == 1 {
+        selected_servers.extend(mcp_server_names.iter().cloned());
+    }
+
+    selected_servers
+}
+
+fn mcp_server_name_from_path(path: &str) -> Option<&str> {
+    path.strip_prefix("mcp://")
+        .and_then(|rest| rest.split(['/', '?', '#']).next())
+        .filter(|name| !name.is_empty())
+}
+
+fn message_has_mcp_reference(message: &str) -> bool {
+    let message = message.to_ascii_lowercase();
+    message.contains("mcp") || message.contains("model context protocol")
+}
+
 fn filter_codex_apps_mcp_tools(
     mut mcp_tools: HashMap<String, crate::mcp_connection_manager::ToolInfo>,
     connectors: &[connectors::AppInfo],
@@ -5705,6 +5775,48 @@ async fn built_tools(
         .list_all_tools()
         .or_cancel(cancellation_token)
         .await?;
+    let configured_enabled_mcp_servers = turn_context
+        .config
+        .mcp_servers
+        .get()
+        .iter()
+        .filter(|(_, cfg)| cfg.enabled)
+        .map(|(name, _)| name.clone())
+        .collect::<HashSet<String>>();
+    let requested_mcp_servers =
+        collect_explicit_mcp_servers_for_input(input, &configured_enabled_mcp_servers);
+    if !requested_mcp_servers.is_empty() {
+        let discovered_mcp_servers = mcp_tools
+            .values()
+            .map(|tool| tool.server_name.clone())
+            .collect::<HashSet<String>>();
+        let servers_to_prime = requested_mcp_servers
+            .into_iter()
+            .filter(|server| !discovered_mcp_servers.contains(server))
+            .collect::<Vec<String>>();
+        if !servers_to_prime.is_empty() {
+            let servers_display = servers_to_prime.join(", ");
+            if let Err(err) = sess
+                .services
+                .mcp_connection_manager
+                .read()
+                .await
+                .load_servers(&servers_to_prime)
+                .or_cancel(cancellation_token)
+                .await
+            {
+                warn!("Failed to auto-load requested MCP servers ({servers_display}): {err:#?}");
+            }
+            mcp_tools = sess
+                .services
+                .mcp_connection_manager
+                .read()
+                .await
+                .list_all_tools()
+                .or_cancel(cancellation_token)
+                .await?;
+        }
+    }
 
     let mut effective_explicitly_enabled_connectors = explicitly_enabled_connectors.clone();
     effective_explicitly_enabled_connectors.extend(sess.get_connector_selection().await);
@@ -6959,6 +7071,46 @@ mod tests {
         );
 
         assert_eq!(connector_ids, HashSet::<String>::new());
+    }
+
+    #[test]
+    fn collect_explicit_mcp_servers_for_input_includes_mcp_path_mentions() {
+        let servers = HashSet::from(["samarth".to_string(), "memory".to_string()]);
+        let input = vec![user_message("use [$samarth](mcp://samarth)")];
+
+        let selected = collect_explicit_mcp_servers_for_input(&input, &servers);
+
+        assert_eq!(selected, HashSet::from(["samarth".to_string()]));
+    }
+
+    #[test]
+    fn collect_explicit_mcp_servers_for_input_includes_name_when_mcp_is_present() {
+        let servers = HashSet::from(["samarth".to_string(), "memory".to_string()]);
+        let input = vec![user_message("please use samarth mcp for this task")];
+
+        let selected = collect_explicit_mcp_servers_for_input(&input, &servers);
+
+        assert_eq!(selected, HashSet::from(["samarth".to_string()]));
+    }
+
+    #[test]
+    fn collect_explicit_mcp_servers_for_input_ignores_plain_names_without_mcp_context() {
+        let servers = HashSet::from(["memory".to_string()]);
+        let input = vec![user_message("memory usage increased yesterday")];
+
+        let selected = collect_explicit_mcp_servers_for_input(&input, &servers);
+
+        assert_eq!(selected, HashSet::<String>::new());
+    }
+
+    #[test]
+    fn collect_explicit_mcp_servers_for_input_defaults_single_server_on_mcp_reference() {
+        let servers = HashSet::from(["samarth".to_string()]);
+        let input = vec![user_message("can you use the new mcp server now?")];
+
+        let selected = collect_explicit_mcp_servers_for_input(&input, &servers);
+
+        assert_eq!(selected, HashSet::from(["samarth".to_string()]));
     }
 
     #[test]
