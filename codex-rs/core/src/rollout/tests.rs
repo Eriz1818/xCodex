@@ -29,12 +29,15 @@ use anyhow::Result;
 use codex_protocol::ThreadId;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::RolloutLine;
+use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::SessionMeta;
 use codex_protocol::protocol::SessionMetaLine;
 use codex_protocol::protocol::SessionSource;
+use codex_protocol::protocol::TurnContextItem;
 use codex_protocol::protocol::UserMessageEvent;
 
 const NO_SOURCE_FILTER: &[SessionSource] = &[];
@@ -644,6 +647,71 @@ async fn test_list_conversations_latest_first() {
     };
 
     assert_eq!(page, expected);
+}
+
+#[tokio::test]
+async fn list_threads_uses_latest_turn_context_cwd_for_summary() {
+    let temp = TempDir::new().unwrap();
+    let home = temp.path();
+    let session_id = Uuid::from_u128(5001);
+    write_session_file(
+        home,
+        "2025-01-03T12-00-00",
+        session_id,
+        0,
+        Some(SessionSource::VSCode),
+    )
+    .unwrap();
+
+    let rollout_path = home
+        .join("sessions")
+        .join("2025")
+        .join("01")
+        .join("03")
+        .join(format!("rollout-2025-01-03T12-00-00-{session_id}.jsonl"));
+    let mut file = fs::OpenOptions::new()
+        .append(true)
+        .open(rollout_path)
+        .unwrap();
+    let turn_context = RolloutLine {
+        timestamp: "2025-01-03T12:00:01Z".to_string(),
+        item: RolloutItem::TurnContext(TurnContextItem {
+            turn_id: Some("turn-1".to_string()),
+            cwd: Path::new("/tmp/latest-session-cwd").to_path_buf(),
+            approval_policy: AskForApproval::OnRequest,
+            sandbox_policy: SandboxPolicy::new_read_only_policy(),
+            network: None,
+            model: "gpt-5".to_string(),
+            personality: None,
+            collaboration_mode: None,
+            effort: None,
+            summary: codex_protocol::config_types::ReasoningSummary::Auto,
+            user_instructions: None,
+            developer_instructions: None,
+            final_output_json_schema: None,
+            truncation_policy: None,
+        }),
+    };
+    writeln!(file, "{}", serde_json::to_string(&turn_context).unwrap()).unwrap();
+
+    let provider_filter = provider_vec(&[TEST_PROVIDER]);
+    let page = get_threads(
+        home,
+        10,
+        None,
+        ThreadSortKey::CreatedAt,
+        INTERACTIVE_SESSION_SOURCES,
+        Some(provider_filter.as_slice()),
+        TEST_PROVIDER,
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(page.items.len(), 1);
+    assert_eq!(
+        page.items[0].cwd,
+        Some(Path::new("/tmp/latest-session-cwd").to_path_buf())
+    );
 }
 
 #[tokio::test]

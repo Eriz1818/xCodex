@@ -1176,6 +1176,75 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn recorder_shutdown_materializes_deferred_items() -> std::io::Result<()> {
+        let home = TempDir::new().expect("temp dir");
+        let config = ConfigBuilder::default()
+            .codex_home(home.path().to_path_buf())
+            .build()
+            .await?;
+        let thread_id = ThreadId::new();
+        let recorder = RolloutRecorder::new(
+            &config,
+            RolloutRecorderParams::new(
+                thread_id,
+                None,
+                SessionSource::Exec,
+                BaseInstructions::default(),
+                Vec::new(),
+                EventPersistenceMode::Limited,
+            ),
+            None,
+            None,
+        )
+        .await?;
+
+        let rollout_path = recorder.rollout_path().to_path_buf();
+        assert!(
+            !rollout_path.exists(),
+            "rollout file should not exist before first user message"
+        );
+
+        recorder
+            .record_items(&[RolloutItem::EventMsg(EventMsg::AgentMessage(
+                AgentMessageEvent {
+                    message: "buffered-event-before-shutdown".to_string(),
+                },
+            ))])
+            .await?;
+        recorder
+            .record_items(&[RolloutItem::EventMsg(EventMsg::UserMessage(
+                UserMessageEvent {
+                    message: "user-event-before-shutdown".to_string(),
+                    images: None,
+                    local_images: Vec::new(),
+                    text_elements: Vec::new(),
+                },
+            ))])
+            .await?;
+
+        recorder.shutdown().await?;
+        assert!(
+            rollout_path.exists(),
+            "shutdown should materialize deferred rollout with buffered items"
+        );
+
+        let text = std::fs::read_to_string(&rollout_path)?;
+        assert!(
+            text.contains("\"type\":\"session_meta\""),
+            "expected session metadata in materialized rollout"
+        );
+        assert!(
+            text.contains("buffered-event-before-shutdown"),
+            "expected buffered agent event to be persisted on shutdown"
+        );
+        assert!(
+            text.contains("user-event-before-shutdown"),
+            "expected buffered user event to be persisted on shutdown"
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn list_threads_db_disabled_does_not_skip_paginated_items() -> std::io::Result<()> {
         let home = TempDir::new().expect("temp dir");
         let mut config = ConfigBuilder::default()
