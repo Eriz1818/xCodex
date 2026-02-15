@@ -2989,23 +2989,55 @@ impl ChatComposer {
         const BRANCH_ICON: &str = " ";
         const WORKTREE_ICON: &str = " ";
         const SECTION_SEPARATOR: &str = " · ";
+        const BRANCH_CHAR_LIMIT: usize = 28;
+        const WORKTREE_CHAR_LIMIT: usize = 48;
+        const DEDUP_COMBINED_CHAR_LIMIT: usize = 72;
 
         let has_branch = self.show_status_bar_git_branch && self.status_bar_git_branch.is_some();
         let has_worktree = self.show_status_bar_worktree && self.status_bar_worktree.is_some();
+        let branch_raw = has_branch
+            .then_some(())
+            .and(self.status_bar_git_branch.as_deref());
+        let worktree_raw = has_worktree
+            .then_some(())
+            .and(self.status_bar_worktree.as_deref());
+        let branch = branch_raw.map(|value| {
+            Self::compact_branch_name_for_char_limit_if_needed(value, BRANCH_CHAR_LIMIT)
+        });
+        let hide_worktree =
+            if let (Some(branch_value), Some(worktree_value)) = (branch_raw, worktree_raw) {
+                Self::should_deduplicate_branch_and_worktree(
+                    branch_value,
+                    worktree_value,
+                    DEDUP_COMBINED_CHAR_LIMIT,
+                )
+            } else {
+                false
+            };
+        let worktree = if hide_worktree {
+            None
+        } else {
+            worktree_raw.map(|value| {
+                Self::compact_worktree_path_for_char_limit_if_needed(value, WORKTREE_CHAR_LIMIT)
+            })
+        };
 
         let mut spans = Vec::new();
         let mut used_width = 0usize;
 
-        if has_branch && let Some(branch) = self.status_bar_git_branch.as_ref() {
+        if let Some(branch_value) = branch.as_deref() {
             spans.push(Span::styled(
                 BRANCH_ICON.to_string(),
                 crate::theme::accent_style(),
             ));
-            spans.push(Span::styled(branch.clone(), crate::theme::accent_style()));
-            used_width += BRANCH_ICON.width() + branch.as_str().width();
+            spans.push(Span::styled(
+                branch_value.to_string(),
+                crate::theme::accent_style(),
+            ));
+            used_width += BRANCH_ICON.width() + branch_value.width();
         }
 
-        if has_worktree && let Some(worktree) = self.status_bar_worktree.as_ref() {
+        if let Some(worktree_value) = worktree.as_deref() {
             if !spans.is_empty() {
                 spans.push(SECTION_SEPARATOR.dim());
                 used_width += SECTION_SEPARATOR.width();
@@ -3021,7 +3053,8 @@ impl ChatComposer {
                 .map(|max| max.saturating_sub(used_width))
                 .map(|max| max.max(1))
                 .unwrap_or(usize::MAX);
-            let worktree_display = Self::compact_worktree_path_for_width(worktree, worktree_budget);
+            let worktree_display =
+                Self::compact_worktree_path_for_width(worktree_value, worktree_budget);
             spans.push(worktree_display.dim());
         }
 
@@ -3107,6 +3140,159 @@ impl ChatComposer {
         }
 
         Self::ellipsize_from_left(&tail, max_width)
+    }
+
+    fn compact_branch_name_for_char_limit_if_needed(branch: &str, max_chars: usize) -> String {
+        if Self::char_count(branch) <= max_chars {
+            return branch.to_string();
+        }
+
+        let stripped = Self::strip_common_branch_prefix(branch);
+        if Self::char_count(stripped) <= max_chars {
+            return stripped.to_string();
+        }
+
+        let segmented = Self::compact_branch_with_initial_segments(stripped);
+        if Self::char_count(&segmented) <= max_chars {
+            return segmented;
+        }
+
+        Self::ellipsize_from_left_by_chars(&segmented, max_chars)
+    }
+
+    fn strip_common_branch_prefix(branch: &str) -> &str {
+        const COMMON_PREFIXES: [&str; 7] = [
+            "feature/",
+            "feat/",
+            "bugfix/",
+            "fix/",
+            "hotfix/",
+            "chore/",
+            "refactor/",
+        ];
+        COMMON_PREFIXES
+            .iter()
+            .find_map(|prefix| branch.strip_prefix(prefix))
+            .unwrap_or(branch)
+    }
+
+    fn compact_branch_with_initial_segments(branch: &str) -> String {
+        let segments: Vec<&str> = branch
+            .split('/')
+            .filter(|segment| !segment.is_empty())
+            .collect();
+        if segments.len() <= 1 {
+            return branch.to_string();
+        }
+
+        let mut out = String::new();
+        for (idx, segment) in segments.iter().enumerate() {
+            if idx > 0 {
+                out.push('/');
+            }
+            if idx + 1 == segments.len() {
+                out.push_str(segment);
+            } else {
+                out.push_str(&abbreviate_parent_segment(segment));
+            }
+        }
+        out
+    }
+
+    fn compact_worktree_path_for_char_limit_if_needed(path: &str, max_chars: usize) -> String {
+        if Self::char_count(path) <= max_chars {
+            return path.to_string();
+        }
+
+        let preferred = Self::compact_worktree_path_to_dot_worktrees(path);
+        if Self::char_count(&preferred) <= max_chars {
+            return preferred;
+        }
+
+        let initials = Self::compact_path_with_initials(path);
+        if Self::char_count(&initials) <= max_chars {
+            return initials;
+        }
+
+        let tail = Self::compact_path_to_tail(path);
+        if Self::char_count(&tail) <= max_chars {
+            return tail;
+        }
+
+        Self::ellipsize_from_left_by_chars(&tail, max_chars)
+    }
+
+    fn compact_worktree_path_to_dot_worktrees(path: &str) -> String {
+        let normalized = path.replace('\\', "/");
+        let (_, segments) = split_normalized_path_segments(&normalized);
+        let Some(worktree_idx) = segments
+            .iter()
+            .position(|segment| *segment == ".worktrees" || *segment == ".worktree")
+        else {
+            return normalized;
+        };
+        let Some(leaf) = segments.last() else {
+            return normalized;
+        };
+        let marker = segments[worktree_idx];
+        format!("…/{marker}/{leaf}")
+    }
+
+    fn should_deduplicate_branch_and_worktree(
+        branch: &str,
+        worktree_path: &str,
+        combined_limit: usize,
+    ) -> bool {
+        let combined_len = Self::char_count(branch) + Self::char_count(worktree_path);
+        if combined_len <= combined_limit {
+            return false;
+        }
+        let Some(worktree_leaf) = Self::path_leaf(worktree_path) else {
+            return false;
+        };
+        let branch_key = Self::normalize_similarity_key(branch);
+        let worktree_key = Self::normalize_similarity_key(worktree_leaf);
+        !branch_key.is_empty()
+            && !worktree_key.is_empty()
+            && (branch_key.contains(&worktree_key) || worktree_key.contains(&branch_key))
+    }
+
+    fn path_leaf(path: &str) -> Option<&str> {
+        path.rsplit(['/', '\\'])
+            .find(|segment| !segment.is_empty())
+            .filter(|segment| *segment != "." && *segment != "..")
+    }
+
+    fn normalize_similarity_key(value: &str) -> String {
+        value
+            .chars()
+            .filter(|ch| ch.is_ascii_alphanumeric())
+            .flat_map(|ch| ch.to_lowercase())
+            .collect()
+    }
+
+    fn char_count(value: &str) -> usize {
+        value.chars().count()
+    }
+
+    fn ellipsize_from_left_by_chars(text: &str, max_chars: usize) -> String {
+        if max_chars == 0 {
+            return String::new();
+        }
+        if max_chars == 1 {
+            return String::from("…");
+        }
+
+        let total_chars = Self::char_count(text);
+        if total_chars <= max_chars {
+            return text.to_string();
+        }
+        let keep_chars = max_chars.saturating_sub(1);
+        let tail: String = text
+            .chars()
+            .skip(total_chars.saturating_sub(keep_chars))
+            .collect();
+        format!("…{tail}")
     }
 
     fn ellipsize_from_left(text: &str, max_width: usize) -> String {
