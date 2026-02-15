@@ -176,6 +176,11 @@ jobs:
             target: x86_64-unknown-linux-gnu
           - runner: ubuntu-24.04-arm
             target: aarch64-unknown-linux-gnu
+            bin: codex
+            timeout_minutes: 90
+          - runner: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+            bin: codex-responses-api-proxy
             timeout_minutes: 90
           # Temporarily disabled while we keep npm payload size under registry limits.
           # - runner: ubuntu-latest
@@ -340,14 +345,14 @@ jobs:
           echo "RUSTFLAGS=-C linker=rust-lld -C lto=off -C codegen-units=4" >> "$GITHUB_ENV"
           echo "CARGO_INCREMENTAL=0" >> "$GITHUB_ENV"
 
-      - name: Install cargo-chef (macOS prewarm)
-        if: ${{ startsWith(matrix.runner, 'macos') }}
+      - name: Install cargo-chef (macOS + ARM Linux prewarm)
+        if: ${{ startsWith(matrix.runner, 'macos') || matrix.target == 'aarch64-unknown-linux-gnu' }}
         uses: taiki-e/install-action@44c6d64aa62cd779e873306675c7a58e86d6d532 # v2
         with:
           tool: cargo-chef@0.1.71
 
-      - name: Pre-warm dependency cache (cargo-chef, macOS)
-        if: ${{ startsWith(matrix.runner, 'macos') }}
+      - name: Pre-warm dependency cache (cargo-chef, macOS + ARM Linux)
+        if: ${{ startsWith(matrix.runner, 'macos') || matrix.target == 'aarch64-unknown-linux-gnu' }}
         shell: bash
         run: |
           set -euo pipefail
@@ -384,12 +389,21 @@ jobs:
           target="${{ matrix.target }}"
 
           if [[ -n "${{ matrix.bin }}" ]]; then
-            src="target/${target}/release/${{ matrix.bin }}.exe"
-            case "${{ matrix.bin }}" in
-              codex) out_name="xcodex-${target}.exe" ;;
-              codex-responses-api-proxy) out_name="xcodex-responses-api-proxy-${target}.exe" ;;
-              *) out_name="${{ matrix.bin }}-${target}.exe" ;;
-            esac
+            if [[ "${{ contains(matrix.target, 'pc-windows') }}" == 'true' ]]; then
+              src="target/${target}/release/${{ matrix.bin }}.exe"
+              case "${{ matrix.bin }}" in
+                codex) out_name="xcodex-${target}.exe" ;;
+                codex-responses-api-proxy) out_name="xcodex-responses-api-proxy-${target}.exe" ;;
+                *) out_name="${{ matrix.bin }}-${target}.exe" ;;
+              esac
+            else
+              src="target/${target}/release/${{ matrix.bin }}"
+              case "${{ matrix.bin }}" in
+                codex) out_name="xcodex-${target}" ;;
+                codex-responses-api-proxy) out_name="xcodex-responses-api-proxy-${target}" ;;
+                *) out_name="${{ matrix.bin }}-${target}" ;;
+              esac
+            fi
             cp "$src" "$dest/$out_name"
           else
             cp "target/${target}/release/codex" "$dest/xcodex-${target}"
@@ -468,20 +482,27 @@ jobs:
       - name: Consolidate Windows artifacts
         shell: bash
         run: |
-          for dir in dist/*-pc-windows-msvc-*; do
-             if [[ -d "$dir" ]]; then
-                if [[ "$dir" == *"x86_64-pc-windows-msvc"* ]]; then
-                   target="x86_64-pc-windows-msvc"
-                elif [[ "$dir" == *"aarch64-pc-windows-msvc"* ]]; then
-                   target="aarch64-pc-windows-msvc"
-                else
-                   continue
-                fi
+          shopt -s nullglob
+          for dir in dist/*; do
+            [[ -d "$dir" ]] || continue
+            base="$(basename "$dir")"
+            target=""
 
-                mkdir -p "dist/$target"
-                mv "$dir"/* "dist/$target/"
-                rmdir "$dir"
-             fi
+            if [[ "$base" == *-codex-responses-api-proxy ]]; then
+              target="${base%-codex-responses-api-proxy}"
+            elif [[ "$base" == *-codex-windows-sandbox-setup ]]; then
+              target="${base%-codex-windows-sandbox-setup}"
+            elif [[ "$base" == *-codex-command-runner ]]; then
+              target="${base%-codex-command-runner}"
+            elif [[ "$base" == *-codex ]]; then
+              target="${base%-codex}"
+            fi
+
+            if [[ -n "$target" && "$target" != "$base" ]]; then
+              mkdir -p "dist/$target"
+              mv "$dir"/* "dist/$target/"
+              rmdir "$dir"
+            fi
           done
 
       - name: List
