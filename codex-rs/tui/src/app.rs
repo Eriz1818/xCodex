@@ -2901,6 +2901,10 @@ impl App {
         }
         self.handle_backtrack_event(&event.msg);
         self.chat_widget.handle_codex_event(event);
+        let turn_proposed_plan_text = self
+            .chat_widget
+            .turn_proposed_plan_text()
+            .map(ToString::to_string);
         if is_session_configured
             && let Some(update) =
                 crate::xcodex_plugins::plan::sync_active_plan_session_state(&mut self.chat_widget)
@@ -2915,6 +2919,7 @@ impl App {
             && let Some(update) = crate::xcodex_plugins::plan::sync_active_plan_turn_end(
                 &mut self.chat_widget,
                 last_agent_message.as_deref(),
+                turn_proposed_plan_text.as_deref(),
             )
         {
             self.app_event_tx.send(AppEvent::PlanFileUiUpdated {

@@ -236,6 +236,34 @@ pub(crate) async fn try_handle_event(
             tui.frame_requester().schedule_frame();
             Ok(None)
         }
+        AppEvent::OpenPlanFixAndStartPrompt { default_mode_mask } => {
+            crate::xcodex_plugins::plan::open_plan_fix_and_start_prompt(
+                &mut app.chat_widget,
+                default_mode_mask,
+            );
+            tui.frame_requester().schedule_frame();
+            Ok(None)
+        }
+        AppEvent::ResolvePlanContextMismatchAndStart {
+            action,
+            collaboration_mode,
+        } => {
+            if let Some(update) =
+                crate::xcodex_plugins::plan::resolve_plan_context_mismatch_and_start_action(
+                    &mut app.chat_widget,
+                    action,
+                    collaboration_mode,
+                )
+            {
+                app.app_event_tx.send(AppEvent::PlanFileUiUpdated {
+                    path: update.path,
+                    todos_remaining: update.todos_remaining,
+                    is_done: update.is_done,
+                });
+            }
+            tui.frame_requester().schedule_frame();
+            Ok(None)
+        }
         AppEvent::ReopenPlanNextStepPromptAfterTurn => {
             app.chat_widget.reopen_plan_prompt_after_turn();
             tui.frame_requester().schedule_frame();

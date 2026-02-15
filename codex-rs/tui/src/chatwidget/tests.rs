@@ -1164,6 +1164,7 @@ async fn make_chatwidget_manual(
         reopen_plan_prompt_after_turn: false,
         plan_delta_buffer: String::new(),
         plan_item_active: false,
+        turn_proposed_plan_text: None,
         last_separator_elapsed_secs: None,
         last_status_elapsed_secs: None,
         turn_runtime_metrics: RuntimeMetricsSummary::default(),
@@ -4871,13 +4872,15 @@ async fn plan_active_file_state_is_scoped_by_thread_id() {
     assert_eq!(update_b.path, plan_b);
 
     chat.thread_id = Some(thread_a);
-    let synced_a = crate::xcodex_plugins::plan::sync_active_plan_turn_end(&mut chat, Some("A"))
-        .expect("turn-end sync for thread a");
+    let synced_a =
+        crate::xcodex_plugins::plan::sync_active_plan_turn_end(&mut chat, Some("A"), None)
+            .expect("turn-end sync for thread a");
     assert_eq!(synced_a.path, plan_a);
 
     chat.thread_id = Some(thread_b);
-    let synced_b = crate::xcodex_plugins::plan::sync_active_plan_turn_end(&mut chat, Some("B"))
-        .expect("turn-end sync for thread b");
+    let synced_b =
+        crate::xcodex_plugins::plan::sync_active_plan_turn_end(&mut chat, Some("B"), None)
+            .expect("turn-end sync for thread b");
     assert_eq!(synced_b.path, plan_b);
 
     let thread_state = std::fs::read_to_string(plan_state_dir.join(".active-plan-by-thread.json"))

@@ -58,6 +58,12 @@ pub(crate) enum PlanSettingsCycleTarget {
     Naming,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PlanFixAndStartAction {
+    UpdatePlanContextAndStart,
+    StartWithoutContextChange,
+}
+
 #[derive(Debug, Clone)]
 pub(crate) struct ConnectorsSnapshot {
     pub(crate) connectors: Vec<AppInfo>,
@@ -256,6 +262,15 @@ pub(crate) enum AppEvent {
 
     /// Open a one-line prompt for the post-plan `Do something else...` action.
     OpenPlanDoSomethingElsePrompt,
+    /// Open the context-resolution popup for blocked `Start Implementation`.
+    OpenPlanFixAndStartPrompt {
+        default_mode_mask: Option<CollaborationModeMask>,
+    },
+    /// Resolve plan context mismatch and start implementation in one step.
+    ResolvePlanContextMismatchAndStart {
+        action: PlanFixAndStartAction,
+        collaboration_mode: CollaborationModeMask,
+    },
     /// Re-open the post-plan next-step prompt after the next assistant turn completes.
     ReopenPlanNextStepPromptAfterTurn,
 

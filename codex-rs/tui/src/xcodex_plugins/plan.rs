@@ -1,4 +1,5 @@
 use crate::app_event::AppEvent;
+use crate::app_event::PlanFixAndStartAction;
 use crate::app_event::PlanSettingsCycleTarget;
 use crate::app_event_sender::AppEventSender;
 use crate::bottom_pane::BottomPaneView;
@@ -697,6 +698,7 @@ pub(crate) fn pause_active_plan_run_action(chat: &mut ChatWidget) -> Option<Plan
 pub(crate) fn sync_active_plan_turn_end(
     chat: &mut ChatWidget,
     last_agent_message: Option<&str>,
+    turn_proposed_plan_text: Option<&str>,
 ) -> Option<PlanUiUpdate> {
     let Some(path) = read_active_plan_path(chat) else {
         return None;
@@ -716,10 +718,24 @@ pub(crate) fn sync_active_plan_turn_end(
     }
     let sync_result = if uses_adr_lite_sync(chat, Some(&path)) {
         let worktree = chat.session_cwd().display().to_string();
-        let branch = current_branch_name();
-        plan_file::sync_turn_end_adr_lite(&path, &today, &note, &worktree, &branch)
+        let branch = current_branch_name(chat);
+        plan_file::sync_turn_end_adr_lite_with_content(
+            &path,
+            &today,
+            &note,
+            &worktree,
+            &branch,
+            last_agent_message,
+            turn_proposed_plan_text,
+        )
     } else {
-        plan_file::sync_turn_end(&path, &today, &note)
+        plan_file::sync_turn_end_with_content(
+            &path,
+            &today,
+            &note,
+            last_agent_message,
+            turn_proposed_plan_text,
+        )
     };
     if let Err(err) = sync_result {
         tracing::warn!(
@@ -747,7 +763,7 @@ pub(crate) fn sync_active_plan_session_state(chat: &mut ChatWidget) -> Option<Pl
         if uses_adr_lite_sync(chat, Some(&path)) {
             let today = chrono::Local::now().date_naive().to_string();
             let worktree = chat.session_cwd().display().to_string();
-            let branch = current_branch_name();
+            let branch = current_branch_name(chat);
             if let Err(err) = plan_file::sync_adr_lite_open_or_resume(
                 &path,
                 &today,
@@ -772,7 +788,7 @@ pub(crate) fn open_post_plan_prompt(
     default_mode_mask: Option<CollaborationModeMask>,
 ) {
     let context_block_reason = plan_start_implementation_block_reason(chat);
-    let (mut start_actions, mut start_disabled_reason) = match default_mode_mask {
+    let (mut start_actions, mut start_disabled_reason) = match default_mode_mask.clone() {
         Some(mask) => {
             let user_text = "Implement the plan.".to_string();
             let actions: Vec<SelectionAction> = vec![Box::new(move |sender| {
@@ -786,11 +802,70 @@ pub(crate) fn open_post_plan_prompt(
         None => (Vec::new(), Some("Default mode unavailable".to_string())),
     };
     if start_disabled_reason.is_none() {
-        start_disabled_reason = context_block_reason;
+        start_disabled_reason = context_block_reason.clone();
     }
     if start_disabled_reason.is_some() {
         start_actions.clear();
     }
+
+    let mut items: Vec<SelectionItem> = Vec::new();
+    if context_block_reason.is_some() {
+        let fix_default_mask = default_mode_mask.clone();
+        let (fix_actions, fix_disabled_reason) = if fix_default_mask.is_some() {
+            let actions: Vec<SelectionAction> = vec![Box::new(move |sender| {
+                sender.send(AppEvent::OpenPlanFixAndStartPrompt {
+                    default_mode_mask: fix_default_mask.clone(),
+                });
+            })];
+            (actions, None)
+        } else {
+            (Vec::new(), Some("Default mode unavailable".to_string()))
+        };
+        items.push(SelectionItem {
+            name: "Fix and Start...".to_string(),
+            description: Some(
+                "Compare plan vs current worktree/branch, choose resolution, then start."
+                    .to_string(),
+            ),
+            actions: fix_actions,
+            disabled_reason: fix_disabled_reason,
+            dismiss_on_select: true,
+            ..Default::default()
+        });
+    }
+    items.push(SelectionItem {
+        name: "Start Implementation".to_string(),
+        description: Some("Switch to Default mode and start coding.".to_string()),
+        actions: start_actions,
+        disabled_reason: start_disabled_reason,
+        dismiss_on_select: true,
+        ..Default::default()
+    });
+    items.push(SelectionItem {
+        name: "Discuss Further".to_string(),
+        description: Some("Stay in Plan mode and continue refining.".to_string()),
+        actions: vec![Box::new(|sender| {
+            sender.send(AppEvent::ReopenPlanNextStepPromptAfterTurn)
+        })],
+        dismiss_on_select: true,
+        ..Default::default()
+    });
+    items.push(SelectionItem {
+        name: "Cancel".to_string(),
+        description: Some("Pause this plan run and keep the plan file.".to_string()),
+        actions: vec![Box::new(|sender| sender.send(AppEvent::PauseActivePlanRun))],
+        dismiss_on_select: true,
+        ..Default::default()
+    });
+    items.push(SelectionItem {
+        name: "Do something else...".to_string(),
+        description: Some("Enter a one-line prompt and send it immediately.".to_string()),
+        actions: vec![Box::new(|sender| {
+            sender.send(AppEvent::OpenPlanDoSomethingElsePrompt)
+        })],
+        dismiss_on_select: true,
+        ..Default::default()
+    });
 
     chat.show_selection_view(SelectionViewParams {
         title: Some("Plan ready: choose next step".to_string()),
@@ -804,37 +879,85 @@ pub(crate) fn open_post_plan_prompt(
             ("Esc", ": close"),
         ])),
         undim_footer_hint: true,
+        items,
+        initial_selected_idx: Some(0),
+        ..Default::default()
+    });
+}
+
+pub(crate) fn open_plan_fix_and_start_prompt(
+    chat: &mut ChatWidget,
+    default_mode_mask: Option<CollaborationModeMask>,
+) {
+    let Some(mask) = default_mode_mask else {
+        chat.add_error_message("Default mode unavailable for Start Implementation.".to_string());
+        return;
+    };
+    let Some(path) = read_active_plan_path(chat) else {
+        chat.add_error_message("No active plan file. Run `/plan open` first.".to_string());
+        return;
+    };
+    if !path.exists() {
+        chat.add_error_message(format!(
+            "Active plan file does not exist: `{}`",
+            path.display(),
+        ));
+        return;
+    }
+
+    let context = plan_context_snapshot(chat, &path);
+    let plan_worktree = context.plan_worktree.as_deref().unwrap_or("(missing)");
+    let plan_branch = context.plan_branch.as_deref().unwrap_or("(missing)");
+    let current_worktree = context.current_worktree.as_str();
+    let current_branch = context.current_branch.as_str();
+    let context_summary = format!(
+        "plan wt=`{plan_worktree}` / br=`{plan_branch}`; current wt=`{current_worktree}` / br=`{current_branch}`"
+    );
+    let update_mask = mask.clone();
+    let keep_mask = mask.clone();
+    chat.show_selection_view(SelectionViewParams {
+        title: Some("Fix context mismatch and start".to_string()),
+        subtitle: Some(context_summary),
+        footer_hint: Some(plan_footer_hint_line(&[
+            ("↑/↓", ": select"),
+            ("Enter", ": confirm"),
+            ("Esc", ": close"),
+        ])),
+        undim_footer_hint: true,
         items: vec![
             SelectionItem {
-                name: "Start Implementation".to_string(),
-                description: Some("Switch to Default mode and start coding.".to_string()),
-                actions: start_actions,
-                disabled_reason: start_disabled_reason,
+                name: "Use Current Context and Start".to_string(),
+                description: Some(
+                    "Update plan `Worktree:`/`Branch:` to current session values, then start."
+                        .to_string(),
+                ),
+                actions: vec![Box::new(move |sender| {
+                    sender.send(AppEvent::ResolvePlanContextMismatchAndStart {
+                        action: PlanFixAndStartAction::UpdatePlanContextAndStart,
+                        collaboration_mode: update_mask.clone(),
+                    });
+                })],
                 dismiss_on_select: true,
                 ..Default::default()
             },
             SelectionItem {
-                name: "Discuss Further".to_string(),
-                description: Some("Stay in Plan mode and continue refining.".to_string()),
-                actions: vec![Box::new(|sender| {
-                    sender.send(AppEvent::ReopenPlanNextStepPromptAfterTurn)
+                name: "Keep Plan Context, Start Anyway".to_string(),
+                description: Some(
+                    "Do not modify plan metadata; start implementation in current context once."
+                        .to_string(),
+                ),
+                actions: vec![Box::new(move |sender| {
+                    sender.send(AppEvent::ResolvePlanContextMismatchAndStart {
+                        action: PlanFixAndStartAction::StartWithoutContextChange,
+                        collaboration_mode: keep_mask.clone(),
+                    });
                 })],
                 dismiss_on_select: true,
                 ..Default::default()
             },
             SelectionItem {
                 name: "Cancel".to_string(),
-                description: Some("Pause this plan run and keep the plan file.".to_string()),
-                actions: vec![Box::new(|sender| sender.send(AppEvent::PauseActivePlanRun))],
-                dismiss_on_select: true,
-                ..Default::default()
-            },
-            SelectionItem {
-                name: "Do something else...".to_string(),
-                description: Some("Enter a one-line prompt and send it immediately.".to_string()),
-                actions: vec![Box::new(|sender| {
-                    sender.send(AppEvent::OpenPlanDoSomethingElsePrompt)
-                })],
+                description: Some("Return without starting implementation.".to_string()),
                 dismiss_on_select: true,
                 ..Default::default()
             },
@@ -842,6 +965,48 @@ pub(crate) fn open_post_plan_prompt(
         initial_selected_idx: Some(0),
         ..Default::default()
     });
+}
+
+pub(crate) fn resolve_plan_context_mismatch_and_start_action(
+    chat: &mut ChatWidget,
+    action: PlanFixAndStartAction,
+    collaboration_mode: CollaborationModeMask,
+) -> Option<PlanUiUpdate> {
+    let mut ui_update = None;
+    if action == PlanFixAndStartAction::UpdatePlanContextAndStart {
+        let Some(path) = read_active_plan_path(chat) else {
+            chat.add_error_message("No active plan file. Run `/plan open` first.".to_string());
+            return None;
+        };
+        if !path.exists() {
+            chat.add_error_message(format!(
+                "Active plan file does not exist: `{}`",
+                path.display(),
+            ));
+            return None;
+        }
+        let current_worktree = chat.session_cwd().display().to_string();
+        let current_branch = current_branch_name(chat);
+        if let Err(err) = upsert_plan_metadata_value(&path, "Worktree:", &current_worktree) {
+            chat.add_error_message(format!("Failed to update plan worktree metadata: {err}"));
+            return None;
+        }
+        if let Err(err) = upsert_plan_metadata_value(&path, "Branch:", &current_branch) {
+            chat.add_error_message(format!("Failed to update plan branch metadata: {err}"));
+            return None;
+        }
+        chat.add_info_message(
+            format!(
+                "Updated plan context metadata to current worktree/branch: `{}`.",
+                path.display()
+            ),
+            None,
+        );
+        ui_update = active_plan_ui_update(chat);
+    }
+
+    chat.submit_user_message_with_mode("Implement the plan.".to_string(), collaboration_mode);
+    ui_update
 }
 
 fn handle_settings_command(chat: &mut ChatWidget, rest: &str) {
@@ -2133,7 +2298,7 @@ fn open_plan_file(chat: &mut ChatWidget, path_arg: Option<&str>) {
     if uses_adr_lite_sync(chat, Some(&resolved_path)) {
         let today = chrono::Local::now().date_naive().to_string();
         let worktree = chat.session_cwd().display().to_string();
-        let branch = current_branch_name();
+        let branch = current_branch_name(chat);
         if let Err(err) = plan_file::sync_adr_lite_open_or_resume(
             &resolved_path,
             &today,
@@ -3111,31 +3276,69 @@ fn ensure_trailing_newline(mut value: String) -> String {
     value
 }
 
-fn plan_context_mismatch_details(chat: &ChatWidget, path: &Path) -> Vec<String> {
-    let mut mismatches = Vec::new();
+#[derive(Clone, Debug)]
+struct PlanContextSnapshot {
+    plan_worktree: Option<String>,
+    current_worktree: String,
+    plan_branch: Option<String>,
+    current_branch: String,
+}
+
+fn plan_context_snapshot(chat: &ChatWidget, path: &Path) -> PlanContextSnapshot {
+    let plan_worktree = read_plan_metadata_value(path, "Worktree:");
     let current_worktree = chat.session_cwd().display().to_string();
-    let current_branch = current_branch_name();
+    let plan_branch = read_plan_metadata_value(path, "Branch:");
+    let current_branch = current_branch_name(chat);
+    PlanContextSnapshot {
+        plan_worktree,
+        current_worktree,
+        plan_branch,
+        current_branch,
+    }
+}
+
+fn normalize_worktree_for_compare(raw: &str) -> String {
+    std::fs::canonicalize(raw)
+        .unwrap_or_else(|_| PathBuf::from(raw))
+        .to_string_lossy()
+        .to_string()
+}
+
+fn plan_context_mismatch_details(chat: &ChatWidget, path: &Path) -> Vec<String> {
+    let snapshot = plan_context_snapshot(chat, path);
+    let mut mismatches = Vec::new();
+    let current_worktree = normalize_worktree_for_compare(&snapshot.current_worktree);
 
     if read_plan_track_worktree(chat) {
-        let expected = read_plan_metadata_value(path, "Worktree:");
-        match expected.as_deref() {
+        match snapshot.plan_worktree.as_deref() {
             None => {
-                mismatches.push("worktree metadata missing (`Worktree:`)".to_string());
+                mismatches.push(format!(
+                    "worktree metadata missing (`Worktree:`; current=`{}`)",
+                    snapshot.current_worktree
+                ));
             }
-            Some(value) if value != current_worktree => {
-                mismatches.push("worktree differs from plan metadata".to_string());
+            Some(value) if normalize_worktree_for_compare(value) != current_worktree => {
+                mismatches.push(format!(
+                    "worktree differs (plan=`{value}`, current=`{}`)",
+                    snapshot.current_worktree
+                ));
             }
             Some(_) => {}
         }
     }
     if read_plan_track_branch(chat) {
-        let expected = read_plan_metadata_value(path, "Branch:");
-        match expected.as_deref() {
+        match snapshot.plan_branch.as_deref() {
             None => {
-                mismatches.push("branch metadata missing (`Branch:`)".to_string());
+                mismatches.push(format!(
+                    "branch metadata missing (`Branch:`; current=`{}`)",
+                    snapshot.current_branch
+                ));
             }
-            Some(value) if value != current_branch => {
-                mismatches.push("branch differs from plan metadata".to_string());
+            Some(value) if value != snapshot.current_branch => {
+                mismatches.push(format!(
+                    "branch differs (plan=`{value}`, current=`{}`)",
+                    snapshot.current_branch
+                ));
             }
             Some(_) => {}
         }
@@ -3338,7 +3541,7 @@ fn date_title_slug(chat: &ChatWidget) -> String {
 }
 
 fn relevant_plan_title_slug(chat: &ChatWidget) -> String {
-    let branch = current_branch_name();
+    let branch = current_branch_name(chat);
     let branch_slug = sanitize_component(&branch);
     let title = if branch_slug.is_empty()
         || matches!(branch_slug.as_str(), "main" | "master" | "unknown")
@@ -3418,7 +3621,7 @@ fn default_default_template(chat: &ChatWidget, path: &Path) -> String {
     format!(
         "# /plan task\n\nStatus: Draft\nTODOs remaining: 3\nStarted: {today}\nLast updated: {today}\nWorktree: {}\nBranch: {}\n\n## Goal\n\n- TODO\n\n## Plan (checklist)\n\n- [ ] Phase 0 — setup foundations\n- [ ] Phase 1 — build on Phase 0\n- [ ] Phase 2 — iterate and validate\n\n## Progress log\n\n- {today}: Created plan file at `{}`.\n",
         chat.session_cwd().display(),
-        current_branch_name(),
+        current_branch_name(chat),
         path.display(),
     )
 }
@@ -3429,7 +3632,7 @@ fn default_adr_lite_template(chat: &ChatWidget, path: &Path) -> String {
         "# /plan task — Implementation plan\n\nStatus: Draft\nTODOs remaining: 4\nAllowed statuses: Draft|Active|Paused|Done|Archived\nOwner: {}\nStarted: {today}\nLast updated: {today}\nWorktree: {}\nBranch: {}\n\n## Goal\n\nWhat we are trying to achieve, in 1–3 sentences.\n\n## Scope\n\n- In scope:\n- Out of scope:\n\n## Definitions / contracts\n\n- <term>: <definition>\n\n## Current state / evidence (facts only)\n\n- <fact> (evidence: <path or link>)\n\n## Hypotheses (unconfirmed)\n\n- <hypothesis> (confidence: low|med|high)\n\n## Root causes (confirmed)\n\n- <root cause> (evidence: <path or link>)\n\n## Decisions\n\n- {today}: [Active] Decision: Do X, not Y.\n  - Expected behavior:\n  - Evidence:\n  - Rationale:\n\n## Open questions\n\n- <question> (options: A/B, recommendation)\n\n## Implementation approach (recommended)\n\n- <approach>\n\n## Plan (checklist)\n\n- [ ] Phase 1 — first small shippable milestone\n- [ ] Phase 2 — next milestone\n- [ ] Phase 3 — final milestone\n\n## Acceptance criteria / verification\n\n- [ ] <criterion>\n\n## Progress log\n\n- {today}: Created plan file at `{}`.\n\n## Learnings\n\n- None yet.\n\n## Memories\n\n- None yet.\n",
         plan_owner(),
         chat.session_cwd().display(),
-        current_branch_name(),
+        current_branch_name(chat),
         path.display(),
     )
 }
@@ -3442,9 +3645,10 @@ fn plan_owner() -> String {
         .unwrap_or_else(|| "unknown".to_string())
 }
 
-fn current_branch_name() -> String {
+fn current_branch_name(chat: &ChatWidget) -> String {
     std::process::Command::new("git")
         .args(["branch", "--show-current"])
+        .current_dir(chat.session_cwd())
         .output()
         .ok()
         .and_then(|output| {

@@ -674,6 +674,8 @@ pub(crate) struct ChatWidget {
     plan_delta_buffer: String,
     // True while a plan item is streaming.
     plan_item_active: bool,
+    // Full proposed-plan markdown captured for the current turn (if emitted).
+    turn_proposed_plan_text: Option<String>,
     // Status-indicator elapsed seconds captured at the last emitted final-message separator.
     //
     // This lets the separator show per-chunk work time (since the previous separator) rather than
@@ -1374,6 +1376,7 @@ impl ChatWidget {
         } else {
             text
         };
+        self.turn_proposed_plan_text = (!plan_text.trim().is_empty()).then_some(plan_text.clone());
         // Plan commit ticks can hide the status row; remember whether we streamed plan output so
         // completion can restore it once stream queues are idle.
         let should_restore_after_stream = self.plan_stream_controller.is_some();
@@ -1456,6 +1459,7 @@ impl ChatWidget {
         self.saw_plan_item_this_turn = false;
         self.plan_delta_buffer.clear();
         self.plan_item_active = false;
+        self.turn_proposed_plan_text = None;
         self.adaptive_chunking.reset();
         self.plan_stream_controller = None;
         self.turn_runtime_metrics = RuntimeMetricsSummary::default();
@@ -1595,6 +1599,10 @@ impl ChatWidget {
 
     pub(crate) fn reopen_plan_prompt_after_turn(&mut self) {
         self.reopen_plan_prompt_after_turn = true;
+    }
+
+    pub(crate) fn turn_proposed_plan_text(&self) -> Option<&str> {
+        self.turn_proposed_plan_text.as_deref()
     }
 
     pub(crate) fn set_token_info(&mut self, info: Option<TokenUsageInfo>) {
@@ -3188,6 +3196,7 @@ impl ChatWidget {
             reopen_plan_prompt_after_turn: false,
             plan_delta_buffer: String::new(),
             plan_item_active: false,
+            turn_proposed_plan_text: None,
             last_separator_elapsed_secs: None,
             last_status_elapsed_secs: None,
             turn_runtime_metrics: RuntimeMetricsSummary::default(),
@@ -3367,6 +3376,7 @@ impl ChatWidget {
             reopen_plan_prompt_after_turn: false,
             plan_delta_buffer: String::new(),
             plan_item_active: false,
+            turn_proposed_plan_text: None,
             queued_user_messages: VecDeque::new(),
             show_welcome_banner: is_first_run,
             suppress_session_configured_redraw: false,
@@ -3577,6 +3587,7 @@ impl ChatWidget {
             reopen_plan_prompt_after_turn: false,
             plan_delta_buffer: String::new(),
             plan_item_active: false,
+            turn_proposed_plan_text: None,
             last_separator_elapsed_secs: None,
             last_status_elapsed_secs: None,
             turn_runtime_metrics: RuntimeMetricsSummary::default(),
