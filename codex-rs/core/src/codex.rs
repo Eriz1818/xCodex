@@ -796,7 +796,8 @@ enum ExclusionRedactionDecision {
     AllowForSession,
     Redact,
     Block,
-    AddAllowlist(String),
+    AddAllowlistLiteral(String),
+    AddAllowlistRegex(String),
     AddBlocklist(String),
 }
 
@@ -877,11 +878,18 @@ async fn maybe_prompt_for_exclusion_redaction(
     if matches!(
         match_info.map(|info| info.reason),
         Some(crate::content_gateway::RedactionReason::SecretPattern)
+            | Some(crate::content_gateway::RedactionReason::IgnoredPath)
     ) {
         options.push(RequestUserInputQuestionOption {
             label: "Add to allowlist".to_string(),
             description: "Allow this matched value through exclusions going forward.".to_string(),
         });
+    }
+
+    if matches!(
+        match_info.map(|info| info.reason),
+        Some(crate::content_gateway::RedactionReason::SecretPattern)
+    ) {
         options.push(RequestUserInputQuestionOption {
             label: "Add to blocklist".to_string(),
             description: "Add this value to extra secret patterns to scan.".to_string(),
@@ -912,7 +920,12 @@ async fn maybe_prompt_for_exclusion_redaction(
         "Allow for this session" => Some(ExclusionRedactionDecision::AllowForSession),
         "Redact" => Some(ExclusionRedactionDecision::Redact),
         "Block" => Some(ExclusionRedactionDecision::Block),
-        "Add to allowlist" => match_value.map(ExclusionRedactionDecision::AddAllowlist),
+        "Add to allowlist" => match match_info.map(|info| info.reason) {
+            Some(crate::content_gateway::RedactionReason::IgnoredPath) => {
+                match_value.map(ExclusionRedactionDecision::AddAllowlistLiteral)
+            }
+            _ => match_value.map(ExclusionRedactionDecision::AddAllowlistRegex),
+        },
         "Add to blocklist" => match_value.map(ExclusionRedactionDecision::AddBlocklist),
         _ => None,
     }
@@ -6252,6 +6265,11 @@ async fn try_run_sampling_request(
                         report = crate::content_gateway::ScanReport::safe();
                     }
                     ExclusionRedactionDecision::AllowForSession => {
+                        crate::content_gateway::remember_safe_report_matches_for_epoch(
+                            &sess.content_gateway_cache,
+                            &report,
+                            epoch,
+                        );
                         if let Some(original) = prompt.input.get(idx).cloned() {
                             crate::content_gateway::remember_safe_response_item_text_fields(
                                 &sess.content_gateway_cache,
@@ -6278,7 +6296,15 @@ async fn try_run_sampling_request(
                         report.redacted = false;
                         report.blocked = true;
                     }
-                    ExclusionRedactionDecision::AddAllowlist(value) => {
+                    ExclusionRedactionDecision::AddAllowlistLiteral(value) => {
+                        sess.add_exclusion_secret_pattern(regex::escape(&value), true)
+                            .await;
+                        if let Some(original) = prompt.input.get(idx).cloned() {
+                            *item = original;
+                        }
+                        report = crate::content_gateway::ScanReport::safe();
+                    }
+                    ExclusionRedactionDecision::AddAllowlistRegex(value) => {
                         sess.add_exclusion_secret_pattern(value, true).await;
                         if let Some(original) = prompt.input.get(idx).cloned() {
                             *item = original;

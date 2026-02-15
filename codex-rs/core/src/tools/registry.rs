@@ -357,7 +357,8 @@ enum RedactionDecision {
     AllowForSession,
     Redact,
     Block,
-    AddAllowlist(String),
+    AddAllowlistLiteral(String),
+    AddAllowlistRegex(String),
     AddBlocklist(String),
 }
 
@@ -397,13 +398,19 @@ fn format_redaction_matches(
 fn parse_redaction_decision(
     answer: &str,
     match_value: Option<String>,
+    match_reason: Option<crate::content_gateway::RedactionReason>,
 ) -> Option<RedactionDecision> {
     match answer {
         "Allow once" => Some(RedactionDecision::AllowOnce),
         "Allow for this session" => Some(RedactionDecision::AllowForSession),
         "Redact" => Some(RedactionDecision::Redact),
         "Block" => Some(RedactionDecision::Block),
-        "Add to allowlist" => match_value.map(RedactionDecision::AddAllowlist),
+        "Add to allowlist" => match match_reason {
+            Some(crate::content_gateway::RedactionReason::IgnoredPath) => {
+                match_value.map(RedactionDecision::AddAllowlistLiteral)
+            }
+            _ => match_value.map(RedactionDecision::AddAllowlistRegex),
+        },
         "Add to blocklist" => match_value.map(RedactionDecision::AddBlocklist),
         _ => None,
     }
@@ -453,11 +460,18 @@ async fn maybe_prompt_for_redaction(
     if matches!(
         match_info.map(|info| info.reason),
         Some(crate::content_gateway::RedactionReason::SecretPattern)
+            | Some(crate::content_gateway::RedactionReason::IgnoredPath)
     ) {
         options.push(RequestUserInputQuestionOption {
             label: "Add to allowlist".to_string(),
             description: "Allow this matched value through exclusions going forward.".to_string(),
         });
+    }
+
+    if matches!(
+        match_info.map(|info| info.reason),
+        Some(crate::content_gateway::RedactionReason::SecretPattern)
+    ) {
         options.push(RequestUserInputQuestionOption {
             label: "Add to blocklist".to_string(),
             description: "Add this value to extra secret patterns to scan.".to_string(),
@@ -482,7 +496,7 @@ async fn maybe_prompt_for_redaction(
         .and_then(|response| response.answers.get("exclusions_redaction").cloned())
         .and_then(|answer| answer.answers.first().cloned())?;
 
-    parse_redaction_decision(&answer, match_value)
+    parse_redaction_decision(&answer, match_value, match_info.map(|info| info.reason))
 }
 
 async fn resolve_redaction_decision(
@@ -503,6 +517,11 @@ async fn resolve_redaction_decision(
     match decision {
         RedactionDecision::AllowOnce => (original, crate::content_gateway::ScanReport::safe()),
         RedactionDecision::AllowForSession => {
+            crate::content_gateway::remember_safe_report_matches_for_epoch(
+                &session.content_gateway_cache,
+                &report,
+                turn.sensitive_paths.ignore_epoch(),
+            );
             session
                 .content_gateway_cache
                 .remember_safe_text_for_epoch(&original, turn.sensitive_paths.ignore_epoch());
@@ -527,7 +546,13 @@ async fn resolve_redaction_decision(
             report.blocked = true;
             ("[BLOCKED]".to_string(), report)
         }
-        RedactionDecision::AddAllowlist(value) => {
+        RedactionDecision::AddAllowlistLiteral(value) => {
+            session
+                .add_exclusion_secret_pattern(regex::escape(&value), true)
+                .await;
+            (original, crate::content_gateway::ScanReport::safe())
+        }
+        RedactionDecision::AddAllowlistRegex(value) => {
             session.add_exclusion_secret_pattern(value, true).await;
             (original, crate::content_gateway::ScanReport::safe())
         }
@@ -1175,31 +1200,43 @@ mod tests {
     #[test]
     fn parse_redaction_decision_maps_answers() {
         assert!(matches!(
-            super::parse_redaction_decision("Allow once", None),
+            super::parse_redaction_decision("Allow once", None, None),
             Some(super::RedactionDecision::AllowOnce)
         ));
         assert!(matches!(
-            super::parse_redaction_decision("Allow for this session", None),
+            super::parse_redaction_decision("Allow for this session", None, None),
             Some(super::RedactionDecision::AllowForSession)
         ));
         assert!(matches!(
-            super::parse_redaction_decision("Redact", None),
+            super::parse_redaction_decision("Redact", None, None),
             Some(super::RedactionDecision::Redact)
         ));
         assert!(matches!(
-            super::parse_redaction_decision("Block", None),
+            super::parse_redaction_decision("Block", None, None),
             Some(super::RedactionDecision::Block)
         ));
         assert!(matches!(
-            super::parse_redaction_decision("Add to allowlist", Some("secret".to_string())),
-            Some(super::RedactionDecision::AddAllowlist(value)) if value == "secret"
+            super::parse_redaction_decision(
+                "Add to allowlist",
+                Some("secret".to_string()),
+                Some(crate::content_gateway::RedactionReason::SecretPattern),
+            ),
+            Some(super::RedactionDecision::AddAllowlistRegex(value)) if value == "secret"
         ));
         assert!(matches!(
-            super::parse_redaction_decision("Add to blocklist", Some("secret".to_string())),
+            super::parse_redaction_decision("Add to blocklist", Some("secret".to_string()), None),
             Some(super::RedactionDecision::AddBlocklist(value)) if value == "secret"
         ));
+        assert!(matches!(
+            super::parse_redaction_decision(
+                "Add to allowlist",
+                Some("ignored/path.db".to_string()),
+                Some(crate::content_gateway::RedactionReason::IgnoredPath),
+            ),
+            Some(super::RedactionDecision::AddAllowlistLiteral(value)) if value == "ignored/path.db"
+        ));
         assert_eq!(
-            super::parse_redaction_decision("unknown", None).is_none(),
+            super::parse_redaction_decision("unknown", None, None).is_none(),
             true
         );
     }
