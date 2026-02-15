@@ -4541,6 +4541,46 @@ mod tests {
     }
 
     #[test]
+    fn status_bar_branch_name_compacts_when_char_limit_is_exceeded() {
+        let branch = "feature/platform/team/project/really-long-branch-name";
+        let compacted = ChatComposer::compact_branch_name_for_char_limit_if_needed(branch, 29);
+        assert_eq!(compacted, "p/t/p/really-long-branch-name");
+    }
+
+    #[test]
+    fn status_bar_worktree_path_prefers_dot_worktrees_compaction() {
+        let worktree = "/Users/dev/codex/.worktrees/feat-project-level-settings";
+        let compacted = ChatComposer::compact_worktree_path_for_char_limit_if_needed(worktree, 40);
+        assert_eq!(compacted, "…/.worktrees/feat-project-level-settings");
+    }
+
+    #[test]
+    fn status_bar_deduplicates_worktree_when_it_matches_branch_and_is_long() {
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask xcodex to do anything".to_string(),
+            false,
+        );
+        composer.set_status_bar_git_options(true, true);
+        composer.set_status_bar_git_context(
+            Some("feat/project-level-settings".to_string()),
+            Some("/Users/eriz/Dev/Pyfun/codex/.worktrees/feat-project-level-settings".to_string()),
+        );
+
+        let rendered: String = composer
+            .status_bar_spans(Some(300))
+            .into_iter()
+            .map(|span| span.content.into_owned())
+            .collect();
+        assert!(rendered.contains(" feat/project-level-settings"));
+        assert!(!rendered.contains(" "));
+    }
+
+    #[test]
     fn footer_mode_snapshots() {
         use crossterm::event::KeyCode;
         use crossterm::event::KeyEvent;
