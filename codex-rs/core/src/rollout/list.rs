@@ -719,6 +719,7 @@ async fn build_thread_item(
             updated_at: mut summary_updated_at,
             ..
         } = summary;
+        let cwd = parse_latest_turn_context_cwd(path.as_path()).await.or(cwd);
         if summary_updated_at.is_none() {
             summary_updated_at = updated_at.or_else(|| created_at.clone());
         }
@@ -736,6 +737,23 @@ async fn build_thread_item(
             created_at,
             updated_at: summary_updated_at,
         });
+    }
+    None
+}
+
+async fn parse_latest_turn_context_cwd(path: &Path) -> Option<PathBuf> {
+    let text = tokio::fs::read_to_string(path).await.ok()?;
+    for line in text.lines().rev() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let Ok(rollout_line) = serde_json::from_str::<RolloutLine>(trimmed) else {
+            continue;
+        };
+        if let RolloutItem::TurnContext(item) = rollout_line.item {
+            return Some(item.cwd);
+        }
     }
     None
 }

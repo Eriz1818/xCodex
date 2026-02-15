@@ -1,4 +1,5 @@
 use crate::config::Config;
+use crate::git_info::collect_git_info;
 use crate::rollout;
 use crate::rollout::list::parse_timestamp_uuid_from_filename;
 use crate::rollout::recorder::RolloutRecorder;
@@ -110,8 +111,17 @@ pub(crate) async fn extract_metadata_from_rollout(
         )
     })?;
     let mut metadata = builder.build(default_provider);
+    let saw_turn_context = items
+        .iter()
+        .any(|item| matches!(item, RolloutItem::TurnContext(_)));
     for item in &items {
         apply_rollout_item(&mut metadata, item, default_provider);
+    }
+    if saw_turn_context {
+        let git = collect_git_info(metadata.cwd.as_path()).await;
+        metadata.git_sha = git.as_ref().and_then(|info| info.commit_hash.clone());
+        metadata.git_branch = git.as_ref().and_then(|info| info.branch.clone());
+        metadata.git_origin_url = git.and_then(|info| info.repository_url);
     }
     if let Some(updated_at) = file_modified_time_utc(rollout_path).await {
         metadata.updated_at = updated_at;

@@ -1,5 +1,6 @@
 use crate::config::Config;
 use crate::features::Feature;
+use crate::git_info::collect_git_info;
 use crate::path_utils::normalize_for_path_comparison;
 use crate::rollout::list::Cursor;
 use crate::rollout::list::ThreadSortKey;
@@ -500,6 +501,39 @@ pub async fn apply_rollout_items(
     if let Err(err) = ctx.apply_rollout_items(&builder, items, None).await {
         warn!(
             "state db apply_rollout_items failed during {stage} for {}: {err}",
+            rollout_path.display()
+        );
+        return;
+    }
+
+    // TurnContext updates can move a session between worktrees. Refresh git
+    // metadata from the latest cwd so resume-picker branch/cwd columns stay in sync.
+    if !items
+        .iter()
+        .any(|item| matches!(item, RolloutItem::TurnContext(_)))
+    {
+        return;
+    }
+
+    let Ok(Some(mut metadata)) = ctx.get_thread(builder.id).await else {
+        return;
+    };
+    let git = collect_git_info(metadata.cwd.as_path()).await;
+    let next_git_sha = git.as_ref().and_then(|info| info.commit_hash.clone());
+    let next_git_branch = git.as_ref().and_then(|info| info.branch.clone());
+    let next_git_origin_url = git.and_then(|info| info.repository_url);
+    if metadata.git_sha == next_git_sha
+        && metadata.git_branch == next_git_branch
+        && metadata.git_origin_url == next_git_origin_url
+    {
+        return;
+    }
+    metadata.git_sha = next_git_sha;
+    metadata.git_branch = next_git_branch;
+    metadata.git_origin_url = next_git_origin_url;
+    if let Err(err) = ctx.upsert_thread(&metadata).await {
+        warn!(
+            "state db git metadata refresh failed during {stage} for {}: {err}",
             rollout_path.display()
         );
     }

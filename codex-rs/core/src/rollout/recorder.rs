@@ -810,7 +810,57 @@ async fn rollout_writer(
                 let _ = ack.send(());
             }
             RolloutCmd::Shutdown { ack } => {
+                let result = async {
+                    if writer.is_none() && !buffered_items.is_empty() {
+                        let Some(log_file_info) = deferred_log_file_info.take() else {
+                            return Err(IoError::other(
+                                "deferred rollout recorder missing log file metadata",
+                            ));
+                        };
+                        let file = open_log_file(log_file_info.path.as_path())?;
+                        writer = Some(JsonlWriter {
+                            file: tokio::fs::File::from_std(file),
+                        });
+                    }
+
+                    if let Some(session_meta) = meta.take()
+                        && writer.is_some()
+                    {
+                        write_session_meta(
+                            writer.as_mut(),
+                            session_meta,
+                            &cwd,
+                            &rollout_path,
+                            state_db_ctx.as_deref(),
+                            &mut state_builder,
+                            default_provider.as_str(),
+                        )
+                        .await?;
+                    }
+
+                    if !buffered_items.is_empty() {
+                        write_and_reconcile_items(
+                            writer.as_mut(),
+                            buffered_items.as_slice(),
+                            &rollout_path,
+                            state_db_ctx.as_deref(),
+                            &mut state_builder,
+                            default_provider.as_str(),
+                        )
+                        .await?;
+                        buffered_items.clear();
+                    }
+
+                    if let Some(writer) = writer.as_mut() {
+                        writer.file.flush().await?;
+                    }
+
+                    Ok(())
+                }
+                .await;
                 let _ = ack.send(());
+                result?;
+                break;
             }
         }
     }
