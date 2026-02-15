@@ -176,7 +176,7 @@ jobs:
             target: x86_64-unknown-linux-gnu
           - runner: ubuntu-24.04-arm
             target: aarch64-unknown-linux-gnu
-            timeout_minutes: 60
+            timeout_minutes: 90
           # Temporarily disabled while we keep npm payload size under registry limits.
           # - runner: ubuntu-latest
           #   target: x86_64-unknown-linux-musl
