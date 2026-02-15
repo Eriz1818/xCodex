@@ -3004,58 +3004,87 @@ impl ChatComposer {
         let branch = branch_raw.map(|value| {
             Self::compact_branch_name_for_char_limit_if_needed(value, BRANCH_CHAR_LIMIT)
         });
-        let hide_worktree =
-            if let (Some(branch_value), Some(worktree_value)) = (branch_raw, worktree_raw) {
+        let worktree = worktree_raw.map(|value| {
+            Self::compact_worktree_path_for_char_limit_if_needed(value, WORKTREE_CHAR_LIMIT)
+        });
+        let dedupe_branch_and_worktree =
+            if let (Some(branch_value), Some(worktree_path)) = (branch_raw, worktree_raw) {
                 Self::should_deduplicate_branch_and_worktree(
                     branch_value,
-                    worktree_value,
+                    worktree_path,
                     DEDUP_COMBINED_CHAR_LIMIT,
                 )
             } else {
                 false
             };
-        let worktree = if hide_worktree {
-            None
-        } else {
-            worktree_raw.map(|value| {
-                Self::compact_worktree_path_for_char_limit_if_needed(value, WORKTREE_CHAR_LIMIT)
-            })
-        };
 
         let mut spans = Vec::new();
         let mut used_width = 0usize;
 
-        if let Some(branch_value) = branch.as_deref() {
-            spans.push(Span::styled(
-                BRANCH_ICON.to_string(),
-                crate::theme::accent_style(),
-            ));
-            spans.push(Span::styled(
-                branch_value.to_string(),
-                crate::theme::accent_style(),
-            ));
-            used_width += BRANCH_ICON.width() + branch_value.width();
-        }
+        if dedupe_branch_and_worktree {
+            if worktree.is_some() {
+                spans.push(Span::styled(
+                    BRANCH_ICON.to_string(),
+                    crate::theme::accent_style(),
+                ));
+                spans.push(Span::styled(
+                    WORKTREE_ICON.to_string(),
+                    crate::theme::accent_style(),
+                ));
+                used_width += BRANCH_ICON.width() + WORKTREE_ICON.width();
 
-        if let Some(worktree_value) = worktree.as_deref() {
-            if !spans.is_empty() {
-                spans.push(SECTION_SEPARATOR.dim());
-                used_width += SECTION_SEPARATOR.width();
+                if let Some(worktree_value) = worktree.as_deref() {
+                    let worktree_budget = max_width
+                        .map(|max| max.saturating_sub(used_width))
+                        .map(|max| max.max(1))
+                        .unwrap_or(usize::MAX);
+                    let worktree_display =
+                        Self::compact_worktree_path_for_width(worktree_value, worktree_budget);
+                    let highlighted_leaf =
+                        branch_raw
+                            .zip(worktree_raw)
+                            .and_then(|(branch_value, worktree_path)| {
+                                Self::overlapping_branch_worktree_leaf(branch_value, worktree_path)
+                            });
+                    spans.extend(Self::worktree_path_spans_with_overlap_highlight(
+                        &worktree_display,
+                        highlighted_leaf,
+                    ));
+                }
+            }
+        } else {
+            if let Some(branch_value) = branch.as_deref() {
+                spans.push(Span::styled(
+                    BRANCH_ICON.to_string(),
+                    crate::theme::accent_style(),
+                ));
+                spans.push(Span::styled(
+                    branch_value.to_string(),
+                    crate::theme::accent_style(),
+                ));
+                used_width += BRANCH_ICON.width() + branch_value.width();
             }
 
-            spans.push(Span::styled(
-                WORKTREE_ICON.to_string(),
-                crate::theme::accent_style(),
-            ));
-            used_width += WORKTREE_ICON.width();
+            if let Some(worktree_value) = worktree.as_deref() {
+                if !spans.is_empty() {
+                    spans.push(SECTION_SEPARATOR.dim());
+                    used_width += SECTION_SEPARATOR.width();
+                }
 
-            let worktree_budget = max_width
-                .map(|max| max.saturating_sub(used_width))
-                .map(|max| max.max(1))
-                .unwrap_or(usize::MAX);
-            let worktree_display =
-                Self::compact_worktree_path_for_width(worktree_value, worktree_budget);
-            spans.push(worktree_display.dim());
+                spans.push(Span::styled(
+                    WORKTREE_ICON.to_string(),
+                    crate::theme::accent_style(),
+                ));
+                used_width += WORKTREE_ICON.width();
+
+                let worktree_budget = max_width
+                    .map(|max| max.saturating_sub(used_width))
+                    .map(|max| max.max(1))
+                    .unwrap_or(usize::MAX);
+                let worktree_display =
+                    Self::compact_worktree_path_for_width(worktree_value, worktree_budget);
+                spans.push(worktree_display.dim());
+            }
         }
 
         spans
@@ -3238,23 +3267,45 @@ impl ChatComposer {
         format!("…/{marker}/{leaf}")
     }
 
+    fn overlapping_branch_worktree_leaf<'a>(
+        branch: &str,
+        worktree_path: &'a str,
+    ) -> Option<&'a str> {
+        let worktree_leaf = Self::path_leaf(worktree_path)?;
+        let branch_key = Self::normalize_similarity_key(branch);
+        let worktree_key = Self::normalize_similarity_key(worktree_leaf);
+        (!branch_key.is_empty()
+            && !worktree_key.is_empty()
+            && (branch_key.contains(&worktree_key) || worktree_key.contains(&branch_key)))
+        .then_some(worktree_leaf)
+    }
+
     fn should_deduplicate_branch_and_worktree(
         branch: &str,
         worktree_path: &str,
         combined_limit: usize,
     ) -> bool {
         let combined_len = Self::char_count(branch) + Self::char_count(worktree_path);
-        if combined_len <= combined_limit {
-            return false;
+        combined_len > combined_limit
+            && Self::overlapping_branch_worktree_leaf(branch, worktree_path).is_some()
+    }
+
+    fn worktree_path_spans_with_overlap_highlight(
+        worktree_display: &str,
+        highlighted_leaf: Option<&str>,
+    ) -> Vec<Span<'static>> {
+        if let Some(leaf) = highlighted_leaf {
+            if let Some(prefix) = worktree_display.strip_suffix(leaf) {
+                let mut spans = Vec::new();
+                if !prefix.is_empty() {
+                    spans.push(prefix.to_string().dim());
+                }
+                spans.push(Span::styled(leaf.to_string(), crate::theme::accent_style()));
+                return spans;
+            }
         }
-        let Some(worktree_leaf) = Self::path_leaf(worktree_path) else {
-            return false;
-        };
-        let branch_key = Self::normalize_similarity_key(branch);
-        let worktree_key = Self::normalize_similarity_key(worktree_leaf);
-        !branch_key.is_empty()
-            && !worktree_key.is_empty()
-            && (branch_key.contains(&worktree_key) || worktree_key.contains(&branch_key))
+
+        vec![worktree_display.to_string().dim()]
     }
 
     fn path_leaf(path: &str) -> Option<&str> {
@@ -4555,7 +4606,7 @@ mod tests {
     }
 
     #[test]
-    fn status_bar_deduplicates_worktree_when_it_matches_branch_and_is_long() {
+    fn status_bar_keeps_worktree_visible_when_branch_is_similar_and_long() {
         let (tx, _rx) = unbounded_channel::<AppEvent>();
         let sender = AppEventSender::new(tx);
         let mut composer = ChatComposer::new(
@@ -4576,8 +4627,89 @@ mod tests {
             .into_iter()
             .map(|span| span.content.into_owned())
             .collect();
-        assert!(rendered.contains(" feat/project-level-settings"));
-        assert!(!rendered.contains(" "));
+        assert!(rendered.contains("  "));
+        assert!(rendered.contains(" "));
+        assert!(!rendered.contains(" feat/project-level-settings"));
+    }
+
+    #[test]
+    fn status_bar_highlights_overlapping_worktree_leaf() {
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask xcodex to do anything".to_string(),
+            false,
+        );
+        composer.set_status_bar_git_options(true, true);
+        composer.set_status_bar_git_context(
+            Some("feat/project-level-settings".to_string()),
+            Some("/Users/eriz/Dev/Pyfun/codex/.worktrees/feat-project-level-settings".to_string()),
+        );
+
+        let spans = composer.status_bar_spans(Some(300));
+        let leaf_span = spans
+            .iter()
+            .find(|span| span.content.as_ref() == "feat-project-level-settings")
+            .expect("expected highlighted worktree leaf span");
+        assert_eq!(leaf_span.style, crate::theme::accent_style());
+
+        let prefix_span = spans
+            .iter()
+            .find(|span| span.content.as_ref().contains(".worktrees/"))
+            .expect("expected dimmed worktree prefix span");
+        assert!(prefix_span.style.add_modifier.contains(Modifier::DIM));
+    }
+
+    #[test]
+    fn status_bar_keeps_worktree_leaf_dim_when_not_overlapping() {
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask xcodex to do anything".to_string(),
+            false,
+        );
+        composer.set_status_bar_git_options(true, true);
+        composer.set_status_bar_git_context(
+            Some("feat/api-auth".to_string()),
+            Some("/Users/eriz/Dev/Pyfun/codex/.worktrees/feat-project-level-settings".to_string()),
+        );
+
+        let spans = composer.status_bar_spans(Some(300));
+        let leaf_span = spans
+            .iter()
+            .find(|span| {
+                span.content
+                    .as_ref()
+                    .contains("feat-project-level-settings")
+            })
+            .expect("expected worktree leaf span");
+        assert_ne!(leaf_span.style, crate::theme::accent_style());
+        assert!(leaf_span.style.add_modifier.contains(Modifier::DIM));
+    }
+
+    #[test]
+    fn status_bar_branch_and_worktree_snapshot_when_names_overlap() {
+        snapshot_composer_state_with_width(
+            "status_bar_branch_and_worktree_overlap",
+            140,
+            true,
+            |composer| {
+                composer.set_status_bar_git_options(true, true);
+                composer.set_status_bar_git_context(
+                    Some("feat/project-level-settings".to_string()),
+                    Some(
+                        "/Users/eriz/Dev/Pyfun/codex/.worktrees/feat-project-level-settings"
+                            .to_string(),
+                    ),
+                );
+            },
+        );
     }
 
     #[test]

@@ -548,9 +548,6 @@ async fn enforce_sensitive_content_gateway(
     call_id: &str,
 ) -> ToolOutput {
     let epoch = turn.sensitive_paths.ignore_epoch();
-    let gateway = crate::content_gateway::ContentGateway::new(
-        crate::content_gateway::GatewayConfig::from_exclusion(&turn.exclusion),
-    );
 
     match output {
         ToolOutput::Function {
@@ -558,6 +555,12 @@ async fn enforce_sensitive_content_gateway(
             mut success,
             provenance,
         } => {
+            let mut gateway_cfg =
+                crate::content_gateway::GatewayConfig::from_exclusion(&turn.exclusion);
+            if is_trusted_local_code_output(&provenance) {
+                gateway_cfg.secret_patterns = false;
+            }
+            let gateway = crate::content_gateway::ContentGateway::new(gateway_cfg);
             let source = match &provenance {
                 ToolProvenance::Filesystem { .. } => {
                     crate::exclusion_counters::ExclusionSource::Filesystem
@@ -680,6 +683,9 @@ async fn enforce_sensitive_content_gateway(
             }
         }
         ToolOutput::Mcp { result, provenance } => {
+            let gateway = crate::content_gateway::ContentGateway::new(
+                crate::content_gateway::GatewayConfig::from_exclusion(&turn.exclusion),
+            );
             let mut report = crate::content_gateway::ScanReport::safe();
             let origin_type = provenance.origin_type();
             let origin_path = provenance.origin_path();
@@ -783,6 +789,46 @@ fn is_unattested_output(output: &ToolOutput) -> bool {
                 | ToolProvenance::Unattested { .. }
         ),
     }
+}
+
+fn is_trusted_local_code_output(provenance: &ToolProvenance) -> bool {
+    let ToolProvenance::Filesystem { path } = provenance else {
+        return false;
+    };
+    let Some(extension) = path.extension().and_then(std::ffi::OsStr::to_str) else {
+        return false;
+    };
+    matches!(
+        extension.to_ascii_lowercase().as_str(),
+        "c" | "cc"
+            | "cpp"
+            | "cs"
+            | "go"
+            | "h"
+            | "hpp"
+            | "java"
+            | "js"
+            | "json"
+            | "jsx"
+            | "kt"
+            | "kts"
+            | "m"
+            | "mm"
+            | "php"
+            | "py"
+            | "rb"
+            | "rs"
+            | "scala"
+            | "sh"
+            | "sql"
+            | "swift"
+            | "toml"
+            | "ts"
+            | "tsx"
+            | "yaml"
+            | "yml"
+            | "zsh"
+    )
 }
 
 async fn enforce_unattested_output_policy<WarnFut, WarnFn, ApprovalFut, ApprovalFn>(
@@ -910,6 +956,24 @@ mod tests {
             },
         };
         assert_eq!(true, super::is_unattested_output(&output));
+    }
+
+    #[test]
+    fn trusted_local_code_output_matches_only_filesystem_code_extensions() {
+        let trusted = ToolProvenance::Filesystem {
+            path: std::path::PathBuf::from("/tmp/src/main.rs"),
+        };
+        assert_eq!(true, super::is_trusted_local_code_output(&trusted));
+
+        let markdown = ToolProvenance::Filesystem {
+            path: std::path::PathBuf::from("/tmp/docs/readme.md"),
+        };
+        assert_eq!(false, super::is_trusted_local_code_output(&markdown));
+
+        let shell = ToolProvenance::Shell {
+            cwd: std::path::PathBuf::from("/tmp"),
+        };
+        assert_eq!(false, super::is_trusted_local_code_output(&shell));
     }
 
     #[test]

@@ -268,6 +268,7 @@ pub(crate) async fn apply_bespoke_event_handling(
             }
         },
         EventMsg::RequestUserInput(request) => {
+            let request_id = request.call_id.clone();
             if matches!(api_version, ApiVersion::V2) {
                 let questions = request
                     .questions
@@ -292,26 +293,26 @@ pub(crate) async fn apply_bespoke_event_handling(
                 let params = ToolRequestUserInputParams {
                     thread_id: conversation_id.to_string(),
                     turn_id: request.turn_id,
-                    item_id: request.call_id,
+                    item_id: request_id.clone(),
                     questions,
                 };
                 let rx = outgoing
                     .send_request(ServerRequestPayload::ToolRequestUserInput(params))
                     .await;
                 tokio::spawn(async move {
-                    on_request_user_input_response(event_turn_id, rx, conversation).await;
+                    on_request_user_input_response(request_id, rx, conversation).await;
                 });
             } else {
                 error!(
                     "request_user_input is only supported on api v2 (call_id: {})",
-                    request.call_id
+                    request_id
                 );
                 let empty = CoreRequestUserInputResponse {
                     answers: HashMap::new(),
                 };
                 if let Err(err) = conversation
                     .submit(Op::UserInputAnswer {
-                        id: event_turn_id,
+                        id: request_id,
                         response: empty,
                     })
                     .await
@@ -1505,7 +1506,7 @@ async fn on_exec_approval_response(
 }
 
 async fn on_request_user_input_response(
-    event_turn_id: String,
+    request_id: String,
     receiver: oneshot::Receiver<ClientRequestResult>,
     conversation: Arc<CodexThread>,
 ) {
@@ -1519,7 +1520,7 @@ async fn on_request_user_input_response(
             };
             if let Err(err) = conversation
                 .submit(Op::UserInputAnswer {
-                    id: event_turn_id,
+                    id: request_id,
                     response: empty,
                 })
                 .await
@@ -1535,7 +1536,7 @@ async fn on_request_user_input_response(
             };
             if let Err(err) = conversation
                 .submit(Op::UserInputAnswer {
-                    id: event_turn_id,
+                    id: request_id,
                     response: empty,
                 })
                 .await
@@ -1570,7 +1571,7 @@ async fn on_request_user_input_response(
 
     if let Err(err) = conversation
         .submit(Op::UserInputAnswer {
-            id: event_turn_id,
+            id: request_id,
             response,
         })
         .await

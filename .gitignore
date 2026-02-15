@@ -70,6 +70,7 @@ coverage/
 
 # personal files
 personal/
+.xcodex/config.toml
 docs/personal
 docs/impl-plans
 docs/impl-plans/

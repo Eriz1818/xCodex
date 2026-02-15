@@ -273,6 +273,38 @@ fn exec_resume_last_respects_cwd_filter_and_all_flag() -> anyhow::Result<()> {
         FileTimes::new().set_modified(SystemTime::UNIX_EPOCH + Duration::from_secs(2)),
     )?;
 
+    let marker_a2 = format!("resume-cwd-a-2-{}", Uuid::new_v4());
+    let prompt_a2 = format!("echo {marker_a2}");
+    test.cmd()
+        .env("CODEX_RS_SSE_FIXTURE", &fixture)
+        .env("OPENAI_BASE_URL", "http://unused.local")
+        .arg("--skip-git-repo-check")
+        .arg("-C")
+        .arg(dir_a.path())
+        .arg("resume")
+        .arg("--last")
+        .arg(&prompt_a2)
+        .assert()
+        .success();
+
+    let resumed_path_cwd = find_session_file_containing_marker(&sessions_dir, &marker_a2)
+        .expect("no resumed session file containing marker_a2");
+    assert_eq!(
+        resumed_path_cwd, path_a,
+        "resume --last should prefer sessions from the same cwd"
+    );
+
+    // `--all` can update the resumed thread's cwd metadata to the current cwd, so
+    // run the cwd-filtered case first. Then reset mtimes before asserting `--all`.
+    let file_a = OpenOptions::new().write(true).open(&path_a)?;
+    file_a.set_times(
+        FileTimes::new().set_modified(SystemTime::UNIX_EPOCH + Duration::from_secs(1)),
+    )?;
+    let file_b = OpenOptions::new().write(true).open(&path_b)?;
+    file_b.set_times(
+        FileTimes::new().set_modified(SystemTime::UNIX_EPOCH + Duration::from_secs(2)),
+    )?;
+
     let marker_b2 = format!("resume-cwd-b-2-{}", Uuid::new_v4());
     let prompt_b2 = format!("echo {marker_b2}");
     test.cmd()
@@ -293,27 +325,6 @@ fn exec_resume_last_respects_cwd_filter_and_all_flag() -> anyhow::Result<()> {
     assert_eq!(
         resumed_path_all, path_b,
         "resume --last --all should pick newest session"
-    );
-
-    let marker_a2 = format!("resume-cwd-a-2-{}", Uuid::new_v4());
-    let prompt_a2 = format!("echo {marker_a2}");
-    test.cmd()
-        .env("CODEX_RS_SSE_FIXTURE", &fixture)
-        .env("OPENAI_BASE_URL", "http://unused.local")
-        .arg("--skip-git-repo-check")
-        .arg("-C")
-        .arg(dir_a.path())
-        .arg("resume")
-        .arg("--last")
-        .arg(&prompt_a2)
-        .assert()
-        .success();
-
-    let resumed_path_cwd = find_session_file_containing_marker(&sessions_dir, &marker_a2)
-        .expect("no resumed session file containing marker_a2");
-    assert_eq!(
-        resumed_path_cwd, path_a,
-        "resume --last should prefer sessions from the same cwd"
     );
 
     Ok(())

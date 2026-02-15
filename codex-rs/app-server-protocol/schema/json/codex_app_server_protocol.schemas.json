@@ -5046,13 +5046,17 @@
         },
         "layer4_request_interceptor": {
           "$ref": "#/definitions/ExclusionCounts"
+        },
+        "layer5_hook_sanitization": {
+          "$ref": "#/definitions/ExclusionCounts"
         }
       },
       "required": [
         "layer1_input_guards",
         "layer2_output_sanitization",
         "layer3_send_firewall",
-        "layer4_request_interceptor"
+        "layer4_request_interceptor",
+        "layer5_hook_sanitization"
       ],
       "type": "object"
     },

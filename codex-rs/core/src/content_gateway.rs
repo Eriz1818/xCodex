@@ -186,9 +186,14 @@ static RE_SECRET_PATTERNS_BUILTIN: Lazy<Vec<Regex>> = Lazy::new(|| {
         // Generic key-value labels except token.
         Regex::new(r"(?i)\b(password|secret|api[_-]?key)\b\s*[:=]\s*\S+")
             .unwrap_or_else(|err| panic!("generic secret kv regex: {err}")),
-        // Token label with stricter value shape to reduce false positives.
-        Regex::new(r#"(?i)\btoken\b\s*[:=]\s*["']?[A-Za-z0-9._-]{16,}["']?"#)
+        // Token label.
+        Regex::new(r#"(?i)\btoken\b\s*[:=]\s*["']?[A-Za-z0-9._-]+["']?"#)
             .unwrap_or_else(|err| panic!("token kv regex: {err}")),
+        // High-confidence token labels that should match even for short values.
+        Regex::new(
+            r#"(?i)\b(access[_-]?token|refresh[_-]?token|id[_-]?token|bearer(?:[_-]?token)?|authorization)\b\s*[:=]\s*["']?[A-Za-z0-9._-]+["']?"#,
+        )
+        .unwrap_or_else(|err| panic!("high confidence token kv regex: {err}")),
     ]
 });
 
@@ -848,7 +853,7 @@ mod tests {
     }
 
     #[test]
-    fn token_label_with_human_readable_value_does_not_trigger_secret_pattern() {
+    fn plain_token_word_without_assignment_does_not_trigger_secret_pattern() {
         let tmp = tempdir().expect("tempdir");
         init_repo(tmp.path());
         let policy = SensitivePathPolicy::new(tmp.path().to_path_buf());
@@ -856,14 +861,14 @@ mod tests {
         let cache = GatewayCache::new();
         let epoch = policy.ignore_epoch();
 
-        let input = r#"token: "git-branch""#;
+        let input = "set the token label for branch selection";
         let (out, report) = gateway.scan_text(input, &policy, &cache, epoch);
         assert_eq!(out, input);
         assert_eq!(report, ScanReport::safe());
     }
 
     #[test]
-    fn token_label_with_long_token_like_value_triggers_secret_pattern() {
+    fn token_label_with_short_value_triggers_secret_pattern() {
         let tmp = tempdir().expect("tempdir");
         init_repo(tmp.path());
         let policy = SensitivePathPolicy::new(tmp.path().to_path_buf());
@@ -871,8 +876,21 @@ mod tests {
         let cache = GatewayCache::new();
         let epoch = policy.ignore_epoch();
 
-        let (out, report) =
-            gateway.scan_text("token = sk_test_1234567890abcdef", &policy, &cache, epoch);
+        let (out, report) = gateway.scan_text(r#"token: "git-branch""#, &policy, &cache, epoch);
+        assert_eq!(out, "[REDACTED]");
+        assert!(report.redacted);
+    }
+
+    #[test]
+    fn high_confidence_token_label_with_short_value_triggers_secret_pattern() {
+        let tmp = tempdir().expect("tempdir");
+        init_repo(tmp.path());
+        let policy = SensitivePathPolicy::new(tmp.path().to_path_buf());
+        let gateway = ContentGateway::new(GatewayConfig::default());
+        let cache = GatewayCache::new();
+        let epoch = policy.ignore_epoch();
+
+        let (out, report) = gateway.scan_text("access_token=abc123", &policy, &cache, epoch);
         assert_eq!(out, "[REDACTED]");
         assert!(report.redacted);
     }
