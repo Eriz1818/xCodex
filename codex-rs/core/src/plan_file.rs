@@ -51,6 +51,18 @@ pub fn set_status(path: &Path, status: &str, today: &str) -> io::Result<()> {
 ///
 /// If status is `Done` or `Archived`, this is a no-op.
 pub fn sync_turn_end(path: &Path, today: &str, note: &str) -> io::Result<()> {
+    sync_turn_end_with_content(path, today, note, None, None)
+}
+
+/// On assistant turn completion, update plan metadata, append a checkpoint line,
+/// persist full proposed plan text (when available), and append discussion text.
+pub fn sync_turn_end_with_content(
+    path: &Path,
+    today: &str,
+    note: &str,
+    discussion_text: Option<&str>,
+    proposed_plan_text: Option<&str>,
+) -> io::Result<()> {
     let content = fs::read_to_string(path)?;
     let current_status = read_status_from_text(&content)
         .unwrap_or_else(|| "Draft".to_string())
@@ -61,9 +73,11 @@ pub fn sync_turn_end(path: &Path, today: &str, note: &str) -> io::Result<()> {
 
     let status = "Active";
     let todos = count_unchecked_todos_in_text(&content);
-    let updated_with_metadata = update_turn_metadata(&content, status, todos, today);
+    let mut updated = update_turn_metadata(&content, status, todos, today);
+    updated = upsert_latest_proposed_plan_section(&updated, proposed_plan_text, false);
+    updated = append_research_log_entry(&updated, today, discussion_text);
     let note = normalize_progress_note(note);
-    let updated = append_progress_log_entry(&updated_with_metadata, today, &note);
+    updated = append_progress_log_entry(&updated, today, &note);
     write_atomic(path, &updated)
 }
 
@@ -79,6 +93,20 @@ pub fn sync_turn_end_adr_lite(
     note: &str,
     worktree: &str,
     branch: &str,
+) -> io::Result<()> {
+    sync_turn_end_adr_lite_with_content(path, today, note, worktree, branch, None, None)
+}
+
+/// ADR-lite turn-end sync with stricter hygiene/context tracking and durable
+/// persistence of proposed plan + discussion text.
+pub fn sync_turn_end_adr_lite_with_content(
+    path: &Path,
+    today: &str,
+    note: &str,
+    worktree: &str,
+    branch: &str,
+    discussion_text: Option<&str>,
+    proposed_plan_text: Option<&str>,
 ) -> io::Result<()> {
     let content = fs::read_to_string(path)?;
     let current_status = read_status_from_text(&content)
@@ -113,6 +141,8 @@ pub fn sync_turn_end_adr_lite(
         ));
     }
 
+    updated = upsert_latest_proposed_plan_section(&updated, proposed_plan_text, true);
+    updated = append_research_log_entry(&updated, today, discussion_text);
     let updated = append_progress_log_entry(&updated, today, &final_note);
     write_atomic(path, &updated)
 }
@@ -329,6 +359,97 @@ fn append_progress_log_entry(content: &str, today: &str, note: &str) -> String {
     }
     out.push_str("## Progress log\n\n");
     out.push_str(&entry);
+    out.push('\n');
+    out
+}
+
+fn upsert_latest_proposed_plan_section(
+    content: &str,
+    proposed_plan_text: Option<&str>,
+    is_adr_lite: bool,
+) -> String {
+    let Some(plan_text) = proposed_plan_text
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return ensure_trailing_newline(content.to_string());
+    };
+
+    let header = if is_adr_lite {
+        "## Latest ADR-lite proposed plan"
+    } else {
+        "## Latest proposed plan"
+    };
+
+    let mut replacement: Vec<String> = Vec::new();
+    replacement.push(header.to_string());
+    replacement.push(String::new());
+    replacement.extend(plan_text.lines().map(ToString::to_string));
+
+    let mut lines: Vec<String> = content.lines().map(ToString::to_string).collect();
+    if let Some(section_start) = lines.iter().position(|line| line.trim() == header) {
+        let section_end = lines
+            .iter()
+            .enumerate()
+            .skip(section_start + 1)
+            .find(|(_, line)| line.starts_with("## "))
+            .map_or(lines.len(), |(idx, _)| idx);
+        lines.splice(section_start..section_end, replacement);
+        return ensure_trailing_newline(lines.join("\n"));
+    }
+
+    let mut out = content.trim_end_matches('\n').to_string();
+    if !out.is_empty() {
+        out.push_str("\n\n");
+    }
+    out.push_str(header);
+    out.push_str("\n\n");
+    out.push_str(plan_text);
+    out.push('\n');
+    out
+}
+
+fn append_research_log_entry(content: &str, today: &str, discussion_text: Option<&str>) -> String {
+    let Some(text) = discussion_text
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return ensure_trailing_newline(content.to_string());
+    };
+
+    let header = "## Research log";
+    let mut entry_lines = vec![format!("- {today}:")];
+    entry_lines.push("  ~~~~markdown".to_string());
+    entry_lines.extend(text.lines().map(|line| format!("  {line}")));
+    entry_lines.push("  ~~~~".to_string());
+
+    let mut lines: Vec<String> = content.lines().map(ToString::to_string).collect();
+    if let Some(section_start) = lines.iter().position(|line| line.trim() == header) {
+        let section_end = lines
+            .iter()
+            .enumerate()
+            .skip(section_start + 1)
+            .find(|(_, line)| line.starts_with("## "))
+            .map_or(lines.len(), |(idx, _)| idx);
+        let mut insert_index = section_end;
+        while insert_index > section_start + 1 && lines[insert_index - 1].trim().is_empty() {
+            insert_index = insert_index.saturating_sub(1);
+        }
+        lines.insert(insert_index, String::new());
+        insert_index += 1;
+        for line in entry_lines.into_iter().rev() {
+            lines.insert(insert_index, line);
+        }
+        return ensure_trailing_newline(lines.join("\n"));
+    }
+
+    let mut out = content.trim_end_matches('\n').to_string();
+    if !out.is_empty() {
+        out.push_str("\n\n");
+    }
+    out.push_str(header);
+    out.push_str("\n\n");
+    out.push_str(&entry_lines.join("\n"));
     out.push('\n');
     out
 }
@@ -596,6 +717,61 @@ Status: Draft
         assert!(updated.contains("## Memories"));
         assert!(updated.contains("ADR-lite hygiene: added missing sections:"));
         assert!(updated.contains("Context updated: Worktree=`/repo/worktree`, Branch=`feat/new`."));
+    }
+
+    #[test]
+    fn sync_turn_end_with_content_persists_proposed_plan_and_discussion() {
+        let dir = tempdir().expect("temp dir");
+        let path = dir.path().join("plan.md");
+        fs::write(
+            &path,
+            "# Plan\nStatus: Draft\nTODOs remaining: 2\nLast updated: 2026-01-01\n\n## Plan (checklist)\n- [ ] A\n- [ ] B\n\n## Progress log\n\n- 2026-01-01: Created\n",
+        )
+        .expect("write plan");
+
+        sync_turn_end_with_content(
+            &path,
+            "2026-02-08",
+            "Discussed options",
+            Some("Researched constraints and tradeoffs."),
+            Some("- Step 1\n- Step 2"),
+        )
+        .expect("sync with content");
+
+        let updated = fs::read_to_string(&path).expect("read plan");
+        assert!(updated.contains("## Latest proposed plan"));
+        assert!(updated.contains("- Step 1"));
+        assert!(updated.contains("## Research log"));
+        assert!(updated.contains("Researched constraints and tradeoffs."));
+        assert!(updated.contains("- 2026-02-08: Discussed options"));
+    }
+
+    #[test]
+    fn sync_turn_end_adr_lite_with_content_uses_adr_plan_section_header() {
+        let dir = tempdir().expect("temp dir");
+        let path = dir.path().join("plan.md");
+        fs::write(
+            &path,
+            "# Plan\nStatus: Draft\nTODOs remaining: 1\nLast updated: 2026-01-01\nWorktree: /old\nBranch: old\n\n## Plan (checklist)\n- [ ] A\n",
+        )
+        .expect("write plan");
+
+        sync_turn_end_adr_lite_with_content(
+            &path,
+            "2026-02-08",
+            "Checkpoint",
+            "/new",
+            "feat/new",
+            Some("Validated with targeted repo reads."),
+            Some("1. Align metadata\n2. Start implementation"),
+        )
+        .expect("sync adr-lite with content");
+
+        let updated = fs::read_to_string(&path).expect("read plan");
+        assert!(updated.contains("## Latest ADR-lite proposed plan"));
+        assert!(updated.contains("Align metadata"));
+        assert!(updated.contains("## Research log"));
+        assert!(updated.contains("Validated with targeted repo reads."));
     }
 
     #[test]
