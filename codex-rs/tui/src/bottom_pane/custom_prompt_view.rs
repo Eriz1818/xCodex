@@ -6,7 +6,7 @@ use ratatui::layout::Rect;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
 use ratatui::text::Span;
-use ratatui::widgets::Clear;
+use ratatui::widgets::Block;
 use ratatui::widgets::Paragraph;
 use ratatui::widgets::StatefulWidgetRef;
 use ratatui::widgets::Widget;
@@ -18,6 +18,7 @@ use super::popup_consts::standard_popup_hint_line;
 
 use super::CancellationEvent;
 use super::bottom_pane_view::BottomPaneView;
+use super::selection_popup_common::popup_surface_style;
 use super::textarea::TextArea;
 use super::textarea::TextAreaState;
 
@@ -115,6 +116,8 @@ impl Renderable for CustomPromptView {
         if area.height == 0 || area.width == 0 {
             return;
         }
+        let base_style = popup_surface_style();
+        Block::default().style(base_style).render(area, buf);
 
         let input_height = self.input_height(area.width);
 
@@ -171,7 +174,7 @@ impl Renderable for CustomPromptView {
                         width: input_area.width.saturating_sub(2),
                         height: 1,
                     };
-                    Clear.render(blank_rect, buf);
+                    Block::default().style(base_style).render(blank_rect, buf);
                 }
                 let textarea_rect = Rect {
                     x: input_area.x.saturating_add(2),
@@ -196,7 +199,7 @@ impl Renderable for CustomPromptView {
                 width: area.width,
                 height: 1,
             };
-            Clear.render(blank_area, buf);
+            Block::default().style(base_style).render(blank_area, buf);
         }
 
         let hint_y = hint_blank_y.saturating_add(1);
