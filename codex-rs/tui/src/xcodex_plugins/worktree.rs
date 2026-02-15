@@ -19,6 +19,7 @@ use codex_core::protocol::Op;
 use crossterm::event::KeyCode;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
+use ratatui::text::Span;
 use std::path::Path;
 use std::path::PathBuf;
 
@@ -1078,27 +1079,30 @@ pub(crate) fn open_worktree_picker(chat: &mut ChatWidget) {
         None
     };
 
+    let key_style = crate::theme::accent_style().bold();
+    let key = |binding| Span::styled(Span::from(binding).content, key_style);
+
     chat.show_selection_view(SelectionViewParams {
         title: Some("Select a worktree".to_string()),
         subtitle,
         footer_hint: Some(Line::from(vec![
-            key_hint::plain(KeyCode::Up).into(),
+            key(key_hint::plain(KeyCode::Up)),
             "/".into(),
-            key_hint::plain(KeyCode::Down).into(),
+            key(key_hint::plain(KeyCode::Down)),
             " select  ".into(),
-            key_hint::plain(KeyCode::Enter).into(),
+            key(key_hint::plain(KeyCode::Enter)),
             " open  ".into(),
-            key_hint::alt(KeyCode::Char('r')).into(),
+            key(key_hint::alt(KeyCode::Char('r'))),
             " refresh  ".into(),
-            key_hint::alt(KeyCode::Char('s')).into(),
+            key(key_hint::alt(KeyCode::Char('s'))),
             " settings  ".into(),
-            key_hint::alt(KeyCode::Char('i')).into(),
+            key(key_hint::alt(KeyCode::Char('i'))),
             " create  ".into(),
-            key_hint::alt(KeyCode::Char('d')).into(),
+            key(key_hint::alt(KeyCode::Char('d'))),
             " doctor  ".into(),
-            "type".cyan(),
+            Span::styled("type", key_style),
             " to search  ".into(),
-            key_hint::plain(KeyCode::Esc).into(),
+            key(key_hint::plain(KeyCode::Esc)),
             " close".into(),
         ])),
         undim_footer_hint: true,
