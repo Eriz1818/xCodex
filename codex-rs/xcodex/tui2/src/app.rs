@@ -427,6 +427,7 @@ pub(crate) struct App {
     /// Ignore the next ShutdownComplete event when we're intentionally
     /// stopping a conversation (e.g., before starting a new one).
     suppress_shutdown_complete: bool,
+    last_known_conversation_id: Option<ThreadId>,
 
     // One-shot suppression of the next world-writable scan after user confirmation.
     skip_world_writable_scan_once: bool,
@@ -633,6 +634,7 @@ impl App {
             feedback: feedback.clone(),
             pending_update_action: None,
             suppress_shutdown_complete: false,
+            last_known_conversation_id: None,
             skip_world_writable_scan_once: false,
             shared_dirs_write_notice_shown: false,
         };
@@ -676,7 +678,7 @@ impl App {
             if let AppRunControl::Exit(exit_reason) = control {
                 return Ok(AppExitInfo {
                     token_usage: app.token_usage(),
-                    conversation_id: app.chat_widget.conversation_id(),
+                    conversation_id: app.effective_conversation_id(),
                     update_action: app.pending_update_action,
                     exit_reason,
                     session_lines: Vec::new(),
@@ -752,7 +754,7 @@ impl App {
         tui.terminal.clear()?;
         Ok(AppExitInfo {
             token_usage: app.token_usage(),
-            conversation_id: app.chat_widget.conversation_id(),
+            conversation_id: app.effective_conversation_id(),
             update_action: app.pending_update_action,
             exit_reason,
             session_lines,
@@ -1781,9 +1783,10 @@ impl App {
             AppEvent::NewSession => {
                 let summary = session_summary(
                     self.chat_widget.token_usage(),
-                    self.chat_widget.conversation_id(),
+                    self.effective_conversation_id(),
                 );
                 self.shutdown_current_conversation().await;
+                self.last_known_conversation_id = None;
                 let init = crate::chatwidget::ChatWidgetInit {
                     config: self.config.clone(),
                     frame_requester: tui.frame_requester(),
@@ -1826,7 +1829,7 @@ impl App {
                     SessionSelection::Resume(path) => {
                         let summary = session_summary(
                             self.chat_widget.token_usage(),
-                            self.chat_widget.conversation_id(),
+                            self.effective_conversation_id(),
                         );
                         match self
                             .server
@@ -1838,6 +1841,7 @@ impl App {
                             .await
                         {
                             Ok(resumed) => {
+                                let resumed_conversation_id = resumed.session_configured.session_id;
                                 let resumed_model = resumed.session_configured.model.clone();
                                 self.shutdown_current_conversation().await;
                                 let init = crate::chatwidget::ChatWidgetInit {
@@ -1858,6 +1862,7 @@ impl App {
                                     resumed.thread,
                                     resumed.session_configured,
                                 );
+                                self.last_known_conversation_id = Some(resumed_conversation_id);
                                 self.current_model = resumed_model;
                                 if let Some(summary) = summary {
                                     let base_style = crate::theme::transcript_style();
@@ -1895,7 +1900,7 @@ impl App {
             AppEvent::ForkCurrentSession => {
                 let summary = session_summary(
                     self.chat_widget.token_usage(),
-                    self.chat_widget.conversation_id(),
+                    self.effective_conversation_id(),
                 );
                 if let Some(path) = self.chat_widget.rollout_path() {
                     match self
@@ -1904,6 +1909,7 @@ impl App {
                         .await
                     {
                         Ok(forked) => {
+                            let forked_conversation_id = forked.session_configured.session_id;
                             self.shutdown_current_conversation().await;
                             let init = crate::chatwidget::ChatWidgetInit {
                                 config: self.config.clone(),
@@ -1923,6 +1929,7 @@ impl App {
                                 forked.thread,
                                 forked.session_configured,
                             );
+                            self.last_known_conversation_id = Some(forked_conversation_id);
                             if let Some(summary) = summary {
                                 let base_style = crate::theme::transcript_style();
                                 let usage_line =
@@ -1997,6 +2004,9 @@ impl App {
                 self.chat_widget.on_commit_tick();
             }
             AppEvent::CodexEvent(event) => {
+                if let EventMsg::SessionConfigured(session) = &event.msg {
+                    self.last_known_conversation_id = Some(session.session_id);
+                }
                 let turn_complete_message = match &event.msg {
                     EventMsg::TurnComplete(turn) => Some(turn.last_agent_message.clone()),
                     _ => None,
@@ -3420,6 +3430,12 @@ impl App {
         self.chat_widget.token_usage()
     }
 
+    fn effective_conversation_id(&self) -> Option<ThreadId> {
+        self.chat_widget
+            .conversation_id()
+            .or(self.last_known_conversation_id)
+    }
+
     fn on_update_reasoning_effort(&mut self, effort: Option<ReasoningEffortConfig>) {
         self.chat_widget.set_reasoning_effort(effort);
         self.config.model_reasoning_effort = effort;
@@ -3824,6 +3840,7 @@ mod tests {
             feedback: codex_feedback::CodexFeedback::new(),
             pending_update_action: None,
             suppress_shutdown_complete: false,
+            last_known_conversation_id: None,
             shared_dirs_write_notice_shown: false,
             skip_world_writable_scan_once: false,
         }
@@ -3883,6 +3900,7 @@ mod tests {
                 feedback: codex_feedback::CodexFeedback::new(),
                 pending_update_action: None,
                 suppress_shutdown_complete: false,
+                last_known_conversation_id: None,
                 shared_dirs_write_notice_shown: false,
                 skip_world_writable_scan_once: false,
             },
