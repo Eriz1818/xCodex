@@ -264,6 +264,50 @@ async fn find_thread_path_repairs_missing_db_row_after_filesystem_fallback() {
     assert_state_db_rollout_path(home, thread_id, Some(fs_rollout_path.as_path())).await;
 }
 
+#[tokio::test]
+async fn find_thread_path_does_not_match_content_only_uuid_hits() {
+    let temp = TempDir::new().unwrap();
+    let home = temp.path();
+    let target_uuid = Uuid::from_u128(304);
+    let other_uuid = Uuid::from_u128(305);
+    write_session_file(
+        home,
+        "2025-01-03T13-00-00",
+        other_uuid,
+        1,
+        Some(SessionSource::Cli),
+    )
+    .unwrap();
+
+    // Create an empty state DB so lookup exercises filesystem fallback.
+    let runtime =
+        codex_state::StateRuntime::init(home.to_path_buf(), TEST_PROVIDER.to_string(), None)
+            .await
+            .expect("state db should initialize");
+    runtime
+        .mark_backfill_complete(None)
+        .await
+        .expect("backfill should be complete");
+
+    // Content mention of the UUID should not be treated as a matching thread rollout.
+    let decoy_file = home
+        .join("sessions")
+        .join("2025")
+        .join("01")
+        .join("03")
+        .join("notes.txt");
+    fs::write(
+        decoy_file,
+        format!("this file mentions {target_uuid} but is not a rollout"),
+    )
+    .unwrap();
+
+    let found = crate::rollout::find_thread_path_by_id_str(home, &target_uuid.to_string())
+        .await
+        .expect("lookup should succeed");
+    assert_eq!(found, None);
+}
+
 #[test]
 fn rollout_date_parts_extracts_directory_components() {
     let file_name = OsStr::new("rollout-2025-03-01T09-00-00-123.jsonl");

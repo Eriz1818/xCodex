@@ -2,7 +2,6 @@ use async_trait::async_trait;
 use std::cmp::Reverse;
 use std::ffi::OsStr;
 use std::io::{self};
-use std::num::NonZero;
 use std::ops::ControlFlow;
 use std::path::Path;
 use std::path::PathBuf;
@@ -17,7 +16,6 @@ use super::ARCHIVED_SESSIONS_SUBDIR;
 use super::SESSIONS_SUBDIR;
 use crate::protocol::EventMsg;
 use crate::state_db;
-use codex_file_search as file_search;
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::RolloutLine;
@@ -1196,23 +1194,10 @@ async fn find_thread_path_by_id_str_in_subdir(
 
     let mut root = codex_home.to_path_buf();
     root.push(subdir);
-    if !root.exists() {
+    if !tokio::fs::try_exists(&root).await.unwrap_or(false) {
         return Ok(None);
     }
-    // This is safe because we know the values are valid.
-    #[allow(clippy::unwrap_used)]
-    let limit = NonZero::new(1).unwrap();
-    let options = file_search::FileSearchOptions {
-        limit,
-        compute_indices: false,
-        respect_gitignore: false,
-        ..Default::default()
-    };
-
-    let results = file_search::run(id_str, vec![root], options, None)
-        .map_err(|e| io::Error::other(format!("file search failed: {e}")))?;
-
-    let found = results.matches.into_iter().next().map(|m| m.full_path());
+    let found = find_rollout_path_by_filename_match(&root, id_str).await?;
     if let Some(found_path) = found.as_ref() {
         tracing::error!("state db missing rollout path for thread {id_str}");
         state_db::record_discrepancy("find_thread_path_by_id_str_in_subdir", "falling_back");
@@ -1226,6 +1211,42 @@ async fn find_thread_path_by_id_str_in_subdir(
     }
 
     Ok(found)
+}
+
+fn rollout_file_name_matches_thread_id(file_name: &OsStr, id_str: &str) -> bool {
+    let Some(name) = file_name.to_str() else {
+        return false;
+    };
+    name.starts_with("rollout-") && name.ends_with(&format!("-{id_str}.jsonl"))
+}
+
+async fn find_rollout_path_by_filename_match(
+    root: &Path,
+    id_str: &str,
+) -> io::Result<Option<PathBuf>> {
+    let mut stack = vec![root.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        let mut entries = match tokio::fs::read_dir(&dir).await {
+            Ok(entries) => entries,
+            Err(err) if err.kind() == io::ErrorKind::NotFound => continue,
+            Err(err) => return Err(err),
+        };
+        while let Some(entry) = entries.next_entry().await? {
+            let path = entry.path();
+            let file_type = entry.file_type().await?;
+            if file_type.is_dir() {
+                stack.push(path);
+                continue;
+            }
+            if file_type.is_file() {
+                let file_name = entry.file_name();
+                if rollout_file_name_matches_thread_id(file_name.as_os_str(), id_str) {
+                    return Ok(Some(path));
+                }
+            }
+        }
+    }
+    Ok(None)
 }
 
 /// Locate a recorded thread rollout file by its UUID string using the existing
