@@ -569,11 +569,11 @@ pub(crate) fn try_handle_subcommand(chat: &mut ChatWidget, args: &str) -> bool {
         return true;
     }
     if trimmed == "open" {
-        open_plan_file(chat, None);
+        open_plan_file(chat, None, true);
         return true;
     }
     if let Some(path_arg) = trimmed.strip_prefix("open ") {
-        open_plan_file(chat, Some(path_arg));
+        open_plan_file(chat, Some(path_arg), true);
         return true;
     }
     if trimmed == "status" {
@@ -618,10 +618,10 @@ pub(crate) fn open_plan_file_path(
 ) -> Option<PlanUiUpdate> {
     if let Some(path) = path {
         let value = path.display().to_string();
-        open_plan_file(chat, Some(&value));
+        open_plan_file(chat, Some(&value), true);
         return active_plan_ui_update(chat);
     }
-    open_plan_file(chat, None);
+    open_plan_file(chat, None, true);
     active_plan_ui_update(chat)
 }
 
@@ -687,6 +687,7 @@ pub(crate) fn pause_active_plan_run_action(chat: &mut ChatWidget) -> Option<Plan
 
 pub(crate) fn sync_active_plan_turn_end(
     chat: &mut ChatWidget,
+    turn_user_prompt_text: Option<&str>,
     last_agent_message: Option<&str>,
     turn_proposed_plan_text: Option<&str>,
 ) -> Option<PlanUiUpdate> {
@@ -699,6 +700,14 @@ pub(crate) fn sync_active_plan_turn_end(
 
     let today = chrono::Local::now().date_naive().to_string();
     let note = checkpoint_note(last_agent_message);
+    let discussion_text = match (turn_user_prompt_text, last_agent_message) {
+        (None, None) => None,
+        (Some(user_text), None) => Some(format!("### User\n\n{user_text}")),
+        (None, Some(agent_text)) => Some(format!("### Assistant\n\n{agent_text}")),
+        (Some(user_text), Some(agent_text)) => Some(format!(
+            "### User\n\n{user_text}\n\n### Assistant\n\n{agent_text}"
+        )),
+    };
     if let Err(err) = ensure_plan_mode_lock(chat, &path) {
         tracing::warn!(
             error = %err,
@@ -706,6 +715,7 @@ pub(crate) fn sync_active_plan_turn_end(
             "failed to ensure plan mode lock metadata before turn-end sync"
         );
     }
+    let discussion_text = discussion_text.as_deref();
     let sync_result = if uses_adr_lite_sync(chat, Some(&path)) {
         let worktree = chat.session_cwd().display().to_string();
         let branch = current_branch_name(chat);
@@ -715,7 +725,7 @@ pub(crate) fn sync_active_plan_turn_end(
             &note,
             &worktree,
             &branch,
-            last_agent_message,
+            discussion_text,
             turn_proposed_plan_text,
         )
     } else {
@@ -723,7 +733,7 @@ pub(crate) fn sync_active_plan_turn_end(
             &path,
             &today,
             &note,
-            last_agent_message,
+            discussion_text,
             turn_proposed_plan_text,
         )
     };
@@ -777,6 +787,16 @@ pub(crate) fn open_post_plan_prompt(
     chat: &mut ChatWidget,
     default_mode_mask: Option<CollaborationModeMask>,
 ) {
+    // If the user just produced a proposed plan without explicitly opening a plan file,
+    // create one now so we don't lose context between sessions.
+    let should_open_plan_file = match read_active_plan_path(chat) {
+        Some(path) => !path.exists(),
+        None => true,
+    };
+    if should_open_plan_file {
+        open_plan_file(chat, None, false);
+    }
+
     let context_block_reason = plan_start_implementation_block_reason(chat);
     let (mut start_actions, mut start_disabled_reason) = match default_mode_mask.clone() {
         Some(mask) => {
@@ -2103,7 +2123,7 @@ fn show_plan_list(chat: &mut ChatWidget, scope: PlanListScope) {
     });
 }
 
-fn open_plan_file(chat: &mut ChatWidget, path_arg: Option<&str>) {
+fn open_plan_file(chat: &mut ChatWidget, path_arg: Option<&str>, emit_message: bool) {
     let resolved_path = path_arg
         .map(|arg| resolve_plan_path(chat, arg))
         .unwrap_or_else(|| default_new_plan_path(chat));
@@ -2189,6 +2209,10 @@ fn open_plan_file(chat: &mut ChatWidget, path_arg: Option<&str>) {
         }
     }
     maybe_notify_plan_context_mismatch(chat, &resolved_path, "opened plan file");
+
+    if !emit_message {
+        return;
+    }
 
     let mut notes: Vec<String> = Vec::new();
     if locked_mode != selected_mode {

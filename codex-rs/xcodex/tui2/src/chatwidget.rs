@@ -453,6 +453,10 @@ pub(crate) struct ChatWidget {
     plan_delta_buffer: String,
     // Marks whether this turn emitted a completed plan item.
     saw_plan_item_this_turn: bool,
+    // User prompt queued for the next TurnStarted event (if any).
+    pending_turn_user_prompt_text: Option<String>,
+    // User prompt associated with the current turn (if any).
+    turn_user_prompt_text: Option<String>,
     // Full proposed-plan markdown captured for the current turn (if emitted).
     turn_proposed_plan_text: Option<String>,
     // True when "Discuss Further" requested re-opening the post-plan prompt after the next turn.
@@ -841,6 +845,7 @@ impl ChatWidget {
         self.reasoning_buffer.clear();
         self.plan_delta_buffer.clear();
         self.saw_plan_item_this_turn = false;
+        self.turn_user_prompt_text = self.pending_turn_user_prompt_text.take();
         self.turn_proposed_plan_text = None;
         self.request_redraw();
     }
@@ -899,6 +904,10 @@ impl ChatWidget {
 
     pub(crate) fn reopen_plan_prompt_after_turn(&mut self) {
         self.reopen_plan_prompt_after_turn = true;
+    }
+
+    pub(crate) fn turn_user_prompt_text(&self) -> Option<&str> {
+        self.turn_user_prompt_text.as_deref()
     }
 
     pub(crate) fn turn_proposed_plan_text(&self) -> Option<&str> {
@@ -2107,6 +2116,8 @@ impl ChatWidget {
             full_reasoning_buffer: String::new(),
             plan_delta_buffer: String::new(),
             saw_plan_item_this_turn: false,
+            pending_turn_user_prompt_text: None,
+            turn_user_prompt_text: None,
             turn_proposed_plan_text: None,
             reopen_plan_prompt_after_turn: false,
             current_status_header: String::from("Working"),
@@ -2254,6 +2265,8 @@ impl ChatWidget {
             full_reasoning_buffer: String::new(),
             plan_delta_buffer: String::new(),
             saw_plan_item_this_turn: false,
+            pending_turn_user_prompt_text: None,
+            turn_user_prompt_text: None,
             turn_proposed_plan_text: None,
             reopen_plan_prompt_after_turn: false,
             current_status_header: String::from("Working"),
@@ -3400,6 +3413,7 @@ impl ChatWidget {
         } else {
             None
         };
+        self.pending_turn_user_prompt_text = (!text.is_empty()).then(|| text.clone());
         self.codex_op_tx
             .send(Op::UserTurn {
                 items,

@@ -473,6 +473,8 @@ async fn make_chatwidget_manual(
         full_reasoning_buffer: String::new(),
         plan_delta_buffer: String::new(),
         saw_plan_item_this_turn: false,
+        pending_turn_user_prompt_text: None,
+        turn_user_prompt_text: None,
         turn_proposed_plan_text: None,
         reopen_plan_prompt_after_turn: false,
         current_status_header: String::from("Working"),
@@ -4648,13 +4650,13 @@ async fn plan_active_file_state_is_scoped_by_thread_id() {
 
     chat.conversation_id = Some(thread_a);
     let synced_a =
-        crate::xcodex_plugins::plan::sync_active_plan_turn_end(&mut chat, Some("A"), None)
+        crate::xcodex_plugins::plan::sync_active_plan_turn_end(&mut chat, None, Some("A"), None)
             .expect("turn-end sync for thread a");
     assert_eq!(synced_a.path, plan_a);
 
     chat.conversation_id = Some(thread_b);
     let synced_b =
-        crate::xcodex_plugins::plan::sync_active_plan_turn_end(&mut chat, Some("B"), None)
+        crate::xcodex_plugins::plan::sync_active_plan_turn_end(&mut chat, None, Some("B"), None)
             .expect("turn-end sync for thread b");
     assert_eq!(synced_b.path, plan_b);
 

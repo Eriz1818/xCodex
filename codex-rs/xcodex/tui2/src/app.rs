@@ -2024,6 +2024,10 @@ impl App {
                     emit_skill_load_warnings(&self.app_event_tx, &errors);
                 }
                 self.chat_widget.handle_codex_event(event);
+                let turn_user_prompt_text = self
+                    .chat_widget
+                    .turn_user_prompt_text()
+                    .map(ToString::to_string);
                 let turn_proposed_plan_text = self
                     .chat_widget
                     .turn_proposed_plan_text()
@@ -2043,6 +2047,7 @@ impl App {
                 if let Some(last_agent_message) = turn_complete_message
                     && let Some(update) = crate::xcodex_plugins::plan::sync_active_plan_turn_end(
                         &mut self.chat_widget,
+                        turn_user_prompt_text.as_deref(),
                         last_agent_message.as_deref(),
                         turn_proposed_plan_text.as_deref(),
                     )
