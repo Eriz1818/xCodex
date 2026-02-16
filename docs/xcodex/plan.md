@@ -7,6 +7,7 @@
 - `Shift+Tab`: toggle Plan mode on/off.
 - `/plan`: open the Plan popup (list + settings + plan actions).
 - In Plan mode, plain composer messages are treated as planning prompts.
+- When Plan mode produces a proposed plan and no active plan file is set, xcodex creates one automatically under the plan base directory.
 - `/plan settings mode <default|adr-lite|custom [default|adr-lite]>`: choose workflow defaults.
 - `/plan settings mode custom <default|adr-lite>`: switch to custom mode and create the custom template if missing using the chosen seed.
 - `/plan settings custom-template`: view/open/init the custom template file.
