@@ -32,12 +32,14 @@ def main() -> int:
     allow_musl_omission = os.environ.get("XCODEX_ALLOW_MUSL_OMISSION") == "1"
     workflow_src = WORKFLOW.read_text(encoding="utf-8").replace("\r\n", "\n")
     cargo_chef_condition = (
-        "matrix.target == 'aarch64-apple-darwin' || matrix.target == 'aarch64-unknown-linux-gnu'"
+        "matrix.target == 'aarch64-apple-darwin' || matrix.target == "
+        "'aarch64-unknown-linux-gnu' || (matrix.target == 'x86_64-apple-darwin' && "
+        "matrix.bin == 'codex')"
     )
     if workflow_src.count(cargo_chef_condition) < 2:
         raise SystemExit(
-            "cargo-chef prewarm must be limited to aarch64-apple-darwin and "
-            "aarch64-unknown-linux-gnu targets."
+            "cargo-chef prewarm must be limited to aarch64-apple-darwin, "
+            "aarch64-unknown-linux-gnu, and x86_64-apple-darwin codex-only."
         )
     matrix_entries = parse_workflow_matrix_entries(workflow_src)
     if not matrix_entries:

@@ -173,6 +173,7 @@ jobs:
           - runner: macos-15
             target: x86_64-apple-darwin
             bin: codex
+            timeout_minutes: 90
           - runner: macos-15
             target: x86_64-apple-darwin
             bin: codex-responses-api-proxy
@@ -349,14 +350,14 @@ jobs:
           echo "RUSTFLAGS=-C linker=rust-lld -C lto=off -C codegen-units=4" >> "$GITHUB_ENV"
           echo "CARGO_INCREMENTAL=0" >> "$GITHUB_ENV"
 
-      - name: Install cargo-chef (ARM macOS + ARM Linux prewarm)
-        if: ${{ matrix.target == 'aarch64-apple-darwin' || matrix.target == 'aarch64-unknown-linux-gnu' }}
+      - name: Install cargo-chef (selected prewarm targets)
+        if: ${{ matrix.target == 'aarch64-apple-darwin' || matrix.target == 'aarch64-unknown-linux-gnu' || (matrix.target == 'x86_64-apple-darwin' && matrix.bin == 'codex') }}
         uses: taiki-e/install-action@44c6d64aa62cd779e873306675c7a58e86d6d532 # v2
         with:
           tool: cargo-chef@0.1.71
 
-      - name: Pre-warm dependency cache (cargo-chef, ARM macOS + ARM Linux)
-        if: ${{ matrix.target == 'aarch64-apple-darwin' || matrix.target == 'aarch64-unknown-linux-gnu' }}
+      - name: Pre-warm dependency cache (cargo-chef, selected targets)
+        if: ${{ matrix.target == 'aarch64-apple-darwin' || matrix.target == 'aarch64-unknown-linux-gnu' || (matrix.target == 'x86_64-apple-darwin' && matrix.bin == 'codex') }}
         shell: bash
         run: |
           set -euo pipefail
