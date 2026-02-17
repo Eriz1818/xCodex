@@ -31,6 +31,14 @@ REQUIRED_ARM_RUNNER_PAIRS = {
 def main() -> int:
     allow_musl_omission = os.environ.get("XCODEX_ALLOW_MUSL_OMISSION") == "1"
     workflow_src = WORKFLOW.read_text(encoding="utf-8").replace("\r\n", "\n")
+    cargo_chef_condition = (
+        "matrix.target == 'aarch64-apple-darwin' || matrix.target == 'aarch64-unknown-linux-gnu'"
+    )
+    if workflow_src.count(cargo_chef_condition) < 2:
+        raise SystemExit(
+            "cargo-chef prewarm must be limited to aarch64-apple-darwin and "
+            "aarch64-unknown-linux-gnu targets."
+        )
     matrix_entries = parse_workflow_matrix_entries(workflow_src)
     if not matrix_entries:
         raise SystemExit("No matrix include entries found in xcodex-release workflow.")
