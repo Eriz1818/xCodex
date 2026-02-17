@@ -44,7 +44,7 @@ class BinaryComponent:
     dest_dir: str  # directory under vendor/<target>/ where the binary is installed
     binary_basename: str  # executable name inside dest_dir (before optional .exe)
     targets: tuple[str, ...] | None = None  # limit installation to specific targets
-    windows_job_bin: str | None = None  # workflow "bin" name for Windows artifact folders
+    windows_job_bin: str | None = None  # workflow "bin" name for split artifact folders
 
 
 WINDOWS_TARGETS = tuple(target for target in BINARY_TARGETS if "windows" in target)
@@ -355,10 +355,7 @@ def _install_single_binary(
     component: BinaryComponent,
 ) -> Path:
     archive_name = _archive_name_for_target(component.artifact_prefix, target)
-    artifact_subdirs = [artifacts_dir / target]
-    if "windows" in target:
-        windows_job_bin = component.windows_job_bin or component.binary_basename
-        artifact_subdirs.append(artifacts_dir / f"{target}-{windows_job_bin}")
+    artifact_subdirs = artifact_subdirs_for_target(artifacts_dir, target, component)
 
     archive_path = None
     for artifact_subdir in artifact_subdirs:
@@ -383,6 +380,27 @@ def _install_single_binary(
     if "windows" not in target:
         dest.chmod(0o755)
     return dest
+
+
+def artifact_subdirs_for_target(
+    artifacts_dir: Path,
+    target: str,
+    component: BinaryComponent,
+) -> list[Path]:
+    """Return artifact subdirectories to probe for a given target/component.
+
+    We always try both:
+    1) <target> (legacy combined workflow entry)
+    2) <target>-<bin> (split matrix entry with `bin:`)
+    """
+    artifact_subdirs = [artifacts_dir / target]
+
+    workflow_job_bin = component.windows_job_bin or component.binary_basename
+    split_artifact_subdir = artifacts_dir / f"{target}-{workflow_job_bin}"
+    if split_artifact_subdir not in artifact_subdirs:
+        artifact_subdirs.append(split_artifact_subdir)
+
+    return artifact_subdirs
 
 
 def _archive_name_for_target(artifact_prefix: str, target: str) -> str:
