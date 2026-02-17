@@ -141,7 +141,7 @@ pub struct ScanReport {
     pub matches: Vec<RedactionMatch>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum RedactionReason {
     FingerprintCache,
     IgnoredPath,

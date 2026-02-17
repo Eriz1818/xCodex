@@ -29,6 +29,8 @@ use codex_protocol::request_user_input::RequestUserInputArgs;
 use codex_protocol::request_user_input::RequestUserInputQuestion;
 use codex_protocol::request_user_input::RequestUserInputQuestionOption;
 use codex_utils_readiness::Readiness;
+use sha2::Digest as _;
+use sha2::Sha256;
 use tracing::warn;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -362,6 +364,130 @@ enum RedactionDecision {
     AddBlocklist(String),
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RedactionPromptAnswer {
+    AllowOnce,
+    AllowForSession,
+    Redact,
+    Block,
+    AddToAllowlist,
+    AddToBlocklist,
+}
+
+fn parse_redaction_prompt_answer(answer: &str) -> Option<RedactionPromptAnswer> {
+    match answer {
+        "Allow once" => Some(RedactionPromptAnswer::AllowOnce),
+        "Allow for this session" => Some(RedactionPromptAnswer::AllowForSession),
+        "Redact" => Some(RedactionPromptAnswer::Redact),
+        "Block" => Some(RedactionPromptAnswer::Block),
+        "Add to allowlist" => Some(RedactionPromptAnswer::AddToAllowlist),
+        "Add to blocklist" => Some(RedactionPromptAnswer::AddToBlocklist),
+        _ => None,
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct RedactionMatchSummary {
+    reason: crate::content_gateway::RedactionReason,
+    value: String,
+    count: usize,
+}
+
+fn redaction_reason_label(reason: crate::content_gateway::RedactionReason) -> &'static str {
+    match reason {
+        crate::content_gateway::RedactionReason::FingerprintCache => "Fingerprint cache",
+        crate::content_gateway::RedactionReason::IgnoredPath => "Ignored path",
+        crate::content_gateway::RedactionReason::SecretPattern => "Secret pattern",
+    }
+}
+
+fn short_sha256_hex(text: &str) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(text.as_bytes());
+    let digest = hasher.finalize();
+    let mut out = String::with_capacity(8);
+    for byte in digest.iter().take(4) {
+        use std::fmt::Write as _;
+        write!(out, "{byte:02x}").ok();
+    }
+    out
+}
+
+fn truncate_match_value(mut value: String) -> String {
+    if value.len() <= 200 {
+        return value;
+    }
+    let mut boundary = 200.min(value.len());
+    while boundary > 0 && !value.is_char_boundary(boundary) {
+        boundary = boundary.saturating_sub(1);
+    }
+    value.truncate(boundary);
+    value.push_str("...");
+    value
+}
+
+fn redaction_match_value_display(summary: &RedactionMatchSummary) -> String {
+    match summary.reason {
+        crate::content_gateway::RedactionReason::SecretPattern => {
+            let hash = short_sha256_hex(&summary.value);
+            let char_len = summary.value.chars().count();
+            if char_len <= 8 {
+                format!("[REDACTED sha256:{hash}]")
+            } else {
+                let prefix = summary
+                    .value
+                    .char_indices()
+                    .nth(4)
+                    .map(|(idx, _)| &summary.value[..idx])
+                    .unwrap_or(summary.value.as_str());
+                let suffix_start_chars = char_len.saturating_sub(4);
+                let suffix_idx = summary
+                    .value
+                    .char_indices()
+                    .nth(suffix_start_chars)
+                    .map(|(idx, _)| idx)
+                    .unwrap_or(0);
+                let suffix = &summary.value[suffix_idx..];
+                format!("[REDACTED {prefix}...{suffix} sha256:{hash}]")
+            }
+        }
+        _ => truncate_match_value(summary.value.clone()),
+    }
+}
+
+fn redaction_match_label(summary: &RedactionMatchSummary) -> String {
+    let reason = redaction_reason_label(summary.reason);
+    let value = redaction_match_value_display(summary);
+    let mut label = format!("{value} (reason: {reason})");
+    if summary.count > 1 {
+        label.push_str(&format!(" x{}", summary.count));
+    }
+    label
+}
+
+fn summarize_redaction_matches(
+    report: &crate::content_gateway::ScanReport,
+) -> Vec<RedactionMatchSummary> {
+    let mut out: Vec<RedactionMatchSummary> = Vec::new();
+    let mut seen: HashMap<(crate::content_gateway::RedactionReason, &str), usize> = HashMap::new();
+
+    for match_info in &report.matches {
+        let key = (match_info.reason, match_info.value.as_str());
+        if let Some(idx) = seen.get(&key) {
+            out[*idx].count = out[*idx].count.saturating_add(1);
+        } else {
+            seen.insert(key, out.len());
+            out.push(RedactionMatchSummary {
+                reason: match_info.reason,
+                value: match_info.value.clone(),
+                count: 1,
+            });
+        }
+    }
+
+    out
+}
+
 fn format_redaction_matches(
     report: &crate::content_gateway::ScanReport,
     layer_label: &str,
@@ -370,50 +496,39 @@ fn format_redaction_matches(
         return None;
     }
 
-    fn redaction_reason_label(reason: crate::content_gateway::RedactionReason) -> &'static str {
-        match reason {
-            crate::content_gateway::RedactionReason::FingerprintCache => "Fingerprint cache",
-            crate::content_gateway::RedactionReason::IgnoredPath => "Ignored path",
-            crate::content_gateway::RedactionReason::SecretPattern => "Secret pattern",
-        }
-    }
-
     let mut lines = Vec::new();
     lines.push(format!("Matched content ({layer_label}):"));
-    for match_info in report.matches.iter().take(3) {
-        let mut value = match_info.value.clone();
-        if value.len() > 200 {
-            value.truncate(200);
-            value.push_str("...");
-        }
-        let reason = redaction_reason_label(match_info.reason);
-        lines.push(format!("- {value} (reason: {reason})"));
-    }
-    if report.matches.len() > 3 {
-        lines.push(format!("...and {} more", report.matches.len() - 3));
+    for match_info in summarize_redaction_matches(report) {
+        lines.push(format!("- {}", redaction_match_label(&match_info)));
     }
     Some(lines.join("\n"))
 }
 
-fn parse_redaction_decision(
-    answer: &str,
-    match_value: Option<String>,
-    match_reason: Option<crate::content_gateway::RedactionReason>,
-) -> Option<RedactionDecision> {
-    match answer {
-        "Allow once" => Some(RedactionDecision::AllowOnce),
-        "Allow for this session" => Some(RedactionDecision::AllowForSession),
-        "Redact" => Some(RedactionDecision::Redact),
-        "Block" => Some(RedactionDecision::Block),
-        "Add to allowlist" => match match_reason {
-            Some(crate::content_gateway::RedactionReason::IgnoredPath) => {
-                match_value.map(RedactionDecision::AddAllowlistLiteral)
-            }
-            _ => match_value.map(RedactionDecision::AddAllowlistRegex),
-        },
-        "Add to blocklist" => match_value.map(RedactionDecision::AddBlocklist),
-        _ => None,
-    }
+async fn prompt_for_redaction_match_selection(
+    session: &crate::codex::Session,
+    turn: &crate::codex::TurnContext,
+    call_id: &str,
+    prompt: &str,
+    question_id: &str,
+    options: Vec<RequestUserInputQuestionOption>,
+) -> Option<String> {
+    let question = RequestUserInputQuestion {
+        header: "Exclusions".to_string(),
+        id: question_id.to_string(),
+        question: prompt.to_string(),
+        is_other: false,
+        is_secret: false,
+        options: Some(options),
+    };
+    let args = RequestUserInputArgs {
+        questions: vec![question],
+    };
+    let response = session
+        .request_user_input(turn, call_id.to_string(), args)
+        .await;
+    response
+        .and_then(|response| response.answers.get(question_id).cloned())
+        .and_then(|answer| answer.answers.first().cloned())
 }
 
 async fn maybe_prompt_for_redaction(
@@ -429,8 +544,7 @@ async fn maybe_prompt_for_redaction(
         return None;
     }
 
-    let match_info = report.matches.first();
-    let match_value = match_info.map(|info| info.value.clone());
+    let match_summaries = summarize_redaction_matches(report);
     let mut question_text =
         format!("Exclusions matched content in {context_label}. How should xcodex proceed?");
     if let Some(summary) = format_redaction_matches(report, "L2-output_sanitization") {
@@ -457,21 +571,25 @@ async fn maybe_prompt_for_redaction(
         },
     ];
 
-    if matches!(
-        match_info.map(|info| info.reason),
-        Some(crate::content_gateway::RedactionReason::SecretPattern)
-            | Some(crate::content_gateway::RedactionReason::IgnoredPath)
-    ) {
+    if match_summaries.iter().any(|summary| {
+        matches!(
+            summary.reason,
+            crate::content_gateway::RedactionReason::SecretPattern
+                | crate::content_gateway::RedactionReason::IgnoredPath
+        )
+    }) {
         options.push(RequestUserInputQuestionOption {
             label: "Add to allowlist".to_string(),
             description: "Allow this matched value through exclusions going forward.".to_string(),
         });
     }
 
-    if matches!(
-        match_info.map(|info| info.reason),
-        Some(crate::content_gateway::RedactionReason::SecretPattern)
-    ) {
+    if match_summaries.iter().any(|summary| {
+        matches!(
+            summary.reason,
+            crate::content_gateway::RedactionReason::SecretPattern
+        )
+    }) {
         options.push(RequestUserInputQuestionOption {
             label: "Add to blocklist".to_string(),
             description: "Add this value to extra secret patterns to scan.".to_string(),
@@ -496,7 +614,102 @@ async fn maybe_prompt_for_redaction(
         .and_then(|response| response.answers.get("exclusions_redaction").cloned())
         .and_then(|answer| answer.answers.first().cloned())?;
 
-    parse_redaction_decision(&answer, match_value, match_info.map(|info| info.reason))
+    let Some(answer) = parse_redaction_prompt_answer(&answer) else {
+        return None;
+    };
+
+    match answer {
+        RedactionPromptAnswer::AllowOnce => Some(RedactionDecision::AllowOnce),
+        RedactionPromptAnswer::AllowForSession => Some(RedactionDecision::AllowForSession),
+        RedactionPromptAnswer::Redact => Some(RedactionDecision::Redact),
+        RedactionPromptAnswer::Block => Some(RedactionDecision::Block),
+        RedactionPromptAnswer::AddToAllowlist => {
+            let candidates: Vec<RedactionMatchSummary> = match_summaries
+                .iter()
+                .filter(|summary| {
+                    matches!(
+                        summary.reason,
+                        crate::content_gateway::RedactionReason::SecretPattern
+                            | crate::content_gateway::RedactionReason::IgnoredPath
+                    )
+                })
+                .cloned()
+                .collect();
+            let selected = if candidates.len() == 1 {
+                candidates.first().cloned()
+            } else {
+                let prompt = "Select a matched value to add to the allowlist.";
+                let options = candidates
+                    .iter()
+                    .map(|summary| RequestUserInputQuestionOption {
+                        label: redaction_match_label(summary),
+                        description: String::new(),
+                    })
+                    .collect::<Vec<_>>();
+
+                let answer = prompt_for_redaction_match_selection(
+                    session,
+                    turn,
+                    call_id,
+                    prompt,
+                    "exclusions_allowlist_match",
+                    options,
+                )
+                .await?;
+
+                candidates
+                    .into_iter()
+                    .find(|summary| redaction_match_label(summary) == answer)
+            }?;
+
+            match selected.reason {
+                crate::content_gateway::RedactionReason::IgnoredPath => {
+                    Some(RedactionDecision::AddAllowlistLiteral(selected.value))
+                }
+                _ => Some(RedactionDecision::AddAllowlistRegex(selected.value)),
+            }
+        }
+        RedactionPromptAnswer::AddToBlocklist => {
+            let candidates: Vec<RedactionMatchSummary> = match_summaries
+                .iter()
+                .filter(|summary| {
+                    matches!(
+                        summary.reason,
+                        crate::content_gateway::RedactionReason::SecretPattern
+                    )
+                })
+                .cloned()
+                .collect();
+            let selected = if candidates.len() == 1 {
+                candidates.first().cloned()
+            } else {
+                let prompt = "Select a matched value to add to the blocklist.";
+                let options = candidates
+                    .iter()
+                    .map(|summary| RequestUserInputQuestionOption {
+                        label: redaction_match_label(summary),
+                        description: String::new(),
+                    })
+                    .collect::<Vec<_>>();
+
+                let answer = prompt_for_redaction_match_selection(
+                    session,
+                    turn,
+                    call_id,
+                    prompt,
+                    "exclusions_blocklist_match",
+                    options,
+                )
+                .await?;
+
+                candidates
+                    .into_iter()
+                    .find(|summary| redaction_match_label(summary) == answer)
+            }?;
+
+            Some(RedactionDecision::AddBlocklist(selected.value))
+        }
+    }
 }
 
 async fn resolve_redaction_decision(
@@ -1198,45 +1411,33 @@ mod tests {
     }
 
     #[test]
-    fn parse_redaction_decision_maps_answers() {
+    fn parse_redaction_prompt_answer_maps_answers() {
         assert!(matches!(
-            super::parse_redaction_decision("Allow once", None, None),
-            Some(super::RedactionDecision::AllowOnce)
+            super::parse_redaction_prompt_answer("Allow once"),
+            Some(super::RedactionPromptAnswer::AllowOnce)
         ));
         assert!(matches!(
-            super::parse_redaction_decision("Allow for this session", None, None),
-            Some(super::RedactionDecision::AllowForSession)
+            super::parse_redaction_prompt_answer("Allow for this session"),
+            Some(super::RedactionPromptAnswer::AllowForSession)
         ));
         assert!(matches!(
-            super::parse_redaction_decision("Redact", None, None),
-            Some(super::RedactionDecision::Redact)
+            super::parse_redaction_prompt_answer("Redact"),
+            Some(super::RedactionPromptAnswer::Redact)
         ));
         assert!(matches!(
-            super::parse_redaction_decision("Block", None, None),
-            Some(super::RedactionDecision::Block)
+            super::parse_redaction_prompt_answer("Block"),
+            Some(super::RedactionPromptAnswer::Block)
         ));
         assert!(matches!(
-            super::parse_redaction_decision(
-                "Add to allowlist",
-                Some("secret".to_string()),
-                Some(crate::content_gateway::RedactionReason::SecretPattern),
-            ),
-            Some(super::RedactionDecision::AddAllowlistRegex(value)) if value == "secret"
+            super::parse_redaction_prompt_answer("Add to allowlist"),
+            Some(super::RedactionPromptAnswer::AddToAllowlist)
         ));
         assert!(matches!(
-            super::parse_redaction_decision("Add to blocklist", Some("secret".to_string()), None),
-            Some(super::RedactionDecision::AddBlocklist(value)) if value == "secret"
-        ));
-        assert!(matches!(
-            super::parse_redaction_decision(
-                "Add to allowlist",
-                Some("ignored/path.db".to_string()),
-                Some(crate::content_gateway::RedactionReason::IgnoredPath),
-            ),
-            Some(super::RedactionDecision::AddAllowlistLiteral(value)) if value == "ignored/path.db"
+            super::parse_redaction_prompt_answer("Add to blocklist"),
+            Some(super::RedactionPromptAnswer::AddToBlocklist)
         ));
         assert_eq!(
-            super::parse_redaction_decision("unknown", None, None).is_none(),
+            super::parse_redaction_prompt_answer("unknown").is_none(),
             true
         );
     }
@@ -1258,7 +1459,7 @@ mod tests {
         assert_eq!(
             summary,
             Some(
-                "Matched content (L2-output_sanitization):\n- token_abc123 (reason: Secret pattern)"
+                "Matched content (L2-output_sanitization):\n- [REDACTED toke...c123 sha256:424fdc9e] (reason: Secret pattern)"
                     .to_string(),
             )
         );

@@ -94,6 +94,8 @@ use rmcp::model::ReadResourceResult;
 use rmcp::model::RequestId;
 use serde_json;
 use serde_json::Value;
+use sha2::Digest as _;
+use sha2::Sha256;
 use tokio::sync::Mutex;
 use tokio::sync::OnceCell;
 use tokio::sync::RwLock;
@@ -801,6 +803,108 @@ enum ExclusionRedactionDecision {
     AddBlocklist(String),
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct ExclusionMatchSummary {
+    reason: crate::content_gateway::RedactionReason,
+    value: String,
+    count: usize,
+}
+
+fn summarize_exclusion_matches(
+    report: &crate::content_gateway::ScanReport,
+) -> Vec<ExclusionMatchSummary> {
+    let mut out: Vec<ExclusionMatchSummary> = Vec::new();
+    let mut seen: HashMap<(crate::content_gateway::RedactionReason, &str), usize> = HashMap::new();
+
+    for match_info in &report.matches {
+        let key = (match_info.reason, match_info.value.as_str());
+        if let Some(idx) = seen.get(&key) {
+            out[*idx].count = out[*idx].count.saturating_add(1);
+        } else {
+            seen.insert(key, out.len());
+            out.push(ExclusionMatchSummary {
+                reason: match_info.reason,
+                value: match_info.value.clone(),
+                count: 1,
+            });
+        }
+    }
+
+    out
+}
+
+fn exclusion_reason_label(reason: crate::content_gateway::RedactionReason) -> &'static str {
+    match reason {
+        crate::content_gateway::RedactionReason::FingerprintCache => "Fingerprint cache",
+        crate::content_gateway::RedactionReason::IgnoredPath => "Ignored path",
+        crate::content_gateway::RedactionReason::SecretPattern => "Secret pattern",
+    }
+}
+
+fn exclusion_short_sha256_hex(text: &str) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(text.as_bytes());
+    let digest = hasher.finalize();
+    let mut out = String::with_capacity(8);
+    for byte in digest.iter().take(4) {
+        use std::fmt::Write as _;
+        write!(out, "{byte:02x}").ok();
+    }
+    out
+}
+
+fn exclusion_truncate_match_value(mut value: String) -> String {
+    if value.len() <= 200 {
+        return value;
+    }
+    let mut boundary = 200.min(value.len());
+    while boundary > 0 && !value.is_char_boundary(boundary) {
+        boundary = boundary.saturating_sub(1);
+    }
+    value.truncate(boundary);
+    value.push_str("...");
+    value
+}
+
+fn exclusion_match_value_display(summary: &ExclusionMatchSummary) -> String {
+    match summary.reason {
+        crate::content_gateway::RedactionReason::SecretPattern => {
+            let hash = exclusion_short_sha256_hex(&summary.value);
+            let char_len = summary.value.chars().count();
+            if char_len <= 8 {
+                format!("[REDACTED sha256:{hash}]")
+            } else {
+                let prefix = summary
+                    .value
+                    .char_indices()
+                    .nth(4)
+                    .map(|(idx, _)| &summary.value[..idx])
+                    .unwrap_or(summary.value.as_str());
+                let suffix_start_chars = char_len.saturating_sub(4);
+                let suffix_idx = summary
+                    .value
+                    .char_indices()
+                    .nth(suffix_start_chars)
+                    .map(|(idx, _)| idx)
+                    .unwrap_or(0);
+                let suffix = &summary.value[suffix_idx..];
+                format!("[REDACTED {prefix}...{suffix} sha256:{hash}]")
+            }
+        }
+        _ => exclusion_truncate_match_value(summary.value.clone()),
+    }
+}
+
+fn exclusion_match_label(summary: &ExclusionMatchSummary) -> String {
+    let reason = exclusion_reason_label(summary.reason);
+    let value = exclusion_match_value_display(summary);
+    let mut label = format!("{value} (reason: {reason})");
+    if summary.count > 1 {
+        label.push_str(&format!(" x{}", summary.count));
+    }
+    label
+}
+
 fn format_exclusion_matches(
     report: &crate::content_gateway::ScanReport,
     layer_label: &str,
@@ -809,29 +913,38 @@ fn format_exclusion_matches(
         return None;
     }
 
-    fn redaction_reason_label(reason: crate::content_gateway::RedactionReason) -> &'static str {
-        match reason {
-            crate::content_gateway::RedactionReason::FingerprintCache => "Fingerprint cache",
-            crate::content_gateway::RedactionReason::IgnoredPath => "Ignored path",
-            crate::content_gateway::RedactionReason::SecretPattern => "Secret pattern",
-        }
-    }
-
     let mut lines = Vec::new();
     lines.push(format!("Matched content ({layer_label}):"));
-    for match_info in report.matches.iter().take(3) {
-        let mut value = match_info.value.clone();
-        if value.len() > 200 {
-            value.truncate(200);
-            value.push('…');
-        }
-        let reason = redaction_reason_label(match_info.reason);
-        lines.push(format!("- {value} (reason: {reason})"));
-    }
-    if report.matches.len() > 3 {
-        lines.push(format!("…and {} more", report.matches.len() - 3));
+    for match_info in summarize_exclusion_matches(report) {
+        lines.push(format!("- {}", exclusion_match_label(&match_info)));
     }
     Some(lines.join("\n"))
+}
+
+async fn prompt_for_exclusion_match_selection(
+    sess: &Session,
+    turn_context: &TurnContext,
+    question_id: &str,
+    prompt: &str,
+    options: Vec<RequestUserInputQuestionOption>,
+) -> Option<String> {
+    let question = RequestUserInputQuestion {
+        header: "Exclusions".to_string(),
+        id: question_id.to_string(),
+        question: prompt.to_string(),
+        is_other: false,
+        is_secret: false,
+        options: Some(options),
+    };
+    let args = RequestUserInputArgs {
+        questions: vec![question],
+    };
+    let response = sess
+        .request_user_input(turn_context, turn_context.sub_id.clone(), args)
+        .await;
+    response
+        .and_then(|response| response.answers.get(question_id).cloned())
+        .and_then(|answer| answer.answers.first().cloned())
 }
 
 async fn maybe_prompt_for_exclusion_redaction(
@@ -847,8 +960,7 @@ async fn maybe_prompt_for_exclusion_redaction(
         return None;
     }
 
-    let match_info = report.matches.first();
-    let match_value = match_info.map(|info| info.value.clone());
+    let match_summaries = summarize_exclusion_matches(report);
     let mut question_text =
         format!("Exclusions matched content in {context_label}. How should xcodex proceed?");
     if let Some(summary) = format_exclusion_matches(report, "L4-request_interceptor") {
@@ -875,21 +987,25 @@ async fn maybe_prompt_for_exclusion_redaction(
         },
     ];
 
-    if matches!(
-        match_info.map(|info| info.reason),
-        Some(crate::content_gateway::RedactionReason::SecretPattern)
-            | Some(crate::content_gateway::RedactionReason::IgnoredPath)
-    ) {
+    if match_summaries.iter().any(|summary| {
+        matches!(
+            summary.reason,
+            crate::content_gateway::RedactionReason::SecretPattern
+                | crate::content_gateway::RedactionReason::IgnoredPath
+        )
+    }) {
         options.push(RequestUserInputQuestionOption {
             label: "Add to allowlist".to_string(),
             description: "Allow this matched value through exclusions going forward.".to_string(),
         });
     }
 
-    if matches!(
-        match_info.map(|info| info.reason),
-        Some(crate::content_gateway::RedactionReason::SecretPattern)
-    ) {
+    if match_summaries.iter().any(|summary| {
+        matches!(
+            summary.reason,
+            crate::content_gateway::RedactionReason::SecretPattern
+        )
+    }) {
         options.push(RequestUserInputQuestionOption {
             label: "Add to blocklist".to_string(),
             description: "Add this value to extra secret patterns to scan.".to_string(),
@@ -920,13 +1036,88 @@ async fn maybe_prompt_for_exclusion_redaction(
         "Allow for this session" => Some(ExclusionRedactionDecision::AllowForSession),
         "Redact" => Some(ExclusionRedactionDecision::Redact),
         "Block" => Some(ExclusionRedactionDecision::Block),
-        "Add to allowlist" => match match_info.map(|info| info.reason) {
-            Some(crate::content_gateway::RedactionReason::IgnoredPath) => {
-                match_value.map(ExclusionRedactionDecision::AddAllowlistLiteral)
+        "Add to allowlist" => {
+            let candidates: Vec<ExclusionMatchSummary> = match_summaries
+                .iter()
+                .filter(|summary| {
+                    matches!(
+                        summary.reason,
+                        crate::content_gateway::RedactionReason::SecretPattern
+                            | crate::content_gateway::RedactionReason::IgnoredPath
+                    )
+                })
+                .cloned()
+                .collect();
+            let selected = if candidates.len() == 1 {
+                candidates.first().cloned()
+            } else {
+                let prompt = "Select a matched value to add to the allowlist.";
+                let options = candidates
+                    .iter()
+                    .map(|summary| RequestUserInputQuestionOption {
+                        label: exclusion_match_label(summary),
+                        description: String::new(),
+                    })
+                    .collect::<Vec<_>>();
+                let answer = prompt_for_exclusion_match_selection(
+                    sess,
+                    turn_context,
+                    "exclusions_allowlist_match",
+                    prompt,
+                    options,
+                )
+                .await?;
+                candidates
+                    .into_iter()
+                    .find(|summary| exclusion_match_label(summary) == answer)
+            }?;
+
+            match selected.reason {
+                crate::content_gateway::RedactionReason::IgnoredPath => Some(
+                    ExclusionRedactionDecision::AddAllowlistLiteral(selected.value),
+                ),
+                _ => Some(ExclusionRedactionDecision::AddAllowlistRegex(
+                    selected.value,
+                )),
             }
-            _ => match_value.map(ExclusionRedactionDecision::AddAllowlistRegex),
-        },
-        "Add to blocklist" => match_value.map(ExclusionRedactionDecision::AddBlocklist),
+        }
+        "Add to blocklist" => {
+            let candidates: Vec<ExclusionMatchSummary> = match_summaries
+                .iter()
+                .filter(|summary| {
+                    matches!(
+                        summary.reason,
+                        crate::content_gateway::RedactionReason::SecretPattern
+                    )
+                })
+                .cloned()
+                .collect();
+            let selected = if candidates.len() == 1 {
+                candidates.first().cloned()
+            } else {
+                let prompt = "Select a matched value to add to the blocklist.";
+                let options = candidates
+                    .iter()
+                    .map(|summary| RequestUserInputQuestionOption {
+                        label: exclusion_match_label(summary),
+                        description: String::new(),
+                    })
+                    .collect::<Vec<_>>();
+                let answer = prompt_for_exclusion_match_selection(
+                    sess,
+                    turn_context,
+                    "exclusions_blocklist_match",
+                    prompt,
+                    options,
+                )
+                .await?;
+                candidates
+                    .into_iter()
+                    .find(|summary| exclusion_match_label(summary) == answer)
+            }?;
+
+            Some(ExclusionRedactionDecision::AddBlocklist(selected.value))
+        }
         _ => None,
     }
 }
