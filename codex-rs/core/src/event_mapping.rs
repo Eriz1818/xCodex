@@ -99,6 +99,7 @@ pub fn parse_turn_item(item: &ResponseItem) -> Option<TurnItem> {
             role,
             content,
             id,
+            end_turn,
             phase,
             ..
         } => match role.as_str() {
@@ -106,7 +107,13 @@ pub fn parse_turn_item(item: &ResponseItem) -> Option<TurnItem> {
             "assistant" => Some(TurnItem::AgentMessage(parse_agent_message(
                 id.as_ref(),
                 content,
-                phase.clone(),
+                phase.clone().or_else(|| match end_turn {
+                    // Some providers omit `phase` but provide `end_turn`; use it as a best-effort
+                    // fallback so UIs can distinguish mid-turn commentary from the final answer.
+                    Some(true) => Some(MessagePhase::FinalAnswer),
+                    Some(false) => Some(MessagePhase::Commentary),
+                    None => None,
+                }),
             ))),
             "system" => None,
             _ => None,
@@ -160,6 +167,7 @@ mod tests {
     use codex_protocol::items::TurnItem;
     use codex_protocol::items::WebSearchItem;
     use codex_protocol::models::ContentItem;
+    use codex_protocol::models::MessagePhase;
     use codex_protocol::models::ReasoningItemContent;
     use codex_protocol::models::ReasoningItemReasoningSummary;
     use codex_protocol::models::ResponseItem;
@@ -369,6 +377,48 @@ mod tests {
                     panic!("expected agent message text content");
                 };
                 assert_eq!(text, "Hello from Codex");
+            }
+            other => panic!("expected TurnItem::AgentMessage, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn derives_agent_message_phase_from_end_turn_when_phase_missing() {
+        let item = ResponseItem::Message {
+            id: Some("msg-1".to_string()),
+            role: "assistant".to_string(),
+            content: vec![ContentItem::OutputText {
+                text: "Progress".to_string(),
+            }],
+            end_turn: Some(false),
+            phase: None,
+        };
+
+        let turn_item = parse_turn_item(&item).expect("expected agent message turn item");
+        match turn_item {
+            TurnItem::AgentMessage(message) => {
+                assert_eq!(message.phase, Some(MessagePhase::Commentary));
+            }
+            other => panic!("expected TurnItem::AgentMessage, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn derives_agent_message_final_answer_from_end_turn_true() {
+        let item = ResponseItem::Message {
+            id: Some("msg-1".to_string()),
+            role: "assistant".to_string(),
+            content: vec![ContentItem::OutputText {
+                text: "Done".to_string(),
+            }],
+            end_turn: Some(true),
+            phase: None,
+        };
+
+        let turn_item = parse_turn_item(&item).expect("expected agent message turn item");
+        match turn_item {
+            TurnItem::AgentMessage(message) => {
+                assert_eq!(message.phase, Some(MessagePhase::FinalAnswer));
             }
             other => panic!("expected TurnItem::AgentMessage, got {other:?}"),
         }
