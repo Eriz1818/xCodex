@@ -866,10 +866,16 @@ fn exclusion_truncate_match_value(mut value: String) -> String {
     value
 }
 
-fn exclusion_match_value_display(summary: &ExclusionMatchSummary) -> String {
+fn exclusion_match_value_display(
+    summary: &ExclusionMatchSummary,
+    reveal_secret_matches: bool,
+) -> String {
     match summary.reason {
         crate::content_gateway::RedactionReason::SecretPattern => {
             let hash = exclusion_short_sha256_hex(&summary.value);
+            if reveal_secret_matches {
+                return format!("{} (sha256:{hash})", summary.value);
+            }
             let char_len = summary.value.chars().count();
             if char_len <= 8 {
                 format!("[REDACTED sha256:{hash}]")
@@ -895,9 +901,9 @@ fn exclusion_match_value_display(summary: &ExclusionMatchSummary) -> String {
     }
 }
 
-fn exclusion_match_label(summary: &ExclusionMatchSummary) -> String {
+fn exclusion_match_label(summary: &ExclusionMatchSummary, reveal_secret_matches: bool) -> String {
     let reason = exclusion_reason_label(summary.reason);
-    let value = exclusion_match_value_display(summary);
+    let value = exclusion_match_value_display(summary, reveal_secret_matches);
     let mut label = format!("{value} (reason: {reason})");
     if summary.count > 1 {
         label.push_str(&format!(" x{}", summary.count));
@@ -908,6 +914,7 @@ fn exclusion_match_label(summary: &ExclusionMatchSummary) -> String {
 fn format_exclusion_matches(
     report: &crate::content_gateway::ScanReport,
     layer_label: &str,
+    reveal_secret_matches: bool,
 ) -> Option<String> {
     if report.matches.is_empty() {
         return None;
@@ -916,7 +923,10 @@ fn format_exclusion_matches(
     let mut lines = Vec::new();
     lines.push(format!("Matched content ({layer_label}):"));
     for match_info in summarize_exclusion_matches(report) {
-        lines.push(format!("- {}", exclusion_match_label(&match_info)));
+        lines.push(format!(
+            "- {}",
+            exclusion_match_label(&match_info, reveal_secret_matches)
+        ));
     }
     Some(lines.join("\n"))
 }
@@ -961,75 +971,113 @@ async fn maybe_prompt_for_exclusion_redaction(
     }
 
     let match_summaries = summarize_exclusion_matches(report);
-    let mut question_text =
-        format!("Exclusions matched content in {context_label}. How should xcodex proceed?");
-    if let Some(summary) = format_exclusion_matches(report, "L4-request_interceptor") {
-        question_text.push('\n');
-        question_text.push_str(&summary);
-    }
-
-    let mut options = vec![
-        RequestUserInputQuestionOption {
-            label: "Allow once".to_string(),
-            description: "Permit this content for the current request.".to_string(),
-        },
-        RequestUserInputQuestionOption {
-            label: "Allow for this session".to_string(),
-            description: "Permit this exact content for this xcodex session.".to_string(),
-        },
-        RequestUserInputQuestionOption {
-            label: "Redact".to_string(),
-            description: "Redact matching content.".to_string(),
-        },
-        RequestUserInputQuestionOption {
-            label: "Block".to_string(),
-            description: "Block matching content.".to_string(),
-        },
-    ];
-
-    if match_summaries.iter().any(|summary| {
-        matches!(
-            summary.reason,
-            crate::content_gateway::RedactionReason::SecretPattern
-                | crate::content_gateway::RedactionReason::IgnoredPath
-        )
-    }) {
-        options.push(RequestUserInputQuestionOption {
-            label: "Add to allowlist".to_string(),
-            description: "Allow this matched value through exclusions going forward.".to_string(),
-        });
-    }
-
-    if match_summaries.iter().any(|summary| {
+    let has_secret_matches = match_summaries.iter().any(|summary| {
         matches!(
             summary.reason,
             crate::content_gateway::RedactionReason::SecretPattern
         )
-    }) {
-        options.push(RequestUserInputQuestionOption {
-            label: "Add to blocklist".to_string(),
-            description: "Add this value to extra secret patterns to scan.".to_string(),
-        });
-    }
+    });
+    let mut reveal_secret_matches = false;
 
-    let question = RequestUserInputQuestion {
-        header: "Exclusions".to_string(),
-        id: "exclusions_redaction".to_string(),
-        question: question_text,
-        is_other: false,
-        is_secret: false,
-        options: Some(options),
-    };
-    let args = RequestUserInputArgs {
-        questions: vec![question],
-    };
+    let answer = loop {
+        let mut question_text =
+            format!("Exclusions matched content in {context_label}. How should xcodex proceed?");
+        if reveal_secret_matches {
+            question_text.push_str("\n(Showing full matched values.)");
+        }
+        if let Some(summary) =
+            format_exclusion_matches(report, "L4-request_interceptor", reveal_secret_matches)
+        {
+            question_text.push('\n');
+            question_text.push_str(&summary);
+        }
 
-    let response = sess
-        .request_user_input(turn_context, turn_context.sub_id.clone(), args)
-        .await;
-    let answer = response
-        .and_then(|response| response.answers.get("exclusions_redaction").cloned())
-        .and_then(|answer| answer.answers.first().cloned())?;
+        let mut options = vec![
+            RequestUserInputQuestionOption {
+                label: "Allow once".to_string(),
+                description: "Permit this content for the current request.".to_string(),
+            },
+            RequestUserInputQuestionOption {
+                label: "Allow for this session".to_string(),
+                description: "Permit this exact content for this xcodex session.".to_string(),
+            },
+            RequestUserInputQuestionOption {
+                label: "Redact".to_string(),
+                description: "Redact matching content.".to_string(),
+            },
+            RequestUserInputQuestionOption {
+                label: "Block".to_string(),
+                description: "Block matching content.".to_string(),
+            },
+        ];
+
+        if has_secret_matches {
+            options.push(RequestUserInputQuestionOption {
+                label: if reveal_secret_matches {
+                    "Hide matched values".to_string()
+                } else {
+                    "Reveal matched values".to_string()
+                },
+                description: if reveal_secret_matches {
+                    "Return to redacted previews for secret matches.".to_string()
+                } else {
+                    "Show the full matched values in this prompt (may display secrets).".to_string()
+                },
+            });
+        }
+
+        if match_summaries.iter().any(|summary| {
+            matches!(
+                summary.reason,
+                crate::content_gateway::RedactionReason::SecretPattern
+                    | crate::content_gateway::RedactionReason::IgnoredPath
+            )
+        }) {
+            options.push(RequestUserInputQuestionOption {
+                label: "Add to allowlist".to_string(),
+                description: "Allow this matched value through exclusions going forward."
+                    .to_string(),
+            });
+        }
+
+        if has_secret_matches {
+            options.push(RequestUserInputQuestionOption {
+                label: "Add to blocklist".to_string(),
+                description: "Add this value to extra secret patterns to scan.".to_string(),
+            });
+        }
+
+        let question = RequestUserInputQuestion {
+            header: "Exclusions".to_string(),
+            id: "exclusions_redaction".to_string(),
+            question: question_text,
+            is_other: false,
+            is_secret: false,
+            options: Some(options),
+        };
+        let args = RequestUserInputArgs {
+            questions: vec![question],
+        };
+
+        let response = sess
+            .request_user_input(turn_context, turn_context.sub_id.clone(), args)
+            .await;
+        let answer = response
+            .and_then(|response| response.answers.get("exclusions_redaction").cloned())
+            .and_then(|answer| answer.answers.first().cloned())?;
+
+        match answer.as_str() {
+            "Reveal matched values" => {
+                reveal_secret_matches = true;
+                continue;
+            }
+            "Hide matched values" => {
+                reveal_secret_matches = false;
+                continue;
+            }
+            _ => break answer,
+        }
+    };
 
     match answer.as_str() {
         "Allow once" => Some(ExclusionRedactionDecision::AllowOnce),
@@ -1055,7 +1103,7 @@ async fn maybe_prompt_for_exclusion_redaction(
                 let options = candidates
                     .iter()
                     .map(|summary| RequestUserInputQuestionOption {
-                        label: exclusion_match_label(summary),
+                        label: exclusion_match_label(summary, false),
                         description: String::new(),
                     })
                     .collect::<Vec<_>>();
@@ -1069,7 +1117,7 @@ async fn maybe_prompt_for_exclusion_redaction(
                 .await?;
                 candidates
                     .into_iter()
-                    .find(|summary| exclusion_match_label(summary) == answer)
+                    .find(|summary| exclusion_match_label(summary, false) == answer)
             }?;
 
             match selected.reason {
@@ -1099,7 +1147,7 @@ async fn maybe_prompt_for_exclusion_redaction(
                 let options = candidates
                     .iter()
                     .map(|summary| RequestUserInputQuestionOption {
-                        label: exclusion_match_label(summary),
+                        label: exclusion_match_label(summary, false),
                         description: String::new(),
                     })
                     .collect::<Vec<_>>();
@@ -1113,7 +1161,7 @@ async fn maybe_prompt_for_exclusion_redaction(
                 .await?;
                 candidates
                     .into_iter()
-                    .find(|summary| exclusion_match_label(summary) == answer)
+                    .find(|summary| exclusion_match_label(summary, false) == answer)
             }?;
 
             Some(ExclusionRedactionDecision::AddBlocklist(selected.value))

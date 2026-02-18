@@ -372,6 +372,8 @@ enum RedactionPromptAnswer {
     Block,
     AddToAllowlist,
     AddToBlocklist,
+    RevealMatches,
+    HideMatches,
 }
 
 fn parse_redaction_prompt_answer(answer: &str) -> Option<RedactionPromptAnswer> {
@@ -382,6 +384,8 @@ fn parse_redaction_prompt_answer(answer: &str) -> Option<RedactionPromptAnswer> 
         "Block" => Some(RedactionPromptAnswer::Block),
         "Add to allowlist" => Some(RedactionPromptAnswer::AddToAllowlist),
         "Add to blocklist" => Some(RedactionPromptAnswer::AddToBlocklist),
+        "Reveal matched values" => Some(RedactionPromptAnswer::RevealMatches),
+        "Hide matched values" => Some(RedactionPromptAnswer::HideMatches),
         _ => None,
     }
 }
@@ -426,10 +430,16 @@ fn truncate_match_value(mut value: String) -> String {
     value
 }
 
-fn redaction_match_value_display(summary: &RedactionMatchSummary) -> String {
+fn redaction_match_value_display(
+    summary: &RedactionMatchSummary,
+    reveal_secret_matches: bool,
+) -> String {
     match summary.reason {
         crate::content_gateway::RedactionReason::SecretPattern => {
             let hash = short_sha256_hex(&summary.value);
+            if reveal_secret_matches {
+                return format!("{} (sha256:{hash})", summary.value);
+            }
             let char_len = summary.value.chars().count();
             if char_len <= 8 {
                 format!("[REDACTED sha256:{hash}]")
@@ -455,9 +465,9 @@ fn redaction_match_value_display(summary: &RedactionMatchSummary) -> String {
     }
 }
 
-fn redaction_match_label(summary: &RedactionMatchSummary) -> String {
+fn redaction_match_label(summary: &RedactionMatchSummary, reveal_secret_matches: bool) -> String {
     let reason = redaction_reason_label(summary.reason);
-    let value = redaction_match_value_display(summary);
+    let value = redaction_match_value_display(summary, reveal_secret_matches);
     let mut label = format!("{value} (reason: {reason})");
     if summary.count > 1 {
         label.push_str(&format!(" x{}", summary.count));
@@ -491,6 +501,7 @@ fn summarize_redaction_matches(
 fn format_redaction_matches(
     report: &crate::content_gateway::ScanReport,
     layer_label: &str,
+    reveal_secret_matches: bool,
 ) -> Option<String> {
     if report.matches.is_empty() {
         return None;
@@ -499,7 +510,10 @@ fn format_redaction_matches(
     let mut lines = Vec::new();
     lines.push(format!("Matched content ({layer_label}):"));
     for match_info in summarize_redaction_matches(report) {
-        lines.push(format!("- {}", redaction_match_label(&match_info)));
+        lines.push(format!(
+            "- {}",
+            redaction_match_label(&match_info, reveal_secret_matches)
+        ));
     }
     Some(lines.join("\n"))
 }
@@ -545,77 +559,115 @@ async fn maybe_prompt_for_redaction(
     }
 
     let match_summaries = summarize_redaction_matches(report);
-    let mut question_text =
-        format!("Exclusions matched content in {context_label}. How should xcodex proceed?");
-    if let Some(summary) = format_redaction_matches(report, "L2-output_sanitization") {
-        question_text.push('\n');
-        question_text.push_str(&summary);
-    }
-
-    let mut options = vec![
-        RequestUserInputQuestionOption {
-            label: "Allow once".to_string(),
-            description: "Permit this content for the current request.".to_string(),
-        },
-        RequestUserInputQuestionOption {
-            label: "Allow for this session".to_string(),
-            description: "Permit this exact content for this xcodex session.".to_string(),
-        },
-        RequestUserInputQuestionOption {
-            label: "Redact".to_string(),
-            description: "Redact matching content.".to_string(),
-        },
-        RequestUserInputQuestionOption {
-            label: "Block".to_string(),
-            description: "Block matching content.".to_string(),
-        },
-    ];
-
-    if match_summaries.iter().any(|summary| {
-        matches!(
-            summary.reason,
-            crate::content_gateway::RedactionReason::SecretPattern
-                | crate::content_gateway::RedactionReason::IgnoredPath
-        )
-    }) {
-        options.push(RequestUserInputQuestionOption {
-            label: "Add to allowlist".to_string(),
-            description: "Allow this matched value through exclusions going forward.".to_string(),
-        });
-    }
-
-    if match_summaries.iter().any(|summary| {
+    let has_secret_matches = match_summaries.iter().any(|summary| {
         matches!(
             summary.reason,
             crate::content_gateway::RedactionReason::SecretPattern
         )
-    }) {
-        options.push(RequestUserInputQuestionOption {
-            label: "Add to blocklist".to_string(),
-            description: "Add this value to extra secret patterns to scan.".to_string(),
-        });
-    }
+    });
 
-    let question = RequestUserInputQuestion {
-        header: "Exclusions".to_string(),
-        id: "exclusions_redaction".to_string(),
-        question: question_text,
-        is_other: false,
-        is_secret: false,
-        options: Some(options),
-    };
-    let args = RequestUserInputArgs {
-        questions: vec![question],
-    };
-    let response = session
-        .request_user_input(turn, call_id.to_string(), args)
-        .await;
-    let answer = response
-        .and_then(|response| response.answers.get("exclusions_redaction").cloned())
-        .and_then(|answer| answer.answers.first().cloned())?;
+    let mut reveal_secret_matches = false;
+    let answer = loop {
+        let mut question_text =
+            format!("Exclusions matched content in {context_label}. How should xcodex proceed?");
+        if reveal_secret_matches {
+            question_text.push_str("\n(Showing full matched values.)");
+        }
+        if let Some(summary) =
+            format_redaction_matches(report, "L2-output_sanitization", reveal_secret_matches)
+        {
+            question_text.push('\n');
+            question_text.push_str(&summary);
+        }
 
-    let Some(answer) = parse_redaction_prompt_answer(&answer) else {
-        return None;
+        let mut options = vec![
+            RequestUserInputQuestionOption {
+                label: "Allow once".to_string(),
+                description: "Permit this content for the current request.".to_string(),
+            },
+            RequestUserInputQuestionOption {
+                label: "Allow for this session".to_string(),
+                description: "Permit this exact content for this xcodex session.".to_string(),
+            },
+            RequestUserInputQuestionOption {
+                label: "Redact".to_string(),
+                description: "Redact matching content.".to_string(),
+            },
+            RequestUserInputQuestionOption {
+                label: "Block".to_string(),
+                description: "Block matching content.".to_string(),
+            },
+        ];
+
+        if has_secret_matches {
+            options.push(RequestUserInputQuestionOption {
+                label: if reveal_secret_matches {
+                    "Hide matched values".to_string()
+                } else {
+                    "Reveal matched values".to_string()
+                },
+                description: if reveal_secret_matches {
+                    "Return to redacted previews for secret matches.".to_string()
+                } else {
+                    "Show the full matched values in this prompt (may display secrets).".to_string()
+                },
+            });
+        }
+
+        if match_summaries.iter().any(|summary| {
+            matches!(
+                summary.reason,
+                crate::content_gateway::RedactionReason::SecretPattern
+                    | crate::content_gateway::RedactionReason::IgnoredPath
+            )
+        }) {
+            options.push(RequestUserInputQuestionOption {
+                label: "Add to allowlist".to_string(),
+                description: "Allow this matched value through exclusions going forward."
+                    .to_string(),
+            });
+        }
+
+        if has_secret_matches {
+            options.push(RequestUserInputQuestionOption {
+                label: "Add to blocklist".to_string(),
+                description: "Add this value to extra secret patterns to scan.".to_string(),
+            });
+        }
+
+        let question = RequestUserInputQuestion {
+            header: "Exclusions".to_string(),
+            id: "exclusions_redaction".to_string(),
+            question: question_text,
+            is_other: false,
+            is_secret: false,
+            options: Some(options),
+        };
+        let args = RequestUserInputArgs {
+            questions: vec![question],
+        };
+        let response = session
+            .request_user_input(turn, call_id.to_string(), args)
+            .await;
+        let answer = response
+            .and_then(|response| response.answers.get("exclusions_redaction").cloned())
+            .and_then(|answer| answer.answers.first().cloned())?;
+
+        let Some(answer) = parse_redaction_prompt_answer(&answer) else {
+            return None;
+        };
+
+        match answer {
+            RedactionPromptAnswer::RevealMatches => {
+                reveal_secret_matches = true;
+                continue;
+            }
+            RedactionPromptAnswer::HideMatches => {
+                reveal_secret_matches = false;
+                continue;
+            }
+            other => break other,
+        }
     };
 
     match answer {
@@ -642,7 +694,7 @@ async fn maybe_prompt_for_redaction(
                 let options = candidates
                     .iter()
                     .map(|summary| RequestUserInputQuestionOption {
-                        label: redaction_match_label(summary),
+                        label: redaction_match_label(summary, false),
                         description: String::new(),
                     })
                     .collect::<Vec<_>>();
@@ -659,7 +711,7 @@ async fn maybe_prompt_for_redaction(
 
                 candidates
                     .into_iter()
-                    .find(|summary| redaction_match_label(summary) == answer)
+                    .find(|summary| redaction_match_label(summary, false) == answer)
             }?;
 
             match selected.reason {
@@ -687,7 +739,7 @@ async fn maybe_prompt_for_redaction(
                 let options = candidates
                     .iter()
                     .map(|summary| RequestUserInputQuestionOption {
-                        label: redaction_match_label(summary),
+                        label: redaction_match_label(summary, false),
                         description: String::new(),
                     })
                     .collect::<Vec<_>>();
@@ -704,11 +756,12 @@ async fn maybe_prompt_for_redaction(
 
                 candidates
                     .into_iter()
-                    .find(|summary| redaction_match_label(summary) == answer)
+                    .find(|summary| redaction_match_label(summary, false) == answer)
             }?;
 
             Some(RedactionDecision::AddBlocklist(selected.value))
         }
+        RedactionPromptAnswer::RevealMatches | RedactionPromptAnswer::HideMatches => None,
     }
 }
 
@@ -1436,6 +1489,14 @@ mod tests {
             super::parse_redaction_prompt_answer("Add to blocklist"),
             Some(super::RedactionPromptAnswer::AddToBlocklist)
         ));
+        assert!(matches!(
+            super::parse_redaction_prompt_answer("Reveal matched values"),
+            Some(super::RedactionPromptAnswer::RevealMatches)
+        ));
+        assert!(matches!(
+            super::parse_redaction_prompt_answer("Hide matched values"),
+            Some(super::RedactionPromptAnswer::HideMatches)
+        ));
         assert_eq!(
             super::parse_redaction_prompt_answer("unknown").is_none(),
             true
@@ -1455,11 +1516,34 @@ mod tests {
             }],
         };
 
-        let summary = super::format_redaction_matches(&report, "L2-output_sanitization");
+        let summary = super::format_redaction_matches(&report, "L2-output_sanitization", false);
         assert_eq!(
             summary,
             Some(
                 "Matched content (L2-output_sanitization):\n- [REDACTED toke...c123 sha256:424fdc9e] (reason: Secret pattern)"
+                    .to_string(),
+            )
+        );
+    }
+
+    #[test]
+    fn format_redaction_matches_can_reveal_secret_values() {
+        let report = crate::content_gateway::ScanReport {
+            layers: Vec::new(),
+            redacted: true,
+            blocked: false,
+            reasons: vec![crate::content_gateway::RedactionReason::SecretPattern],
+            matches: vec![crate::content_gateway::RedactionMatch {
+                reason: crate::content_gateway::RedactionReason::SecretPattern,
+                value: "token_abc123".to_string(),
+            }],
+        };
+
+        let summary = super::format_redaction_matches(&report, "L2-output_sanitization", true);
+        assert_eq!(
+            summary,
+            Some(
+                "Matched content (L2-output_sanitization):\n- token_abc123 (sha256:424fdc9e) (reason: Secret pattern)"
                     .to_string(),
             )
         );
