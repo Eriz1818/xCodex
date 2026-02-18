@@ -553,6 +553,11 @@ impl ExclusionsSettingsView {
                 Toggle::ShowSummaryHistory,
                 "Store exclusion summaries in the transcript.",
             ),
+            (
+                "Approval prompt: reveal matched values",
+                Toggle::PromptRevealSecretMatches,
+                "Show full secret-pattern matches by default in exclusion prompts (may display secrets).",
+            ),
         ];
 
         rows.extend(toggles.iter().map(|(label, toggle, hint)| ExclusionRow {
@@ -1193,6 +1198,7 @@ enum Toggle {
     SecretPatternsBuiltin,
     ShowSummaryBanner,
     ShowSummaryHistory,
+    PromptRevealSecretMatches,
     PreflightShellPaths,
 }
 
@@ -1212,6 +1218,7 @@ impl Toggle {
             Toggle::SecretPatternsBuiltin => current.secret_patterns_builtin,
             Toggle::ShowSummaryBanner => current.show_summary_banner,
             Toggle::ShowSummaryHistory => current.show_summary_history,
+            Toggle::PromptRevealSecretMatches => current.prompt_reveal_secret_matches,
             Toggle::PreflightShellPaths => current.preflight_shell_paths,
         }
     }
@@ -1248,6 +1255,9 @@ impl Toggle {
             }
             Toggle::ShowSummaryHistory => {
                 exclusion.show_summary_history = !exclusion.show_summary_history
+            }
+            Toggle::PromptRevealSecretMatches => {
+                exclusion.prompt_reveal_secret_matches = !exclusion.prompt_reveal_secret_matches
             }
             Toggle::PreflightShellPaths => {
                 exclusion.preflight_shell_paths = !exclusion.preflight_shell_paths
