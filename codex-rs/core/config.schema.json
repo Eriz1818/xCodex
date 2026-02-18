@@ -457,6 +457,11 @@
           "description": "When true, prompt to allow excluded paths or payloads instead of blocking immediately.",
           "type": "boolean"
         },
+        "prompt_reveal_secret_matches": {
+          "default": false,
+          "description": "When `true`, exclusion approval prompts show full matched values for secret-pattern matches by default.\n\nThis may display secrets on-screen. You can still toggle Reveal/Hide within the prompt.",
+          "type": "boolean"
+        },
         "secret_patterns": {
           "default": true,
           "description": "Secret-pattern scanning in text (defense-in-depth redaction).",

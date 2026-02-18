@@ -977,7 +977,8 @@ async fn maybe_prompt_for_exclusion_redaction(
             crate::content_gateway::RedactionReason::SecretPattern
         )
     });
-    let mut reveal_secret_matches = false;
+    let mut reveal_secret_matches =
+        has_secret_matches && turn_context.exclusion.prompt_reveal_secret_matches;
 
     let answer = loop {
         let mut question_text =
@@ -1103,7 +1104,7 @@ async fn maybe_prompt_for_exclusion_redaction(
                 let options = candidates
                     .iter()
                     .map(|summary| RequestUserInputQuestionOption {
-                        label: exclusion_match_label(summary, false),
+                        label: exclusion_match_label(summary, reveal_secret_matches),
                         description: String::new(),
                     })
                     .collect::<Vec<_>>();
@@ -1117,7 +1118,7 @@ async fn maybe_prompt_for_exclusion_redaction(
                 .await?;
                 candidates
                     .into_iter()
-                    .find(|summary| exclusion_match_label(summary, false) == answer)
+                    .find(|summary| exclusion_match_label(summary, reveal_secret_matches) == answer)
             }?;
 
             match selected.reason {
@@ -1147,7 +1148,7 @@ async fn maybe_prompt_for_exclusion_redaction(
                 let options = candidates
                     .iter()
                     .map(|summary| RequestUserInputQuestionOption {
-                        label: exclusion_match_label(summary, false),
+                        label: exclusion_match_label(summary, reveal_secret_matches),
                         description: String::new(),
                     })
                     .collect::<Vec<_>>();
@@ -1161,7 +1162,7 @@ async fn maybe_prompt_for_exclusion_redaction(
                 .await?;
                 candidates
                     .into_iter()
-                    .find(|summary| exclusion_match_label(summary, false) == answer)
+                    .find(|summary| exclusion_match_label(summary, reveal_secret_matches) == answer)
             }?;
 
             Some(ExclusionRedactionDecision::AddBlocklist(selected.value))

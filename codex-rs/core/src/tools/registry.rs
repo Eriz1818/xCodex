@@ -566,7 +566,8 @@ async fn maybe_prompt_for_redaction(
         )
     });
 
-    let mut reveal_secret_matches = false;
+    let mut reveal_secret_matches =
+        has_secret_matches && turn.exclusion.prompt_reveal_secret_matches;
     let answer = loop {
         let mut question_text =
             format!("Exclusions matched content in {context_label}. How should xcodex proceed?");
@@ -694,7 +695,7 @@ async fn maybe_prompt_for_redaction(
                 let options = candidates
                     .iter()
                     .map(|summary| RequestUserInputQuestionOption {
-                        label: redaction_match_label(summary, false),
+                        label: redaction_match_label(summary, reveal_secret_matches),
                         description: String::new(),
                     })
                     .collect::<Vec<_>>();
@@ -711,7 +712,7 @@ async fn maybe_prompt_for_redaction(
 
                 candidates
                     .into_iter()
-                    .find(|summary| redaction_match_label(summary, false) == answer)
+                    .find(|summary| redaction_match_label(summary, reveal_secret_matches) == answer)
             }?;
 
             match selected.reason {
@@ -739,7 +740,7 @@ async fn maybe_prompt_for_redaction(
                 let options = candidates
                     .iter()
                     .map(|summary| RequestUserInputQuestionOption {
-                        label: redaction_match_label(summary, false),
+                        label: redaction_match_label(summary, reveal_secret_matches),
                         description: String::new(),
                     })
                     .collect::<Vec<_>>();
@@ -756,7 +757,7 @@ async fn maybe_prompt_for_redaction(
 
                 candidates
                     .into_iter()
-                    .find(|summary| redaction_match_label(summary, false) == answer)
+                    .find(|summary| redaction_match_label(summary, reveal_secret_matches) == answer)
             }?;
 
             Some(RedactionDecision::AddBlocklist(selected.value))

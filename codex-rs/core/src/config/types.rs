@@ -181,6 +181,12 @@ pub struct ExclusionConfig {
     #[serde(default)]
     pub prompt_on_blocked: bool,
 
+    /// When `true`, exclusion approval prompts show full matched values for secret-pattern matches by default.
+    ///
+    /// This may display secrets on-screen. You can still toggle Reveal/Hide within the prompt.
+    #[serde(default)]
+    pub prompt_reveal_secret_matches: bool,
+
     /// When `true`, block shell tool calls that reference excluded paths before executing.
     #[serde(default = "default_enabled")]
     pub preflight_shell_paths: bool,
@@ -230,6 +236,7 @@ impl Default for ExclusionConfig {
             show_summary_banner: default_enabled(),
             show_summary_history: default_enabled(),
             prompt_on_blocked: false,
+            prompt_reveal_secret_matches: false,
             preflight_shell_paths: default_enabled(),
             files: default_exclusion_files(),
         }
