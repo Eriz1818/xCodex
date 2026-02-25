@@ -64,7 +64,8 @@ impl McpStartupState {
         let state = ev.status;
         match &state {
             McpStartupStatus::Starting => {
-                *self.startup_attempts.entry(server.clone()).or_insert(0) += 1;
+                let attempts = self.startup_attempts.entry(server.clone()).or_insert(0);
+                *attempts = std::cmp::min(*attempts + 1, MAX_MCP_AUTOLOAD_ATTEMPTS);
                 self.server_start_times.insert(server.clone(), now);
                 self.startup_durations.remove(&server);
             }

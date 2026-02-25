@@ -901,7 +901,7 @@ impl McpConnectionManager {
             ));
         }
 
-        if matches!(trigger, StartupTrigger::AutoLoad) {
+        if matches!(trigger, StartupTrigger::AutoLoad | StartupTrigger::ToolCall) {
             let mut attempts_guard = self.autoload_attempts.lock().await;
             let attempts = attempts_guard.get(server_name).copied().unwrap_or(0);
             if attempts >= MAX_AUTOLOAD_ATTEMPTS {
@@ -947,6 +947,9 @@ impl McpConnectionManager {
         let outcome = async_client.client().await;
         let status = match &outcome {
             Ok(managed) => {
+                if matches!(trigger, StartupTrigger::AutoLoad | StartupTrigger::ToolCall) {
+                    self.autoload_attempts.lock().await.remove(server_name);
+                }
                 self.ready_clients
                     .lock()
                     .await

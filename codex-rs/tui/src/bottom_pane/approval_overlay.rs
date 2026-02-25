@@ -999,6 +999,7 @@ mod tests {
 
     #[test]
     fn exclusion_header_highlights_caught_content() {
+        let _guard = crate::theme::test_style_guard();
         let (tx, _rx) = unbounded_channel::<AppEvent>();
         let tx = AppEventSender::new(tx);
         let question = concat!(
