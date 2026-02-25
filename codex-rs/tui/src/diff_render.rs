@@ -903,6 +903,7 @@ fn push_wrapped_diff_line(
     surface: DiffSurface,
 ) -> Vec<RtLine<'static>> {
     let ln_str = line_number.to_string();
+    let text = text.trim_start_matches(|ch| ch == ' ' || ch == '\t');
 
     // Reserve a fixed number of spaces (equal to the widest line number plus a
     // trailing spacer) so the sign column stays aligned across the diff block.
@@ -1185,6 +1186,39 @@ mod tests {
         assert_eq!(
             guess_lang_for_path(Path::new("apps/web/src/AppV2.tsx")),
             Some("tsx".to_string())
+        );
+    }
+
+    #[test]
+    fn side_by_side_trims_leading_indentation_for_syntax_wrapping() {
+        let lines = push_wrapped_diff_line(
+            1,
+            DiffLineType::Insert,
+            "            return origin_message_id",
+            20,
+            line_number_width(1),
+            false,
+            true,
+            Some("python"),
+            DiffSurface::Transcript,
+        );
+
+        let rendered = lines
+            .first()
+            .expect("first line")
+            .spans
+            .iter()
+            .skip(2) // skip gutter + sign
+            .map(|span| span.content.as_ref())
+            .collect::<String>();
+
+        assert!(
+            !rendered.starts_with(' '),
+            "expected leading whitespace to be trimmed: {rendered:?}"
+        );
+        assert!(
+            rendered.starts_with("return"),
+            "expected trimmed content to start with code token: {rendered:?}"
         );
     }
 
