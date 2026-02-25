@@ -117,7 +117,7 @@ use toml::Value as TomlValue;
 
 async fn test_config() -> Config {
     // Use base defaults to avoid depending on host state.
-    let codex_home = std::env::temp_dir();
+    let codex_home = tempdir().expect("temp codex home").keep();
     ConfigBuilder::default()
         .codex_home(codex_home.clone())
         .build()

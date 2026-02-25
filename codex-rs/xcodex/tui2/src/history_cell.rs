@@ -2820,7 +2820,7 @@ mod tests {
     use codex_protocol::mcp::CallToolResult;
     use codex_protocol::mcp::Tool;
     async fn test_config() -> Config {
-        let codex_home = std::env::temp_dir();
+        let codex_home = tempfile::tempdir().expect("temp codex home").keep();
         ConfigBuilder::default()
             .codex_home(codex_home.clone())
             .build()

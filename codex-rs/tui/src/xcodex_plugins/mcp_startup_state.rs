@@ -8,6 +8,8 @@ use codex_core::protocol::McpStartupFailure;
 use codex_core::protocol::McpStartupStatus;
 use codex_core::protocol::McpStartupUpdateEvent;
 
+const MAX_MCP_AUTOLOAD_ATTEMPTS: u32 = 5;
+
 #[derive(Default)]
 pub(crate) struct McpStartupState {
     started_at: Option<Instant>,
@@ -16,6 +18,7 @@ pub(crate) struct McpStartupState {
     failed_servers: Vec<String>,
     server_start_times: HashMap<String, Instant>,
     startup_durations: HashMap<String, Duration>,
+    startup_attempts: HashMap<String, u32>,
 }
 
 pub(crate) struct McpStartupCompleteOutcome {
@@ -31,6 +34,7 @@ impl McpStartupState {
         self.failed_servers.clear();
         self.server_start_times.clear();
         self.startup_durations.clear();
+        self.startup_attempts.clear();
     }
 
     pub(crate) fn status(&self) -> Option<&HashMap<String, McpStartupStatus>> {
@@ -60,6 +64,7 @@ impl McpStartupState {
         let state = ev.status;
         match &state {
             McpStartupStatus::Starting => {
+                *self.startup_attempts.entry(server.clone()).or_insert(0) += 1;
                 self.server_start_times.insert(server.clone(), now);
                 self.startup_durations.remove(&server);
             }
@@ -175,7 +180,10 @@ impl McpStartupState {
                 to_show.join(", ")
             ))
         } else {
-            Some(format!("Booting MCP server: {first}"))
+            let attempts = self.startup_attempts.get(*first).copied().unwrap_or(0);
+            Some(format!(
+                "Booting MCP server ({attempts}/{MAX_MCP_AUTOLOAD_ATTEMPTS}): {first}"
+            ))
         }
     }
 

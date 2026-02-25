@@ -112,6 +112,7 @@ pub const DEFAULT_STARTUP_TIMEOUT: Duration = Duration::from_secs(10);
 const DEFAULT_TOOL_TIMEOUT: Duration = Duration::from_secs(60);
 
 const CODEX_APPS_TOOLS_CACHE_TTL: Duration = Duration::from_secs(3600);
+const MAX_AUTOLOAD_ATTEMPTS: u32 = 5;
 
 /// The Responses API requires tool names to match `^[a-zA-Z0-9_-]+$`.
 /// MCP server/tool names are user-controlled, so sanitize the fully-qualified
@@ -593,6 +594,7 @@ pub(crate) struct McpConnectionManager {
     codex_home: Option<PathBuf>,
     sandbox_state: Option<SandboxState>,
     tx_event: Option<Sender<Event>>,
+    autoload_attempts: Arc<Mutex<HashMap<String, u32>>>,
 }
 
 impl Default for McpConnectionManager {
@@ -607,6 +609,7 @@ impl Default for McpConnectionManager {
             codex_home: None,
             sandbox_state: None,
             tx_event: None,
+            autoload_attempts: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 }
@@ -644,6 +647,7 @@ impl McpConnectionManager {
         self.ready_clients = Arc::clone(&ready_clients);
         self.manifest_cache = Arc::clone(&manifest_cache);
         self.elicitation_requests = elicitation_requests.clone();
+        self.autoload_attempts.lock().await.clear();
 
         for (server_name, cfg) in mcp_servers.into_iter().filter(|(_, cfg)| cfg.enabled) {
             let cancel_token = cancel_token.child_token();
@@ -774,6 +778,10 @@ impl McpConnectionManager {
             return;
         }
 
+        for server in mcp_servers.keys() {
+            self.autoload_attempts.lock().await.remove(server);
+        }
+
         let mut join_set = JoinSet::new();
         for (server_name, cfg) in mcp_servers.into_iter().filter(|(_, cfg)| cfg.enabled) {
             let cancel_token = cancel_token.child_token();
@@ -885,10 +893,38 @@ impl McpConnectionManager {
             return Err(anyhow!("MCP server '{server_name}' is disabled"));
         }
         let startup_mode = config.startup_mode.unwrap_or(self.startup_mode);
-        if startup_mode == McpStartupMode::Manual && matches!(trigger, StartupTrigger::ToolCall) {
+        if startup_mode == McpStartupMode::Manual
+            && matches!(trigger, StartupTrigger::ToolCall | StartupTrigger::AutoLoad)
+        {
             return Err(anyhow!(
                 "MCP server '{server_name}' is not running (manual mode). Run `/mcp load {server_name}`."
             ));
+        }
+
+        if matches!(trigger, StartupTrigger::AutoLoad) {
+            let mut attempts_guard = self.autoload_attempts.lock().await;
+            let attempts = attempts_guard.get(server_name).copied().unwrap_or(0);
+            if attempts >= MAX_AUTOLOAD_ATTEMPTS {
+                if attempts == MAX_AUTOLOAD_ATTEMPTS
+                    && let Some(tx_event) = &self.tx_event
+                {
+                    let _ = tx_event
+                        .send(Event {
+                            id: INITIAL_SUBMIT_ID.to_owned(),
+                            msg: EventMsg::Warning(codex_protocol::protocol::WarningEvent {
+                                message: format!(
+                                    "MCP server `{server_name}` failed to start {MAX_AUTOLOAD_ATTEMPTS} times; stopping automatic retries. Run `/mcp retry {server_name}` to try again."
+                                ),
+                            }),
+                        })
+                        .await;
+                    attempts_guard.insert(server_name.to_string(), MAX_AUTOLOAD_ATTEMPTS + 1);
+                }
+                return Err(anyhow!(
+                    "MCP server '{server_name}' is not running; automatic retries have been paused"
+                ));
+            }
+            attempts_guard.insert(server_name.to_string(), attempts + 1);
         }
 
         let async_client = self
@@ -983,8 +1019,18 @@ impl McpConnectionManager {
 
     pub async fn load_servers(&self, servers: &[String]) -> Result<()> {
         for server in servers {
+            self.autoload_attempts.lock().await.remove(server);
             self.ensure_server_ready(server, StartupTrigger::ManualLoad)
                 .await?;
+        }
+        Ok(())
+    }
+
+    pub async fn autoload_servers(&self, servers: &[String]) -> Result<()> {
+        for server in servers {
+            let _ = self
+                .ensure_server_ready(server, StartupTrigger::AutoLoad)
+                .await;
         }
         Ok(())
     }
@@ -1846,6 +1892,7 @@ fn validate_mcp_server_name(server_name: &str) -> Result<()> {
 enum StartupTrigger {
     ToolCall,
     ManualLoad,
+    AutoLoad,
 }
 
 fn mcp_init_error_display(

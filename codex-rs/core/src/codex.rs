@@ -6035,18 +6035,14 @@ async fn built_tools(
             .filter(|server| !discovered_mcp_servers.contains(server))
             .collect::<Vec<String>>();
         if !servers_to_prime.is_empty() {
-            let servers_display = servers_to_prime.join(", ");
-            if let Err(err) = sess
+            let _ = sess
                 .services
                 .mcp_connection_manager
                 .read()
                 .await
-                .load_servers(&servers_to_prime)
+                .autoload_servers(&servers_to_prime)
                 .or_cancel(cancellation_token)
-                .await
-            {
-                warn!("Failed to auto-load requested MCP servers ({servers_display}): {err:#?}");
-            }
+                .await;
             mcp_tools = sess
                 .services
                 .mcp_connection_manager

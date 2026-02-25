@@ -1,9 +1,9 @@
 ---
-source: tui2/src/chatwidget/tests.rs
+source: xcodex/tui2/src/chatwidget/tests.rs
 expression: terminal.backend()
 ---
 "                                                                                "
-"• Booting MCP server: alpha (0s • esc to interrupt)                             "
+"• Booting MCP server (1/5): alpha (0s • esc to interrupt)                       "
 "                                                                                "
 "                                                                                "
 "› Ask xcodex to do anything                                                     "

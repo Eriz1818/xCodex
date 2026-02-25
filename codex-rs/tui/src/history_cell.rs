@@ -2693,7 +2693,7 @@ mod tests {
 
     const SMALL_PNG_BASE64: &str = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg==";
     async fn test_config() -> Config {
-        let codex_home = std::env::temp_dir();
+        let codex_home = tempfile::tempdir().expect("temp codex home").keep();
         ConfigBuilder::default()
             .codex_home(codex_home.clone())
             .build()
