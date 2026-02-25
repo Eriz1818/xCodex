@@ -228,6 +228,7 @@ static RUST_HIGHLIGHT_CONFIG: OnceLock<HighlightConfiguration> = OnceLock::new()
 static PYTHON_HIGHLIGHT_CONFIG: OnceLock<HighlightConfiguration> = OnceLock::new();
 static JAVASCRIPT_HIGHLIGHT_CONFIG: OnceLock<HighlightConfiguration> = OnceLock::new();
 static TYPESCRIPT_HIGHLIGHT_CONFIG: OnceLock<HighlightConfiguration> = OnceLock::new();
+static TSX_HIGHLIGHT_CONFIG: OnceLock<HighlightConfiguration> = OnceLock::new();
 static RUBY_HIGHLIGHT_CONFIG: OnceLock<HighlightConfiguration> = OnceLock::new();
 static GO_HIGHLIGHT_CONFIG: OnceLock<HighlightConfiguration> = OnceLock::new();
 static C_HIGHLIGHT_CONFIG: OnceLock<HighlightConfiguration> = OnceLock::new();
@@ -312,6 +313,23 @@ fn typescript_highlight_config() -> &'static HighlightConfiguration {
         #[expect(clippy::expect_used)]
         let mut config = HighlightConfiguration::new(language, "typescript", &query, "", "")
             .expect("load typescript highlight query");
+        config.configure(GENERIC_HIGHLIGHT_NAMES);
+        config
+    })
+}
+
+fn tsx_highlight_config() -> &'static HighlightConfiguration {
+    TSX_HIGHLIGHT_CONFIG.get_or_init(|| {
+        let language = tree_sitter_typescript::LANGUAGE_TSX.into();
+        let query = format!(
+            "{}\n{}\n{}",
+            tree_sitter_javascript::HIGHLIGHT_QUERY,
+            tree_sitter_typescript::HIGHLIGHTS_QUERY,
+            TYPESCRIPT_EXTRA_HIGHLIGHTS
+        );
+        #[expect(clippy::expect_used)]
+        let mut config =
+            HighlightConfiguration::new(language, "tsx", &query, "", "").expect("load tsx query");
         config.configure(GENERIC_HIGHLIGHT_NAMES);
         config
     })
@@ -456,6 +474,7 @@ fn highlight_config_for(lang: &str) -> Option<&'static HighlightConfiguration> {
         "python" | "py" => Some(python_highlight_config()),
         "javascript" | "js" => Some(javascript_highlight_config()),
         "typescript" | "ts" => Some(typescript_highlight_config()),
+        "tsx" => Some(tsx_highlight_config()),
         "ruby" | "rb" => Some(ruby_highlight_config()),
         "go" | "golang" => Some(go_highlight_config()),
         "c" => Some(c_highlight_config()),

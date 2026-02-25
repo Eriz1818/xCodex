@@ -706,6 +706,21 @@ fn code_block_bash_is_syntax_highlighted() {
 }
 
 #[test]
+fn code_block_tsx_is_syntax_highlighted() {
+    let text = render_markdown_text("```tsx\nconst x = \"hi\";\n```\n");
+    assert_eq!(text.lines.len(), 1);
+
+    let mut string_fg = None;
+    for span in &text.lines[0].spans {
+        if span.content.as_ref() == "\"hi\"" {
+            string_fg = span.style.fg;
+        }
+    }
+
+    assert_eq!(string_fg, crate::theme::code_string_style().fg);
+}
+
+#[test]
 fn horizontal_rule_renders_em_dashes() {
     let md = "Before\n\n---\n\nAfter\n";
     let text = render_markdown_text(md);

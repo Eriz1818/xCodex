@@ -1968,10 +1968,12 @@ mod mcp_init_error_display_tests {}
 mod tests {
     use super::*;
     use codex_protocol::protocol::McpAuthStatus;
+    use codex_protocol::protocol::SandboxPolicy;
     use rmcp::model::JsonObject;
     use std::collections::HashSet;
     use std::sync::Arc;
     use tempfile::tempdir;
+    use tokio_util::sync::CancellationToken;
 
     fn create_test_tool(server_name: &str, tool_name: &str) -> ToolInfo {
         ToolInfo {
@@ -2366,5 +2368,216 @@ mod tests {
         assert_eq!(tool.tool.description.as_deref(), Some("Search docs"));
         assert_eq!(tool.connector_id.as_deref(), Some("docs"));
         assert_eq!(tool.connector_name.as_deref(), Some("Docs"));
+    }
+
+    #[tokio::test]
+    async fn tool_call_retries_stop_after_max_attempts() {
+        let codex_home = tempdir().expect("codex home");
+        let (tx_event, rx_event) = async_channel::unbounded();
+
+        let server_name = "qdrant";
+        let mut mcp_servers = HashMap::new();
+        mcp_servers.insert(
+            server_name.to_string(),
+            McpServerConfig {
+                transport: McpServerTransportConfig::Stdio {
+                    command: "false".to_string(),
+                    args: Vec::new(),
+                    env: None,
+                    env_vars: Vec::new(),
+                    cwd: None,
+                },
+                enabled: true,
+                required: false,
+                disabled_reason: None,
+                startup_timeout_sec: None,
+                tool_timeout_sec: None,
+                enabled_tools: None,
+                disabled_tools: None,
+                startup_mode: Some(McpStartupMode::Lazy),
+                scopes: None,
+            },
+        );
+
+        let mut manager = McpConnectionManager::default();
+        manager
+            .initialize(
+                &mcp_servers,
+                OAuthCredentialsStoreMode::File,
+                HashMap::new(),
+                tx_event,
+                CancellationToken::new(),
+                SandboxState {
+                    sandbox_policy: SandboxPolicy::new_workspace_write_policy(),
+                    codex_linux_sandbox_exe: None,
+                    sandbox_cwd: std::env::current_dir().unwrap_or_else(|_| PathBuf::from("/")),
+                    use_linux_sandbox_bwrap: false,
+                },
+                None,
+                McpStartupMode::Lazy,
+                codex_home.path().to_path_buf(),
+            )
+            .await;
+
+        for _ in 0..MAX_AUTOLOAD_ATTEMPTS {
+            assert!(
+                manager
+                    .ensure_server_ready(server_name, StartupTrigger::ToolCall)
+                    .await
+                    .is_err()
+            );
+        }
+
+        // The next attempt is blocked and emits a warning at most once.
+        assert!(
+            manager
+                .ensure_server_ready(server_name, StartupTrigger::ToolCall)
+                .await
+                .is_err()
+        );
+        assert_eq!(
+            manager
+                .autoload_attempts
+                .lock()
+                .await
+                .get(server_name)
+                .copied(),
+            Some(MAX_AUTOLOAD_ATTEMPTS + 1)
+        );
+
+        let mut warning_count = 0;
+        while let Ok(event) = rx_event.try_recv() {
+            if matches!(event.msg, EventMsg::Warning(_)) {
+                warning_count += 1;
+            }
+        }
+        assert_eq!(warning_count, 1);
+
+        // Subsequent calls keep failing without incrementing past the sentinel.
+        for _ in 0..3 {
+            assert!(
+                manager
+                    .ensure_server_ready(server_name, StartupTrigger::ToolCall)
+                    .await
+                    .is_err()
+            );
+        }
+        assert_eq!(
+            manager
+                .autoload_attempts
+                .lock()
+                .await
+                .get(server_name)
+                .copied(),
+            Some(MAX_AUTOLOAD_ATTEMPTS + 1)
+        );
+    }
+
+    #[tokio::test]
+    async fn retry_servers_clears_tool_call_retry_backoff() {
+        let codex_home = tempdir().expect("codex home");
+        let (tx_event, _rx_event) = async_channel::unbounded();
+
+        let server_name = "qdrant";
+        let mut mcp_servers = HashMap::new();
+        mcp_servers.insert(
+            server_name.to_string(),
+            McpServerConfig {
+                transport: McpServerTransportConfig::Stdio {
+                    command: "false".to_string(),
+                    args: Vec::new(),
+                    env: None,
+                    env_vars: Vec::new(),
+                    cwd: None,
+                },
+                enabled: true,
+                required: false,
+                disabled_reason: None,
+                startup_timeout_sec: None,
+                tool_timeout_sec: None,
+                enabled_tools: None,
+                disabled_tools: None,
+                startup_mode: Some(McpStartupMode::Lazy),
+                scopes: None,
+            },
+        );
+
+        let mut manager = McpConnectionManager::default();
+        manager
+            .initialize(
+                &mcp_servers,
+                OAuthCredentialsStoreMode::File,
+                HashMap::new(),
+                tx_event.clone(),
+                CancellationToken::new(),
+                SandboxState {
+                    sandbox_policy: SandboxPolicy::new_workspace_write_policy(),
+                    codex_linux_sandbox_exe: None,
+                    sandbox_cwd: std::env::current_dir().unwrap_or_else(|_| PathBuf::from("/")),
+                    use_linux_sandbox_bwrap: false,
+                },
+                None,
+                McpStartupMode::Lazy,
+                codex_home.path().to_path_buf(),
+            )
+            .await;
+
+        for _ in 0..=MAX_AUTOLOAD_ATTEMPTS {
+            assert!(
+                manager
+                    .ensure_server_ready(server_name, StartupTrigger::ToolCall)
+                    .await
+                    .is_err()
+            );
+        }
+        assert!(
+            manager
+                .autoload_attempts
+                .lock()
+                .await
+                .get(server_name)
+                .is_some()
+        );
+
+        manager
+            .retry_servers(
+                mcp_servers.clone(),
+                OAuthCredentialsStoreMode::File,
+                HashMap::new(),
+                tx_event,
+                CancellationToken::new(),
+                SandboxState {
+                    sandbox_policy: SandboxPolicy::new_workspace_write_policy(),
+                    codex_linux_sandbox_exe: None,
+                    sandbox_cwd: std::env::current_dir().unwrap_or_else(|_| PathBuf::from("/")),
+                    use_linux_sandbox_bwrap: false,
+                },
+                None,
+            )
+            .await;
+
+        assert!(
+            manager
+                .autoload_attempts
+                .lock()
+                .await
+                .get(server_name)
+                .is_none()
+        );
+        assert!(
+            manager
+                .ensure_server_ready(server_name, StartupTrigger::ToolCall)
+                .await
+                .is_err()
+        );
+        assert_eq!(
+            manager
+                .autoload_attempts
+                .lock()
+                .await
+                .get(server_name)
+                .copied(),
+            Some(1)
+        );
     }
 }

@@ -259,6 +259,7 @@ fn guess_lang_for_path(path: &Path) -> Option<String> {
         "py" => "python",
         "js" | "mjs" | "cjs" => "javascript",
         "ts" | "mts" | "cts" => "typescript",
+        "tsx" => "tsx",
         "rb" => "ruby",
         "sh" | "bash" => "bash",
         _ => return None,
@@ -1176,6 +1177,14 @@ mod tests {
                 .join("example.png")
                 .display()
                 .to_string()
+        );
+    }
+
+    #[test]
+    fn guess_lang_for_path_recognizes_tsx() {
+        assert_eq!(
+            guess_lang_for_path(Path::new("apps/web/src/AppV2.tsx")),
+            Some("tsx".to_string())
         );
     }
 
