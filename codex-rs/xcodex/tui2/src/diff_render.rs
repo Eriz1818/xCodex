@@ -645,16 +645,14 @@ fn normalize_diff_indentation(text: &str, baseline_cols: usize) -> String {
     out
 }
 
-fn side_by_side_baseline_cols(rows: &[SideBySideRow], left: bool) -> usize {
+fn side_by_side_shared_baseline_cols(rows: &[SideBySideRow]) -> usize {
     rows.iter()
-        .filter_map(|row| {
-            let cell = if left { &row.left } else { &row.right };
-            match cell {
-                SideBySideCell::Diff { text, .. } if !text.is_empty() => {
-                    Some(leading_indent_cols(text))
-                }
-                _ => None,
+        .flat_map(|row| [&row.left, &row.right])
+        .filter_map(|cell| match cell {
+            SideBySideCell::Diff { text, .. } if !text.is_empty() => {
+                Some(leading_indent_cols(text))
             }
+            _ => None,
         })
         .min()
         .unwrap_or(0)
@@ -821,12 +819,11 @@ fn render_change_side_by_side(
         if pending.is_empty() {
             return;
         }
-        let left_baseline = side_by_side_baseline_cols(pending, true);
-        let right_baseline = side_by_side_baseline_cols(pending, false);
+        let baseline = side_by_side_shared_baseline_cols(pending);
         for row in pending.drain(..) {
             let left_lines = render_side_by_side_cell_normalized(
                 &row.left,
-                left_baseline,
+                baseline,
                 left_width,
                 left_line_number_width,
                 diff_highlight,
@@ -836,7 +833,7 @@ fn render_change_side_by_side(
             );
             let right_lines = render_side_by_side_cell_normalized(
                 &row.right,
-                right_baseline,
+                baseline,
                 right_width,
                 right_line_number_width,
                 diff_highlight,
