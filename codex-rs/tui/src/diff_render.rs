@@ -582,6 +582,125 @@ fn flush_side_by_side_pending_rows(
     }
 }
 
+const DIFF_TAB_WIDTH_COLS: usize = 4;
+
+fn leading_indent_cols(text: &str) -> usize {
+    let mut cols = 0usize;
+    for ch in text.chars() {
+        match ch {
+            ' ' => cols += 1,
+            '\t' => cols += DIFF_TAB_WIDTH_COLS,
+            _ => break,
+        }
+    }
+    cols
+}
+
+fn normalize_diff_indentation(text: &str, baseline_cols: usize) -> String {
+    let mut cols = 0usize;
+    let mut idx = 0usize;
+    let mut normalized_indent = String::new();
+
+    // Strip up to `baseline_cols` worth of leading indentation.
+    for (offset, ch) in text.char_indices() {
+        if cols >= baseline_cols {
+            idx = offset;
+            break;
+        }
+
+        match ch {
+            ' ' => cols += 1,
+            '\t' => {
+                let next = cols.saturating_add(DIFF_TAB_WIDTH_COLS);
+                if next > baseline_cols {
+                    normalized_indent.push_str(&" ".repeat(next.saturating_sub(baseline_cols)));
+                }
+                cols = next;
+            }
+            _ => {
+                idx = offset;
+                break;
+            }
+        }
+        idx = offset + ch.len_utf8();
+    }
+
+    // Convert any remaining leading tabs to spaces so terminal tab stops can't shift content.
+    let mut rest_idx = idx;
+    for (offset, ch) in text[idx..].char_indices() {
+        match ch {
+            ' ' => normalized_indent.push(' '),
+            '\t' => normalized_indent.push_str(&" ".repeat(DIFF_TAB_WIDTH_COLS)),
+            _ => {
+                rest_idx = idx + offset;
+                break;
+            }
+        }
+        rest_idx = idx + offset + ch.len_utf8();
+    }
+
+    let mut out = String::from(" ");
+    out.push_str(&normalized_indent);
+    out.push_str(&text[rest_idx..]);
+    out
+}
+
+fn side_by_side_baseline_cols(rows: &[SideBySideRow], left: bool) -> usize {
+    rows.iter()
+        .filter_map(|row| {
+            let cell = if left { &row.left } else { &row.right };
+            match cell {
+                SideBySideCell::Diff { text, .. } if !text.is_empty() => {
+                    Some(leading_indent_cols(text))
+                }
+                _ => None,
+            }
+        })
+        .min()
+        .unwrap_or(0)
+}
+
+fn render_side_by_side_cell_normalized(
+    cell: &SideBySideCell,
+    baseline_cols: usize,
+    width: usize,
+    line_number_width: usize,
+    diff_highlight: bool,
+    syntax_highlight: bool,
+    lang: Option<&str>,
+    surface: DiffSurface,
+) -> Vec<RtLine<'static>> {
+    match cell {
+        SideBySideCell::Diff {
+            line_number,
+            kind,
+            text,
+        } => {
+            let normalized = normalize_diff_indentation(text, baseline_cols);
+            push_wrapped_diff_line(
+                *line_number,
+                *kind,
+                normalized.as_str(),
+                width,
+                line_number_width,
+                diff_highlight,
+                syntax_highlight,
+                lang,
+                surface,
+            )
+        }
+        other => render_side_by_side_cell(
+            other,
+            width,
+            line_number_width,
+            diff_highlight,
+            syntax_highlight,
+            lang,
+            surface,
+        ),
+    }
+}
+
 fn render_change_side_by_side(
     change: &FileChange,
     out: &mut Vec<RtLine<'static>>,
@@ -697,44 +816,101 @@ fn render_change_side_by_side(
     let separator_style = style_gutter(surface);
     let separator = RtSpan::styled(" │ ", separator_style);
 
+    let mut pending: Vec<SideBySideRow> = Vec::new();
+    let flush_pending = |pending: &mut Vec<SideBySideRow>, out: &mut Vec<RtLine<'static>>| {
+        if pending.is_empty() {
+            return;
+        }
+        let left_baseline = side_by_side_baseline_cols(pending, true);
+        let right_baseline = side_by_side_baseline_cols(pending, false);
+        for row in pending.drain(..) {
+            let left_lines = render_side_by_side_cell_normalized(
+                &row.left,
+                left_baseline,
+                left_width,
+                left_line_number_width,
+                diff_highlight,
+                syntax_highlight,
+                lang,
+                surface,
+            );
+            let right_lines = render_side_by_side_cell_normalized(
+                &row.right,
+                right_baseline,
+                right_width,
+                right_line_number_width,
+                diff_highlight,
+                syntax_highlight,
+                lang,
+                surface,
+            );
+            let row_count = left_lines.len().max(right_lines.len());
+            for row_index in 0..row_count {
+                let left_line = left_lines
+                    .get(row_index)
+                    .cloned()
+                    .unwrap_or_else(|| blank_side_line(left_width, surface));
+                let right_line = right_lines
+                    .get(row_index)
+                    .cloned()
+                    .unwrap_or_else(|| blank_side_line(right_width, surface));
+                let left_line = truncate_line_to_width(left_line, left_width);
+                let right_line = truncate_line_to_width(right_line, right_width);
+                let mut left_line =
+                    pad_line_to_width(left_line, left_width, style_context(surface));
+                let right_line = pad_line_to_width(right_line, right_width, style_context(surface));
+                left_line.spans.push(separator.clone());
+                left_line.spans.extend(right_line.spans);
+                out.push(truncate_line_to_width(left_line, width));
+            }
+        }
+    };
+
     for row in rows {
-        let left_lines = render_side_by_side_cell(
-            &row.left,
-            left_width,
-            left_line_number_width,
-            diff_highlight,
-            syntax_highlight,
-            lang,
-            surface,
-        );
-        let right_lines = render_side_by_side_cell(
-            &row.right,
-            right_width,
-            right_line_number_width,
-            diff_highlight,
-            syntax_highlight,
-            lang,
-            surface,
-        );
-        let row_count = left_lines.len().max(right_lines.len());
-        for row_index in 0..row_count {
-            let left_line = left_lines
-                .get(row_index)
-                .cloned()
-                .unwrap_or_else(|| blank_side_line(left_width, surface));
-            let right_line = right_lines
-                .get(row_index)
-                .cloned()
-                .unwrap_or_else(|| blank_side_line(right_width, surface));
-            let left_line = truncate_line_to_width(left_line, left_width);
-            let right_line = truncate_line_to_width(right_line, right_width);
-            let mut left_line = pad_line_to_width(left_line, left_width, style_context(surface));
-            let right_line = pad_line_to_width(right_line, right_width, style_context(surface));
-            left_line.spans.push(separator.clone());
-            left_line.spans.extend(right_line.spans);
-            out.push(truncate_line_to_width(left_line, width));
+        if matches!(row.left, SideBySideCell::Break) && matches!(row.right, SideBySideCell::Break) {
+            flush_pending(&mut pending, out);
+            let left_lines = render_side_by_side_cell(
+                &row.left,
+                left_width,
+                left_line_number_width,
+                diff_highlight,
+                syntax_highlight,
+                lang,
+                surface,
+            );
+            let right_lines = render_side_by_side_cell(
+                &row.right,
+                right_width,
+                right_line_number_width,
+                diff_highlight,
+                syntax_highlight,
+                lang,
+                surface,
+            );
+            let row_count = left_lines.len().max(right_lines.len());
+            for row_index in 0..row_count {
+                let left_line = left_lines
+                    .get(row_index)
+                    .cloned()
+                    .unwrap_or_else(|| blank_side_line(left_width, surface));
+                let right_line = right_lines
+                    .get(row_index)
+                    .cloned()
+                    .unwrap_or_else(|| blank_side_line(right_width, surface));
+                let left_line = truncate_line_to_width(left_line, left_width);
+                let right_line = truncate_line_to_width(right_line, right_width);
+                let mut left_line =
+                    pad_line_to_width(left_line, left_width, style_context(surface));
+                let right_line = pad_line_to_width(right_line, right_width, style_context(surface));
+                left_line.spans.push(separator.clone());
+                left_line.spans.extend(right_line.spans);
+                out.push(truncate_line_to_width(left_line, width));
+            }
+        } else {
+            pending.push(row);
         }
     }
+    flush_pending(&mut pending, out);
 }
 
 fn side_by_side_column_widths(width: usize) -> (usize, usize) {
@@ -903,7 +1079,6 @@ fn push_wrapped_diff_line(
     surface: DiffSurface,
 ) -> Vec<RtLine<'static>> {
     let ln_str = line_number.to_string();
-    let text = text.trim_start_matches(|ch| ch == ' ' || ch == '\t');
 
     // Reserve a fixed number of spaces (equal to the widest line number plus a
     // trailing spacer) so the sign column stays aligned across the diff block.
@@ -1190,36 +1365,18 @@ mod tests {
     }
 
     #[test]
-    fn side_by_side_trims_leading_indentation_for_syntax_wrapping() {
-        let lines = push_wrapped_diff_line(
-            1,
-            DiffLineType::Insert,
-            "            return origin_message_id",
-            20,
-            line_number_width(1),
-            false,
-            true,
-            Some("python"),
-            DiffSurface::Transcript,
-        );
+    fn side_by_side_normalizes_indentation_baseline() {
+        let normalized = normalize_diff_indentation("            return x", 12);
+        assert_eq!(normalized, " return x");
 
-        let rendered = lines
-            .first()
-            .expect("first line")
-            .spans
-            .iter()
-            .skip(2) // skip gutter + sign
-            .map(|span| span.content.as_ref())
-            .collect::<String>();
+        let normalized = normalize_diff_indentation("                return x", 12);
+        assert_eq!(normalized, "     return x");
+    }
 
-        assert!(
-            !rendered.starts_with(' '),
-            "expected leading whitespace to be trimmed: {rendered:?}"
-        );
-        assert!(
-            rendered.starts_with("return"),
-            "expected trimmed content to start with code token: {rendered:?}"
-        );
+    #[test]
+    fn side_by_side_normalizes_tabs_as_indentation() {
+        let normalized = normalize_diff_indentation("\t\treturn x", 4);
+        assert_eq!(normalized, "     return x");
     }
 
     #[test]

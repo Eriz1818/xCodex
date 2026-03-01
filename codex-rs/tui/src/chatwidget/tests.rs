@@ -8112,10 +8112,10 @@ async fn apply_patch_request_shows_diff_summary() -> anyhow::Result<()> {
         if row.contains("README.md (+2 -0)") {
             saw_header = true;
         }
-        if row.contains("+line one") {
+        if row.contains("+ line one") {
             saw_line1 = true;
         }
-        if row.contains("+line two") {
+        if row.contains("+ line two") {
             saw_line2 = true;
         }
         if saw_header && saw_line1 && saw_line2 {
