@@ -1814,6 +1814,7 @@ impl ChatWidget {
 
         let request = ApprovalRequest::ApplyPatch {
             id,
+            turn_id: (!ev.turn_id.is_empty()).then_some(ev.turn_id),
             reason: ev.reason,
             changes: ev.changes.clone(),
             cwd: self.config.cwd.clone(),

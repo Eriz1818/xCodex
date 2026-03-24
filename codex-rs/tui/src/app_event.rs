@@ -8,6 +8,7 @@
 //! Exit is modelled explicitly via `AppEvent::Exit(ExitMode)` so callers can request shutdown-first
 //! quits without reaching into the app loop or coupling to shutdown/exit sequencing.
 
+use std::collections::HashMap;
 use std::path::PathBuf;
 
 use codex_chatgpt::connectors::AppInfo;
@@ -29,6 +30,7 @@ use codex_core::config::types::ExclusionConfig;
 use codex_core::config::types::XtremeMode;
 use codex_core::features::Feature;
 use codex_core::protocol::AskForApproval;
+use codex_core::protocol::FileChange;
 use codex_core::protocol::SandboxPolicy;
 use codex_protocol::config_types::CollaborationModeMask;
 use codex_protocol::config_types::Personality;
@@ -67,6 +69,15 @@ pub(crate) enum PlanFixAndStartAction {
 #[derive(Debug, Clone)]
 pub(crate) struct ConnectorsSnapshot {
     pub(crate) connectors: Vec<AppInfo>,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct ManualPatchApplyRequest {
+    pub approval_id: String,
+    pub turn_id: Option<String>,
+    pub cwd: PathBuf,
+    pub changes: HashMap<PathBuf, FileChange>,
+    pub reason: Option<String>,
 }
 
 #[allow(clippy::large_enum_variant)]
@@ -278,6 +289,9 @@ pub(crate) enum AppEvent {
     OpenPlanInExternalEditor {
         path: PathBuf,
     },
+
+    /// Open the configured external editor with a serialized manual patch-apply payload.
+    OpenManualPatchApply(ManualPatchApplyRequest),
 
     /// Emitted whenever the active plan file state changes and UI surfaces should refresh.
     PlanFileUiUpdated {

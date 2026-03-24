@@ -41,6 +41,13 @@ The prompt text remains:
 
 - `Would you like to make the following edits?`
 
+Recommended v1 shortcuts:
+
+- `y` => `Yes, proceed`
+- `a` => `Yes, and don't ask again for these files`
+- `m` => `Manual apply in editor`
+- `n` and `Esc` => `No, and tell xCodex what to do differently`
+
 ### 4.2 Manual Apply Flow
 
 1. Agent proposes file edits.
@@ -89,13 +96,9 @@ Rationale:
 
 ### 6.2 Add a New App Event
 
-Add an application-level event carrying the full patch request:
+Add an application-level event carrying only the data needed for manual apply:
 
-- `AppEvent::OpenManualPatchApply { request: ApprovalRequest }`
-
-or more narrowly:
-
-- `AppEvent::OpenManualPatchApply { id, cwd, changes, reason }`
+- `AppEvent::OpenManualPatchApply(ManualPatchApplyRequest)`
 
 The event must preserve:
 
@@ -109,6 +112,8 @@ Rationale:
 - `Op::PatchApproval` only carries `id` and `ReviewDecision`.
 - once reduced to `Op::PatchApproval`, the diff and file-path payload is lost
 - manual apply needs the original patch data
+- a dedicated request type avoids passing unrelated `ApprovalRequest` variants
+- UI-only display flags such as diff layout should not leak into the serialization boundary
 
 ### 6.3 Add a Manual Apply Launch Path in the App Layer
 
@@ -156,8 +161,8 @@ Suggested shape:
   "schema_version": 1,
   "kind": "manual_patch_apply_request",
   "approval_id": "call_123",
-  "thread_id": "optional-thread-id",
-  "turn_id": "turn_abc",
+  "thread_id": "optional-thread-id-if-available",
+  "turn_id": "optional-turn-id-if-available",
   "cwd": "/repo",
   "reason": "optional approval reason",
   "changes": [
@@ -186,12 +191,19 @@ Suggested shape:
 - a normalized `kind`
 - `move_path` for rename/move support
 - raw `diff` or raw full-file content matching current internal semantics
+- `thread_id` only when the app can retrieve the active conversation id without adding new core plumbing
+- `turn_id` only when the patch approval context already exposes it at the app/TUI boundary
 
 ### 7.2 Data Source
 
-This payload can be derived directly from:
+This payload can be derived primarily from:
 
 - `ApprovalRequest::ApplyPatch`
+
+Optional enrichment may come from app-level context:
+
+- active conversation id
+- active turn id, if already available without widening the core approval protocol
 
 No new core protocol is required for the first version.
 
@@ -316,10 +328,12 @@ This is acceptable for v1.
 
 - Manual apply must never implicitly grant write approval to the agent.
 - The payload file must contain only the patch request data already visible in the approval UI.
-- Temporary payloads should be written under a controlled temp directory.
+- Temporary payloads should be written under a controlled temp directory using collision-safe file creation.
+- Payload files should be created with owner-only read/write permissions where the platform supports it.
 - Payload lifecycle should be explicit:
-  - keep for debugging during v1
-  - consider cleanup policy later
+  - keep the payload after editor exit during v1 so plugin failures are debuggable
+  - name it predictably enough for discovery, but not by reusing untrusted input directly
+  - consider automatic cleanup or retention caps later
 
 ## 13. Testing Requirements
 

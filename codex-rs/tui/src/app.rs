@@ -1,6 +1,7 @@
 use crate::app_backtrack::BacktrackState;
 use crate::app_event::AppEvent;
 use crate::app_event::ExitMode;
+use crate::app_event::ManualPatchApplyRequest;
 #[cfg(target_os = "windows")]
 use crate::app_event::WindowsSandboxEnableMode;
 #[cfg(target_os = "windows")]
@@ -49,9 +50,11 @@ use codex_core::models_manager::model_presets::HIDE_GPT5_1_MIGRATION_PROMPT_CONF
 use codex_core::protocol::AskForApproval;
 use codex_core::protocol::Event;
 use codex_core::protocol::EventMsg;
+use codex_core::protocol::FileChange;
 use codex_core::protocol::FinalOutput;
 use codex_core::protocol::ListSkillsResponseEvent;
 use codex_core::protocol::Op;
+use codex_core::protocol::ReviewDecision;
 use codex_core::protocol::SandboxPolicy;
 use codex_core::protocol::SessionSource;
 use codex_core::protocol::SkillErrorInfo;
@@ -92,6 +95,7 @@ use std::sync::atomic::Ordering;
 use std::thread;
 use std::time::Duration;
 use std::time::Instant;
+use tempfile::Builder as TempFileBuilder;
 use tokio::select;
 use tokio::sync::Mutex;
 use tokio::sync::broadcast;
@@ -112,6 +116,30 @@ const THREAD_EVENT_CHANNEL_CAPACITY: usize = 32768;
 /// Smooth-mode streaming drains one line per tick, so this interval controls
 /// perceived typing speed for non-backlogged output.
 const COMMIT_ANIMATION_TICK: Duration = tui::TARGET_FRAME_INTERVAL;
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+struct ManualPatchApplyPayload {
+    schema_version: u32,
+    kind: String,
+    approval_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    thread_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    turn_id: Option<String>,
+    cwd: PathBuf,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    reason: Option<String>,
+    changes: Vec<ManualPatchApplyPayloadChange>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+struct ManualPatchApplyPayloadChange {
+    path: PathBuf,
+    kind: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    move_path: Option<PathBuf>,
+    diff: String,
+}
 
 #[derive(Debug, Clone)]
 pub struct AppExitInfo {
@@ -1838,7 +1866,13 @@ impl App {
                 }
             }
             AppEvent::OpenPlanInExternalEditor { path } => {
-                self.launch_external_editor_for_path(tui, &path).await;
+                if let Err(err) = self.launch_external_editor_for_path(tui, &path).await {
+                    self.chat_widget
+                        .add_to_history(history_cell::new_error_event(err));
+                }
+            }
+            AppEvent::OpenManualPatchApply(request) => {
+                self.handle_open_manual_patch_apply(tui, request).await;
             }
             AppEvent::OpenWindowsSandboxEnablePrompt { preset } => {
                 self.chat_widget.open_windows_sandbox_enable_prompt(preset);
@@ -3103,25 +3137,21 @@ impl App {
         tui.frame_requester().schedule_frame();
     }
 
-    async fn launch_external_editor_for_path(&mut self, tui: &mut tui::Tui, path: &Path) {
+    async fn launch_external_editor_for_path(
+        &mut self,
+        tui: &mut tui::Tui,
+        path: &Path,
+    ) -> std::result::Result<(), String> {
         let editor_cmd = match external_editor::resolve_editor_command() {
             Ok(cmd) => cmd,
             Err(external_editor::EditorError::MissingEditor) => {
-                self.chat_widget
-                    .add_to_history(history_cell::new_error_event(
+                return Err(
                     "Cannot open external editor: set $VISUAL or $EDITOR before starting Codex."
                         .to_string(),
-                ));
-                tui.frame_requester().schedule_frame();
-                return;
+                );
             }
             Err(err) => {
-                self.chat_widget
-                    .add_to_history(history_cell::new_error_event(format!(
-                        "Failed to open editor: {err}",
-                    )));
-                tui.frame_requester().schedule_frame();
-                return;
+                return Err(format!("Failed to open editor: {err}"));
             }
         };
 
@@ -3131,13 +3161,130 @@ impl App {
             })
             .await;
 
-        if let Err(err) = editor_result {
-            self.chat_widget
-                .add_to_history(history_cell::new_error_event(format!(
-                    "Failed to open editor: {err}",
-                )));
-        }
+        tui.frame_requester().schedule_frame();
+        editor_result.map_err(|err| format!("Failed to open editor: {err}"))
+    }
 
+    fn absolutize_path(cwd: &Path, path: &Path) -> PathBuf {
+        if path.is_absolute() {
+            path.to_path_buf()
+        } else {
+            cwd.join(path)
+        }
+    }
+
+    fn manual_patch_apply_payload(
+        request: &ManualPatchApplyRequest,
+        thread_id: Option<ThreadId>,
+    ) -> ManualPatchApplyPayload {
+        let mut changes: Vec<_> = request.changes.iter().collect();
+        changes.sort_by(|(left_path, _), (right_path, _)| {
+            Self::absolutize_path(&request.cwd, left_path)
+                .cmp(&Self::absolutize_path(&request.cwd, right_path))
+        });
+
+        let changes = changes
+            .into_iter()
+            .map(|(path, change)| {
+                let path = Self::absolutize_path(&request.cwd, path);
+                match change {
+                    FileChange::Add { content } => ManualPatchApplyPayloadChange {
+                        path,
+                        kind: "add",
+                        move_path: None,
+                        diff: content.clone(),
+                    },
+                    FileChange::Delete { content } => ManualPatchApplyPayloadChange {
+                        path,
+                        kind: "delete",
+                        move_path: None,
+                        diff: content.clone(),
+                    },
+                    FileChange::Update {
+                        unified_diff,
+                        move_path,
+                    } => ManualPatchApplyPayloadChange {
+                        path,
+                        kind: "update",
+                        move_path: move_path
+                            .as_ref()
+                            .map(|move_path| Self::absolutize_path(&request.cwd, move_path)),
+                        diff: unified_diff.clone(),
+                    },
+                }
+            })
+            .collect();
+
+        ManualPatchApplyPayload {
+            schema_version: 1,
+            kind: "manual_patch_apply_request".to_string(),
+            approval_id: request.approval_id.clone(),
+            thread_id: thread_id.map(|thread_id| thread_id.to_string()),
+            turn_id: request.turn_id.clone(),
+            cwd: request.cwd.clone(),
+            reason: request.reason.clone(),
+            changes,
+        }
+    }
+
+    fn write_manual_patch_apply_payload(
+        payload: &ManualPatchApplyPayload,
+    ) -> std::result::Result<PathBuf, String> {
+        let file = TempFileBuilder::new()
+            .prefix("xcodex-manual-apply-")
+            .suffix(".json")
+            .tempfile()
+            .map_err(|err| format!("Failed to create manual apply payload file: {err}"))?;
+        serde_json::to_writer_pretty(file.as_file(), payload)
+            .map_err(|err| format!("Failed to write manual apply payload file: {err}"))?;
+        let (_, path) = file
+            .keep()
+            .map_err(|err| format!("Failed to persist manual apply payload file: {}", err.error))?;
+        Ok(path)
+    }
+
+    async fn handle_open_manual_patch_apply(
+        &mut self,
+        tui: &mut tui::Tui,
+        request: ManualPatchApplyRequest,
+    ) {
+        let approval_id = request.approval_id.clone();
+        let payload = Self::manual_patch_apply_payload(&request, self.chat_widget.thread_id());
+        let payload_path = match Self::write_manual_patch_apply_payload(&payload) {
+            Ok(path) => path,
+            Err(err) => {
+                self.chat_widget
+                    .add_to_history(history_cell::new_error_event(err));
+                self.chat_widget.submit_op(Op::PatchApproval {
+                    id: approval_id,
+                    decision: ReviewDecision::Abort,
+                });
+                tui.frame_requester().schedule_frame();
+                return;
+            }
+        };
+
+        match self
+            .launch_external_editor_for_path(tui, &payload_path)
+            .await
+        {
+            Ok(()) => self
+                .chat_widget
+                .add_to_history(history_cell::new_info_event(
+                    "Opened editor for manual patch application. Automatic apply was skipped."
+                        .to_string(),
+                    Some(format!("Payload saved at {}", payload_path.display())),
+                )),
+            Err(err) => self
+                .chat_widget
+                .add_to_history(history_cell::new_error_event(format!(
+                    "{err} Automatic apply was skipped."
+                ))),
+        }
+        self.chat_widget.submit_op(Op::PatchApproval {
+            id: approval_id,
+            decision: ReviewDecision::Abort,
+        });
         tui.frame_requester().schedule_frame();
     }
 

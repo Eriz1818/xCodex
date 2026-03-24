@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 use crate::app_event::AppEvent;
+use crate::app_event::ManualPatchApplyRequest;
 use crate::app_event_sender::AppEventSender;
 use crate::bottom_pane::BottomPaneView;
 use crate::bottom_pane::CancellationEvent;
@@ -53,6 +54,7 @@ pub(crate) enum ApprovalRequest {
     },
     ApplyPatch {
         id: String,
+        turn_id: Option<String>,
         reason: Option<String>,
         cwd: PathBuf,
         changes: HashMap<PathBuf, FileChange>,
@@ -207,6 +209,22 @@ impl ApprovalOverlay {
                     self.handle_patch_decision(id, decision.clone());
                 }
                 (
+                    ApprovalVariant::ApplyPatch {
+                        id,
+                        turn_id,
+                        cwd,
+                        changes,
+                        reason,
+                    },
+                    ApprovalDecision::ManualApply,
+                ) => self.handle_manual_patch_apply_decision(
+                    id,
+                    turn_id.clone(),
+                    cwd.clone(),
+                    changes.clone(),
+                    reason.clone(),
+                ),
+                (
                     ApprovalVariant::McpElicitation {
                         server_name,
                         request_id,
@@ -246,6 +264,24 @@ impl ApprovalOverlay {
             id: id.to_string(),
             decision,
         }));
+    }
+
+    fn handle_manual_patch_apply_decision(
+        &self,
+        id: &str,
+        turn_id: Option<String>,
+        cwd: PathBuf,
+        changes: HashMap<PathBuf, FileChange>,
+        reason: Option<String>,
+    ) {
+        self.app_event_tx
+            .send(AppEvent::OpenManualPatchApply(ManualPatchApplyRequest {
+                approval_id: id.to_string(),
+                turn_id,
+                cwd,
+                changes,
+                reason,
+            }));
     }
 
     fn handle_elicitation_decision(
@@ -466,6 +502,7 @@ impl From<ApprovalRequest> for ApprovalRequestState {
             }
             ApprovalRequest::ApplyPatch {
                 id,
+                turn_id,
                 reason,
                 cwd,
                 changes,
@@ -473,20 +510,35 @@ impl From<ApprovalRequest> for ApprovalRequestState {
                 side_by_side,
             } => {
                 let mut header: Vec<Box<dyn Renderable>> = Vec::new();
-                if let Some(reason) = reason
-                    && !reason.is_empty()
+                if let Some(reason_text) = reason.as_ref()
+                    && !reason_text.is_empty()
                 {
                     header.push(Box::new(
-                        Paragraph::new(Line::from_iter(["Reason: ".into(), reason.italic()]))
-                            .wrap(Wrap { trim: false }),
+                        Paragraph::new(Line::from_iter([
+                            "Reason: ".into(),
+                            reason_text.clone().italic(),
+                        ]))
+                        .wrap(Wrap { trim: false }),
                     ));
                     header.push(Box::new(Line::from("")));
                 }
                 header.push(
-                    DiffSummary::new_popup(changes, cwd, diff_highlight, side_by_side).into(),
+                    DiffSummary::new_popup(
+                        changes.clone(),
+                        cwd.clone(),
+                        diff_highlight,
+                        side_by_side,
+                    )
+                    .into(),
                 );
                 Self {
-                    variant: ApprovalVariant::ApplyPatch { id },
+                    variant: ApprovalVariant::ApplyPatch {
+                        id,
+                        turn_id,
+                        cwd,
+                        changes,
+                        reason,
+                    },
                     header: Box::new(ColumnRenderable::with(header)),
                 }
             }
@@ -544,6 +596,10 @@ enum ApprovalVariant {
     },
     ApplyPatch {
         id: String,
+        turn_id: Option<String>,
+        cwd: PathBuf,
+        changes: HashMap<PathBuf, FileChange>,
+        reason: Option<String>,
     },
     McpElicitation {
         server_name: String,
@@ -559,6 +615,7 @@ enum ApprovalVariant {
 #[derive(Clone)]
 enum ApprovalDecision {
     Review(ReviewDecision),
+    ManualApply,
     McpElicitation(ElicitationAction),
     Exclusion(String),
 }
@@ -635,6 +692,12 @@ fn patch_options() -> Vec<ApprovalOption> {
             decision: ApprovalDecision::Review(ReviewDecision::ApprovedForSession),
             display_shortcut: None,
             additional_shortcuts: vec![key_hint::plain(KeyCode::Char('a'))],
+        },
+        ApprovalOption {
+            label: "Manual apply in editor".to_string(),
+            decision: ApprovalDecision::ManualApply,
+            display_shortcut: None,
+            additional_shortcuts: vec![key_hint::plain(KeyCode::Char('m'))],
         },
         ApprovalOption {
             label: "No, and tell xCodex what to do differently".to_string(),
@@ -734,6 +797,24 @@ mod tests {
         }
     }
 
+    fn make_patch_request() -> ApprovalRequest {
+        ApprovalRequest::ApplyPatch {
+            id: "patch-1".to_string(),
+            turn_id: Some("turn-1".to_string()),
+            reason: Some("reason".to_string()),
+            cwd: PathBuf::from("/repo"),
+            changes: HashMap::from([(
+                PathBuf::from("src/main.rs"),
+                FileChange::Update {
+                    unified_diff: "@@ -1 +1 @@\n-old\n+new".to_string(),
+                    move_path: None,
+                },
+            )]),
+            diff_highlight: false,
+            side_by_side: false,
+        }
+    }
+
     #[test]
     fn ctrl_c_aborts_and_clears_queue() {
         let (tx, _rx) = unbounded_channel::<AppEvent>();
@@ -802,6 +883,27 @@ mod tests {
     }
 
     #[test]
+    fn patch_manual_apply_shortcut_emits_manual_apply_event() {
+        let (tx, mut rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx);
+        let mut view = ApprovalOverlay::new(make_patch_request(), tx, Features::with_defaults());
+
+        view.handle_key_event(KeyEvent::new(KeyCode::Char('m'), KeyModifiers::NONE));
+
+        let ev = rx.try_recv().expect("manual apply event");
+        match ev {
+            AppEvent::OpenManualPatchApply(request) => {
+                assert_eq!(request.approval_id, "patch-1");
+                assert_eq!(request.turn_id.as_deref(), Some("turn-1"));
+                assert_eq!(request.cwd, PathBuf::from("/repo"));
+                assert_eq!(request.reason.as_deref(), Some("reason"));
+                assert_eq!(request.changes.len(), 1);
+            }
+            other => panic!("expected OpenManualPatchApply event, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn exec_prefix_option_hidden_when_execpolicy_disabled() {
         let (tx, mut rx) = unbounded_channel::<AppEvent>();
         let tx = AppEventSender::new(tx);
@@ -858,6 +960,7 @@ mod tests {
         );
         let req = ApprovalRequest::ApplyPatch {
             id: "test".to_string(),
+            turn_id: None,
             reason: None,
             cwd: PathBuf::from("/"),
             changes,
