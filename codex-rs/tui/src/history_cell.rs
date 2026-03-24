@@ -880,6 +880,19 @@ pub fn new_approval_decision_cell(
                 ],
             )
         }
+        ExternallyApplied => {
+            let snippet = Span::from(exec_snippet(&command)).dim();
+            (
+                "✔ ".green(),
+                vec![
+                    "You ".into(),
+                    "applied".bold(),
+                    " the requested change for ".into(),
+                    snippet,
+                    " manually in your editor".bold(),
+                ],
+            )
+        }
     };
 
     Box::new(PrefixedWrappedHistoryCell::new(

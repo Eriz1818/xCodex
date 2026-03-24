@@ -49,6 +49,18 @@ impl ApplyPatchRuntime {
         Self
     }
 
+    fn externally_applied_output() -> ExecToolCallOutput {
+        let stdout = "Patch applied manually in external editor.\n".to_string();
+        ExecToolCallOutput {
+            exit_code: 0,
+            stdout: StreamOutput::new(stdout.clone()),
+            stderr: StreamOutput::new(String::new()),
+            aggregated_output: StreamOutput::new(stdout),
+            duration: std::time::Duration::ZERO,
+            timed_out: false,
+        }
+    }
+
     fn apply_patch_in_process(req: &ApplyPatchRequest) -> ExecToolCallOutput {
         let start = Instant::now();
         let parsed = match codex_apply_patch::parse_patch(&req.action.patch) {
@@ -295,6 +307,21 @@ impl Approvable<ApplyPatchRequest> for ApplyPatchRuntime {
 pub(crate) struct ApprovalKey(String);
 
 impl ToolRuntime<ApplyPatchRequest, ExecToolCallOutput> for ApplyPatchRuntime {
+    fn short_circuit_after_approval(
+        &self,
+        _req: &ApplyPatchRequest,
+        decision: &ReviewDecision,
+    ) -> Option<ExecToolCallOutput> {
+        match decision {
+            ReviewDecision::ExternallyApplied => Some(Self::externally_applied_output()),
+            ReviewDecision::Approved
+            | ReviewDecision::ApprovedExecpolicyAmendment { .. }
+            | ReviewDecision::ApprovedForSession
+            | ReviewDecision::Denied
+            | ReviewDecision::Abort => None,
+        }
+    }
+
     async fn run(
         &mut self,
         req: &ApplyPatchRequest,

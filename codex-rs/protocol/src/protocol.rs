@@ -2684,6 +2684,10 @@ pub enum ReviewDecision {
     /// User has denied this command and the agent should not do anything until
     /// the user's next command.
     Abort,
+
+    /// User has satisfied a patch request outside Codex, so the turn may
+    /// continue without running `apply_patch`.
+    ExternallyApplied,
 }
 
 impl ReviewDecision {
@@ -2696,6 +2700,7 @@ impl ReviewDecision {
             ReviewDecision::ApprovedForSession => "approved_for_session",
             ReviewDecision::Denied => "denied",
             ReviewDecision::Abort => "abort",
+            ReviewDecision::ExternallyApplied => "externally_applied",
         }
     }
 }

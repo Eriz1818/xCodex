@@ -75,13 +75,18 @@ impl ToolOrchestrator {
 
                 otel.tool_decision(otel_tn, otel_ci, &decision, otel_user.clone());
 
+                if let Some(out) = tool.short_circuit_after_approval(req, &decision) {
+                    return Ok(out);
+                }
+
                 match decision {
                     ReviewDecision::Denied | ReviewDecision::Abort => {
                         return Err(ToolError::Rejected("rejected by user".to_string()));
                     }
                     ReviewDecision::Approved
                     | ReviewDecision::ApprovedExecpolicyAmendment { .. }
-                    | ReviewDecision::ApprovedForSession => {}
+                    | ReviewDecision::ApprovedForSession
+                    | ReviewDecision::ExternallyApplied => {}
                 }
                 already_approved = true;
             }
@@ -150,13 +155,18 @@ impl ToolOrchestrator {
                     let decision = tool.start_approval_async(req, approval_ctx).await;
                     otel.tool_decision(otel_tn, otel_ci, &decision, otel_user);
 
+                    if let Some(out) = tool.short_circuit_after_approval(req, &decision) {
+                        return Ok(out);
+                    }
+
                     match decision {
                         ReviewDecision::Denied | ReviewDecision::Abort => {
                             return Err(ToolError::Rejected("rejected by user".to_string()));
                         }
                         ReviewDecision::Approved
                         | ReviewDecision::ApprovedExecpolicyAmendment { .. }
-                        | ReviewDecision::ApprovedForSession => {}
+                        | ReviewDecision::ApprovedForSession
+                        | ReviewDecision::ExternallyApplied => {}
                     }
                 }
 

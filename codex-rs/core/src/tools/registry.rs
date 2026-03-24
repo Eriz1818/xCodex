@@ -1168,7 +1168,9 @@ where
                 ReviewDecision::Approved
                 | ReviewDecision::ApprovedForSession
                 | ReviewDecision::ApprovedExecpolicyAmendment { .. } => output,
-                ReviewDecision::Denied | ReviewDecision::Abort => block_unattested_output(output),
+                ReviewDecision::Denied
+                | ReviewDecision::Abort
+                | ReviewDecision::ExternallyApplied => block_unattested_output(output),
             }
         }
         crate::config::types::UnattestedOutputPolicy::Block => block_unattested_output(output),

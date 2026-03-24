@@ -232,6 +232,10 @@ enum Expectation {
         target: TargetPath,
         content: &'static str,
     },
+    PatchSkippedExternally {
+        target: TargetPath,
+        stdout_contains: &'static str,
+    },
     FileNotCreated {
         target: TargetPath,
         message_contains: &'static [&'static str],
@@ -319,6 +323,26 @@ impl Expectation {
                     "patched file missing {content:?}: {file_contents}"
                 );
                 let _ = fs::remove_file(path);
+            }
+            Expectation::PatchSkippedExternally {
+                target,
+                stdout_contains,
+            } => {
+                let (path, _) = target.resolve_for_patch(test);
+                assert_eq!(
+                    result.exit_code,
+                    Some(0),
+                    "expected successful external patch result for {path:?}"
+                );
+                assert!(
+                    result.stdout.contains(stdout_contains),
+                    "stdout missing {stdout_contains:?}: {}",
+                    result.stdout
+                );
+                assert!(
+                    !path.exists(),
+                    "expected patch runtime to be skipped for {path:?}, but file exists"
+                );
             }
             Expectation::FileNotCreated {
                 target,
@@ -1131,6 +1155,26 @@ fn scenarios() -> Vec<ScenarioSpec> {
             expectation: Expectation::PatchApplied {
                 target: TargetPath::OutsideWorkspace("apply_patch_function_outside.txt"),
                 content: "function-patch-outside",
+            },
+        },
+        ScenarioSpec {
+            name: "apply_patch_function_externally_applied_skips_runtime",
+            approval_policy: OnRequest,
+            sandbox_policy: workspace_write(false),
+            action: ActionKind::ApplyPatchFunction {
+                target: TargetPath::OutsideWorkspace("apply_patch_function_external.txt"),
+                content: "function-patch-external",
+            },
+            sandbox_permissions: SandboxPermissions::UseDefault,
+            features: vec![],
+            model_override: Some("gpt-5.1-codex"),
+            outcome: Outcome::PatchApproval {
+                decision: ReviewDecision::ExternallyApplied,
+                expected_reason: None,
+            },
+            expectation: Expectation::PatchSkippedExternally {
+                target: TargetPath::OutsideWorkspace("apply_patch_function_external.txt"),
+                stdout_contains: "Patch applied manually in external editor.",
             },
         },
         ScenarioSpec {

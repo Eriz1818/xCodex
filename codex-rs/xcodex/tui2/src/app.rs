@@ -90,6 +90,7 @@ use ratatui::text::Span;
 use ratatui::widgets::Paragraph;
 use ratatui::widgets::Wrap;
 use std::collections::BTreeMap;
+use std::collections::HashMap;
 use std::env;
 use std::path::Path;
 use std::path::PathBuf;
@@ -235,6 +236,22 @@ struct ManualPatchApplyPayloadChange {
     #[serde(skip_serializing_if = "Option::is_none")]
     move_path: Option<PathBuf>,
     diff: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+struct ManualPatchApplyResult {
+    schema_version: u32,
+    kind: String,
+    approval_id: String,
+    status: ManualPatchApplyStatus,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+enum ManualPatchApplyStatus {
+    Completed,
+    Cancelled,
+    Failed,
 }
 
 fn should_show_model_migration_prompt(
@@ -461,6 +478,7 @@ pub(crate) struct App {
     skip_world_writable_scan_once: bool,
 
     shared_dirs_write_notice_shown: bool,
+    pending_manual_patch_apply: HashMap<String, PathBuf>,
 }
 impl App {
     fn clear_area_with_style(buf: &mut Buffer, area: Rect, style: Style) {
@@ -665,6 +683,7 @@ impl App {
             last_known_conversation_id: None,
             skip_world_writable_scan_once: false,
             shared_dirs_write_notice_shown: false,
+            pending_manual_patch_apply: HashMap::new(),
         };
 
         // On startup, if Agent mode (workspace-write) or ReadOnly is active, warn about world-writable dirs on Windows.
@@ -3601,6 +3620,39 @@ impl App {
         Ok(path)
     }
 
+    fn manual_patch_apply_result_path(payload_path: &Path) -> PathBuf {
+        payload_path.with_extension("result.json")
+    }
+
+    fn read_manual_patch_apply_result(
+        path: &Path,
+        expected_approval_id: &str,
+    ) -> Result<ManualPatchApplyResult, String> {
+        let content = std::fs::read_to_string(path).map_err(|err| {
+            let path_display = path.display();
+            format!("Failed to read manual apply result file {path_display}: {err}")
+        })?;
+        let result: ManualPatchApplyResult = serde_json::from_str(&content).map_err(|err| {
+            let path_display = path.display();
+            format!("Failed to parse manual apply result file {path_display}: {err}")
+        })?;
+        if result.kind != "manual_patch_apply_result" {
+            let path_display = path.display();
+            return Err(format!(
+                "Invalid manual apply result kind in {path_display}: {}",
+                result.kind
+            ));
+        }
+        if result.approval_id != expected_approval_id {
+            let path_display = path.display();
+            return Err(format!(
+                "Manual apply result file {path_display} reported approval {} but expected {expected_approval_id}",
+                result.approval_id
+            ));
+        }
+        Ok(result)
+    }
+
     async fn run_external_editor_for_path(
         path: &Path,
         editor_cmd: &[String],
@@ -3688,24 +3740,93 @@ impl App {
                 return;
             }
         };
+        let result_path = Self::manual_patch_apply_result_path(&payload_path);
+        match std::fs::remove_file(&result_path) {
+            Ok(()) => {}
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+            Err(err) => {
+                self.chat_widget.add_error_message(format!(
+                    "Failed to prepare manual apply result file {}: {err}",
+                    result_path.display()
+                ));
+                self.chat_widget.submit_op(Op::PatchApproval {
+                    id: approval_id,
+                    decision: ReviewDecision::Abort,
+                });
+                tui.frame_requester().schedule_frame();
+                return;
+            }
+        }
+        if let Some(previous_path) = self
+            .pending_manual_patch_apply
+            .insert(approval_id.clone(), result_path.clone())
+        {
+            tracing::warn!(
+                previous_path = %previous_path.display(),
+                "overwriting pending manual patch apply state for approval_id={approval_id}"
+            );
+        }
 
-        match self
+        let decision = match self
             .launch_external_editor_for_path(tui, &payload_path)
             .await
         {
-            Ok(()) => self.chat_widget.add_info_message(
-                "Opened editor for manual patch application. Automatic apply was skipped."
-                    .to_string(),
-                Some(format!("Payload saved at {}", payload_path.display())),
-            ),
-            Err(err) => self
-                .chat_widget
-                .add_error_message(format!("{err} Automatic apply was skipped.")),
+            Ok(()) => match Self::read_manual_patch_apply_result(&result_path, &approval_id) {
+                Ok(result) => match result.status {
+                    ManualPatchApplyStatus::Completed => {
+                        self.chat_widget.add_info_message(
+                            "Manual patch application completed in external editor.".to_string(),
+                            Some(format!(
+                                "Resuming turn without rerunning apply_patch. Payload saved at {}",
+                                payload_path.display()
+                            )),
+                        );
+                        ReviewDecision::ExternallyApplied
+                    }
+                    ManualPatchApplyStatus::Cancelled => {
+                        self.chat_widget.add_info_message(
+                            "Manual patch application was cancelled. The turn was interrupted."
+                                .to_string(),
+                            Some(format!("Result file: {}", result_path.display())),
+                        );
+                        ReviewDecision::Abort
+                    }
+                    ManualPatchApplyStatus::Failed => {
+                        self.chat_widget.add_error_message(format!(
+                            "Manual patch application failed. The turn was interrupted. Result file: {}",
+                            result_path.display()
+                        ));
+                        ReviewDecision::Abort
+                    }
+                },
+                Err(err) => {
+                    self.chat_widget.add_error_message(format!(
+                        "{err} Manual patch application was not completed, so the turn was interrupted."
+                    ));
+                    ReviewDecision::Abort
+                }
+            },
+            Err(err) => {
+                self.chat_widget.add_error_message(format!(
+                    "{err} Manual patch application was not completed."
+                ));
+                ReviewDecision::Abort
+            }
+        };
+
+        if self
+            .pending_manual_patch_apply
+            .remove(&approval_id)
+            .is_none()
+        {
+            tracing::warn!("manual patch apply approval already resolved: {approval_id}");
+            tui.frame_requester().schedule_frame();
+            return;
         }
 
         self.chat_widget.submit_op(Op::PatchApproval {
             id: approval_id,
-            decision: ReviewDecision::Abort,
+            decision,
         });
         tui.frame_requester().schedule_frame();
     }
@@ -4032,6 +4153,7 @@ mod tests {
             last_known_conversation_id: None,
             shared_dirs_write_notice_shown: false,
             skip_world_writable_scan_once: false,
+            pending_manual_patch_apply: HashMap::new(),
         }
     }
 
@@ -4092,6 +4214,7 @@ mod tests {
                 last_known_conversation_id: None,
                 shared_dirs_write_notice_shown: false,
                 skip_world_writable_scan_once: false,
+                pending_manual_patch_apply: HashMap::new(),
             },
             rx,
             op_rx,
@@ -4226,6 +4349,53 @@ mod tests {
         assert_eq!(parsed["changes"][0]["path"], "/repo/src/main.rs");
 
         std::fs::remove_file(path).expect("remove temp payload file");
+    }
+
+    #[test]
+    fn manual_patch_apply_result_path_uses_sibling_result_json() {
+        let path = PathBuf::from("/tmp/xcodex-manual-apply-123.json");
+        assert_eq!(
+            App::manual_patch_apply_result_path(&path),
+            PathBuf::from("/tmp/xcodex-manual-apply-123.result.json")
+        );
+    }
+
+    #[test]
+    fn read_manual_patch_apply_result_parses_completed_status() {
+        let dir = tempdir().expect("tempdir");
+        let path = dir.path().join("manual-apply.result.json");
+        std::fs::write(
+            &path,
+            r#"{"schema_version":1,"kind":"manual_patch_apply_result","approval_id":"call-1","status":"completed"}"#,
+        )
+        .expect("write result");
+
+        let result = App::read_manual_patch_apply_result(&path, "call-1").expect("parse result");
+
+        assert_eq!(
+            result,
+            ManualPatchApplyResult {
+                schema_version: 1,
+                kind: "manual_patch_apply_result".to_string(),
+                approval_id: "call-1".to_string(),
+                status: ManualPatchApplyStatus::Completed,
+            }
+        );
+    }
+
+    #[test]
+    fn read_manual_patch_apply_result_rejects_mismatched_approval_id() {
+        let dir = tempdir().expect("tempdir");
+        let path = dir.path().join("manual-apply.result.json");
+        std::fs::write(
+            &path,
+            r#"{"schema_version":1,"kind":"manual_patch_apply_result","approval_id":"call-2","status":"completed"}"#,
+        )
+        .expect("write result");
+
+        let err = App::read_manual_patch_apply_result(&path, "call-1").expect_err("mismatch");
+
+        assert!(err.contains("expected call-1"), "unexpected error: {err}");
     }
 
     #[tokio::test]

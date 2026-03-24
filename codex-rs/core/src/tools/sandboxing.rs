@@ -261,6 +261,10 @@ pub(crate) enum ToolError {
 }
 
 pub(crate) trait ToolRuntime<Req, Out>: Approvable<Req> + Sandboxable {
+    fn short_circuit_after_approval(&self, _req: &Req, _decision: &ReviewDecision) -> Option<Out> {
+        None
+    }
+
     async fn run(
         &mut self,
         req: &Req,

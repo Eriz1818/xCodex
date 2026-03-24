@@ -1,0 +1,21 @@
+for (int i = 0; i < 1000; i++)
+{
+    Console.WriteLine(1);
+}
+
+Ai is cool
+int count = 0;
+do
+{
+    Console.WriteLine(count);
+    count++;
+}
+while (count < 10);
+
+
+
+
+
+
+
+
