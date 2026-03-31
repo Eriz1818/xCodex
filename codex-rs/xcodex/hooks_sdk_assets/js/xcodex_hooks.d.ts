@@ -20,6 +20,7 @@ export type HookPayload = {
   call_id?: null | string;
   command?: null | string[];
   cwd: string;
+  detail_decision?: "approved" | "approved-for-session" | "approved-with-amendment" | "denied" | "aborted" | "canceled" | null;
   duration_ms?: null | number;
   event_id: string;
   grant_root?: null | string;
@@ -34,6 +35,7 @@ export type HookPayload = {
   model_request_id?: null | string;
   needs_follow_up?: boolean | null;
   notification_type?: null | string;
+  outcome?: "accepted" | "declined" | null;
   output_bytes?: null | number;
   output_preview?: null | string;
   parallel_tool_calls?: boolean | null;

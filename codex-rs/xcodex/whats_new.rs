@@ -55,6 +55,10 @@ mod tests {
                 "Improved mode UX and discoverability across TUI/TUI2.".to_string(),
                 "Durable plan-file CLI commands are available (`xcodex plan status|list|open|done|archive`)."
                     .to_string(),
+                "Fixed a Plan/exclusion approval routing issue that could cause indefinite waiting after you answer prompts."
+                    .to_string(),
+                "Improved worktree status dedupe rendering and exclusion approval highlighting for better readability."
+                    .to_string(),
                 "Read more: docs/xcodex/releases/0.4.0.md".to_string(),
             ]
         );

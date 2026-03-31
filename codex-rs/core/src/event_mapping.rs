@@ -107,7 +107,7 @@ pub fn parse_turn_item(item: &ResponseItem) -> Option<TurnItem> {
             "assistant" => Some(TurnItem::AgentMessage(parse_agent_message(
                 id.as_ref(),
                 content,
-                phase.clone().or_else(|| match end_turn {
+                phase.clone().or(match end_turn {
                     // Some providers omit `phase` but provide `end_turn`; use it as a best-effort
                     // fallback so UIs can distinguish mid-turn commentary from the final answer.
                     Some(true) => Some(MessagePhase::FinalAnswer),

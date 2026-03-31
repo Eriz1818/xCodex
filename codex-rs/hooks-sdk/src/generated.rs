@@ -25,6 +25,8 @@ pub struct HookPayload {
     pub command: Option<Vec<String>>,
     #[serde(rename = "cwd")]
     pub cwd: String,
+    #[serde(rename = "detail_decision")]
+    pub detail_decision: Option<Value>,
     #[serde(rename = "duration_ms")]
     pub duration_ms: Option<u64>,
     #[serde(rename = "event_id")]
@@ -53,6 +55,8 @@ pub struct HookPayload {
     pub needs_follow_up: Option<bool>,
     #[serde(rename = "notification_type")]
     pub notification_type: Option<String>,
+    #[serde(rename = "outcome")]
+    pub outcome: Option<Value>,
     #[serde(rename = "output_bytes")]
     pub output_bytes: Option<u64>,
     #[serde(rename = "output_preview")]

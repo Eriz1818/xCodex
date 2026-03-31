@@ -52,6 +52,7 @@ use crate::protocol::EventMsg;
 use crate::protocol::ExecPolicyAmendment;
 use crate::protocol::HookProcessBeginEvent;
 use crate::protocol::HookProcessEndEvent;
+use crate::protocol::ReviewDecision;
 use crate::protocol::SandboxPolicy;
 use crate::protocol::TokenUsage;
 use crate::protocol_config_types::SandboxMode;
@@ -559,6 +560,7 @@ impl ExternalCommandHooksProvider {
         match event.notification() {
             HookNotification::AgentTurnComplete { .. } => &self.hooks.agent_turn_complete,
             HookNotification::ApprovalRequested { .. } => &self.hooks.approval_requested,
+            HookNotification::ApprovalResolved { .. } => &self.hooks.approval_resolved,
             HookNotification::SessionStart { .. } => &self.hooks.session_start,
             HookNotification::SessionEnd { .. } => &self.hooks.session_end,
             HookNotification::UserPromptSubmit { .. } => &self.hooks.user_prompt_submit,
@@ -772,6 +774,7 @@ impl ExternalCommandHooksProvider {
 enum HookEventKey {
     AgentTurnComplete,
     ApprovalRequested,
+    ApprovalResolved,
     SessionStart,
     SessionEnd,
     UserPromptSubmit,
@@ -789,6 +792,7 @@ impl HookEventKey {
         match notification {
             HookNotification::AgentTurnComplete { .. } => Self::AgentTurnComplete,
             HookNotification::ApprovalRequested { .. } => Self::ApprovalRequested,
+            HookNotification::ApprovalResolved { .. } => Self::ApprovalResolved,
             HookNotification::SessionStart { .. } => Self::SessionStart,
             HookNotification::SessionEnd { .. } => Self::SessionEnd,
             HookNotification::UserPromptSubmit { .. } => Self::UserPromptSubmit,
@@ -805,7 +809,10 @@ impl HookEventKey {
     fn is_tool_scoped(self) -> bool {
         matches!(
             self,
-            Self::ApprovalRequested | Self::ToolCallStarted | Self::ToolCallFinished
+            Self::ApprovalRequested
+                | Self::ApprovalResolved
+                | Self::ToolCallStarted
+                | Self::ToolCallFinished
         )
     }
 }
@@ -815,6 +822,7 @@ fn canonical_event_key(name: &str) -> Option<HookEventKey> {
         // Canonical TOML keys (snake_case)
         "agent_turn_complete" => Some(HookEventKey::AgentTurnComplete),
         "approval_requested" => Some(HookEventKey::ApprovalRequested),
+        "approval_resolved" => Some(HookEventKey::ApprovalResolved),
         "session_start" => Some(HookEventKey::SessionStart),
         "session_end" => Some(HookEventKey::SessionEnd),
         "user_prompt_submit" => Some(HookEventKey::UserPromptSubmit),
@@ -829,6 +837,7 @@ fn canonical_event_key(name: &str) -> Option<HookEventKey> {
         // Canonical event type strings (kebab-case)
         "agent-turn-complete" => Some(HookEventKey::AgentTurnComplete),
         "approval-requested" => Some(HookEventKey::ApprovalRequested),
+        "approval-resolved" => Some(HookEventKey::ApprovalResolved),
         "session-start" => Some(HookEventKey::SessionStart),
         "session-end" => Some(HookEventKey::SessionEnd),
         "user-prompt-submit" => Some(HookEventKey::UserPromptSubmit),
@@ -1111,12 +1120,9 @@ fn build_match_candidates(notification: &HookNotification) -> HookMatchCandidate
             xcodex: Some(tool_name.as_str()),
             claude: claude_compat::map_tool_name(tool_name),
         },
-        HookNotification::ApprovalRequested { kind, .. } => {
-            let (xcodex, claude) = match kind {
-                ApprovalKind::Exec => ("exec", "Bash"),
-                ApprovalKind::ApplyPatch => ("apply-patch", "Edit"),
-                ApprovalKind::Elicitation => ("elicitation", "MCP"),
-            };
+        HookNotification::ApprovalRequested { kind, .. }
+        | HookNotification::ApprovalResolved { kind, .. } => {
+            let (xcodex, claude) = approval_kind_tool_name(*kind);
             HookMatchCandidates {
                 xcodex: Some(xcodex),
                 claude: Some(claude.to_string()),
@@ -1934,6 +1940,61 @@ impl UserHooks {
         );
     }
 
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn approval_resolved(
+        &self,
+        thread_id: String,
+        turn_id: Option<String>,
+        cwd: Option<String>,
+        kind: ApprovalKind,
+        call_id: Option<String>,
+        server_name: Option<String>,
+        request_id: Option<String>,
+        outcome: ApprovalOutcome,
+        detail_decision: ApprovalDetailDecision,
+        proposed_execpolicy_amendment: Option<ExecPolicyAmendment>,
+    ) {
+        self.bus.emit(HookNotification::ApprovalResolved {
+            thread_id,
+            turn_id,
+            cwd,
+            kind,
+            call_id,
+            server_name,
+            request_id,
+            outcome,
+            detail_decision,
+            proposed_execpolicy_amendment,
+        });
+    }
+
+    pub(crate) fn approval_resolved_from_review_decision(
+        &self,
+        thread_id: String,
+        turn_id: Option<String>,
+        cwd: Option<String>,
+        kind: ApprovalKind,
+        call_id: Option<String>,
+        server_name: Option<String>,
+        request_id: Option<String>,
+        decision: &ReviewDecision,
+    ) {
+        let (outcome, detail_decision, proposed_execpolicy_amendment) =
+            review_decision_hook_metadata(decision);
+        self.approval_resolved(
+            thread_id,
+            turn_id,
+            cwd,
+            kind,
+            call_id,
+            server_name,
+            request_id,
+            outcome,
+            detail_decision,
+            proposed_execpolicy_amendment,
+        );
+    }
+
     pub(crate) fn session_start(&self, thread_id: String, cwd: String, session_source: String) {
         self.bus.emit(HookNotification::SessionStart {
             thread_id,
@@ -2599,6 +2660,10 @@ pub struct HookPayload {
     server_name: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     request_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    outcome: Option<ApprovalOutcome>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    detail_decision: Option<ApprovalDetailDecision>,
 
     #[serde(skip_serializing_if = "Option::is_none")]
     model_request_id: Option<String>,
@@ -2641,6 +2706,16 @@ impl HookPayload {
                 ..
             } => (thread_id.clone(), Some(turn_id.clone()), cwd.clone()),
             HookNotification::ApprovalRequested {
+                thread_id,
+                turn_id,
+                cwd,
+                ..
+            } => (
+                thread_id.clone(),
+                turn_id.clone(),
+                cwd.clone().unwrap_or_default(),
+            ),
+            HookNotification::ApprovalResolved {
                 thread_id,
                 turn_id,
                 cwd,
@@ -2724,6 +2799,8 @@ impl HookPayload {
             grant_root: None,
             server_name: None,
             request_id: None,
+            outcome: None,
+            detail_decision: None,
             model_request_id: None,
             attempt: None,
             model: None,
@@ -2761,11 +2838,7 @@ impl HookPayload {
                 message,
                 ..
             } => {
-                let (kind_str, tool_name) = match kind {
-                    ApprovalKind::Exec => ("exec", "Bash"),
-                    ApprovalKind::ApplyPatch => ("apply-patch", "Edit"),
-                    ApprovalKind::Elicitation => ("elicitation", "MCP"),
-                };
+                let (kind_str, tool_name) = approval_kind_tool_name(*kind);
                 out.kind = Some(kind_str.to_string());
                 out.call_id = call_id.clone();
                 out.reason = reason.clone();
@@ -2791,6 +2864,27 @@ impl HookPayload {
                     ApprovalKind::Elicitation => None,
                 };
                 out.tool_response = Some(Value::Null);
+            }
+            HookNotification::ApprovalResolved {
+                kind,
+                call_id,
+                server_name,
+                request_id,
+                outcome,
+                detail_decision,
+                proposed_execpolicy_amendment,
+                ..
+            } => {
+                let (kind_str, tool_name) = approval_kind_tool_name(*kind);
+                out.kind = Some(kind_str.to_string());
+                out.call_id = call_id.clone();
+                out.server_name = server_name.clone();
+                out.request_id = request_id.clone();
+                out.outcome = Some(*outcome);
+                out.detail_decision = Some(*detail_decision);
+                out.proposed_execpolicy_amendment = proposed_execpolicy_amendment.clone();
+                out.tool_name = Some(tool_name.to_string());
+                out.tool_use_id = call_id.clone();
             }
             HookNotification::SessionStart { session_source, .. }
             | HookNotification::SessionEnd { session_source, .. } => {
@@ -2973,6 +3067,26 @@ pub enum ApprovalKind {
 #[cfg_attr(feature = "hooks-schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "kebab-case")]
+pub enum ApprovalOutcome {
+    Accepted,
+    Declined,
+}
+
+#[cfg_attr(feature = "hooks-schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ApprovalDetailDecision {
+    Approved,
+    ApprovedForSession,
+    ApprovedWithAmendment,
+    Denied,
+    Aborted,
+    Canceled,
+}
+
+#[cfg_attr(feature = "hooks-schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "kebab-case")]
 pub enum ToolCallStatus {
     Completed,
     Aborted,
@@ -2982,6 +3096,52 @@ fn tool_call_status_string(status: ToolCallStatus) -> &'static str {
     match status {
         ToolCallStatus::Completed => "completed",
         ToolCallStatus::Aborted => "aborted",
+    }
+}
+
+fn review_decision_hook_metadata(
+    decision: &ReviewDecision,
+) -> (
+    ApprovalOutcome,
+    ApprovalDetailDecision,
+    Option<ExecPolicyAmendment>,
+) {
+    match decision {
+        ReviewDecision::Approved => (
+            ApprovalOutcome::Accepted,
+            ApprovalDetailDecision::Approved,
+            None,
+        ),
+        ReviewDecision::ApprovedExecpolicyAmendment {
+            proposed_execpolicy_amendment,
+        } => (
+            ApprovalOutcome::Accepted,
+            ApprovalDetailDecision::ApprovedWithAmendment,
+            Some(proposed_execpolicy_amendment.clone()),
+        ),
+        ReviewDecision::ApprovedForSession => (
+            ApprovalOutcome::Accepted,
+            ApprovalDetailDecision::ApprovedForSession,
+            None,
+        ),
+        ReviewDecision::Denied => (
+            ApprovalOutcome::Declined,
+            ApprovalDetailDecision::Denied,
+            None,
+        ),
+        ReviewDecision::Abort => (
+            ApprovalOutcome::Declined,
+            ApprovalDetailDecision::Aborted,
+            None,
+        ),
+    }
+}
+
+fn approval_kind_tool_name(kind: ApprovalKind) -> (&'static str, &'static str) {
+    match kind {
+        ApprovalKind::Exec => ("exec", "Bash"),
+        ApprovalKind::ApplyPatch => ("apply-patch", "Edit"),
+        ApprovalKind::Elicitation => ("elicitation", "MCP"),
     }
 }
 
@@ -3057,6 +3217,30 @@ pub enum HookNotification {
         request_id: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
         message: Option<String>,
+    },
+
+    #[serde(rename_all = "kebab-case")]
+    ApprovalResolved {
+        thread_id: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        turn_id: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        cwd: Option<String>,
+
+        kind: ApprovalKind,
+
+        #[serde(skip_serializing_if = "Option::is_none")]
+        call_id: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        server_name: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        request_id: Option<String>,
+
+        outcome: ApprovalOutcome,
+        detail_decision: ApprovalDetailDecision,
+
+        #[serde(skip_serializing_if = "Option::is_none")]
+        proposed_execpolicy_amendment: Option<ExecPolicyAmendment>,
     },
 
     #[serde(rename_all = "kebab-case")]
@@ -3179,6 +3363,7 @@ impl HookNotification {
         match self {
             Self::AgentTurnComplete { .. } => "agent-turn-complete",
             Self::ApprovalRequested { .. } => "approval-requested",
+            Self::ApprovalResolved { .. } => "approval-resolved",
             Self::SessionStart { .. } => "session-start",
             Self::SessionEnd { .. } => "session-end",
             Self::UserPromptSubmit { .. } => "user-prompt-submit",
@@ -3209,6 +3394,9 @@ pub(crate) mod hooks_test {
         ApprovalRequestedExec,
         ApprovalRequestedApplyPatch,
         ApprovalRequestedElicitation,
+        ApprovalResolvedExec,
+        ApprovalResolvedApplyPatch,
+        ApprovalResolvedElicitation,
         SessionStart,
         SessionEnd,
         UserPromptSubmit,
@@ -3330,6 +3518,9 @@ pub(crate) mod hooks_test {
                 HooksTestEvent::ApprovalRequestedExec,
                 HooksTestEvent::ApprovalRequestedApplyPatch,
                 HooksTestEvent::ApprovalRequestedElicitation,
+                HooksTestEvent::ApprovalResolvedExec,
+                HooksTestEvent::ApprovalResolvedApplyPatch,
+                HooksTestEvent::ApprovalResolvedElicitation,
             ],
         }
     }
@@ -3359,6 +3550,17 @@ pub(crate) mod hooks_test {
             | HooksTestEvent::ApprovalRequestedApplyPatch
             | HooksTestEvent::ApprovalRequestedElicitation => hooks
                 .approval_requested
+                .iter()
+                .cloned()
+                .map(|command| HooksTestCommand {
+                    command,
+                    hook_event_name: hook_event_name.clone(),
+                })
+                .collect(),
+            HooksTestEvent::ApprovalResolvedExec
+            | HooksTestEvent::ApprovalResolvedApplyPatch
+            | HooksTestEvent::ApprovalResolvedElicitation => hooks
+                .approval_resolved
                 .iter()
                 .cloned()
                 .map(|command| HooksTestCommand {
@@ -3545,6 +3747,42 @@ pub(crate) mod hooks_test {
                 server_name: Some("hooks-test".to_string()),
                 request_id: Some("hooks-test".to_string()),
                 message: Some("hooks test".to_string()),
+            },
+            HooksTestEvent::ApprovalResolvedExec => HookNotification::ApprovalResolved {
+                thread_id,
+                turn_id: Some(turn_id),
+                cwd: Some(cwd),
+                kind: ApprovalKind::Exec,
+                call_id: Some(format!("call-{}", Uuid::new_v4())),
+                server_name: None,
+                request_id: None,
+                outcome: ApprovalOutcome::Accepted,
+                detail_decision: ApprovalDetailDecision::Approved,
+                proposed_execpolicy_amendment: None,
+            },
+            HooksTestEvent::ApprovalResolvedApplyPatch => HookNotification::ApprovalResolved {
+                thread_id,
+                turn_id: Some(turn_id),
+                cwd: Some(cwd),
+                kind: ApprovalKind::ApplyPatch,
+                call_id: Some(format!("call-{}", Uuid::new_v4())),
+                server_name: None,
+                request_id: None,
+                outcome: ApprovalOutcome::Declined,
+                detail_decision: ApprovalDetailDecision::Denied,
+                proposed_execpolicy_amendment: None,
+            },
+            HooksTestEvent::ApprovalResolvedElicitation => HookNotification::ApprovalResolved {
+                thread_id,
+                turn_id: None,
+                cwd: Some(cwd),
+                kind: ApprovalKind::Elicitation,
+                call_id: None,
+                server_name: Some("hooks-test".to_string()),
+                request_id: Some("hooks-test".to_string()),
+                outcome: ApprovalOutcome::Declined,
+                detail_decision: ApprovalDetailDecision::Canceled,
+                proposed_execpolicy_amendment: None,
             },
             HooksTestEvent::SessionStart => HookNotification::SessionStart {
                 thread_id,
@@ -4265,6 +4503,9 @@ done
             hooks_test::HooksTestEvent::ApprovalRequestedExec,
             hooks_test::HooksTestEvent::ApprovalRequestedApplyPatch,
             hooks_test::HooksTestEvent::ApprovalRequestedElicitation,
+            hooks_test::HooksTestEvent::ApprovalResolvedExec,
+            hooks_test::HooksTestEvent::ApprovalResolvedApplyPatch,
+            hooks_test::HooksTestEvent::ApprovalResolvedElicitation,
         ]
     }
 
@@ -4624,6 +4865,73 @@ for key in required_keys:
                 ),
             ],
         );
+        events.insert(
+            "approval_resolved".to_string(),
+            vec![
+                mk_entry(
+                    Some("Bash"),
+                    mk_hook_argv(
+                        "approval-resolved",
+                        "approval_resolved",
+                        &[
+                            "schema_version",
+                            "event_id",
+                            "timestamp",
+                            "session_id",
+                            "cwd",
+                            "turn_id",
+                            "kind",
+                            "outcome",
+                            "detail_decision",
+                            "call_id",
+                            "tool_name",
+                            "tool_use_id",
+                        ],
+                    ),
+                ),
+                mk_entry(
+                    Some("Edit"),
+                    mk_hook_argv(
+                        "approval-resolved",
+                        "approval_resolved",
+                        &[
+                            "schema_version",
+                            "event_id",
+                            "timestamp",
+                            "session_id",
+                            "cwd",
+                            "turn_id",
+                            "kind",
+                            "outcome",
+                            "detail_decision",
+                            "call_id",
+                            "tool_name",
+                            "tool_use_id",
+                        ],
+                    ),
+                ),
+                mk_entry(
+                    Some("MCP"),
+                    mk_hook_argv(
+                        "approval-resolved",
+                        "approval_resolved",
+                        &[
+                            "schema_version",
+                            "event_id",
+                            "timestamp",
+                            "session_id",
+                            "cwd",
+                            "kind",
+                            "outcome",
+                            "detail_decision",
+                            "server_name",
+                            "request_id",
+                            "tool_name",
+                        ],
+                    ),
+                ),
+            ],
+        );
 
         let hooks = HooksConfig {
             max_stdin_payload_bytes: 1024 * 1024,
@@ -4643,7 +4951,7 @@ for key in required_keys:
         )
         .await?;
 
-        assert_eq!(report.invocations.len(), 14);
+        assert_eq!(report.invocations.len(), hooks_test_events_all().len());
         assert!(
             report
                 .invocations
@@ -4816,6 +5124,7 @@ done
         );
 
         let mut expected: HashMap<(String, String), usize> = HashMap::new();
+        let expected_event_count = hooks_test_events_all().len();
         for event in hooks_test_events_all() {
             let notification = hooks_test::build_notification_for_test(event);
             let expected_hook_event_name = expected_default_hook_event_name(&notification);
@@ -4830,7 +5139,7 @@ done
         let contents = tokio::time::timeout(Duration::from_secs(2), async {
             loop {
                 if let Ok(contents) = std::fs::read_to_string(&out_path)
-                    && contents.lines().count() >= 14
+                    && contents.lines().count() >= expected_event_count
                 {
                     break contents;
                 }
@@ -4918,6 +5227,7 @@ def on_event(event):
         );
 
         let mut expected: HashMap<(String, String), usize> = HashMap::new();
+        let expected_event_count = hooks_test_events_all().len();
         for event in hooks_test_events_all() {
             let notification = hooks_test::build_notification_for_test(event);
             let expected_hook_event_name = expected_default_hook_event_name(&notification);
@@ -4932,7 +5242,7 @@ def on_event(event):
         let contents = tokio::time::timeout(Duration::from_secs(2), async {
             loop {
                 if let Ok(contents) = std::fs::read_to_string(&marker_path)
-                    && contents.lines().count() >= 14
+                    && contents.lines().count() >= expected_event_count
                 {
                     break contents;
                 }

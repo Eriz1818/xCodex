@@ -940,6 +940,7 @@ Hook stdout/stderr are redirected to log files under CODEX_HOME so hooks do not 
 [hooks]
 agent_turn_complete = [["python3", "/Users/alice/.xcodex/hook.py"]]
 approval_requested = [["python3", "/Users/alice/.xcodex/hook.py"]]
+approval_resolved = [["python3", "/Users/alice/.xcodex/hook.py"]]
 ```
 
 #### hooks.command (matcher + per-hook options)
@@ -965,6 +966,12 @@ matcher = "write_file|edit_block"
 matcher = "exec"
   [[hooks.command.approval_requested.hooks]]
   command = "terminal-notifier -title 'xcodex' -message 'approval requested'"
+  timeout_sec = 5
+
+[[hooks.command.approval_resolved]]
+matcher = "exec"
+  [[hooks.command.approval_resolved.hooks]]
+  command = "terminal-notifier -title 'xcodex' -message 'approval resolved'"
   timeout_sec = 5
 ```
 
@@ -1047,6 +1054,7 @@ Supported events:
 
 - `agent-turn-complete`
 - `approval-requested` (with `"kind"` set to `"exec"`, `"apply-patch"`, or `"elicitation"`)
+- `approval-resolved` (with `"outcome"` set to `"accepted"` or `"declined"` and `"detail_decision"` preserving the richer approval decision)
 - `session-start`
 - `session-end`
 - `user-prompt-submit`
@@ -1354,6 +1362,7 @@ Valid values:
 | `notify`                                         | array<string>                                                     | Deprecated (xcodex): ignored; use `hooks.agent_turn_complete`.                                                                  |
 | `hooks.agent_turn_complete`                      | array<array<string>>                                              | External programs to spawn after each completed turn.                                                                           |
 | `hooks.approval_requested`                       | array<array<string>>                                              | External programs to spawn when Codex requests approvals (exec/apply_patch/MCP elicitation).                                     |
+| `hooks.approval_resolved`                       | array<array<string>>                                              | External programs to spawn when approval requests are resolved.                                                                  |
 | `hooks.session_start`                            | array<array<string>>                                              | External programs to spawn when a session starts (after `SessionConfigured`).                                                   |
 | `hooks.session_end`                              | array<array<string>>                                              | External programs to spawn when a session ends (best-effort during shutdown).                                                   |
 | `hooks.user_prompt_submit`                       | array<array<string>>                                              | External programs to spawn when the user submits input.                                                                         |

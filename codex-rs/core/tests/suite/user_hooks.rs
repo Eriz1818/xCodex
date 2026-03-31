@@ -186,6 +186,164 @@ async fn hooks_approval_requested_invoked_for_exec() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn hooks_approval_resolved_invoked_for_exec_approved() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+
+    let call_id = "hooks-approval-resolved-approved";
+    let args = json!({
+        "command": ["/bin/sh", "-c", "echo hook-approved"],
+        "timeout_ms": 1_000,
+    });
+
+    let responses = vec![
+        sse(vec![
+            ev_response_created("resp-1"),
+            ev_function_call(call_id, "shell", &serde_json::to_string(&args)?),
+            ev_completed("resp-1"),
+        ]),
+        sse(vec![
+            ev_assistant_message("m1", "Done"),
+            ev_completed("resp-2"),
+        ]),
+    ];
+    mount_sse_sequence(&server, responses).await;
+
+    let hook_dir = TempDir::new()?;
+    let hook_script = write_hook_script(&hook_dir, "hook.sh", "approval_resolved_approved.json")?;
+    let hook_file = hook_dir.path().join("approval_resolved_approved.json");
+
+    let TestCodex { codex, .. } = test_codex()
+        .with_config(move |cfg| {
+            cfg.xcodex.hooks.approval_resolved = vec![vec![hook_script]];
+            cfg.permissions.approval_policy = Constrained::allow_any(AskForApproval::UnlessTrusted);
+        })
+        .build(&server)
+        .await?;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "run an approved shell command".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+        })
+        .await?;
+
+    let approval_event =
+        wait_for_event(&codex, |ev| matches!(ev, EventMsg::ExecApprovalRequest(_))).await;
+    let EventMsg::ExecApprovalRequest(approval) = approval_event else {
+        unreachable!("event guard ensures ExecApprovalRequest")
+    };
+
+    codex
+        .submit(Op::ExecApproval {
+            id: approval.call_id.clone(),
+            turn_id: Some(approval.turn_id.clone()),
+            decision: ReviewDecision::Approved,
+        })
+        .await?;
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    fs_wait::wait_for_path_exists(&hook_file, Duration::from_secs(5)).await?;
+    let hook_payload_raw = tokio::fs::read_to_string(&hook_file).await?;
+    let payload: Value = serde_json::from_str(&hook_payload_raw)?;
+
+    assert_eq!(payload["schema_version"], json!(1));
+    assert_eq!(payload["hook_event_name"], json!("approval_resolved"));
+    assert_eq!(payload["xcodex_event_type"], json!("approval-resolved"));
+    assert_eq!(payload["kind"], json!("exec"));
+    assert_eq!(payload["call_id"], json!(call_id));
+    assert_eq!(payload["tool_name"], json!("Bash"));
+    assert_eq!(payload["tool_use_id"], json!(call_id));
+    assert_eq!(payload["outcome"], json!("accepted"));
+    assert_eq!(payload["detail_decision"], json!("approved"));
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn hooks_approval_resolved_invoked_for_exec_declined() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+
+    let call_id = "hooks-approval-resolved-declined";
+    let args = json!({
+        "command": ["/bin/sh", "-c", "echo hook-declined"],
+        "timeout_ms": 1_000,
+    });
+
+    let responses = vec![
+        sse(vec![
+            ev_response_created("resp-1"),
+            ev_function_call(call_id, "shell", &serde_json::to_string(&args)?),
+            ev_completed("resp-1"),
+        ]),
+        sse(vec![
+            ev_assistant_message("m1", "Done"),
+            ev_completed("resp-2"),
+        ]),
+    ];
+    mount_sse_sequence(&server, responses).await;
+
+    let hook_dir = TempDir::new()?;
+    let hook_script = write_hook_script(&hook_dir, "hook.sh", "approval_resolved_declined.json")?;
+    let hook_file = hook_dir.path().join("approval_resolved_declined.json");
+
+    let TestCodex { codex, .. } = test_codex()
+        .with_config(move |cfg| {
+            cfg.xcodex.hooks.approval_resolved = vec![vec![hook_script]];
+            cfg.permissions.approval_policy = Constrained::allow_any(AskForApproval::UnlessTrusted);
+        })
+        .build(&server)
+        .await?;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "run a declined shell command".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+        })
+        .await?;
+
+    let approval_event =
+        wait_for_event(&codex, |ev| matches!(ev, EventMsg::ExecApprovalRequest(_))).await;
+    let EventMsg::ExecApprovalRequest(approval) = approval_event else {
+        unreachable!("event guard ensures ExecApprovalRequest")
+    };
+
+    codex
+        .submit(Op::ExecApproval {
+            id: approval.call_id.clone(),
+            turn_id: Some(approval.turn_id.clone()),
+            decision: ReviewDecision::Denied,
+        })
+        .await?;
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    fs_wait::wait_for_path_exists(&hook_file, Duration::from_secs(5)).await?;
+    let hook_payload_raw = tokio::fs::read_to_string(&hook_file).await?;
+    let payload: Value = serde_json::from_str(&hook_payload_raw)?;
+
+    assert_eq!(payload["schema_version"], json!(1));
+    assert_eq!(payload["hook_event_name"], json!("approval_resolved"));
+    assert_eq!(payload["xcodex_event_type"], json!("approval-resolved"));
+    assert_eq!(payload["kind"], json!("exec"));
+    assert_eq!(payload["call_id"], json!(call_id));
+    assert_eq!(payload["tool_name"], json!("Bash"));
+    assert_eq!(payload["tool_use_id"], json!(call_id));
+    assert_eq!(payload["outcome"], json!("declined"));
+    assert_eq!(payload["detail_decision"], json!("denied"));
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn hooks_session_start_invoked() -> Result<()> {
     skip_if_no_network!(Ok(()));
 

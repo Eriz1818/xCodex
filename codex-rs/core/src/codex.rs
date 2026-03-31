@@ -41,6 +41,7 @@ use crate::truncate::TruncationPolicy;
 use crate::turn_metadata::build_turn_metadata_header;
 use crate::turn_metadata::resolve_turn_metadata_header_with_timeout;
 use crate::util::error_or_panic;
+use crate::xcodex::hooks::ApprovalKind;
 use crate::xcodex::hooks::UserHooks;
 use async_channel::Receiver;
 use async_channel::Sender;
@@ -224,6 +225,7 @@ use crate::skills::injection::app_id_from_path;
 use crate::skills::injection::tool_kind_for_path;
 use crate::skills::resolve_skill_dependencies_for_turn;
 use crate::state::ActiveTurn;
+use crate::state::PendingApproval;
 use crate::state::SessionServices;
 use crate::state::SessionState;
 use crate::state_db;
@@ -2809,7 +2811,16 @@ impl Session {
             match active.as_mut() {
                 Some(at) => {
                     let mut ts = at.turn_state.lock().await;
-                    ts.insert_pending_approval(approval_id.clone(), tx_approve)
+                    ts.insert_pending_approval(
+                        approval_id.clone(),
+                        PendingApproval {
+                            tx: tx_approve,
+                            turn_id: Some(turn_context.sub_id.clone()),
+                            cwd: Some(cwd.display().to_string()),
+                            kind: ApprovalKind::Exec,
+                            call_id: Some(call_id.clone()),
+                        },
+                    )
                 }
                 None => None,
             }
@@ -2866,7 +2877,16 @@ impl Session {
             match active.as_mut() {
                 Some(at) => {
                     let mut ts = at.turn_state.lock().await;
-                    ts.insert_pending_approval(approval_id.clone(), tx_approve)
+                    ts.insert_pending_approval(
+                        approval_id.clone(),
+                        PendingApproval {
+                            tx: tx_approve,
+                            turn_id: Some(turn_context.sub_id.clone()),
+                            cwd: Some(turn_context.cwd.display().to_string()),
+                            kind: ApprovalKind::ApplyPatch,
+                            call_id: Some(call_id.clone()),
+                        },
+                    )
                 }
                 None => None,
             }
@@ -2959,24 +2979,54 @@ impl Session {
         }
     }
 
-    pub async fn notify_approval(&self, approval_id: &str, decision: ReviewDecision) {
-        let entry = {
-            let mut active = self.active_turn.lock().await;
-            match active.as_mut() {
-                Some(at) => {
-                    let mut ts = at.turn_state.lock().await;
-                    ts.remove_pending_approval(approval_id)
-                }
-                None => None,
+    async fn take_pending_approval(&self, approval_id: &str) -> Option<PendingApproval> {
+        let mut active = self.active_turn.lock().await;
+        match active.as_mut() {
+            Some(at) => {
+                let mut ts = at.turn_state.lock().await;
+                ts.remove_pending_approval(approval_id)
             }
-        };
+            None => None,
+        }
+    }
+
+    fn emit_approval_resolved(
+        &self,
+        pending_approval: &PendingApproval,
+        decision: &ReviewDecision,
+    ) {
+        self.user_hooks().approval_resolved_from_review_decision(
+            self.conversation_id.to_string(),
+            pending_approval.turn_id.clone(),
+            pending_approval.cwd.clone(),
+            pending_approval.kind,
+            pending_approval.call_id.clone(),
+            None,
+            None,
+            decision,
+        );
+    }
+
+    pub async fn notify_approval(&self, approval_id: &str, decision: ReviewDecision) {
+        let entry = self.take_pending_approval(approval_id).await;
         match entry {
-            Some(tx_approve) => {
-                tx_approve.send(decision).ok();
+            Some(pending_approval) => {
+                self.emit_approval_resolved(&pending_approval, &decision);
+                pending_approval.tx.send(decision).ok();
             }
             None => {
                 warn!("No pending approval found for call_id: {approval_id}");
             }
+        }
+    }
+
+    pub async fn notify_aborted_approval(&self, approval_id: &str) {
+        let entry = self.take_pending_approval(approval_id).await;
+        match entry {
+            Some(pending_approval) => {
+                self.emit_approval_resolved(&pending_approval, &ReviewDecision::Abort);
+            }
+            None => warn!("No pending approval found for call_id: {approval_id}"),
         }
     }
 
@@ -4049,6 +4099,9 @@ mod handlers {
     use crate::tasks::UserShellCommandMode;
     use crate::tasks::UserShellCommandTask;
     use crate::tasks::execute_user_shell_command;
+    use crate::xcodex::hooks::ApprovalDetailDecision;
+    use crate::xcodex::hooks::ApprovalKind;
+    use crate::xcodex::hooks::ApprovalOutcome;
     use codex_protocol::custom_prompts::CustomPrompt;
     use codex_protocol::protocol::BackgroundEventEvent;
     use codex_protocol::protocol::CodexErrorInfo;
@@ -4307,6 +4360,37 @@ mod handlers {
             codex_protocol::approvals::ElicitationAction::Decline => ElicitationAction::Decline,
             codex_protocol::approvals::ElicitationAction::Cancel => ElicitationAction::Cancel,
         };
+        let (outcome, detail_decision) = match action {
+            ElicitationAction::Accept => {
+                (ApprovalOutcome::Accepted, ApprovalDetailDecision::Approved)
+            }
+            ElicitationAction::Decline => {
+                (ApprovalOutcome::Declined, ApprovalDetailDecision::Denied)
+            }
+            ElicitationAction::Cancel => {
+                (ApprovalOutcome::Declined, ApprovalDetailDecision::Canceled)
+            }
+        };
+        let request_id_string = match &request_id {
+            ProtocolRequestId::String(value) => value.clone(),
+            ProtocolRequestId::Integer(value) => value.to_string(),
+        };
+        let cwd = {
+            let state = sess.state.lock().await;
+            state.session_configuration.cwd.display().to_string()
+        };
+        sess.user_hooks().approval_resolved(
+            sess.conversation_id.to_string(),
+            None,
+            Some(cwd),
+            ApprovalKind::Elicitation,
+            None,
+            Some(server_name.clone()),
+            Some(request_id_string),
+            outcome,
+            detail_decision,
+            None,
+        );
         // When accepting, send an empty object as content to satisfy MCP servers
         // that expect non-null content on Accept. For Decline/Cancel, content is None.
         let content = match action {
@@ -4369,6 +4453,7 @@ mod handlers {
         }
         match decision {
             ReviewDecision::Abort => {
+                sess.notify_aborted_approval(&approval_id).await;
                 sess.interrupt_task().await;
             }
             other => sess.notify_approval(&approval_id, other).await,
@@ -4378,6 +4463,7 @@ mod handlers {
     pub async fn patch_approval(sess: &Arc<Session>, id: String, decision: ReviewDecision) {
         match decision {
             ReviewDecision::Abort => {
+                sess.notify_aborted_approval(&id).await;
                 sess.interrupt_task().await;
             }
             other => sess.notify_approval(&id, other).await,

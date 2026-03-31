@@ -24,6 +24,7 @@ type HookPayload struct {
 	CallId *string `json:"call_id"`
 	Command []string `json:"command"`
 	Cwd string `json:"cwd"`
+	DetailDecision any `json:"detail_decision"`
 	DurationMs *int `json:"duration_ms"`
 	EventId string `json:"event_id"`
 	GrantRoot *string `json:"grant_root"`
@@ -38,6 +39,7 @@ type HookPayload struct {
 	ModelRequestId *string `json:"model_request_id"`
 	NeedsFollowUp *bool `json:"needs_follow_up"`
 	NotificationType *string `json:"notification_type"`
+	Outcome any `json:"outcome"`
 	OutputBytes *int `json:"output_bytes"`
 	OutputPreview *string `json:"output_preview"`
 	ParallelToolCalls *bool `json:"parallel_tool_calls"`

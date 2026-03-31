@@ -97,6 +97,7 @@ class HookPayload:
     attempt: Optional[Any] = None
     call_id: Optional[Any] = None
     command: Optional[Any] = None
+    detail_decision: Optional[Any] = None
     duration_ms: Optional[Any] = None
     grant_root: Optional[Any] = None
     has_output_schema: Optional[Any] = None
@@ -109,6 +110,7 @@ class HookPayload:
     model_request_id: Optional[Any] = None
     needs_follow_up: Optional[Any] = None
     notification_type: Optional[Any] = None
+    outcome: Optional[Any] = None
     output_bytes: Optional[Any] = None
     output_preview: Optional[Any] = None
     parallel_tool_calls: Optional[Any] = None
@@ -148,6 +150,7 @@ def parse_hook_payload(payload: Mapping[str, Any]) -> HookPayload:
         "call_id",
         "command",
         "cwd",
+        "detail_decision",
         "duration_ms",
         "event_id",
         "grant_root",
@@ -162,6 +165,7 @@ def parse_hook_payload(payload: Mapping[str, Any]) -> HookPayload:
         "model_request_id",
         "needs_follow_up",
         "notification_type",
+        "outcome",
         "output_bytes",
         "output_preview",
         "parallel_tool_calls",
@@ -202,6 +206,7 @@ def parse_hook_payload(payload: Mapping[str, Any]) -> HookPayload:
         call_id=lambda x: x(raw.get("call_id")),
         command=lambda x: x(raw.get("command")),
         cwd=_as_str(raw.get("cwd")),
+        detail_decision=lambda x: x(raw.get("detail_decision")),
         duration_ms=lambda x: x(raw.get("duration_ms")),
         event_id=_as_str(raw.get("event_id")),
         grant_root=lambda x: x(raw.get("grant_root")),
@@ -216,6 +221,7 @@ def parse_hook_payload(payload: Mapping[str, Any]) -> HookPayload:
         model_request_id=lambda x: x(raw.get("model_request_id")),
         needs_follow_up=lambda x: x(raw.get("needs_follow_up")),
         notification_type=lambda x: x(raw.get("notification_type")),
+        outcome=lambda x: x(raw.get("outcome")),
         output_bytes=lambda x: x(raw.get("output_bytes")),
         output_preview=lambda x: x(raw.get("output_preview")),
         parallel_tool_calls=lambda x: x(raw.get("parallel_tool_calls")),

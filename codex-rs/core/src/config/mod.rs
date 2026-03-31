@@ -1615,6 +1615,10 @@ pub struct HooksConfig {
     #[serde(default)]
     pub approval_requested: Vec<Vec<String>>,
 
+    /// Hooks invoked when an approval request is resolved.
+    #[serde(default)]
+    pub approval_resolved: Vec<Vec<String>>,
+
     /// Hooks invoked when a session has started (after `SessionConfigured` is emitted).
     #[serde(default)]
     pub session_start: Vec<Vec<String>>,
@@ -1896,6 +1900,7 @@ impl Default for HooksConfig {
         Self {
             agent_turn_complete: Vec::new(),
             approval_requested: Vec::new(),
+            approval_resolved: Vec::new(),
             session_start: Vec::new(),
             session_end: Vec::new(),
             user_prompt_submit: Vec::new(),

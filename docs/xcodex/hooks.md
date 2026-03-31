@@ -89,6 +89,7 @@ Supported xcodex event types (via `xcodex_event_type`):
 - `tool-call-finished`
 - `agent-turn-complete`
 - `approval-requested`
+- `approval-resolved`
 
 Event parity: these same event types are emitted regardless of hook mode (external, Python Host, or PyO3). Python Host wraps the payload in a JSONL object with an `event` field; the `event` value is the same payload object external hooks receive.
 
@@ -136,6 +137,25 @@ Approval requested example:
   "kind": "exec",
   "command": "rm -rf node_modules",
   "proposed_execpolicy_amendment": null
+}
+```
+
+Approval resolved example:
+
+```json
+{
+  "schema_version": 1,
+  "event_id": "evt-...",
+  "timestamp": "2026-01-11T23:59:59Z",
+  "session_id": "thread-...",
+  "turn_id": "turn-...",
+  "cwd": "/path/to/repo",
+  "hook_event_name": "approval_resolved",
+  "xcodex_event_type": "approval-resolved",
+  "kind": "exec",
+  "call_id": "call-...",
+  "outcome": "accepted",
+  "detail_decision": "approved-for-session"
 }
 ```
 
@@ -190,7 +210,7 @@ callable = "on_event"
 This is a quick, “everything hooks-related” cheat sheet. The canonical source remains `docs/config.md#hooks`.
 
 - External (legacy argv arrays):
-  - `hooks.agent_turn_complete`, `hooks.approval_requested`, `hooks.session_start`, `hooks.session_end`
+  - `hooks.agent_turn_complete`, `hooks.approval_requested`, `hooks.approval_resolved`, `hooks.session_start`, `hooks.session_end`
   - `hooks.user_prompt_submit`, `hooks.pre_compact`, `hooks.notification`, `hooks.subagent_stop`
   - `hooks.model_request_started`, `hooks.model_response_completed`
   - `hooks.tool_call_started`, `hooks.tool_call_finished`

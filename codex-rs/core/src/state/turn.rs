@@ -16,6 +16,7 @@ use tokio::sync::oneshot;
 use crate::codex::TurnContext;
 use crate::protocol::ReviewDecision;
 use crate::tasks::SessionTask;
+use crate::xcodex::hooks::ApprovalKind;
 
 /// Metadata about the currently running turn.
 pub(crate) struct ActiveTurn {
@@ -69,25 +70,30 @@ impl ActiveTurn {
 /// Mutable state for a single turn.
 #[derive(Default)]
 pub(crate) struct TurnState {
-    pending_approvals: HashMap<String, oneshot::Sender<ReviewDecision>>,
+    pending_approvals: HashMap<String, PendingApproval>,
     pending_user_input: HashMap<String, oneshot::Sender<RequestUserInputResponse>>,
     pending_dynamic_tools: HashMap<String, oneshot::Sender<DynamicToolResponse>>,
     pending_input: Vec<ResponseInputItem>,
+}
+
+pub(crate) struct PendingApproval {
+    pub(crate) tx: oneshot::Sender<ReviewDecision>,
+    pub(crate) turn_id: Option<String>,
+    pub(crate) cwd: Option<String>,
+    pub(crate) kind: ApprovalKind,
+    pub(crate) call_id: Option<String>,
 }
 
 impl TurnState {
     pub(crate) fn insert_pending_approval(
         &mut self,
         key: String,
-        tx: oneshot::Sender<ReviewDecision>,
-    ) -> Option<oneshot::Sender<ReviewDecision>> {
-        self.pending_approvals.insert(key, tx)
+        pending_approval: PendingApproval,
+    ) -> Option<PendingApproval> {
+        self.pending_approvals.insert(key, pending_approval)
     }
 
-    pub(crate) fn remove_pending_approval(
-        &mut self,
-        key: &str,
-    ) -> Option<oneshot::Sender<ReviewDecision>> {
+    pub(crate) fn remove_pending_approval(&mut self, key: &str) -> Option<PendingApproval> {
         self.pending_approvals.remove(key)
     }
 

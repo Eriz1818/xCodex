@@ -769,6 +769,17 @@
           },
           "type": "array"
         },
+        "approval_resolved": {
+          "default": [],
+          "description": "Hooks invoked when an approval request is resolved.",
+          "items": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "type": "array"
+        },
         "command": {
           "allOf": [
             {
@@ -2400,6 +2411,7 @@
       "default": {
         "agent_turn_complete": [],
         "approval_requested": [],
+        "approval_resolved": [],
         "command": {
           "default_timeout_sec": 30
         },
