@@ -1,15 +1,16 @@
 use anyhow::Context;
-use codex_core::features::Feature;
-use codex_core::protocol::AskForApproval;
-use codex_core::protocol::EventMsg;
-use codex_core::protocol::ExecCommandEndEvent;
-use codex_core::protocol::ExecCommandSource;
-use codex_core::protocol::ExecOutputStream;
-use codex_core::protocol::Op;
-use codex_core::protocol::SandboxPolicy;
-use codex_core::protocol::TurnAbortReason;
-use codex_protocol::config_types::ReasoningSummary;
+use codex_features::Feature;
+use codex_protocol::permissions::NetworkSandboxPolicy;
+use codex_protocol::protocol::AskForApproval;
+use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::ExecCommandEndEvent;
+use codex_protocol::protocol::ExecCommandSource;
+use codex_protocol::protocol::ExecOutputStream;
+use codex_protocol::protocol::Op;
+use codex_protocol::protocol::SandboxPolicy;
+use codex_protocol::protocol::TurnAbortReason;
 use codex_protocol::user_input::UserInput;
+use core_test_support::PathBufExt;
 use core_test_support::assert_regex_match;
 use core_test_support::responses;
 use core_test_support::responses::ev_assistant_message;
@@ -24,6 +25,7 @@ use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
 use core_test_support::wait_for_event_match;
 use core_test_support::wait_for_event_with_timeout;
+use pretty_assertions::assert_eq;
 use regex_lite::escape;
 use std::path::PathBuf;
 use tempfile::TempDir;
@@ -45,7 +47,7 @@ async fn user_shell_cmd_ls_and_cat_in_temp_dir() {
     let server = start_mock_server().await;
     let cwd_path = cwd.path().to_path_buf();
     let mut builder = test_codex().with_config(move |config| {
-        config.cwd = cwd_path;
+        config.cwd = cwd_path.abs();
     });
     let codex = builder
         .build(&server)
@@ -175,10 +177,12 @@ async fn user_shell_command_does_not_replace_active_turn() -> anyhow::Result<()>
             final_output_json_schema: None,
             cwd: fixture.cwd.path().to_path_buf(),
             approval_policy: AskForApproval::Never,
+            approvals_reviewer: None,
             sandbox_policy: SandboxPolicy::DangerFullAccess,
             model: fixture.session_configured.model.clone(),
             effort: None,
-            summary: ReasoningSummary::Auto,
+            summary: None,
+            service_tier: None,
             collaboration_mode: None,
             personality: None,
         })
@@ -252,7 +256,10 @@ async fn user_shell_command_history_is_persisted_and_shared_with_model() -> anyh
     let server = responses::start_mock_server().await;
     // Disable it to ease command matching.
     let mut builder = core_test_support::test_codex::test_codex().with_config(move |config| {
-        config.features.disable(Feature::ShellSnapshot);
+        config
+            .features
+            .disable(Feature::ShellSnapshot)
+            .expect("test config should allow feature update");
     });
     let test = builder.build(&server).await?;
 
@@ -323,6 +330,44 @@ async fn user_shell_command_history_is_persisted_and_shared_with_model() -> anyh
         r"(?m)\A<user_shell_command>\n<command>\n{escaped_command}\n</command>\n<result>\nExit code: 0\nDuration: [0-9]+(?:\.[0-9]+)? seconds\nOutput:\nnot-set\n</result>\n</user_shell_command>\z"
     );
     assert_regex_match(&expected_pattern, &command_message);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn user_shell_command_does_not_set_network_sandbox_env_var() -> anyhow::Result<()> {
+    let server = responses::start_mock_server().await;
+    let mut builder = core_test_support::test_codex::test_codex().with_config(|config| {
+        config.permissions.network_sandbox_policy = NetworkSandboxPolicy::Restricted;
+    });
+    let test = builder.build(&server).await?;
+
+    #[cfg(windows)]
+    let command = r#"$val = $env:CODEX_SANDBOX_NETWORK_DISABLED; if ([string]::IsNullOrEmpty($val)) { $val = 'not-set' } ; [System.Console]::Write($val)"#.to_string();
+    #[cfg(not(windows))]
+    let command =
+        r#"sh -c "printf '%s' \"${CODEX_SANDBOX_NETWORK_DISABLED:-not-set}\"""#.to_string();
+
+    test.codex
+        .submit(Op::RunUserShellCommand { command })
+        .await?;
+
+    let ExecCommandEndEvent {
+        exit_code,
+        stdout,
+        stderr,
+        ..
+    } = wait_for_event_match(&test.codex, |ev| match ev {
+        EventMsg::ExecCommandEnd(event) => Some(event.clone()),
+        _ => None,
+    })
+    .await;
+
+    assert_eq!(
+        exit_code, 0,
+        "shell command should execute successfully. stdout=`{stdout}`, stderr=`{stderr}`",
+    );
+    assert_eq!(stdout.trim(), "not-set");
 
     Ok(())
 }

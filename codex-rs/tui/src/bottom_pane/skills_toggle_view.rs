@@ -22,6 +22,7 @@ use crate::render::renderable::ColumnRenderable;
 use crate::render::renderable::Renderable;
 use crate::skills_helpers::match_skill;
 use crate::skills_helpers::truncate_skill_name;
+use crate::style::user_message_style;
 use codex_core::protocol::Op;
 
 use super::CancellationEvent;
@@ -187,10 +188,8 @@ impl SkillsToggleView {
         }
         self.complete = true;
         self.app_event_tx.send(AppEvent::ManageSkillsClosed);
-        self.app_event_tx.send(AppEvent::CodexOp(Op::ListSkills {
-            cwds: Vec::new(),
-            force_reload: true,
-        }));
+        self.app_event_tx
+            .list_skills(Vec::new(), /*force_reload*/ true);
     }
 
     fn rows_width(total_width: u16) -> u16 {
@@ -313,7 +312,7 @@ impl Renderable for SkillsToggleView {
             Constraint::Length(2),
             Constraint::Length(rows_height),
         ])
-        .areas(content_area.inset(Insets::vh(1, 2)));
+        .areas(content_area.inset(Insets::vh(/*v*/ 1, /*h*/ 2)));
 
         self.header.render(header_area, buf);
 
@@ -434,7 +433,7 @@ mod tests {
             },
         ];
         let view = SkillsToggleView::new(items, tx);
-        assert_snapshot!("skills_toggle_basic", render_lines(&view, 72));
+        assert_snapshot!("skills_toggle_basic", render_lines(&view, /*width*/ 72));
     }
 
     #[test]

@@ -65,12 +65,18 @@ pub enum PlanType {
     Plus,
     #[serde(rename = "pro")]
     Pro,
+    #[serde(rename = "prolite")]
+    ProLite,
     #[serde(rename = "free_workspace")]
     FreeWorkspace,
     #[serde(rename = "team")]
     Team,
+    #[serde(rename = "self_serve_business_usage_based")]
+    SelfServeBusinessUsageBased,
     #[serde(rename = "business")]
     Business,
+    #[serde(rename = "enterprise_cbp_usage_based")]
+    EnterpriseCbpUsageBased,
     #[serde(rename = "education")]
     Education,
     #[serde(rename = "quorum")]
@@ -81,4 +87,6 @@ pub enum PlanType {
     Enterprise,
     #[serde(rename = "edu")]
     Edu,
+    #[serde(rename = "unknown", other)]
+    Unknown,
 }

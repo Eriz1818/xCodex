@@ -1565,7 +1565,7 @@ pub async fn collect_git_info(cwd: &Path) -> Option<GitInfo> {
         && output.status.success()
         && let Ok(hash) = String::from_utf8(output.stdout)
     {
-        git_info.commit_hash = Some(hash.trim().to_string());
+        git_info.commit_hash = Some(GitSha(hash.trim().to_string()));
     }
 
     // Process branch name

@@ -10,6 +10,7 @@ node_modules
 # build
 dist/
 bazel-*
+user.bazelrc
 build/
 out/
 storybook-static/
@@ -35,6 +36,7 @@ AGENTS.override.md
 
 # caches
 .cache/
+tmp/
 .turbo/
 .parcel-cache/
 .eslintcache

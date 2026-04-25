@@ -1,25 +1,27 @@
 use codex_core::CodexThread;
-use codex_core::ContentItem;
 use codex_core::REVIEW_PROMPT;
-use codex_core::ResponseItem;
 use codex_core::config::Config;
-use codex_core::protocol::ENVIRONMENT_CONTEXT_OPEN_TAG;
-use codex_core::protocol::EventMsg;
-use codex_core::protocol::ExitedReviewModeEvent;
-use codex_core::protocol::Op;
-use codex_core::protocol::ReviewCodeLocation;
-use codex_core::protocol::ReviewFinding;
-use codex_core::protocol::ReviewLineRange;
-use codex_core::protocol::ReviewOutputEvent;
-use codex_core::protocol::ReviewRequest;
-use codex_core::protocol::ReviewTarget;
-use codex_core::protocol::RolloutItem;
-use codex_core::protocol::RolloutLine;
 use codex_core::review_format::render_review_output_text;
+use codex_protocol::models::ContentItem;
+use codex_protocol::models::ResponseItem;
+use codex_protocol::protocol::ENVIRONMENT_CONTEXT_OPEN_TAG;
+use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::ExitedReviewModeEvent;
+use codex_protocol::protocol::Op;
+use codex_protocol::protocol::ReviewCodeLocation;
+use codex_protocol::protocol::ReviewFinding;
+use codex_protocol::protocol::ReviewLineRange;
+use codex_protocol::protocol::ReviewOutputEvent;
+use codex_protocol::protocol::ReviewRequest;
+use codex_protocol::protocol::ReviewTarget;
+use codex_protocol::protocol::RolloutItem;
+use codex_protocol::protocol::RolloutLine;
 use codex_protocol::user_input::UserInput;
+use core_test_support::PathBufExt;
 use core_test_support::load_sse_fixture_with_id_from_str;
 use core_test_support::responses::ResponseMock;
 use core_test_support::responses::mount_sse_sequence;
+use core_test_support::responses::start_mock_server;
 use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
@@ -68,7 +70,8 @@ async fn review_op_emits_lifecycle_and_review_output() {
         ]"#;
     let review_json_escaped = serde_json::to_string(&review_json).unwrap();
     let sse_raw = sse_template.replace("__REVIEW__", &review_json_escaped);
-    let (server, _request_log) = start_responses_server_with_sse(&sse_raw, 1).await;
+    let (server, _request_log) =
+        start_responses_server_with_sse(&sse_raw, /*expected_requests*/ 1).await;
     let codex_home = Arc::new(TempDir::new().unwrap());
     let codex = new_conversation_for_server(&server, codex_home.clone(), |_| {}).await;
 
@@ -190,7 +193,8 @@ async fn review_op_with_plain_text_emits_review_fallback() {
         }},
         {"type":"response.completed", "response": {"id": "__ID__"}}
     ]"#;
-    let (server, _request_log) = start_responses_server_with_sse(sse_raw, 1).await;
+    let (server, _request_log) =
+        start_responses_server_with_sse(sse_raw, /*expected_requests*/ 1).await;
     let codex_home = Arc::new(TempDir::new().unwrap());
     let codex = new_conversation_for_server(&server, codex_home.clone(), |_| {}).await;
 
@@ -251,7 +255,8 @@ async fn review_filters_agent_message_related_events() {
         }},
         {"type":"response.completed", "response": {"id": "__ID__"}}
     ]"#;
-    let (server, _request_log) = start_responses_server_with_sse(sse_raw, 1).await;
+    let (server, _request_log) =
+        start_responses_server_with_sse(sse_raw, /*expected_requests*/ 1).await;
     let codex_home = Arc::new(TempDir::new().unwrap());
     let codex = new_conversation_for_server(&server, codex_home.clone(), |_| {}).await;
 
@@ -333,7 +338,8 @@ async fn review_does_not_emit_agent_message_on_structured_output() {
         ]"#;
     let review_json_escaped = serde_json::to_string(&review_json).unwrap();
     let sse_raw = sse_template.replace("__REVIEW__", &review_json_escaped);
-    let (server, _request_log) = start_responses_server_with_sse(&sse_raw, 1).await;
+    let (server, _request_log) =
+        start_responses_server_with_sse(&sse_raw, /*expected_requests*/ 1).await;
     let codex_home = Arc::new(TempDir::new().unwrap());
     let codex = new_conversation_for_server(&server, codex_home.clone(), |_| {}).await;
 
@@ -388,7 +394,8 @@ async fn review_uses_custom_review_model_from_config() {
     let sse_raw = r#"[
         {"type":"response.completed", "response": {"id": "__ID__"}}
     ]"#;
-    let (server, request_log) = start_responses_server_with_sse(sse_raw, 1).await;
+    let (server, request_log) =
+        start_responses_server_with_sse(sse_raw, /*expected_requests*/ 1).await;
     let codex_home = Arc::new(TempDir::new().unwrap());
     // Choose a review model different from the main model; ensure it is used.
     let codex = new_conversation_for_server(&server, codex_home.clone(), |cfg| {
@@ -442,7 +449,8 @@ async fn review_uses_session_model_when_review_model_unset() {
     let sse_raw = r#"[
         {"type":"response.completed", "response": {"id": "__ID__"}}
     ]"#;
-    let (server, request_log) = start_responses_server_with_sse(sse_raw, 1).await;
+    let (server, request_log) =
+        start_responses_server_with_sse(sse_raw, /*expected_requests*/ 1).await;
     let codex_home = Arc::new(TempDir::new().unwrap());
     let codex = new_conversation_for_server(&server, codex_home.clone(), |cfg| {
         cfg.model = Some("gpt-4.1".to_string());
@@ -496,7 +504,8 @@ async fn review_input_isolated_from_parent_history() {
     let sse_raw = r#"[
         {"type":"response.completed", "response": {"id": "__ID__"}}
     ]"#;
-    let (server, request_log) = start_responses_server_with_sse(sse_raw, 1).await;
+    let (server, request_log) =
+        start_responses_server_with_sse(sse_raw, /*expected_requests*/ 1).await;
 
     // Seed a parent session history via resume file with both user + assistant items.
     let codex_home = Arc::new(TempDir::new().unwrap());
@@ -604,7 +613,9 @@ async fn review_input_isolated_from_parent_history() {
 
     let env_text = input
         .iter()
-        .filter_map(|msg| msg["content"][0]["text"].as_str())
+        .filter_map(|msg| msg.get("content").and_then(|content| content.as_array()))
+        .flat_map(|content| content.iter())
+        .filter_map(|entry| entry.get("text").and_then(|text| text.as_str()))
         .find(|text| text.starts_with(ENVIRONMENT_CONTEXT_OPEN_TAG))
         .expect("env text");
     assert!(
@@ -614,7 +625,9 @@ async fn review_input_isolated_from_parent_history() {
 
     let review_text = input
         .iter()
-        .filter_map(|msg| msg["content"][0]["text"].as_str())
+        .filter_map(|msg| msg.get("content").and_then(|content| content.as_array()))
+        .flat_map(|content| content.iter())
+        .filter_map(|entry| entry.get("text").and_then(|text| text.as_str()))
         .find(|text| *text == review_prompt)
         .expect("review prompt text");
     assert_eq!(
@@ -675,7 +688,8 @@ async fn review_history_surfaces_in_parent_session() {
         }},
         {"type":"response.completed", "response": {"id": "__ID__"}}
     ]"#;
-    let (server, request_log) = start_responses_server_with_sse(sse_raw, 2).await;
+    let (server, request_log) =
+        start_responses_server_with_sse(sse_raw, /*expected_requests*/ 2).await;
     let codex_home = Arc::new(TempDir::new().unwrap());
     let codex = new_conversation_for_server(&server, codex_home.clone(), |_| {}).await;
 
@@ -712,6 +726,7 @@ async fn review_history_surfaces_in_parent_session() {
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
+            responsesapi_client_metadata: None,
         })
         .await
         .unwrap();
@@ -767,7 +782,8 @@ async fn review_uses_overridden_cwd_for_base_branch_merge_base() {
     skip_if_no_network!();
 
     let sse_raw = r#"[{"type":"response.completed", "response": {"id": "__ID__"}}]"#;
-    let (server, request_log) = start_responses_server_with_sse(sse_raw, 1).await;
+    let (server, request_log) =
+        start_responses_server_with_sse(sse_raw, /*expected_requests*/ 1).await;
 
     let initial_cwd = TempDir::new().unwrap();
 
@@ -812,7 +828,7 @@ async fn review_uses_overridden_cwd_for_base_branch_merge_base() {
     let codex_home = Arc::new(TempDir::new().unwrap());
     let initial_cwd_path = initial_cwd.path().to_path_buf();
     let codex = new_conversation_for_server(&server, codex_home.clone(), move |config| {
-        config.cwd = initial_cwd_path;
+        config.cwd = initial_cwd_path.abs();
     })
     .await;
 
@@ -820,11 +836,13 @@ async fn review_uses_overridden_cwd_for_base_branch_merge_base() {
         .submit(Op::OverrideTurnContext {
             cwd: Some(repo_path.to_path_buf()),
             approval_policy: None,
+            approvals_reviewer: None,
             sandbox_policy: None,
             windows_sandbox_level: None,
             model: None,
             effort: None,
             summary: None,
+            service_tier: None,
             collaboration_mode: None,
             personality: None,
         })
@@ -872,7 +890,7 @@ async fn start_responses_server_with_sse(
     sse_raw: &str,
     expected_requests: usize,
 ) -> (MockServer, ResponseMock) {
-    let server = MockServer::start().await;
+    let server = start_mock_server().await;
     let sse = load_sse_fixture_with_id_from_str(sse_raw, &Uuid::new_v4().to_string());
     let responses = vec![sse; expected_requests];
     let request_log = mount_sse_sequence(&server, responses).await;

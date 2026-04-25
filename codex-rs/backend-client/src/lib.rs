@@ -1,7 +1,8 @@
 mod client;
-pub mod types;
+pub(crate) mod types;
 
 pub use client::Client;
+pub use client::RequestError;
 pub use types::CodeTaskDetailsResponse;
 pub use types::CodeTaskDetailsResponseExt;
 pub use types::ConfigFileResponse;

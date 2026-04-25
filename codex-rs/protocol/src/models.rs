@@ -1,45 +1,117 @@
 use std::collections::HashMap;
 use std::path::Path;
+use std::sync::LazyLock;
 
-use codex_utils_image::load_and_resize_to_fit;
+use codex_utils_image::PromptImageMode;
+use codex_utils_image::load_for_prompt_bytes;
+use codex_utils_template::Template;
 use serde::Deserialize;
 use serde::Deserializer;
 use serde::Serialize;
 use serde::ser::Serializer;
 use ts_rs::TS;
 
+use crate::config_types::ApprovalsReviewer;
 use crate::config_types::CollaborationMode;
 use crate::config_types::SandboxMode;
 use crate::protocol::AskForApproval;
 use crate::protocol::COLLABORATION_MODE_CLOSE_TAG;
 use crate::protocol::COLLABORATION_MODE_OPEN_TAG;
+use crate::protocol::GranularApprovalConfig;
 use crate::protocol::NetworkAccess;
+use crate::protocol::REALTIME_CONVERSATION_CLOSE_TAG;
+use crate::protocol::REALTIME_CONVERSATION_OPEN_TAG;
 use crate::protocol::SandboxPolicy;
 use crate::protocol::WritableRoot;
 use crate::user_input::UserInput;
 use codex_execpolicy::Policy;
-use codex_git::GhostCommit;
-use codex_utils_image::error::ImageProcessingError;
+use codex_git_utils::GhostCommit;
+use codex_utils_absolute_path::AbsolutePathBuf;
+use codex_utils_image::ImageProcessingError;
 use schemars::JsonSchema;
 
 use crate::mcp::CallToolResult;
 
-/// Controls whether a command should use the session sandbox or bypass it.
+static SANDBOX_MODE_DANGER_FULL_ACCESS_TEMPLATE: LazyLock<Template> = LazyLock::new(|| {
+    Template::parse(SANDBOX_MODE_DANGER_FULL_ACCESS.trim_end())
+        .unwrap_or_else(|err| panic!("danger-full-access sandbox template must parse: {err}"))
+});
+static SANDBOX_MODE_WORKSPACE_WRITE_TEMPLATE: LazyLock<Template> = LazyLock::new(|| {
+    Template::parse(SANDBOX_MODE_WORKSPACE_WRITE.trim_end())
+        .unwrap_or_else(|err| panic!("workspace-write sandbox template must parse: {err}"))
+});
+static SANDBOX_MODE_READ_ONLY_TEMPLATE: LazyLock<Template> = LazyLock::new(|| {
+    Template::parse(SANDBOX_MODE_READ_ONLY.trim_end())
+        .unwrap_or_else(|err| panic!("read-only sandbox template must parse: {err}"))
+});
+
+/// Controls the per-command sandbox override requested by a shell-like tool call.
 #[derive(
     Debug, Clone, Copy, Default, Eq, Hash, PartialEq, Serialize, Deserialize, JsonSchema, TS,
 )]
 #[serde(rename_all = "snake_case")]
 pub enum SandboxPermissions {
-    /// Run with the configured sandbox
+    /// Run with the turn's configured sandbox policy unchanged.
     #[default]
     UseDefault,
-    /// Request to run outside the sandbox
+    /// Request to run outside the sandbox.
     RequireEscalated,
+    /// Request to stay in the sandbox while widening permissions for this
+    /// command only.
+    WithAdditionalPermissions,
 }
 
 impl SandboxPermissions {
+    /// True if SandboxPermissions requires full unsandboxed execution (i.e. RequireEscalated)
     pub fn requires_escalated_permissions(self) -> bool {
         matches!(self, SandboxPermissions::RequireEscalated)
+    }
+
+    /// True if SandboxPermissions requests any explicit per-command override
+    /// beyond `UseDefault`.
+    pub fn requests_sandbox_override(self) -> bool {
+        !matches!(self, SandboxPermissions::UseDefault)
+    }
+
+    /// True if SandboxPermissions uses the sandboxed per-command permission
+    /// widening flow.
+    pub fn uses_additional_permissions(self) -> bool {
+        matches!(self, SandboxPermissions::WithAdditionalPermissions)
+    }
+}
+
+#[derive(Debug, Clone, Default, Eq, Hash, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+pub struct FileSystemPermissions {
+    pub read: Option<Vec<AbsolutePathBuf>>,
+    pub write: Option<Vec<AbsolutePathBuf>>,
+}
+
+impl FileSystemPermissions {
+    pub fn is_empty(&self) -> bool {
+        self.read.is_none() && self.write.is_none()
+    }
+}
+
+#[derive(Debug, Clone, Default, Eq, Hash, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+pub struct NetworkPermissions {
+    pub enabled: Option<bool>,
+}
+
+impl NetworkPermissions {
+    pub fn is_empty(&self) -> bool {
+        self.enabled.is_none()
+    }
+}
+
+#[derive(Debug, Clone, Default, Eq, Hash, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+pub struct PermissionProfile {
+    pub network: Option<NetworkPermissions>,
+    pub file_system: Option<FileSystemPermissions>,
+}
+
+impl PermissionProfile {
+    pub fn is_empty(&self) -> bool {
+        self.network.is_none() && self.file_system.is_none()
     }
 }
 
@@ -52,15 +124,29 @@ pub enum ResponseInputItem {
     },
     FunctionCallOutput {
         call_id: String,
+        #[ts(as = "FunctionCallOutputBody")]
+        #[schemars(with = "FunctionCallOutputBody")]
         output: FunctionCallOutputPayload,
     },
     McpToolCallOutput {
         call_id: String,
-        result: Result<CallToolResult, String>,
+        output: CallToolResult,
     },
     CustomToolCallOutput {
         call_id: String,
-        output: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        name: Option<String>,
+        #[ts(as = "FunctionCallOutputBody")]
+        #[schemars(with = "FunctionCallOutputBody")]
+        output: FunctionCallOutputPayload,
+    },
+    ToolSearchOutput {
+        call_id: String,
+        status: String,
+        execution: String,
+        #[ts(type = "unknown[]")]
+        tools: Vec<serde_json::Value>,
     },
 }
 
@@ -70,6 +156,15 @@ pub enum ContentItem {
     InputText { text: String },
     InputImage { image_url: String },
     OutputText { text: String },
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "lowercase")]
+pub enum ImageDetail {
+    Auto,
+    Low,
+    High,
+    Original,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, TS)]
@@ -111,6 +206,7 @@ pub enum ResponseItem {
     Reasoning {
         #[serde(default, skip_serializing)]
         #[ts(skip)]
+        #[schemars(skip)]
         id: String,
         summary: Vec<ReasoningItemReasoningSummary>,
         #[serde(default, skip_serializing_if = "should_serialize_reasoning_content")]
@@ -133,11 +229,26 @@ pub enum ResponseItem {
         #[ts(skip)]
         id: Option<String>,
         name: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        namespace: Option<String>,
         // The Responses API returns the function call arguments as a *string* that contains
         // JSON, not as an already‑parsed object. We keep it as a raw string here and let
         // Session::handle_function_call parse it into a Value.
         arguments: String,
         call_id: String,
+    },
+    ToolSearchCall {
+        #[serde(default, skip_serializing)]
+        #[ts(skip)]
+        id: Option<String>,
+        call_id: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        status: Option<String>,
+        execution: String,
+        #[ts(type = "unknown")]
+        arguments: serde_json::Value,
     },
     // NOTE: The `output` field for `function_call_output` uses a dedicated payload type with
     // custom serialization. On the wire it is either:
@@ -146,6 +257,8 @@ pub enum ResponseItem {
     // We keep this behavior centralized in `FunctionCallOutputPayload`.
     FunctionCallOutput {
         call_id: String,
+        #[ts(as = "FunctionCallOutputBody")]
+        #[schemars(with = "FunctionCallOutputBody")]
         output: FunctionCallOutputPayload,
     },
     CustomToolCall {
@@ -160,9 +273,24 @@ pub enum ResponseItem {
         name: String,
         input: String,
     },
+    // `custom_tool_call_output.output` uses the same wire encoding as
+    // `function_call_output.output` so freeform tools can return either plain
+    // text or structured content items.
     CustomToolCallOutput {
         call_id: String,
-        output: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        name: Option<String>,
+        #[ts(as = "FunctionCallOutputBody")]
+        #[schemars(with = "FunctionCallOutputBody")]
+        output: FunctionCallOutputPayload,
+    },
+    ToolSearchOutput {
+        call_id: Option<String>,
+        status: String,
+        execution: String,
+        #[ts(type = "unknown[]")]
+        tools: Vec<serde_json::Value>,
     },
     // Emitted by the Responses API when the agent triggers a web search.
     // Example payload (from SSE `response.output_item.done`):
@@ -182,6 +310,23 @@ pub enum ResponseItem {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         #[ts(optional)]
         action: Option<WebSearchAction>,
+    },
+    // Emitted by the Responses API when the agent triggers image generation.
+    // Example payload:
+    // {
+    //   "id":"ig_123",
+    //   "type":"image_generation_call",
+    //   "status":"completed",
+    //   "revised_prompt":"A gray tabby cat hugging an otter...",
+    //   "result":"..."
+    // }
+    ImageGenerationCall {
+        id: String,
+        status: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        revised_prompt: Option<String>,
+        result: String,
     },
     // Generated by the harness but considered exactly as a model response.
     GhostSnapshot {
@@ -225,16 +370,28 @@ const APPROVAL_POLICY_UNLESS_TRUSTED: &str =
     include_str!("prompts/permissions/approval_policy/unless_trusted.md");
 const APPROVAL_POLICY_ON_FAILURE: &str =
     include_str!("prompts/permissions/approval_policy/on_failure.md");
-const APPROVAL_POLICY_ON_REQUEST: &str =
-    include_str!("prompts/permissions/approval_policy/on_request.md");
 const APPROVAL_POLICY_ON_REQUEST_RULE: &str =
-    include_str!("prompts/permissions/approval_policy/on_request_rule.md");
+    include_str!("prompts/permissions/approval_policy/on_request.md");
+const APPROVAL_POLICY_ON_REQUEST_RULE_REQUEST_PERMISSION: &str =
+    include_str!("prompts/permissions/approval_policy/on_request_rule_request_permission.md");
+const GUARDIAN_SUBAGENT_APPROVAL_SUFFIX: &str = "`approvals_reviewer` is `guardian_subagent`: Sandbox escalations with require_escalated will be reviewed for compliance with the policy. If a rejection happens, you should proceed only with a materially safer alternative, or inform the user of the risk and send a final message to ask for approval.";
 
 const SANDBOX_MODE_DANGER_FULL_ACCESS: &str =
     include_str!("prompts/permissions/sandbox_mode/danger_full_access.md");
 const SANDBOX_MODE_WORKSPACE_WRITE: &str =
     include_str!("prompts/permissions/sandbox_mode/workspace_write.md");
 const SANDBOX_MODE_READ_ONLY: &str = include_str!("prompts/permissions/sandbox_mode/read_only.md");
+
+const REALTIME_START_INSTRUCTIONS: &str = include_str!("prompts/realtime/realtime_start.md");
+const REALTIME_END_INSTRUCTIONS: &str = include_str!("prompts/realtime/realtime_end.md");
+
+struct PermissionsPromptConfig<'a> {
+    approval_policy: AskForApproval,
+    approvals_reviewer: ApprovalsReviewer,
+    exec_policy: &'a Policy,
+    exec_permission_approvals_enabled: bool,
+    request_permissions_tool_enabled: bool,
+}
 
 impl DeveloperInstructions {
     pub fn new<T: Into<String>>(text: T) -> Self {
@@ -243,29 +400,56 @@ impl DeveloperInstructions {
 
     pub fn from(
         approval_policy: AskForApproval,
+        approvals_reviewer: ApprovalsReviewer,
         exec_policy: &Policy,
-        request_rule_enabled: bool,
+        exec_permission_approvals_enabled: bool,
+        request_permissions_tool_enabled: bool,
     ) -> DeveloperInstructions {
+        let with_request_permissions_tool = |text: &str| {
+            if request_permissions_tool_enabled {
+                format!("{text}\n\n{}", request_permissions_tool_prompt_section())
+            } else {
+                text.to_string()
+            }
+        };
+        let on_request_instructions = || {
+            let on_request_rule = if exec_permission_approvals_enabled {
+                APPROVAL_POLICY_ON_REQUEST_RULE_REQUEST_PERMISSION.to_string()
+            } else {
+                APPROVAL_POLICY_ON_REQUEST_RULE.to_string()
+            };
+            let mut sections = vec![on_request_rule];
+            if request_permissions_tool_enabled {
+                sections.push(request_permissions_tool_prompt_section().to_string());
+            }
+            if let Some(prefixes) = approved_command_prefixes_text(exec_policy) {
+                sections.push(format!(
+                    "## Approved command prefixes\nThe following prefix rules have already been approved: {prefixes}"
+                ));
+            }
+            sections.join("\n\n")
+        };
         let text = match approval_policy {
             AskForApproval::Never => APPROVAL_POLICY_NEVER.to_string(),
-            AskForApproval::UnlessTrusted => APPROVAL_POLICY_UNLESS_TRUSTED.to_string(),
-            AskForApproval::OnFailure => APPROVAL_POLICY_ON_FAILURE.to_string(),
-            AskForApproval::OnRequest => {
-                if !request_rule_enabled {
-                    APPROVAL_POLICY_ON_REQUEST.to_string()
-                } else {
-                    let command_prefixes =
-                        format_allow_prefixes(exec_policy.get_allowed_prefixes());
-                    match command_prefixes {
-                        Some(prefixes) => {
-                            format!(
-                                "{APPROVAL_POLICY_ON_REQUEST_RULE}\n## Approved command prefixes\nThe following prefix rules have already been approved: {prefixes}"
-                            )
-                        }
-                        None => APPROVAL_POLICY_ON_REQUEST_RULE.to_string(),
-                    }
-                }
+            AskForApproval::UnlessTrusted => {
+                with_request_permissions_tool(APPROVAL_POLICY_UNLESS_TRUSTED)
             }
+            AskForApproval::OnFailure => with_request_permissions_tool(APPROVAL_POLICY_ON_FAILURE),
+            AskForApproval::OnRequest => on_request_instructions(),
+            AskForApproval::Granular(granular_config) => granular_instructions(
+                granular_config,
+                exec_policy,
+                exec_permission_approvals_enabled,
+                request_permissions_tool_enabled,
+            ),
+        };
+
+        let text = if approvals_reviewer == ApprovalsReviewer::GuardianSubagent
+            && approval_policy != AskForApproval::Never
+        {
+            format!("{text}\n\n{GUARDIAN_SUBAGENT_APPROVAL_SUFFIX}")
+        } else {
+            text
         };
 
         DeveloperInstructions::new(text)
@@ -290,6 +474,23 @@ impl DeveloperInstructions {
         ))
     }
 
+    pub fn realtime_start_message() -> Self {
+        Self::realtime_start_message_with_instructions(REALTIME_START_INSTRUCTIONS.trim())
+    }
+
+    pub fn realtime_start_message_with_instructions(instructions: &str) -> Self {
+        DeveloperInstructions::new(format!(
+            "{REALTIME_CONVERSATION_OPEN_TAG}\n{instructions}\n{REALTIME_CONVERSATION_CLOSE_TAG}"
+        ))
+    }
+
+    pub fn realtime_end_message(reason: &str) -> Self {
+        DeveloperInstructions::new(format!(
+            "{REALTIME_CONVERSATION_OPEN_TAG}\n{}\n\nReason: {reason}\n{REALTIME_CONVERSATION_CLOSE_TAG}",
+            REALTIME_END_INSTRUCTIONS.trim()
+        ))
+    }
+
     pub fn personality_spec_message(spec: String) -> Self {
         let message = format!(
             "<personality_spec> The user has requested a new communication style. Future messages should adhere to the following personality: \n{spec} </personality_spec>"
@@ -300,9 +501,11 @@ impl DeveloperInstructions {
     pub fn from_policy(
         sandbox_policy: &SandboxPolicy,
         approval_policy: AskForApproval,
+        approvals_reviewer: ApprovalsReviewer,
         exec_policy: &Policy,
-        request_rule_enabled: bool,
         cwd: &Path,
+        exec_permission_approvals_enabled: bool,
+        request_permissions_tool_enabled: bool,
     ) -> Self {
         let network_access = if sandbox_policy.has_full_network_access() {
             NetworkAccess::Enabled
@@ -323,9 +526,13 @@ impl DeveloperInstructions {
         DeveloperInstructions::from_permissions_with_network(
             sandbox_mode,
             network_access,
-            approval_policy,
-            exec_policy,
-            request_rule_enabled,
+            PermissionsPromptConfig {
+                approval_policy,
+                approvals_reviewer,
+                exec_policy,
+                exec_permission_approvals_enabled,
+                request_permissions_tool_enabled,
+            },
             writable_roots,
         )
     }
@@ -347,9 +554,7 @@ impl DeveloperInstructions {
     fn from_permissions_with_network(
         sandbox_mode: SandboxMode,
         network_access: NetworkAccess,
-        approval_policy: AskForApproval,
-        exec_policy: &Policy,
-        request_rule_enabled: bool,
+        config: PermissionsPromptConfig<'_>,
         writable_roots: Option<Vec<WritableRoot>>,
     ) -> Self {
         let start_tag = DeveloperInstructions::new("<permissions instructions>");
@@ -360,9 +565,11 @@ impl DeveloperInstructions {
                 network_access,
             ))
             .concat(DeveloperInstructions::from(
-                approval_policy,
-                exec_policy,
-                request_rule_enabled,
+                config.approval_policy,
+                config.approvals_reviewer,
+                config.exec_policy,
+                config.exec_permission_approvals_enabled,
+                config.request_permissions_tool_enabled,
             ))
             .concat(DeveloperInstructions::from_writable_roots(writable_roots))
             .concat(end_tag)
@@ -391,14 +598,102 @@ impl DeveloperInstructions {
 
     fn sandbox_text(mode: SandboxMode, network_access: NetworkAccess) -> DeveloperInstructions {
         let template = match mode {
-            SandboxMode::DangerFullAccess => SANDBOX_MODE_DANGER_FULL_ACCESS.trim_end(),
-            SandboxMode::WorkspaceWrite => SANDBOX_MODE_WORKSPACE_WRITE.trim_end(),
-            SandboxMode::ReadOnly => SANDBOX_MODE_READ_ONLY.trim_end(),
+            SandboxMode::DangerFullAccess => &*SANDBOX_MODE_DANGER_FULL_ACCESS_TEMPLATE,
+            SandboxMode::WorkspaceWrite => &*SANDBOX_MODE_WORKSPACE_WRITE_TEMPLATE,
+            SandboxMode::ReadOnly => &*SANDBOX_MODE_READ_ONLY_TEMPLATE,
         };
-        let text = template.replace("{network_access}", &network_access.to_string());
+        let network_access = network_access.to_string();
+        let text = template
+            .render([("network_access", network_access.as_str())])
+            .unwrap_or_else(|err| panic!("sandbox template must render: {err}"));
 
         DeveloperInstructions::new(text)
     }
+}
+
+fn approved_command_prefixes_text(exec_policy: &Policy) -> Option<String> {
+    format_allow_prefixes(exec_policy.get_allowed_prefixes())
+        .filter(|prefixes| !prefixes.is_empty())
+}
+
+fn granular_prompt_intro_text() -> &'static str {
+    "# Approval Requests\n\nApproval policy is `granular`. Categories set to `false` are automatically rejected instead of prompting the user."
+}
+
+fn request_permissions_tool_prompt_section() -> &'static str {
+    "# request_permissions Tool\n\nThe built-in `request_permissions` tool is available in this session. Invoke it when you need to request additional `network` or `file_system` permissions before later shell-like commands need them. Request only the specific permissions required for the task."
+}
+
+fn granular_instructions(
+    granular_config: GranularApprovalConfig,
+    exec_policy: &Policy,
+    exec_permission_approvals_enabled: bool,
+    request_permissions_tool_enabled: bool,
+) -> String {
+    let sandbox_approval_prompts_allowed = granular_config.allows_sandbox_approval();
+    let shell_permission_requests_available =
+        exec_permission_approvals_enabled && sandbox_approval_prompts_allowed;
+    let request_permissions_tool_prompts_allowed =
+        request_permissions_tool_enabled && granular_config.allows_request_permissions();
+    let categories = [
+        Some((
+            granular_config.allows_sandbox_approval(),
+            "`sandbox_approval`",
+        )),
+        Some((granular_config.allows_rules_approval(), "`rules`")),
+        Some((granular_config.allows_skill_approval(), "`skill_approval`")),
+        request_permissions_tool_enabled.then_some((
+            granular_config.allows_request_permissions(),
+            "`request_permissions`",
+        )),
+        Some((
+            granular_config.allows_mcp_elicitations(),
+            "`mcp_elicitations`",
+        )),
+    ];
+    let prompted_categories = categories
+        .iter()
+        .flatten()
+        .filter(|&&(is_allowed, _)| is_allowed)
+        .map(|&(_, category)| format!("- {category}"))
+        .collect::<Vec<_>>();
+    let rejected_categories = categories
+        .iter()
+        .flatten()
+        .filter(|&&(is_allowed, _)| !is_allowed)
+        .map(|&(_, category)| format!("- {category}"))
+        .collect::<Vec<_>>();
+
+    let mut sections = vec![granular_prompt_intro_text().to_string()];
+
+    if !prompted_categories.is_empty() {
+        sections.push(format!(
+            "These approval categories may still prompt the user when needed:\n{}",
+            prompted_categories.join("\n")
+        ));
+    }
+    if !rejected_categories.is_empty() {
+        sections.push(format!(
+            "These approval categories are automatically rejected instead of prompting the user:\n{}",
+            rejected_categories.join("\n")
+        ));
+    }
+
+    if shell_permission_requests_available {
+        sections.push(APPROVAL_POLICY_ON_REQUEST_RULE_REQUEST_PERMISSION.to_string());
+    }
+
+    if request_permissions_tool_prompts_allowed {
+        sections.push(request_permissions_tool_prompt_section().to_string());
+    }
+
+    if let Some(prefixes) = approved_command_prefixes_text(exec_policy) {
+        sections.push(format!(
+            "## Approved command prefixes\nThe following prefix rules have already been approved: {prefixes}"
+        ));
+    }
+
+    sections.join("\n\n")
 }
 
 const MAX_RENDERED_PREFIXES: usize = 100;
@@ -562,7 +857,7 @@ fn invalid_image_error_placeholder(
 fn unsupported_image_error_placeholder(path: &std::path::Path, mime: &str) -> ContentItem {
     ContentItem::InputText {
         text: format!(
-            "Codex cannot attach image at `{}`: unsupported image format `{}`.",
+            "Codex cannot attach image at `{}`: unsupported image `{}`.",
             path.display(),
             mime
         ),
@@ -571,9 +866,11 @@ fn unsupported_image_error_placeholder(path: &std::path::Path, mime: &str) -> Co
 
 pub fn local_image_content_items_with_label_number(
     path: &std::path::Path,
+    file_bytes: Vec<u8>,
     label_number: Option<usize>,
+    mode: PromptImageMode,
 ) -> Vec<ContentItem> {
-    match load_and_resize_to_fit(path) {
+    match load_for_prompt_bytes(path, file_bytes, mode) {
         Ok(image) => {
             let mut items = Vec::with_capacity(3);
             if let Some(label_number) = label_number {
@@ -591,28 +888,20 @@ pub fn local_image_content_items_with_label_number(
             }
             items
         }
-        Err(err) => {
-            if matches!(&err, ImageProcessingError::Read { .. }) {
+        Err(err) => match &err {
+            ImageProcessingError::Read { .. } | ImageProcessingError::Encode { .. } => {
                 vec![local_image_error_placeholder(path, &err)]
-            } else if err.is_invalid_image() {
-                vec![invalid_image_error_placeholder(path, &err)]
-            } else {
-                let Some(mime_guess) = mime_guess::from_path(path).first() else {
-                    return vec![local_image_error_placeholder(
-                        path,
-                        "unsupported MIME type (unknown)",
-                    )];
-                };
-                let mime = mime_guess.essence_str().to_owned();
-                if !mime.starts_with("image/") {
-                    return vec![local_image_error_placeholder(
-                        path,
-                        format!("unsupported MIME type `{mime}`"),
-                    )];
-                }
-                vec![unsupported_image_error_placeholder(path, &mime)]
             }
-        }
+            ImageProcessingError::Decode { .. } if err.is_invalid_image() => {
+                vec![invalid_image_error_placeholder(path, &err)]
+            }
+            ImageProcessingError::Decode { .. } => {
+                vec![local_image_error_placeholder(path, &err)]
+            }
+            ImageProcessingError::UnsupportedImageFormat { mime } => {
+                vec![unsupported_image_error_placeholder(path, mime)]
+            }
+        },
     }
 }
 
@@ -629,19 +918,30 @@ impl From<ResponseInputItem> for ResponseItem {
             ResponseInputItem::FunctionCallOutput { call_id, output } => {
                 Self::FunctionCallOutput { call_id, output }
             }
-            ResponseInputItem::McpToolCallOutput { call_id, result } => {
-                let output = match result {
-                    Ok(result) => FunctionCallOutputPayload::from(&result),
-                    Err(tool_call_err) => FunctionCallOutputPayload {
-                        body: FunctionCallOutputBody::Text(tool_call_err),
-                        success: Some(false),
-                    },
-                };
+            ResponseInputItem::McpToolCallOutput { call_id, output } => {
+                let output = output.into_function_call_output_payload();
                 Self::FunctionCallOutput { call_id, output }
             }
-            ResponseInputItem::CustomToolCallOutput { call_id, output } => {
-                Self::CustomToolCallOutput { call_id, output }
-            }
+            ResponseInputItem::CustomToolCallOutput {
+                call_id,
+                name,
+                output,
+            } => Self::CustomToolCallOutput {
+                call_id,
+                name,
+                output,
+            },
+            ResponseInputItem::ToolSearchOutput {
+                call_id,
+                status,
+                execution,
+                tools,
+            } => Self::ToolSearchOutput {
+                call_id: Some(call_id),
+                status,
+                execution,
+                tools,
+            },
         }
     }
 }
@@ -671,6 +971,7 @@ pub struct LocalShellExecAction {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, JsonSchema, TS)]
 #[serde(tag = "type", rename_all = "snake_case")]
+#[schemars(rename = "ResponsesApiWebSearchAction")]
 pub enum WebSearchAction {
     Search {
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -720,24 +1021,42 @@ impl From<Vec<UserInput>> for ResponseInputItem {
                 .into_iter()
                 .flat_map(|c| match c {
                     UserInput::Text { text, .. } => vec![ContentItem::InputText { text }],
-                    UserInput::Image { image_url } => vec![
-                        ContentItem::InputText {
-                            text: image_open_tag_text(),
-                        },
-                        ContentItem::InputImage { image_url },
-                        ContentItem::InputText {
-                            text: image_close_tag_text(),
-                        },
-                    ],
+                    UserInput::Image { image_url } => {
+                        image_index += 1;
+                        vec![
+                            ContentItem::InputText {
+                                text: image_open_tag_text(),
+                            },
+                            ContentItem::InputImage { image_url },
+                            ContentItem::InputText {
+                                text: image_close_tag_text(),
+                            },
+                        ]
+                    }
                     UserInput::LocalImage { path } => {
                         image_index += 1;
-                        local_image_content_items_with_label_number(&path, Some(image_index))
+                        match std::fs::read(&path) {
+                            Ok(file_bytes) => local_image_content_items_with_label_number(
+                                &path,
+                                file_bytes,
+                                Some(image_index),
+                                PromptImageMode::ResizeToFit,
+                            ),
+                            Err(err) => vec![local_image_error_placeholder(&path, err)],
+                        }
                     }
                     UserInput::Skill { .. } | UserInput::Mention { .. } => Vec::new(), // Tool bodies are injected later in core
                 })
                 .collect::<Vec<ContentItem>>(),
         }
     }
+}
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+pub struct SearchToolCallParams {
+    pub query: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub limit: Option<usize>,
 }
 
 /// If the `name` of a `ResponseItem::FunctionCall` is either `container.exec`
@@ -757,6 +1076,9 @@ pub struct ShellToolCallParams {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub prefix_rule: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub additional_permissions: Option<PermissionProfile>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub justification: Option<String>,
 }
@@ -780,6 +1102,9 @@ pub struct ShellCommandToolCallParams {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub prefix_rule: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub additional_permissions: Option<PermissionProfile>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub justification: Option<String>,
 }
@@ -790,9 +1115,16 @@ pub struct ShellCommandToolCallParams {
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum FunctionCallOutputContentItem {
     // Do not rename, these are serialized and used directly in the responses API.
-    InputText { text: String },
+    InputText {
+        text: String,
+    },
     // Do not rename, these are serialized and used directly in the responses API.
-    InputImage { image_url: String },
+    InputImage {
+        image_url: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        detail: Option<ImageDetail>,
+    },
 }
 
 /// Converts structured function-call output content into plain text for
@@ -836,7 +1168,10 @@ impl From<crate::dynamic_tools::DynamicToolCallOutputContentItem>
                 Self::InputText { text }
             }
             crate::dynamic_tools::DynamicToolCallOutputContentItem::InputImage { image_url } => {
-                Self::InputImage { image_url }
+                Self::InputImage {
+                    image_url,
+                    detail: None,
+                }
             }
         }
     }
@@ -952,25 +1287,39 @@ impl<'de> Deserialize<'de> for FunctionCallOutputPayload {
     }
 }
 
-impl From<&CallToolResult> for FunctionCallOutputPayload {
-    fn from(call_tool_result: &CallToolResult) -> Self {
-        let CallToolResult {
-            content,
-            structured_content,
-            is_error,
-            meta: _,
-        } = call_tool_result;
+impl CallToolResult {
+    pub fn from_result(result: Result<Self, String>) -> Self {
+        match result {
+            Ok(result) => result,
+            Err(error) => Self::from_error_text(error),
+        }
+    }
 
-        let is_success = is_error != &Some(true);
+    pub fn from_error_text(text: String) -> Self {
+        Self {
+            content: vec![serde_json::json!({
+                "type": "text",
+                "text": text,
+            })],
+            structured_content: None,
+            is_error: Some(true),
+            meta: None,
+        }
+    }
 
-        if let Some(structured_content) = structured_content
+    pub fn success(&self) -> bool {
+        self.is_error != Some(true)
+    }
+
+    pub fn as_function_call_output_payload(&self) -> FunctionCallOutputPayload {
+        if let Some(structured_content) = &self.structured_content
             && !structured_content.is_null()
         {
             match serde_json::to_string(structured_content) {
                 Ok(serialized_structured_content) => {
                     return FunctionCallOutputPayload {
                         body: FunctionCallOutputBody::Text(serialized_structured_content),
-                        success: Some(is_success),
+                        success: Some(self.success()),
                     };
                 }
                 Err(err) => {
@@ -982,7 +1331,7 @@ impl From<&CallToolResult> for FunctionCallOutputPayload {
             }
         }
 
-        let serialized_content = match serde_json::to_string(content) {
+        let serialized_content = match serde_json::to_string(&self.content) {
             Ok(serialized_content) => serialized_content,
             Err(err) => {
                 return FunctionCallOutputPayload {
@@ -992,7 +1341,7 @@ impl From<&CallToolResult> for FunctionCallOutputPayload {
             }
         };
 
-        let content_items = convert_mcp_content_to_items(content);
+        let content_items = convert_mcp_content_to_items(&self.content);
 
         let body = match content_items {
             Some(content_items) => FunctionCallOutputBody::ContentItems(content_items),
@@ -1001,8 +1350,12 @@ impl From<&CallToolResult> for FunctionCallOutputPayload {
 
         FunctionCallOutputPayload {
             body,
-            success: Some(is_success),
+            success: Some(self.success()),
         }
+    }
+
+    pub fn into_function_call_output_payload(self) -> FunctionCallOutputPayload {
+        self.as_function_call_output_payload()
     }
 }
 
@@ -1038,7 +1391,10 @@ fn convert_mcp_content_to_items(
                     let mime_type = mime_type.unwrap_or_else(|| "application/octet-stream".into());
                     format!("data:{mime_type};base64,{data}")
                 };
-                FunctionCallOutputContentItem::InputImage { image_url }
+                FunctionCallOutputContentItem::InputImage {
+                    image_url,
+                    detail: None,
+                }
             }
             Ok(McpContent::Unknown) | Err(_) => FunctionCallOutputContentItem::InputText {
                 text: serde_json::to_string(content).unwrap_or_else(|_| "<content>".to_string()),
@@ -1073,11 +1429,47 @@ mod tests {
     use super::*;
     use crate::config_types::SandboxMode;
     use crate::protocol::AskForApproval;
+    use crate::protocol::GranularApprovalConfig;
     use anyhow::Result;
     use codex_execpolicy::Policy;
     use pretty_assertions::assert_eq;
     use std::path::PathBuf;
     use tempfile::tempdir;
+
+    #[test]
+    fn sandbox_permissions_helpers_match_documented_semantics() {
+        let cases = [
+            (SandboxPermissions::UseDefault, false, false, false),
+            (SandboxPermissions::RequireEscalated, true, true, false),
+            (
+                SandboxPermissions::WithAdditionalPermissions,
+                false,
+                true,
+                true,
+            ),
+        ];
+
+        for (
+            sandbox_permissions,
+            requires_escalated_permissions,
+            requests_sandbox_override,
+            uses_additional_permissions,
+        ) in cases
+        {
+            assert_eq!(
+                sandbox_permissions.requires_escalated_permissions(),
+                requires_escalated_permissions
+            );
+            assert_eq!(
+                sandbox_permissions.requests_sandbox_override(),
+                requests_sandbox_override
+            );
+            assert_eq!(
+                sandbox_permissions.uses_additional_permissions(),
+                uses_additional_permissions
+            );
+        }
+    }
 
     #[test]
     fn convert_mcp_content_to_items_preserves_data_urls() {
@@ -1092,8 +1484,66 @@ mod tests {
             items,
             vec![FunctionCallOutputContentItem::InputImage {
                 image_url: "data:image/png;base64,Zm9v".to_string(),
+                detail: None,
             }]
         );
+    }
+
+    #[test]
+    fn response_item_parses_image_generation_call() {
+        let item = serde_json::from_value::<ResponseItem>(serde_json::json!({
+            "id": "ig_123",
+            "type": "image_generation_call",
+            "status": "completed",
+            "revised_prompt": "A small blue square",
+            "result": "Zm9v",
+        }))
+        .expect("image generation item should deserialize");
+
+        assert_eq!(
+            item,
+            ResponseItem::ImageGenerationCall {
+                id: "ig_123".to_string(),
+                status: "completed".to_string(),
+                revised_prompt: Some("A small blue square".to_string()),
+                result: "Zm9v".to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn response_item_parses_image_generation_call_without_revised_prompt() {
+        let item = serde_json::from_value::<ResponseItem>(serde_json::json!({
+            "id": "ig_123",
+            "type": "image_generation_call",
+            "status": "completed",
+            "result": "Zm9v",
+        }))
+        .expect("image generation item should deserialize");
+
+        assert_eq!(
+            item,
+            ResponseItem::ImageGenerationCall {
+                id: "ig_123".to_string(),
+                status: "completed".to_string(),
+                revised_prompt: None,
+                result: "Zm9v".to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn permission_profile_is_empty_when_all_fields_are_none() {
+        assert_eq!(PermissionProfile::default().is_empty(), true);
+    }
+
+    #[test]
+    fn permission_profile_is_not_empty_when_field_is_present_but_nested_empty() {
+        let permission_profile = PermissionProfile {
+            network: Some(NetworkPermissions { enabled: None }),
+            file_system: None,
+        };
+        assert_eq!(permission_profile.is_empty(), false);
     }
 
     #[test]
@@ -1109,6 +1559,7 @@ mod tests {
             items,
             vec![FunctionCallOutputContentItem::InputImage {
                 image_url: "data:image/png;base64,Zm9v".to_string(),
+                detail: None,
             }]
         );
     }
@@ -1131,6 +1582,7 @@ mod tests {
             },
             FunctionCallOutputContentItem::InputImage {
                 image_url: "data:image/png;base64,AAA".to_string(),
+                detail: None,
             },
             FunctionCallOutputContentItem::InputText {
                 text: "line 2".to_string(),
@@ -1149,6 +1601,7 @@ mod tests {
             },
             FunctionCallOutputContentItem::InputImage {
                 image_url: "data:image/png;base64,AAA".to_string(),
+                detail: None,
             },
         ];
 
@@ -1171,11 +1624,35 @@ mod tests {
             },
             FunctionCallOutputContentItem::InputImage {
                 image_url: "data:image/png;base64,AAA".to_string(),
+                detail: None,
             },
         ]);
 
         let text = body.to_text();
         assert_eq!(text, Some("line 1".to_string()));
+    }
+
+    #[test]
+    fn function_call_deserializes_optional_namespace() {
+        let item: ResponseItem = serde_json::from_value(serde_json::json!({
+            "type": "function_call",
+            "name": "mcp__codex_apps__gmail_get_recent_emails",
+            "namespace": "mcp__codex_apps__gmail",
+            "arguments": "{\"top_k\":5}",
+            "call_id": "call-1",
+        }))
+        .expect("function_call should deserialize");
+
+        assert_eq!(
+            item,
+            ResponseItem::FunctionCall {
+                id: None,
+                name: "mcp__codex_apps__gmail_get_recent_emails".to_string(),
+                namespace: Some("mcp__codex_apps__gmail".to_string()),
+                arguments: "{\"top_k\":5}".to_string(),
+                call_id: "call-1".to_string(),
+            }
+        );
     }
 
     #[test]
@@ -1195,6 +1672,14 @@ mod tests {
                 "Filesystem sandboxing defines which files can be read or written. `sandbox_mode` is `read-only`: The sandbox only permits reading files. Network access is restricted."
             )
         );
+
+        let danger_full_access: DeveloperInstructions = SandboxMode::DangerFullAccess.into();
+        assert_eq!(
+            danger_full_access,
+            DeveloperInstructions::new(
+                "Filesystem sandboxing defines which files can be read or written. `sandbox_mode` is `danger-full-access`: No filesystem sandboxing - all commands are permitted. Network access is enabled."
+            )
+        );
     }
 
     #[test]
@@ -1202,10 +1687,14 @@ mod tests {
         let instructions = DeveloperInstructions::from_permissions_with_network(
             SandboxMode::WorkspaceWrite,
             NetworkAccess::Enabled,
-            AskForApproval::OnRequest,
-            &Policy::empty(),
-            false,
-            None,
+            PermissionsPromptConfig {
+                approval_policy: AskForApproval::OnRequest,
+                approvals_reviewer: ApprovalsReviewer::User,
+                exec_policy: &Policy::empty(),
+                exec_permission_approvals_enabled: false,
+                request_permissions_tool_enabled: false,
+            },
+            /*writable_roots*/ None,
         );
 
         let text = instructions.into_text();
@@ -1214,7 +1703,7 @@ mod tests {
             "expected network access to be enabled in message"
         );
         assert!(
-            text.contains("`approval_policy` is `on-request`"),
+            text.contains("How to request escalation"),
             "expected approval guidance to be included"
         );
     }
@@ -1232,9 +1721,11 @@ mod tests {
         let instructions = DeveloperInstructions::from_policy(
             &policy,
             AskForApproval::UnlessTrusted,
+            ApprovalsReviewer::User,
             &Policy::empty(),
-            false,
             &PathBuf::from("/tmp"),
+            /*exec_permission_approvals_enabled*/ false,
+            /*request_permissions_tool_enabled*/ false,
         );
         let text = instructions.into_text();
         assert!(text.contains("Network access is enabled."));
@@ -1242,7 +1733,7 @@ mod tests {
     }
 
     #[test]
-    fn includes_request_rule_instructions_when_enabled() {
+    fn includes_request_rule_instructions_for_on_request() {
         let mut exec_policy = Policy::empty();
         exec_policy
             .add_prefix_rule(
@@ -1253,16 +1744,340 @@ mod tests {
         let instructions = DeveloperInstructions::from_permissions_with_network(
             SandboxMode::WorkspaceWrite,
             NetworkAccess::Enabled,
-            AskForApproval::OnRequest,
-            &exec_policy,
-            true,
-            None,
+            PermissionsPromptConfig {
+                approval_policy: AskForApproval::OnRequest,
+                approvals_reviewer: ApprovalsReviewer::User,
+                exec_policy: &exec_policy,
+                exec_permission_approvals_enabled: false,
+                request_permissions_tool_enabled: false,
+            },
+            /*writable_roots*/ None,
         );
 
         let text = instructions.into_text();
         assert!(text.contains("prefix_rule"));
         assert!(text.contains("Approved command prefixes"));
         assert!(text.contains(r#"["git", "pull"]"#));
+    }
+
+    #[test]
+    fn includes_request_permissions_tool_instructions_for_unless_trusted_when_enabled() {
+        let instructions = DeveloperInstructions::from_permissions_with_network(
+            SandboxMode::WorkspaceWrite,
+            NetworkAccess::Enabled,
+            PermissionsPromptConfig {
+                approval_policy: AskForApproval::UnlessTrusted,
+                approvals_reviewer: ApprovalsReviewer::User,
+                exec_policy: &Policy::empty(),
+                exec_permission_approvals_enabled: false,
+                request_permissions_tool_enabled: true,
+            },
+            /*writable_roots*/ None,
+        );
+
+        let text = instructions.into_text();
+        assert!(text.contains("`approval_policy` is `unless-trusted`"));
+        assert!(text.contains("# request_permissions Tool"));
+    }
+
+    #[test]
+    fn includes_request_permissions_tool_instructions_for_on_failure_when_enabled() {
+        let instructions = DeveloperInstructions::from_permissions_with_network(
+            SandboxMode::WorkspaceWrite,
+            NetworkAccess::Enabled,
+            PermissionsPromptConfig {
+                approval_policy: AskForApproval::OnFailure,
+                approvals_reviewer: ApprovalsReviewer::User,
+                exec_policy: &Policy::empty(),
+                exec_permission_approvals_enabled: false,
+                request_permissions_tool_enabled: true,
+            },
+            /*writable_roots*/ None,
+        );
+
+        let text = instructions.into_text();
+        assert!(text.contains("`approval_policy` is `on-failure`"));
+        assert!(text.contains("# request_permissions Tool"));
+    }
+
+    #[test]
+    fn includes_request_permission_rule_instructions_for_on_request_when_enabled() {
+        let instructions = DeveloperInstructions::from_permissions_with_network(
+            SandboxMode::WorkspaceWrite,
+            NetworkAccess::Enabled,
+            PermissionsPromptConfig {
+                approval_policy: AskForApproval::OnRequest,
+                approvals_reviewer: ApprovalsReviewer::User,
+                exec_policy: &Policy::empty(),
+                exec_permission_approvals_enabled: true,
+                request_permissions_tool_enabled: false,
+            },
+            /*writable_roots*/ None,
+        );
+
+        let text = instructions.into_text();
+        assert!(text.contains("with_additional_permissions"));
+        assert!(text.contains("additional_permissions"));
+    }
+
+    #[test]
+    fn includes_request_permissions_tool_instructions_for_on_request_when_tool_is_enabled() {
+        let instructions = DeveloperInstructions::from_permissions_with_network(
+            SandboxMode::WorkspaceWrite,
+            NetworkAccess::Enabled,
+            PermissionsPromptConfig {
+                approval_policy: AskForApproval::OnRequest,
+                approvals_reviewer: ApprovalsReviewer::User,
+                exec_policy: &Policy::empty(),
+                exec_permission_approvals_enabled: false,
+                request_permissions_tool_enabled: true,
+            },
+            /*writable_roots*/ None,
+        );
+
+        let text = instructions.into_text();
+        assert!(text.contains("# request_permissions Tool"));
+        assert!(
+            text.contains("The built-in `request_permissions` tool is available in this session.")
+        );
+    }
+
+    #[test]
+    fn on_request_includes_tool_guidance_alongside_inline_permission_guidance_when_both_exist() {
+        let instructions = DeveloperInstructions::from_permissions_with_network(
+            SandboxMode::WorkspaceWrite,
+            NetworkAccess::Enabled,
+            PermissionsPromptConfig {
+                approval_policy: AskForApproval::OnRequest,
+                approvals_reviewer: ApprovalsReviewer::User,
+                exec_policy: &Policy::empty(),
+                exec_permission_approvals_enabled: true,
+                request_permissions_tool_enabled: true,
+            },
+            /*writable_roots*/ None,
+        );
+
+        let text = instructions.into_text();
+        assert!(text.contains("with_additional_permissions"));
+        assert!(text.contains("# request_permissions Tool"));
+    }
+
+    #[test]
+    fn guardian_subagent_approvals_append_guardian_specific_guidance() {
+        let text = DeveloperInstructions::from(
+            AskForApproval::OnRequest,
+            ApprovalsReviewer::GuardianSubagent,
+            &Policy::empty(),
+            /*exec_permission_approvals_enabled*/ false,
+            /*request_permissions_tool_enabled*/ false,
+        )
+        .into_text();
+
+        assert!(text.contains("`approvals_reviewer` is `guardian_subagent`"));
+        assert!(text.contains("materially safer alternative"));
+    }
+
+    #[test]
+    fn guardian_subagent_approvals_omit_guardian_specific_guidance_when_approval_is_never() {
+        let text = DeveloperInstructions::from(
+            AskForApproval::Never,
+            ApprovalsReviewer::GuardianSubagent,
+            &Policy::empty(),
+            /*exec_permission_approvals_enabled*/ false,
+            /*request_permissions_tool_enabled*/ false,
+        )
+        .into_text();
+
+        assert!(!text.contains("`approvals_reviewer` is `guardian_subagent`"));
+    }
+
+    fn granular_categories_section(title: &str, categories: &[&str]) -> String {
+        format!("{title}\n{}", categories.join("\n"))
+    }
+
+    fn granular_prompt_expected(
+        prompted_categories: &[&str],
+        rejected_categories: &[&str],
+        include_shell_permission_request_instructions: bool,
+        include_request_permissions_tool_section: bool,
+    ) -> String {
+        let mut sections = vec![granular_prompt_intro_text().to_string()];
+        if !prompted_categories.is_empty() {
+            sections.push(granular_categories_section(
+                "These approval categories may still prompt the user when needed:",
+                prompted_categories,
+            ));
+        }
+        if !rejected_categories.is_empty() {
+            sections.push(granular_categories_section(
+                "These approval categories are automatically rejected instead of prompting the user:",
+                rejected_categories,
+            ));
+        }
+        if include_shell_permission_request_instructions {
+            sections.push(APPROVAL_POLICY_ON_REQUEST_RULE_REQUEST_PERMISSION.to_string());
+        }
+        if include_request_permissions_tool_section {
+            sections.push(request_permissions_tool_prompt_section().to_string());
+        }
+        sections.join("\n\n")
+    }
+
+    #[test]
+    fn granular_policy_lists_prompted_and_rejected_categories_separately() {
+        let text = DeveloperInstructions::from(
+            AskForApproval::Granular(GranularApprovalConfig {
+                sandbox_approval: false,
+                rules: true,
+                skill_approval: false,
+                request_permissions: true,
+                mcp_elicitations: false,
+            }),
+            ApprovalsReviewer::User,
+            &Policy::empty(),
+            /*exec_permission_approvals_enabled*/ true,
+            /*request_permissions_tool_enabled*/ false,
+        )
+        .into_text();
+
+        assert_eq!(
+            text,
+            [
+                granular_prompt_intro_text().to_string(),
+                granular_categories_section(
+                    "These approval categories may still prompt the user when needed:",
+                    &["- `rules`"],
+                ),
+                granular_categories_section(
+                    "These approval categories are automatically rejected instead of prompting the user:",
+                    &["- `sandbox_approval`", "- `skill_approval`", "- `mcp_elicitations`",],
+                ),
+            ]
+            .join("\n\n")
+        );
+    }
+
+    #[test]
+    fn granular_policy_includes_command_permission_instructions_when_sandbox_approval_can_prompt() {
+        let text = DeveloperInstructions::from(
+            AskForApproval::Granular(GranularApprovalConfig {
+                sandbox_approval: true,
+                rules: true,
+                skill_approval: true,
+                request_permissions: true,
+                mcp_elicitations: true,
+            }),
+            ApprovalsReviewer::User,
+            &Policy::empty(),
+            /*exec_permission_approvals_enabled*/ true,
+            /*request_permissions_tool_enabled*/ false,
+        )
+        .into_text();
+
+        assert_eq!(
+            text,
+            granular_prompt_expected(
+                &[
+                    "- `sandbox_approval`",
+                    "- `rules`",
+                    "- `skill_approval`",
+                    "- `mcp_elicitations`",
+                ],
+                &[],
+                /*include_shell_permission_request_instructions*/ true,
+                /*include_request_permissions_tool_section*/ false,
+            )
+        );
+    }
+
+    #[test]
+    fn granular_policy_omits_shell_permission_instructions_when_inline_requests_are_disabled() {
+        let text = DeveloperInstructions::from(
+            AskForApproval::Granular(GranularApprovalConfig {
+                sandbox_approval: true,
+                rules: true,
+                skill_approval: true,
+                request_permissions: true,
+                mcp_elicitations: true,
+            }),
+            ApprovalsReviewer::User,
+            &Policy::empty(),
+            /*exec_permission_approvals_enabled*/ false,
+            /*request_permissions_tool_enabled*/ false,
+        )
+        .into_text();
+
+        assert_eq!(
+            text,
+            granular_prompt_expected(
+                &[
+                    "- `sandbox_approval`",
+                    "- `rules`",
+                    "- `skill_approval`",
+                    "- `mcp_elicitations`",
+                ],
+                &[],
+                /*include_shell_permission_request_instructions*/ false,
+                /*include_request_permissions_tool_section*/ false,
+            )
+        );
+    }
+
+    #[test]
+    fn granular_policy_includes_request_permissions_tool_only_when_that_prompt_can_still_fire() {
+        let allowed = DeveloperInstructions::from(
+            AskForApproval::Granular(GranularApprovalConfig {
+                sandbox_approval: true,
+                rules: true,
+                skill_approval: true,
+                request_permissions: true,
+                mcp_elicitations: true,
+            }),
+            ApprovalsReviewer::User,
+            &Policy::empty(),
+            /*exec_permission_approvals_enabled*/ true,
+            /*request_permissions_tool_enabled*/ true,
+        )
+        .into_text();
+        assert!(allowed.contains("# request_permissions Tool"));
+
+        let rejected = DeveloperInstructions::from(
+            AskForApproval::Granular(GranularApprovalConfig {
+                sandbox_approval: true,
+                rules: true,
+                skill_approval: true,
+                request_permissions: false,
+                mcp_elicitations: true,
+            }),
+            ApprovalsReviewer::User,
+            &Policy::empty(),
+            /*exec_permission_approvals_enabled*/ true,
+            /*request_permissions_tool_enabled*/ true,
+        )
+        .into_text();
+        assert!(!rejected.contains("# request_permissions Tool"));
+    }
+
+    #[test]
+    fn granular_policy_lists_request_permissions_category_without_tool_section_when_tool_is_unavailable()
+     {
+        let text = DeveloperInstructions::from(
+            AskForApproval::Granular(GranularApprovalConfig {
+                sandbox_approval: false,
+                rules: false,
+                skill_approval: false,
+                request_permissions: true,
+                mcp_elicitations: false,
+            }),
+            ApprovalsReviewer::User,
+            &Policy::empty(),
+            /*exec_permission_approvals_enabled*/ true,
+            /*request_permissions_tool_enabled*/ false,
+        )
+        .into_text();
+
+        assert!(!text.contains("- `request_permissions`"));
+        assert!(!text.contains("# request_permissions Tool"));
     }
 
     #[test]
@@ -1365,7 +2180,7 @@ mod tests {
             meta: None,
         };
 
-        let payload = FunctionCallOutputPayload::from(&call_tool_result);
+        let payload = call_tool_result.into_function_call_output_payload();
         assert_eq!(payload.success, Some(true));
         let Some(items) = payload.content_items() else {
             panic!("expected content items");
@@ -1379,6 +2194,7 @@ mod tests {
                 },
                 FunctionCallOutputContentItem::InputImage {
                     image_url: "data:image/png;base64,BASE64".into(),
+                    detail: None,
                 },
             ]
         );
@@ -1386,6 +2202,28 @@ mod tests {
         let item = ResponseInputItem::FunctionCallOutput {
             call_id: "call1".into(),
             output: payload,
+        };
+
+        let json = serde_json::to_string(&item)?;
+        let v: serde_json::Value = serde_json::from_str(&json)?;
+
+        let output = v.get("output").expect("output field");
+        assert!(output.is_array(), "expected array output");
+
+        Ok(())
+    }
+
+    #[test]
+    fn serializes_custom_tool_image_outputs_as_array() -> Result<()> {
+        let item = ResponseInputItem::CustomToolCallOutput {
+            call_id: "call1".into(),
+            name: None,
+            output: FunctionCallOutputPayload::from_content_items(vec![
+                FunctionCallOutputContentItem::InputImage {
+                    image_url: "data:image/png;base64,BASE64".into(),
+                    detail: None,
+                },
+            ]),
         };
 
         let json = serde_json::to_string(&item)?;
@@ -1410,7 +2248,7 @@ mod tests {
             meta: None,
         };
 
-        let payload = FunctionCallOutputPayload::from(&call_tool_result);
+        let payload = call_tool_result.into_function_call_output_payload();
         let Some(items) = payload.content_items() else {
             panic!("expected content items");
         };
@@ -1419,6 +2257,7 @@ mod tests {
             items,
             vec![FunctionCallOutputContentItem::InputImage {
                 image_url: "data:image/png;base64,BASE64".into(),
+                detail: None,
             }]
         );
 
@@ -1441,6 +2280,7 @@ mod tests {
             },
             FunctionCallOutputContentItem::InputImage {
                 image_url: "data:image/png;base64,XYZ".into(),
+                detail: None,
             },
         ];
         assert_eq!(
@@ -1575,6 +2415,7 @@ mod tests {
                 timeout_ms: Some(1000),
                 sandbox_permissions: None,
                 prefix_rule: None,
+                additional_permissions: None,
                 justification: None,
             },
             params
@@ -1602,6 +2443,228 @@ mod tests {
                     },
                 ];
                 assert_eq!(content, expected);
+            }
+            other => panic!("expected message response but got {other:?}"),
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn tool_search_call_roundtrips() -> Result<()> {
+        let parsed: ResponseItem = serde_json::from_str(
+            r#"{
+                "type": "tool_search_call",
+                "call_id": "search-1",
+                "execution": "client",
+                "arguments": {
+                    "query": "calendar create",
+                    "limit": 1
+                }
+            }"#,
+        )?;
+
+        assert_eq!(
+            parsed,
+            ResponseItem::ToolSearchCall {
+                id: None,
+                call_id: Some("search-1".to_string()),
+                status: None,
+                execution: "client".to_string(),
+                arguments: serde_json::json!({
+                    "query": "calendar create",
+                    "limit": 1,
+                }),
+            }
+        );
+
+        assert_eq!(
+            serde_json::to_value(&parsed)?,
+            serde_json::json!({
+                "type": "tool_search_call",
+                "call_id": "search-1",
+                "execution": "client",
+                "arguments": {
+                    "query": "calendar create",
+                    "limit": 1,
+                }
+            })
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn tool_search_output_roundtrips() -> Result<()> {
+        let input = ResponseInputItem::ToolSearchOutput {
+            call_id: "search-1".to_string(),
+            status: "completed".to_string(),
+            execution: "client".to_string(),
+            tools: vec![serde_json::json!({
+                "type": "function",
+                "name": "mcp__codex_apps__calendar_create_event",
+                "description": "Create a calendar event.",
+                "defer_loading": true,
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "title": {"type": "string"}
+                    },
+                    "required": ["title"],
+                    "additionalProperties": false,
+                }
+            })],
+        };
+        assert_eq!(
+            ResponseItem::from(input.clone()),
+            ResponseItem::ToolSearchOutput {
+                call_id: Some("search-1".to_string()),
+                status: "completed".to_string(),
+                execution: "client".to_string(),
+                tools: vec![serde_json::json!({
+                    "type": "function",
+                    "name": "mcp__codex_apps__calendar_create_event",
+                    "description": "Create a calendar event.",
+                    "defer_loading": true,
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "title": {"type": "string"}
+                        },
+                        "required": ["title"],
+                        "additionalProperties": false,
+                    }
+                })],
+            }
+        );
+
+        assert_eq!(
+            serde_json::to_value(input)?,
+            serde_json::json!({
+                "type": "tool_search_output",
+                "call_id": "search-1",
+                "status": "completed",
+                "execution": "client",
+                "tools": [{
+                    "type": "function",
+                    "name": "mcp__codex_apps__calendar_create_event",
+                    "description": "Create a calendar event.",
+                    "defer_loading": true,
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "title": {"type": "string"}
+                        },
+                        "required": ["title"],
+                        "additionalProperties": false,
+                    }
+                }]
+            })
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn tool_search_server_items_allow_null_call_id() -> Result<()> {
+        let parsed_call: ResponseItem = serde_json::from_str(
+            r#"{
+                "type": "tool_search_call",
+                "execution": "server",
+                "call_id": null,
+                "status": "completed",
+                "arguments": {
+                    "paths": ["crm"]
+                }
+            }"#,
+        )?;
+        assert_eq!(
+            parsed_call,
+            ResponseItem::ToolSearchCall {
+                id: None,
+                call_id: None,
+                status: Some("completed".to_string()),
+                execution: "server".to_string(),
+                arguments: serde_json::json!({
+                    "paths": ["crm"],
+                }),
+            }
+        );
+
+        let parsed_output: ResponseItem = serde_json::from_str(
+            r#"{
+                "type": "tool_search_output",
+                "execution": "server",
+                "call_id": null,
+                "status": "completed",
+                "tools": []
+            }"#,
+        )?;
+        assert_eq!(
+            parsed_output,
+            ResponseItem::ToolSearchOutput {
+                call_id: None,
+                status: "completed".to_string(),
+                execution: "server".to_string(),
+                tools: vec![],
+            }
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn mixed_remote_and_local_images_share_label_sequence() -> Result<()> {
+        let image_url = "data:image/png;base64,abc".to_string();
+        let dir = tempdir()?;
+        let local_path = dir.path().join("local.png");
+        // A tiny valid PNG (1x1) so this test doesn't depend on cross-crate file paths, which
+        // break under Bazel sandboxing.
+        const TINY_PNG_BYTES: &[u8] = &[
+            137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 0, 1, 0, 0, 0, 1,
+            8, 6, 0, 0, 0, 31, 21, 196, 137, 0, 0, 0, 11, 73, 68, 65, 84, 120, 156, 99, 96, 0, 2,
+            0, 0, 5, 0, 1, 122, 94, 171, 63, 0, 0, 0, 0, 73, 69, 78, 68, 174, 66, 96, 130,
+        ];
+        std::fs::write(&local_path, TINY_PNG_BYTES)?;
+
+        let item = ResponseInputItem::from(vec![
+            UserInput::Image {
+                image_url: image_url.clone(),
+            },
+            UserInput::LocalImage { path: local_path },
+        ]);
+
+        match item {
+            ResponseInputItem::Message { content, .. } => {
+                assert_eq!(
+                    content.first(),
+                    Some(&ContentItem::InputText {
+                        text: image_open_tag_text(),
+                    })
+                );
+                assert_eq!(content.get(1), Some(&ContentItem::InputImage { image_url }));
+                assert_eq!(
+                    content.get(2),
+                    Some(&ContentItem::InputText {
+                        text: image_close_tag_text(),
+                    })
+                );
+                assert_eq!(
+                    content.get(3),
+                    Some(&ContentItem::InputText {
+                        text: local_image_open_tag_text(/*label_number*/ 2),
+                    })
+                );
+                assert!(matches!(
+                    content.get(4),
+                    Some(ContentItem::InputImage { .. })
+                ));
+                assert_eq!(
+                    content.get(5),
+                    Some(&ContentItem::InputText {
+                        text: image_close_tag_text(),
+                    })
+                );
             }
             other => panic!("expected message response but got {other:?}"),
         }
@@ -1658,8 +2721,8 @@ mod tests {
                 match &content[0] {
                     ContentItem::InputText { text } => {
                         assert!(
-                            text.contains("unsupported MIME type `application/json`"),
-                            "placeholder should mention unsupported MIME: {text}"
+                            text.contains("unsupported image `application/json`"),
+                            "placeholder should mention unsupported image MIME: {text}"
                         );
                         assert!(
                             text.contains(&json_path.display().to_string()),
@@ -1693,7 +2756,7 @@ mod tests {
             ResponseInputItem::Message { content, .. } => {
                 assert_eq!(content.len(), 1);
                 let expected = format!(
-                    "Codex cannot attach image at `{}`: unsupported image format `image/svg+xml`.",
+                    "Codex cannot attach image at `{}`: unsupported image `image/svg+xml`.",
                     svg_path.display()
                 );
                 match &content[0] {

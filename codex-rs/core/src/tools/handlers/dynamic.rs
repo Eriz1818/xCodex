@@ -1,27 +1,28 @@
 use crate::codex::Session;
 use crate::codex::TurnContext;
 use crate::function_tool::FunctionCallError;
+use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::ToolInvocation;
-use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
 use crate::tools::context::ToolProvenance;
 use crate::tools::handlers::parse_arguments;
 use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
-use async_trait::async_trait;
 use codex_protocol::dynamic_tools::DynamicToolCallRequest;
 use codex_protocol::dynamic_tools::DynamicToolResponse;
-use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::models::FunctionCallOutputContentItem;
+use codex_protocol::protocol::DynamicToolCallResponseEvent;
 use codex_protocol::protocol::EventMsg;
 use serde_json::Value;
+use std::time::Instant;
 use tokio::sync::oneshot;
 use tracing::warn;
 
 pub struct DynamicToolHandler;
 
-#[async_trait]
 impl ToolHandler for DynamicToolHandler {
+    type Output = FunctionToolOutput;
+
     fn kind(&self) -> ToolKind {
         ToolKind::Function
     }
@@ -30,7 +31,7 @@ impl ToolHandler for DynamicToolHandler {
         true
     }
 
-    async fn handle(&self, invocation: ToolInvocation) -> Result<ToolOutput, FunctionCallError> {
+    async fn handle(&self, invocation: ToolInvocation) -> Result<Self::Output, FunctionCallError> {
         let ToolInvocation {
             session,
             turn,
@@ -50,13 +51,14 @@ impl ToolHandler for DynamicToolHandler {
         };
 
         let args: Value = parse_arguments(&arguments)?;
-        let response = request_dynamic_tool(&session, turn.as_ref(), call_id, tool_name, args)
-            .await
-            .ok_or_else(|| {
-                FunctionCallError::RespondToModel(
-                    "dynamic tool call was cancelled before receiving a response".to_string(),
-                )
-            })?;
+        let response =
+            request_dynamic_tool(&session, turn.as_ref(), call_id, tool_name.display(), args)
+                .await
+                .ok_or_else(|| {
+                    FunctionCallError::RespondToModel(
+                        "dynamic tool call was cancelled before receiving a response".to_string(),
+                    )
+                })?;
 
         let DynamicToolResponse {
             content_items,
@@ -66,16 +68,14 @@ impl ToolHandler for DynamicToolHandler {
             .into_iter()
             .map(FunctionCallOutputContentItem::from)
             .collect::<Vec<_>>();
-        let body = FunctionCallOutputBody::ContentItems(body);
-
-        Ok(ToolOutput::Function {
-            body,
-            success: Some(success),
-            provenance: ToolProvenance::Unattested {
-                origin_type: "dynamic_tool",
-                origin_path: None,
-            },
-        })
+        Ok(
+            FunctionToolOutput::from_content(body, Some(success)).with_provenance(
+                ToolProvenance::Unattested {
+                    origin_type: "dynamic_tool",
+                    origin_path: None,
+                },
+            ),
+        )
     }
 }
 
@@ -86,7 +86,7 @@ async fn request_dynamic_tool(
     tool: String,
     arguments: Value,
 ) -> Option<DynamicToolResponse> {
-    let _sub_id = turn_context.sub_id.clone();
+    let turn_id = turn_context.sub_id.clone();
     let (tx_response, rx_response) = oneshot::channel();
     let event_id = call_id.clone();
     let prev_entry = {
@@ -103,12 +103,39 @@ async fn request_dynamic_tool(
         warn!("Overwriting existing pending dynamic tool call for call_id: {event_id}");
     }
 
+    let started_at = Instant::now();
     let event = EventMsg::DynamicToolCallRequest(DynamicToolCallRequest {
-        call_id,
-        turn_id: turn_context.sub_id.clone(),
-        tool,
-        arguments,
+        call_id: call_id.clone(),
+        turn_id: turn_id.clone(),
+        tool: tool.clone(),
+        arguments: arguments.clone(),
     });
     session.send_event(turn_context, event).await;
-    rx_response.await.ok()
+    let response = rx_response.await.ok();
+
+    let response_event = match &response {
+        Some(response) => EventMsg::DynamicToolCallResponse(DynamicToolCallResponseEvent {
+            call_id,
+            turn_id,
+            tool,
+            arguments,
+            content_items: response.content_items.clone(),
+            success: response.success,
+            error: None,
+            duration: started_at.elapsed(),
+        }),
+        None => EventMsg::DynamicToolCallResponse(DynamicToolCallResponseEvent {
+            call_id,
+            turn_id,
+            tool,
+            arguments,
+            content_items: Vec::new(),
+            success: false,
+            error: Some("dynamic tool call was cancelled before receiving a response".to_string()),
+            duration: started_at.elapsed(),
+        }),
+    };
+    session.send_event(turn_context, response_event).await;
+
+    response
 }

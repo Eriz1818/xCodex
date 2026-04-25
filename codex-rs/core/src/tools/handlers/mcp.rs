@@ -1,25 +1,24 @@
-use async_trait::async_trait;
 use std::sync::Arc;
+use std::time::Instant;
 
 use crate::function_tool::FunctionCallError;
 use crate::mcp_tool_call::handle_mcp_tool_call;
+use crate::tools::context::McpToolOutput;
 use crate::tools::context::ToolInvocation;
-use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
 use crate::tools::context::ToolProvenance;
 use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
-use codex_protocol::models::ResponseInputItem;
 
 pub struct McpHandler;
-
-#[async_trait]
 impl ToolHandler for McpHandler {
+    type Output = McpToolOutput;
+
     fn kind(&self) -> ToolKind {
         ToolKind::Mcp
     }
 
-    async fn handle(&self, invocation: ToolInvocation) -> Result<ToolOutput, FunctionCallError> {
+    async fn handle(&self, invocation: ToolInvocation) -> Result<Self::Output, FunctionCallError> {
         let ToolInvocation {
             session,
             turn,
@@ -48,9 +47,10 @@ impl ToolHandler for McpHandler {
         };
         let arguments_str = raw_arguments;
 
-        let response = handle_mcp_tool_call(
+        let started = Instant::now();
+        let result = handle_mcp_tool_call(
             Arc::clone(&session),
-            turn.as_ref(),
+            &turn,
             call_id.clone(),
             server,
             tool,
@@ -58,22 +58,10 @@ impl ToolHandler for McpHandler {
         )
         .await;
 
-        match response {
-            ResponseInputItem::McpToolCallOutput { result, .. } => {
-                Ok(ToolOutput::Mcp { result, provenance })
-            }
-            ResponseInputItem::FunctionCallOutput { output, .. } => {
-                let success = output.success;
-                let body = output.body;
-                Ok(ToolOutput::Function {
-                    body,
-                    success,
-                    provenance,
-                })
-            }
-            _ => Err(FunctionCallError::RespondToModel(
-                "mcp handler received unexpected response variant".to_string(),
-            )),
-        }
+        Ok(McpToolOutput {
+            result,
+            wall_time: started.elapsed(),
+            provenance,
+        })
     }
 }

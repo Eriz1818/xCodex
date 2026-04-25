@@ -2,10 +2,19 @@
 
 // Note this file should generally be restricted to simple struct/enum
 // definitions that do not contain business logic.
+//
+// Compatibility seam for the merge:
+// - shared config types are moving into `codex-config`
+// - xcodex/core still relies on extended config shapes here (for example MCP
+//   startup behavior, exclusion controls, and TUI/theme/worktree settings)
+// Keep this path stable during the merge, then migrate more call sites and
+// type ownership out of `codex-core` in a focused follow-up cleanup.
 
 use crate::config_loader::RequirementSource;
 pub use crate::xcodex::config::ScrollInputMode;
 pub use crate::xcodex::config::XtremeMode;
+use codex_config::types::ModelAvailabilityNuxConfig;
+use codex_config::types::TuiNotificationSettings;
 pub use codex_protocol::config_types::AltScreenMode;
 pub use codex_protocol::config_types::ModeKind;
 pub use codex_protocol::config_types::Personality;
@@ -765,6 +774,9 @@ impl fmt::Display for NotificationMethod {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema)]
 #[schemars(deny_unknown_fields)]
 pub struct Tui {
+    #[serde(default, flatten)]
+    pub notification_settings: TuiNotificationSettings,
+
     /// Enable desktop notifications from the TUI when the terminal is unfocused.
     /// Defaults to `true`.
     #[serde(default)]
@@ -865,6 +877,11 @@ pub struct Tui {
     /// Defaults to `false`.
     #[serde(default)]
     pub status_bar_show_worktree: bool,
+
+    /// Show the current model name in the footer row next to the shortcuts hint.
+    /// Defaults to `false`.
+    #[serde(default)]
+    pub status_bar_show_model: bool,
 
     /// When true, render the active composer with only top/bottom borders.
     ///
@@ -989,6 +1006,20 @@ pub struct Tui {
     /// When set, the TUI renders the selected items as the status line.
     #[serde(default)]
     pub status_line: Option<Vec<String>>,
+
+    /// Ordered list of terminal title item identifiers.
+    ///
+    /// When set, the TUI renders the selected items into the terminal window/tab title.
+    #[serde(default)]
+    pub terminal_title: Option<Vec<String>>,
+
+    /// Syntax highlighting theme name (kebab-case).
+    #[serde(default)]
+    pub theme: Option<String>,
+
+    /// Startup tooltip availability NUX state persisted by the TUI.
+    #[serde(default)]
+    pub model_availability_nux: ModelAvailabilityNuxConfig,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema)]

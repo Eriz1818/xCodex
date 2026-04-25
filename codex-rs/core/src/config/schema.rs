@@ -1,7 +1,11 @@
 use crate::config::ConfigToml;
-use crate::config::types::McpStartupMode;
-use crate::config::types::RawMcpServerConfig;
-use crate::features::FEATURES;
+use codex_config::types::McpStartupMode;
+use codex_config::types::RawMcpServerConfig;
+use codex_features::FEATURES;
+use codex_features::Feature;
+use codex_features::FeatureToml;
+use codex_features::MultiAgentV2ConfigToml;
+use codex_features::legacy_feature_keys;
 use schemars::r#gen::SchemaGenerator;
 use schemars::r#gen::SchemaSettings;
 use schemars::schema::InstanceType;
@@ -22,11 +26,21 @@ pub(crate) fn features_schema(schema_gen: &mut SchemaGenerator) -> Schema {
 
     let mut validation = ObjectValidation::default();
     for feature in FEATURES {
+        if feature.id == Feature::Artifact {
+            continue;
+        }
+        if feature.id == Feature::MultiAgentV2 {
+            validation.properties.insert(
+                feature.key.to_string(),
+                schema_gen.subschema_for::<FeatureToml<MultiAgentV2ConfigToml>>(),
+            );
+            continue;
+        }
         validation
             .properties
             .insert(feature.key.to_string(), schema_gen.subschema_for::<bool>());
     }
-    for legacy_key in crate::features::legacy_feature_keys() {
+    for legacy_key in legacy_feature_keys() {
         validation
             .properties
             .insert(legacy_key.to_string(), schema_gen.subschema_for::<bool>());
@@ -67,7 +81,7 @@ pub fn config_schema() -> RootSchema {
 }
 
 /// Canonicalize a JSON value by sorting its keys.
-fn canonicalize(value: &Value) -> Value {
+pub fn canonicalize(value: &Value) -> Value {
     match value {
         Value::Array(items) => Value::Array(items.iter().map(canonicalize).collect()),
         Value::Object(map) => {
@@ -100,54 +114,5 @@ pub fn write_config_schema(out_path: &Path) -> anyhow::Result<()> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::canonicalize;
-    use super::config_schema_json;
-    use super::write_config_schema;
-
-    use pretty_assertions::assert_eq;
-    use similar::TextDiff;
-    use tempfile::TempDir;
-
-    #[test]
-    fn config_schema_matches_fixture() {
-        let fixture_path = codex_utils_cargo_bin::find_resource!("config.schema.json")
-            .expect("resolve config schema fixture path");
-        let fixture = std::fs::read_to_string(fixture_path).expect("read config schema fixture");
-        let fixture_value: serde_json::Value =
-            serde_json::from_str(&fixture).expect("parse config schema fixture");
-        let schema_json = config_schema_json().expect("serialize config schema");
-        let schema_value: serde_json::Value =
-            serde_json::from_slice(&schema_json).expect("decode schema json");
-        let fixture_value = canonicalize(&fixture_value);
-        let schema_value = canonicalize(&schema_value);
-        if fixture_value != schema_value {
-            let expected =
-                serde_json::to_string_pretty(&fixture_value).expect("serialize fixture json");
-            let actual =
-                serde_json::to_string_pretty(&schema_value).expect("serialize schema json");
-            let diff = TextDiff::from_lines(&expected, &actual)
-                .unified_diff()
-                .header("fixture", "generated")
-                .to_string();
-            panic!(
-                "Current schema for `config.toml` doesn't match the fixture. \
-Run `just write-config-schema` to overwrite with your changes.\n\n{diff}"
-            );
-        }
-
-        // Make sure the version in the repo matches exactly: https://github.com/openai/codex/pull/10977.
-        let tmp = TempDir::new().expect("create temp dir");
-        let tmp_path = tmp.path().join("config.schema.json");
-        write_config_schema(&tmp_path).expect("write config schema to temp path");
-        let tmp_contents =
-            std::fs::read_to_string(&tmp_path).expect("read back config schema from temp path");
-        #[cfg(windows)]
-        let fixture = fixture.replace("\r\n", "\n");
-
-        assert_eq!(
-            fixture, tmp_contents,
-            "fixture should match exactly with generated schema"
-        );
-    }
-}
+#[path = "schema_tests.rs"]
+mod tests;

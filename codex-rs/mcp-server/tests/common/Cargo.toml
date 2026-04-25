@@ -7,10 +7,14 @@ version.workspace = true
 [lib]
 path = "lib.rs"
 
+[lints]
+workspace = true
+
 [dependencies]
 anyhow = { workspace = true }
-codex-core = { workspace = true }
+codex-login = { workspace = true }
 codex-mcp-server = { workspace = true }
+codex-terminal-detection = { workspace = true }
 codex-utils-cargo-bin = { workspace = true }
 core_test_support = { path = "../../../core/tests/common" }
 mcp-types = { workspace = true }

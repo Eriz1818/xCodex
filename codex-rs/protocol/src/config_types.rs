@@ -1,6 +1,9 @@
+use codex_utils_absolute_path::AbsolutePathBuf;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Serialize;
+use std::num::NonZeroU64;
+use std::time::Duration;
 use strum_macros::Display;
 use strum_macros::EnumIter;
 use ts_rs::TS;
@@ -69,6 +72,22 @@ pub enum SandboxMode {
 #[derive(
     Deserialize, Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Display, JsonSchema, TS,
 )]
+#[serde(rename_all = "snake_case")]
+#[strum(serialize_all = "snake_case")]
+/// Configures who approval requests are routed to for review. Examples
+/// include sandbox escapes, blocked network access, MCP approval prompts, and
+/// ARC escalations. Defaults to `user`. `guardian_subagent` uses a carefully
+/// prompted subagent to gather relevant context and apply a risk-based
+/// decision framework before approving or denying the request.
+pub enum ApprovalsReviewer {
+    #[default]
+    User,
+    GuardianSubagent,
+}
+
+#[derive(
+    Deserialize, Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Display, JsonSchema, TS,
+)]
 #[serde(rename_all = "kebab-case")]
 #[strum(serialize_all = "kebab-case")]
 pub enum WindowsSandboxLevel {
@@ -116,9 +135,206 @@ pub enum WebSearchMode {
 #[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Display, JsonSchema, TS)]
 #[serde(rename_all = "lowercase")]
 #[strum(serialize_all = "lowercase")]
+pub enum WebSearchContextSize {
+    Low,
+    Medium,
+    High,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Default, PartialEq, Eq, JsonSchema, TS)]
+#[schemars(deny_unknown_fields)]
+pub struct WebSearchLocation {
+    pub country: Option<String>,
+    pub region: Option<String>,
+    pub city: Option<String>,
+    pub timezone: Option<String>,
+}
+
+impl WebSearchLocation {
+    pub fn merge(&self, other: &Self) -> Self {
+        Self {
+            country: other.country.clone().or_else(|| self.country.clone()),
+            region: other.region.clone().or_else(|| self.region.clone()),
+            city: other.city.clone().or_else(|| self.city.clone()),
+            timezone: other.timezone.clone().or_else(|| self.timezone.clone()),
+        }
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Default, PartialEq, Eq, JsonSchema, TS)]
+#[schemars(deny_unknown_fields)]
+pub struct WebSearchToolConfig {
+    pub context_size: Option<WebSearchContextSize>,
+    pub allowed_domains: Option<Vec<String>>,
+    pub location: Option<WebSearchLocation>,
+}
+
+impl WebSearchToolConfig {
+    pub fn merge(&self, other: &Self) -> Self {
+        Self {
+            context_size: other.context_size.or(self.context_size),
+            allowed_domains: other
+                .allowed_domains
+                .clone()
+                .or_else(|| self.allowed_domains.clone()),
+            location: match (&self.location, &other.location) {
+                (Some(location), Some(other_location)) => Some(location.merge(other_location)),
+                (Some(location), None) => Some(location.clone()),
+                (None, Some(other_location)) => Some(other_location.clone()),
+                (None, None) => None,
+            },
+        }
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Default, PartialEq, Eq, JsonSchema, TS)]
+#[schemars(deny_unknown_fields)]
+pub struct WebSearchFilters {
+    pub allowed_domains: Option<Vec<String>>,
+}
+
+#[derive(
+    Debug, Serialize, Deserialize, Clone, Copy, Default, PartialEq, Eq, Display, JsonSchema, TS,
+)]
+#[serde(rename_all = "lowercase")]
+#[strum(serialize_all = "lowercase")]
+pub enum WebSearchUserLocationType {
+    #[default]
+    Approximate,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Default, PartialEq, Eq, JsonSchema, TS)]
+#[schemars(deny_unknown_fields)]
+pub struct WebSearchUserLocation {
+    #[serde(default)]
+    pub r#type: WebSearchUserLocationType,
+    pub country: Option<String>,
+    pub region: Option<String>,
+    pub city: Option<String>,
+    pub timezone: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Default, PartialEq, Eq, JsonSchema, TS)]
+#[schemars(deny_unknown_fields)]
+pub struct WebSearchConfig {
+    pub filters: Option<WebSearchFilters>,
+    pub user_location: Option<WebSearchUserLocation>,
+    pub search_context_size: Option<WebSearchContextSize>,
+}
+
+impl From<WebSearchLocation> for WebSearchUserLocation {
+    fn from(location: WebSearchLocation) -> Self {
+        Self {
+            r#type: WebSearchUserLocationType::Approximate,
+            country: location.country,
+            region: location.region,
+            city: location.city,
+            timezone: location.timezone,
+        }
+    }
+}
+
+impl From<WebSearchToolConfig> for WebSearchConfig {
+    fn from(config: WebSearchToolConfig) -> Self {
+        Self {
+            filters: config
+                .allowed_domains
+                .map(|allowed_domains| WebSearchFilters {
+                    allowed_domains: Some(allowed_domains),
+                }),
+            user_location: config.location.map(Into::into),
+            search_context_size: config.context_size,
+        }
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Display, JsonSchema, TS)]
+#[serde(rename_all = "lowercase")]
+#[strum(serialize_all = "lowercase")]
+pub enum ServiceTier {
+    Fast,
+    Flex,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Display, JsonSchema, TS)]
+#[serde(rename_all = "lowercase")]
+#[strum(serialize_all = "lowercase")]
 pub enum ForcedLoginMethod {
     Chatgpt,
     Api,
+}
+
+const DEFAULT_PROVIDER_AUTH_TIMEOUT_MS: u64 = 5_000;
+const DEFAULT_PROVIDER_AUTH_REFRESH_INTERVAL_MS: u64 = 300_000;
+
+/// Configuration for obtaining a provider bearer token from a command.
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct ModelProviderAuthInfo {
+    /// Command to execute. Bare names are resolved via `PATH`; paths are resolved against `cwd`.
+    pub command: String,
+
+    /// Command arguments.
+    #[serde(default)]
+    pub args: Vec<String>,
+
+    /// Maximum time to wait for the token command to exit successfully.
+    #[serde(default = "default_provider_auth_timeout_ms")]
+    pub timeout_ms: NonZeroU64,
+
+    /// Maximum age for the cached token before rerunning the command.
+    /// Set to `0` to disable proactive refresh and only rerun after a 401 retry path.
+    #[serde(default = "default_provider_auth_refresh_interval_ms")]
+    pub refresh_interval_ms: u64,
+
+    /// Working directory used when running the token command.
+    #[serde(default = "default_provider_auth_cwd")]
+    #[schemars(skip_serializing_if = "is_default_provider_auth_cwd")]
+    pub cwd: AbsolutePathBuf,
+}
+
+impl ModelProviderAuthInfo {
+    pub fn timeout(&self) -> Duration {
+        Duration::from_millis(self.timeout_ms.get())
+    }
+
+    pub fn refresh_interval(&self) -> Option<Duration> {
+        NonZeroU64::new(self.refresh_interval_ms).map(|value| Duration::from_millis(value.get()))
+    }
+}
+
+fn default_provider_auth_timeout_ms() -> NonZeroU64 {
+    non_zero_u64(
+        DEFAULT_PROVIDER_AUTH_TIMEOUT_MS,
+        "model_providers.<id>.auth.timeout_ms",
+    )
+}
+
+fn default_provider_auth_refresh_interval_ms() -> u64 {
+    DEFAULT_PROVIDER_AUTH_REFRESH_INTERVAL_MS
+}
+
+fn non_zero_u64(value: u64, field_name: &str) -> NonZeroU64 {
+    match NonZeroU64::new(value) {
+        Some(value) => value,
+        None => panic!("{field_name} must be non-zero"),
+    }
+}
+
+fn default_provider_auth_cwd() -> AbsolutePathBuf {
+    let deserializer = serde::de::value::StrDeserializer::<serde::de::value::Error>::new(".");
+    if let Ok(cwd) = AbsolutePathBuf::deserialize(deserializer) {
+        return cwd;
+    }
+
+    match AbsolutePathBuf::current_dir() {
+        Ok(cwd) => cwd,
+        Err(err) => panic!("provider auth cwd must resolve: {err}"),
+    }
+}
+
+fn is_default_provider_auth_cwd(path: &AbsolutePathBuf) -> bool {
+    path == &default_provider_auth_cwd()
 }
 
 /// Represents the trust level for a project directory.
@@ -357,5 +573,67 @@ mod tests {
 
         assert!(!ModeKind::PairProgramming.is_tui_visible());
         assert!(!ModeKind::Execute.is_tui_visible());
+    }
+
+    #[test]
+    fn web_search_location_merge_prefers_overlay_values() {
+        let base = WebSearchLocation {
+            country: Some("US".to_string()),
+            region: Some("CA".to_string()),
+            city: None,
+            timezone: Some("America/Los_Angeles".to_string()),
+        };
+        let overlay = WebSearchLocation {
+            country: None,
+            region: Some("WA".to_string()),
+            city: Some("Seattle".to_string()),
+            timezone: None,
+        };
+
+        let expected = WebSearchLocation {
+            country: Some("US".to_string()),
+            region: Some("WA".to_string()),
+            city: Some("Seattle".to_string()),
+            timezone: Some("America/Los_Angeles".to_string()),
+        };
+
+        assert_eq!(expected, base.merge(&overlay));
+    }
+
+    #[test]
+    fn web_search_tool_config_merge_prefers_overlay_values() {
+        let base = WebSearchToolConfig {
+            context_size: Some(WebSearchContextSize::Low),
+            allowed_domains: Some(vec!["openai.com".to_string()]),
+            location: Some(WebSearchLocation {
+                country: Some("US".to_string()),
+                region: Some("CA".to_string()),
+                city: None,
+                timezone: Some("America/Los_Angeles".to_string()),
+            }),
+        };
+        let overlay = WebSearchToolConfig {
+            context_size: Some(WebSearchContextSize::High),
+            allowed_domains: None,
+            location: Some(WebSearchLocation {
+                country: None,
+                region: Some("WA".to_string()),
+                city: Some("Seattle".to_string()),
+                timezone: None,
+            }),
+        };
+
+        let expected = WebSearchToolConfig {
+            context_size: Some(WebSearchContextSize::High),
+            allowed_domains: Some(vec!["openai.com".to_string()]),
+            location: Some(WebSearchLocation {
+                country: Some("US".to_string()),
+                region: Some("WA".to_string()),
+                city: Some("Seattle".to_string()),
+                timezone: Some("America/Los_Angeles".to_string()),
+            }),
+        };
+
+        assert_eq!(expected, base.merge(&overlay));
     }
 }

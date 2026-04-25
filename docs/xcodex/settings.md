@@ -6,9 +6,9 @@ In the legacy TUI (`tui`), `/settings` opens a bottom-pane tabbed menu (replacin
 
 ## Status bar items
 
-`xcodex` can optionally show additional items in the footer status bar, behind toggles.
+`xcodex` can optionally show additional items in the footer row, behind toggles.
 
-The values shown are derived from the session’s working directory (the same directory shown in `/status`), so different sessions can show different branches/worktrees.
+The values shown are derived from the current session state, so different sessions can show different model, branch, and worktree values.
 
 While enabled, `xcodex` refreshes these values automatically (about every 5 seconds). If `HEAD` is detached, it shows `branch: (detached)`.
 
@@ -17,6 +17,7 @@ While enabled, `xcodex` refreshes these values automatically (about every 5 seco
 ```text
 /settings status-bar git-branch [on|off|toggle|status]
 /settings status-bar worktree   [on|off|toggle|status]
+/settings status-bar model      [on|off|toggle|status]
 ```
 
 - When the action is omitted, `toggle` is assumed.
@@ -31,6 +32,7 @@ These keys live under `[tui]`:
 [tui]
 status_bar_show_git_branch = false
 status_bar_show_worktree = false
+status_bar_show_model = false
 
 # Render the active composer with only top/bottom borders (default: false)
 # minimal_composer = false

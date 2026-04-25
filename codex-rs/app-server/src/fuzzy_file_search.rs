@@ -5,7 +5,9 @@ use std::sync::Mutex;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 
+use codex_app_server_protocol::FuzzyFileSearchMatchType;
 use codex_app_server_protocol::FuzzyFileSearchResult;
+use codex_app_server_protocol::FuzzyFileSearchSessionCompletedNotification;
 use codex_app_server_protocol::FuzzyFileSearchSessionUpdatedNotification;
 use codex_app_server_protocol::ServerNotification;
 use codex_file_search as file_search;
@@ -59,6 +61,10 @@ pub(crate) async fn run_fuzzy_file_search(
                 FuzzyFileSearchResult {
                     root: m.root.to_string_lossy().to_string(),
                     path: m.path.to_string_lossy().to_string(),
+                    match_type: match m.match_type {
+                        file_search::MatchType::File => FuzzyFileSearchMatchType::File,
+                        file_search::MatchType::Directory => FuzzyFileSearchMatchType::Directory,
+                    },
                     file_name: file_name.to_string_lossy().to_string(),
                     score: m.score,
                     indices: m.indices,
@@ -195,6 +201,20 @@ impl SessionReporterImpl {
             outgoing.send_server_notification(notification).await;
         });
     }
+
+    fn send_complete(&self) {
+        if self.shared.canceled.load(Ordering::Relaxed) {
+            return;
+        }
+        let session_id = self.shared.session_id.clone();
+        let outgoing = self.shared.outgoing.clone();
+        self.shared.runtime.spawn(async move {
+            let notification = ServerNotification::FuzzyFileSearchSessionCompleted(
+                FuzzyFileSearchSessionCompletedNotification { session_id },
+            );
+            outgoing.send_server_notification(notification).await;
+        });
+    }
 }
 
 impl file_search::SessionReporter for SessionReporterImpl {
@@ -202,7 +222,9 @@ impl file_search::SessionReporter for SessionReporterImpl {
         self.send_snapshot(snapshot);
     }
 
-    fn on_complete(&self) {}
+    fn on_complete(&self) {
+        self.send_complete();
+    }
 }
 
 fn collect_files(snapshot: &file_search::FileSearchSnapshot) -> Vec<FuzzyFileSearchResult> {
@@ -214,6 +236,10 @@ fn collect_files(snapshot: &file_search::FileSearchSnapshot) -> Vec<FuzzyFileSea
             FuzzyFileSearchResult {
                 root: m.root.to_string_lossy().to_string(),
                 path: m.path.to_string_lossy().to_string(),
+                match_type: match m.match_type {
+                    file_search::MatchType::File => FuzzyFileSearchMatchType::File,
+                    file_search::MatchType::Directory => FuzzyFileSearchMatchType::Directory,
+                },
                 file_name: file_name.to_string_lossy().to_string(),
                 score: m.score,
                 indices: m.indices.clone(),

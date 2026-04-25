@@ -6,6 +6,7 @@ use ratatui::text::Line;
 
 pub(crate) fn add_settings_output_with_values(
     chat: &mut ChatWidget,
+    show_model: bool,
     show_git_branch: bool,
     show_worktree: bool,
     transcript_diff_highlight: bool,
@@ -16,6 +17,7 @@ pub(crate) fn add_settings_output_with_values(
     let command = PlainHistoryCell::new(vec![Line::from(vec!["/settings".magenta()])]);
     let card = crate::status::new_settings_card(
         chat.xtreme_ui_enabled(),
+        show_model,
         show_git_branch,
         show_worktree,
         transcript_diff_highlight,
@@ -28,6 +30,7 @@ pub(crate) fn add_settings_output_with_values(
 
 pub(crate) fn handle_settings_command(chat: &mut ChatWidget, rest: &str) -> bool {
     let args: Vec<&str> = rest.split_whitespace().collect();
+    let current_model = chat.config_ref().tui_status_bar_show_model;
     let current_git_branch = chat.config_ref().tui_status_bar_show_git_branch;
     let current_worktree = chat.config_ref().tui_status_bar_show_worktree;
     let current_diff_highlight = chat.config_ref().tui_transcript_diff_highlight;
@@ -39,6 +42,7 @@ pub(crate) fn handle_settings_command(chat: &mut ChatWidget, rest: &str) -> bool
         [] | ["status-bar"] | ["transcript"] => {
             add_settings_output_with_values(
                 chat,
+                current_model,
                 current_git_branch,
                 current_worktree,
                 current_diff_highlight,
@@ -67,6 +71,7 @@ pub(crate) fn handle_settings_command(chat: &mut ChatWidget, rest: &str) -> bool
 
     let mut next_git_branch = current_git_branch;
     let mut next_worktree = current_worktree;
+    let mut next_model = current_model;
     let mut next_diff_highlight = current_diff_highlight;
     let mut next_side_by_side = current_side_by_side;
     let mut next_user_prompt_highlight = current_user_prompt_highlight;
@@ -89,7 +94,7 @@ pub(crate) fn handle_settings_command(chat: &mut ChatWidget, rest: &str) -> bool
         Some(_) => {
             match section {
                 "status-bar" => chat.add_info_message(
-                    "Usage: /settings status-bar <git-branch|worktree> [on|off|toggle|status]"
+                    "Usage: /settings status-bar <git-branch|worktree|model> [on|off|toggle|status]"
                         .to_string(),
                     None,
                 ),
@@ -107,13 +112,14 @@ pub(crate) fn handle_settings_command(chat: &mut ChatWidget, rest: &str) -> bool
     match section {
         "status-bar" => {
             let selected = match item.as_str() {
+                "model" | "model-name" => Some((&mut next_model, current_model)),
                 "git-branch" | "branch" => Some((&mut next_git_branch, current_git_branch)),
                 "worktree" | "worktree-path" => Some((&mut next_worktree, current_worktree)),
                 _ => None,
             };
             let Some((selected, current)) = selected else {
                 chat.add_info_message(
-                    "Unknown setting. Use: git-branch | worktree".to_string(),
+                    "Unknown setting. Use: git-branch | worktree | model".to_string(),
                     None,
                 );
                 return true;
@@ -127,12 +133,14 @@ pub(crate) fn handle_settings_command(chat: &mut ChatWidget, rest: &str) -> bool
             if let Some(value) = next {
                 *selected = value;
                 chat.app_event_tx()
-                    .send(crate::app_event::AppEvent::UpdateStatusBarGitOptions {
+                    .send(crate::app_event::AppEvent::UpdateFooterStatusOptions {
+                        show_model: next_model,
                         show_git_branch: next_git_branch,
                         show_worktree: next_worktree,
                     });
                 chat.app_event_tx()
-                    .send(crate::app_event::AppEvent::PersistStatusBarGitOptions {
+                    .send(crate::app_event::AppEvent::PersistFooterStatusOptions {
+                        show_model: next_model,
                         show_git_branch: next_git_branch,
                         show_worktree: next_worktree,
                     });
@@ -230,6 +238,7 @@ pub(crate) fn handle_settings_command(chat: &mut ChatWidget, rest: &str) -> bool
 
     add_settings_output_with_values(
         chat,
+        next_model,
         next_git_branch,
         next_worktree,
         next_diff_highlight,

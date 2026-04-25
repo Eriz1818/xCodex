@@ -76,8 +76,27 @@ pub(crate) struct CommandPopup {
 pub(crate) struct CommandPopupFlags {
     pub(crate) collaboration_modes_enabled: bool,
     pub(crate) connectors_enabled: bool,
+    pub(crate) plugins_command_enabled: bool,
+    pub(crate) fast_command_enabled: bool,
     pub(crate) personality_command_enabled: bool,
+    pub(crate) realtime_conversation_enabled: bool,
+    pub(crate) audio_device_selection_enabled: bool,
     pub(crate) windows_degraded_sandbox_active: bool,
+}
+
+impl From<CommandPopupFlags> for slash_commands::BuiltinCommandFlags {
+    fn from(value: CommandPopupFlags) -> Self {
+        Self {
+            collaboration_modes_enabled: value.collaboration_modes_enabled,
+            connectors_enabled: value.connectors_enabled,
+            plugins_command_enabled: value.plugins_command_enabled,
+            fast_command_enabled: value.fast_command_enabled,
+            personality_command_enabled: value.personality_command_enabled,
+            realtime_conversation_enabled: value.realtime_conversation_enabled,
+            audio_device_selection_enabled: value.audio_device_selection_enabled,
+            allow_elevate_sandbox: value.windows_degraded_sandbox_active,
+        }
+    }
 }
 
 impl CommandPopup {
@@ -138,7 +157,6 @@ impl CommandPopup {
     pub(crate) fn prompt(&self, idx: usize) -> Option<&CustomPrompt> {
         self.prompts.get(idx)
     }
-
     /// Update the filter string based on the current composer text. The text
     /// passed in is expected to start with a leading '/'. Everything after the
     /// *first* '/' on the *first* line becomes the active filter that is used
@@ -223,7 +241,6 @@ impl CommandPopup {
             build_subcommand_matches(&self.command_filter, &self.command_line);
         let mut out: Vec<(CommandItem, Option<Vec<usize>>)> = Vec::new();
         if filter.is_empty() {
-            // Built-ins first, in presentation order.
             for (_, cmd) in self.builtins.iter() {
                 if ALIAS_COMMANDS.contains(cmd) {
                     continue;
@@ -277,7 +294,6 @@ impl CommandPopup {
         let filter_chars = filter.chars().count();
         let mut exact: Vec<(CommandItem, Option<Vec<usize>>)> = Vec::new();
         let mut prefix: Vec<(CommandItem, Option<Vec<usize>>)> = Vec::new();
-        let prompt_prefix_len = PROMPTS_CMD_PREFIX.chars().count() + 1;
         let indices_for = |offset| Some((offset..offset + filter_chars).collect());
 
         let mut push_match =
@@ -381,6 +397,7 @@ impl CommandPopup {
                 };
                 GenericDisplayRow {
                     name,
+                    name_prefix_spans: Vec::new(),
                     match_indices: indices.map(|v| v.into_iter().map(|i| i + 1).collect()),
                     display_shortcut: None,
                     description: Some(description),
@@ -467,7 +484,9 @@ impl WidgetRef for CommandPopup {
         }
         let rows = self.rows_from_matches(self.filtered());
         render_rows(
-            area.inset(Insets::tlbr(0, 2, 0, 0)),
+            area.inset(Insets::tlbr(
+                /*top*/ 0, /*left*/ 2, /*bottom*/ 0, /*right*/ 0,
+            )),
             buf,
             &rows,
             &self.state,
@@ -540,7 +559,6 @@ mod tests {
             CommandPopupFlags::default(),
             DEFAULT_SLASH_POPUP_ROWS,
         );
-
         popup.on_composer_text_change("/mo".to_string());
         let matches = popup.filtered_items();
         match matches.first() {
@@ -675,7 +693,6 @@ mod tests {
         let description = rows.first().and_then(|row| row.description.as_deref());
         assert_eq!(description, Some("send saved prompt"));
     }
-
     #[test]
     fn prefix_filter_limits_matches_for_ac() {
         let mut popup = CommandPopup::new(
@@ -700,13 +717,28 @@ mod tests {
     }
 
     #[test]
+    fn quit_hidden_in_empty_filter_but_shown_for_prefix() {
+        let mut popup = CommandPopup::new(
+            Vec::new(),
+            CommandPopupFlags::default(),
+            DEFAULT_SLASH_POPUP_ROWS,
+        );
+        popup.on_composer_text_change("/".to_string());
+        let items = popup.filtered_items();
+        assert!(!items.contains(&CommandItem::Builtin(SlashCommand::Quit)));
+
+        popup.on_composer_text_change("/qu".to_string());
+        let items = popup.filtered_items();
+        assert!(items.contains(&CommandItem::Builtin(SlashCommand::Quit)));
+    }
+    #[test]
     fn collab_command_hidden_when_collaboration_modes_disabled() {
         let mut popup = CommandPopup::new(
             Vec::new(),
             CommandPopupFlags::default(),
             DEFAULT_SLASH_POPUP_ROWS,
         );
-        popup.on_composer_text_change("/coll".to_string());
+        popup.on_composer_text_change("/".to_string());
 
         let cmds: Vec<&str> = popup
             .filtered_items()
@@ -730,7 +762,11 @@ mod tests {
             CommandPopupFlags {
                 collaboration_modes_enabled: true,
                 connectors_enabled: false,
+                plugins_command_enabled: false,
+                fast_command_enabled: false,
                 personality_command_enabled: true,
+                realtime_conversation_enabled: false,
+                audio_device_selection_enabled: false,
                 windows_degraded_sandbox_active: false,
             },
             DEFAULT_SLASH_POPUP_ROWS,
@@ -744,19 +780,27 @@ mod tests {
     }
 
     #[test]
-    fn quit_hidden_in_empty_filter_but_shown_for_prefix() {
+    fn plan_command_visible_when_collaboration_modes_enabled() {
         let mut popup = CommandPopup::new(
             Vec::new(),
-            CommandPopupFlags::default(),
+            CommandPopupFlags {
+                collaboration_modes_enabled: true,
+                connectors_enabled: false,
+                plugins_command_enabled: false,
+                fast_command_enabled: false,
+                personality_command_enabled: true,
+                realtime_conversation_enabled: false,
+                audio_device_selection_enabled: false,
+                windows_degraded_sandbox_active: false,
+            },
             DEFAULT_SLASH_POPUP_ROWS,
         );
-        popup.on_composer_text_change("/".to_string());
-        let items = popup.filtered_items();
-        assert!(!items.contains(&CommandItem::Builtin(SlashCommand::Quit)));
+        popup.on_composer_text_change("/plan".to_string());
 
-        popup.on_composer_text_change("/qu".to_string());
-        let items = popup.filtered_items();
-        assert!(items.contains(&CommandItem::Builtin(SlashCommand::Quit)));
+        match popup.selected_item() {
+            Some(CommandItem::Builtin(cmd)) => assert_eq!(cmd.command(), "plan"),
+            other => panic!("expected plan to be selected for exact match, got {other:?}"),
+        }
     }
 
     #[test]
@@ -782,7 +826,11 @@ mod tests {
             CommandPopupFlags {
                 collaboration_modes_enabled: true,
                 connectors_enabled: false,
+                plugins_command_enabled: false,
+                fast_command_enabled: false,
                 personality_command_enabled: false,
+                realtime_conversation_enabled: false,
+                audio_device_selection_enabled: false,
                 windows_degraded_sandbox_active: false,
             },
             DEFAULT_SLASH_POPUP_ROWS,
@@ -827,5 +875,84 @@ mod tests {
         assert_transcript_surface_bg(Rect::new(0, 0, 32, 6), |area, buf| {
             popup.render_ref(area, buf);
         });
+    }
+
+    #[test]
+    fn personality_command_visible_when_enabled() {
+        let mut popup = CommandPopup::new(
+            Vec::new(),
+            CommandPopupFlags {
+                collaboration_modes_enabled: true,
+                connectors_enabled: false,
+                plugins_command_enabled: false,
+                fast_command_enabled: false,
+                personality_command_enabled: true,
+                realtime_conversation_enabled: false,
+                audio_device_selection_enabled: false,
+                windows_degraded_sandbox_active: false,
+            },
+            DEFAULT_SLASH_POPUP_ROWS,
+        );
+        popup.on_composer_text_change("/personality".to_string());
+
+        match popup.selected_item() {
+            Some(CommandItem::Builtin(cmd)) => assert_eq!(cmd.command(), "personality"),
+            other => panic!("expected personality to be selected for exact match, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn settings_command_hidden_when_audio_device_selection_is_disabled() {
+        let mut popup = CommandPopup::new(
+            Vec::new(),
+            CommandPopupFlags {
+                collaboration_modes_enabled: false,
+                connectors_enabled: false,
+                plugins_command_enabled: false,
+                fast_command_enabled: false,
+                personality_command_enabled: true,
+                realtime_conversation_enabled: true,
+                audio_device_selection_enabled: false,
+                windows_degraded_sandbox_active: false,
+            },
+            DEFAULT_SLASH_POPUP_ROWS,
+        );
+        popup.on_composer_text_change("/aud".to_string());
+
+        let cmds: Vec<&str> = popup
+            .filtered_items()
+            .into_iter()
+            .filter_map(|item| match item {
+                CommandItem::Builtin(cmd) => Some(cmd.command()),
+                _ => None,
+            })
+            .collect();
+
+        assert!(
+            !cmds.contains(&"settings"),
+            "expected '/settings' to be hidden when audio device selection is disabled, got {cmds:?}"
+        );
+    }
+
+    #[test]
+    fn debug_commands_are_hidden_from_popup() {
+        let popup = CommandPopup::new(
+            Vec::new(),
+            CommandPopupFlags::default(),
+            DEFAULT_SLASH_POPUP_ROWS,
+        );
+        let cmds: Vec<&str> = popup
+            .filtered_items()
+            .into_iter()
+            .filter_map(|item| match item {
+                CommandItem::Builtin(cmd) => Some(cmd.command()),
+                _ => None,
+            })
+            .collect();
+
+        assert!(
+            !cmds.iter().any(|name| name.starts_with("debug")),
+            "expected no /debug* command in popup menu, got {cmds:?}"
+        );
     }
 }

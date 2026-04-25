@@ -5,11 +5,11 @@ use crate::endpoint::client_version::append_upstream_client_version_for_openai_o
 use crate::endpoint::session::EndpointSession;
 use crate::error::ApiError;
 use crate::provider::Provider;
+use crate::requests::Compression;
+use crate::requests::attach_item_ids;
 use crate::requests::headers::build_conversation_headers;
 use crate::requests::headers::insert_header;
 use crate::requests::headers::subagent_header;
-use crate::requests::responses::Compression;
-use crate::requests::responses::attach_item_ids;
 use crate::sse::spawn_response_stream;
 use crate::telemetry::SseTelemetry;
 use codex_client::HttpTransport;
@@ -22,6 +22,7 @@ use http::Method;
 use serde_json::Value;
 use std::sync::Arc;
 use std::sync::OnceLock;
+use tracing::instrument;
 
 pub struct ResponsesClient<T: HttpTransport, A: AuthProvider> {
     session: EndpointSession<T, A>,
@@ -56,6 +57,16 @@ impl<T: HttpTransport, A: AuthProvider> ResponsesClient<T, A> {
         }
     }
 
+    #[instrument(
+        name = "responses.stream_request",
+        level = "info",
+        skip_all,
+        fields(
+            transport = "responses_http",
+            http.method = "POST",
+            api.path = "responses"
+        )
+    )]
     pub async fn stream_request(
         &self,
         request: ResponsesApiRequest,
@@ -76,6 +87,9 @@ impl<T: HttpTransport, A: AuthProvider> ResponsesClient<T, A> {
         }
 
         let mut headers = extra_headers;
+        if let Some(ref conv_id) = conversation_id {
+            insert_header(&mut headers, "x-client-request-id", conv_id);
+        }
         headers.extend(build_conversation_headers(conversation_id));
         if let Some(subagent) = subagent_header(&session_source) {
             insert_header(&mut headers, "x-openai-subagent", &subagent);
@@ -88,6 +102,17 @@ impl<T: HttpTransport, A: AuthProvider> ResponsesClient<T, A> {
         "responses"
     }
 
+    #[instrument(
+        name = "responses.stream",
+        level = "info",
+        skip_all,
+        fields(
+            transport = "responses_http",
+            http.method = "POST",
+            api.path = "responses",
+            turn.has_state = turn_state.is_some()
+        )
+    )]
     pub async fn stream(
         &self,
         body: Value,

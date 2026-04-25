@@ -2,7 +2,7 @@
 #![allow(clippy::expect_used)]
 
 use anyhow::Result;
-use codex_core::protocol::SandboxPolicy;
+use codex_protocol::protocol::SandboxPolicy;
 use core_test_support::assert_regex_match;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
@@ -125,7 +125,11 @@ async fn shell_output_stays_json_without_freeform_apply_patch(
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
-    let mut builder = configure_shell_model(test_codex(), output_type, false);
+    let mut builder = configure_shell_model(
+        test_codex(),
+        output_type,
+        /*include_apply_patch_tool*/ false,
+    );
     let test = builder.build(&server).await?;
 
     let call_id = "shell-json";
@@ -177,7 +181,11 @@ async fn shell_output_is_structured_with_freeform_apply_patch(
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
-    let mut builder = configure_shell_model(test_codex(), output_type, true);
+    let mut builder = configure_shell_model(
+        test_codex(),
+        output_type,
+        /*include_apply_patch_tool*/ true,
+    );
     let test = builder.build(&server).await?;
 
     let call_id = "shell-structured";
@@ -222,7 +230,11 @@ async fn shell_output_preserves_fixture_json_without_serialization(
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
-    let mut builder = configure_shell_model(test_codex(), output_type, false);
+    let mut builder = configure_shell_model(
+        test_codex(),
+        output_type,
+        /*include_apply_patch_tool*/ false,
+    );
     let test = builder.build(&server).await?;
 
     let fixture_path = test.cwd.path().join("fixture.json");
@@ -286,7 +298,11 @@ async fn shell_output_structures_fixture_with_serialization(
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
-    let mut builder = configure_shell_model(test_codex(), output_type, true);
+    let mut builder = configure_shell_model(
+        test_codex(),
+        output_type,
+        /*include_apply_patch_tool*/ true,
+    );
     let test = builder.build(&server).await?;
 
     let fixture_path = test.cwd.path().join("fixture.json");
@@ -345,11 +361,15 @@ async fn shell_output_for_freeform_tool_records_duration(
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
-    let mut builder = configure_shell_model(test_codex(), output_type, true);
+    let mut builder = configure_shell_model(
+        test_codex(),
+        output_type,
+        /*include_apply_patch_tool*/ true,
+    );
     let test = builder.build(&server).await?;
 
     let call_id = "shell-structured";
-    let responses = shell_responses(call_id, vec!["/bin/sh", "-c", "sleep 1"], output_type)?;
+    let responses = shell_responses(call_id, vec!["/bin/sh", "-c", "sleep 0.2"], output_type)?;
     let mock = mount_sse_sequence(&server, responses).await;
 
     test.submit_turn_with_policy(
@@ -381,7 +401,7 @@ $"#;
         .and_then(|value| value.as_str().parse::<f32>().ok())
         .expect("expected structured shell output to contain wall time seconds");
     assert!(
-        wall_time_seconds > 0.5,
+        wall_time_seconds > 0.1,
         "expected wall time to be greater than zero seconds, got {wall_time_seconds}"
     );
 
@@ -395,10 +415,14 @@ async fn shell_output_reserializes_truncated_content(output_type: ShellModelOutp
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
-    let mut builder =
-        configure_shell_model(test_codex(), output_type, true).with_config(move |config| {
-            config.tool_output_token_limit = Some(200);
-        });
+    let mut builder = configure_shell_model(
+        test_codex(),
+        output_type,
+        /*include_apply_patch_tool*/ true,
+    )
+    .with_config(move |config| {
+        config.tool_output_token_limit = Some(200);
+    });
     let test = builder.build(&server).await?;
 
     let call_id = "shell-truncated";
@@ -531,8 +555,7 @@ A {file_name}
     );
     assert_regex_match(&expected_pattern, output.as_str());
 
-    let new_file_path = harness.path(file_name);
-    let created_contents = fs::read_to_string(&new_file_path)?;
+    let created_contents = harness.read_file_text(file_name).await?;
     assert_eq!(
         created_contents, "custom tool content\n",
         "expected file contents for {file_name}"
@@ -555,8 +578,7 @@ async fn apply_patch_custom_tool_call_updates_existing_file(
 
     let call_id = "apply-patch-update-file";
     let file_name = "custom_tool_apply_patch_existing.txt";
-    let file_path = harness.path(file_name);
-    fs::write(&file_path, "before\n")?;
+    harness.write_file(file_name, "before\n").await?;
     let patch = format!(
         "*** Begin Patch\n*** Update File: {file_name}\n@@\n-before\n+after\n*** End Patch\n"
     );
@@ -589,7 +611,7 @@ M {file_name}
     );
     assert_regex_match(&expected_pattern, output.as_str());
 
-    let updated_contents = fs::read_to_string(file_path)?;
+    let updated_contents = harness.read_file_text(file_name).await?;
     assert_eq!(updated_contents, "after\n", "expected updated file content");
 
     Ok(())
@@ -740,6 +762,7 @@ async fn shell_command_output_is_freeform() -> Result<()> {
     let call_id = "shell-command";
     let args = json!({
         "command": "echo shell command",
+        "login": false,
         "timeout_ms": 1_000,
     });
     let responses = vec![
@@ -791,6 +814,7 @@ async fn shell_command_output_is_not_truncated_under_10k_bytes() -> Result<()> {
     let call_id = "shell-command";
     let args = json!({
         "command": "perl -e 'print \"1\" x 10000'",
+        "login": false,
         "timeout_ms": 1000,
     });
     let responses = vec![
@@ -841,6 +865,7 @@ async fn shell_command_output_is_not_truncated_over_10k_bytes() -> Result<()> {
     let call_id = "shell-command";
     let args = json!({
         "command": "perl -e 'print \"1\" x 10001'",
+        "login": false,
         "timeout_ms": 1000,
     });
     let responses = vec![

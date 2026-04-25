@@ -1,4 +1,3 @@
-use crate::exec::ExecToolCallOutput;
 use crate::token_data::KnownPlan;
 use crate::token_data::PlanType;
 use crate::truncate::TruncationPolicy;
@@ -9,6 +8,7 @@ use chrono::Local;
 use chrono::Utc;
 use codex_async_utils::CancelErr;
 use codex_protocol::ThreadId;
+use codex_protocol::exec_output::ExecToolCallOutput;
 use codex_protocol::protocol::CodexErrorInfo;
 use codex_protocol::protocol::ErrorEvent;
 use codex_protocol::protocol::RateLimitSnapshot;
@@ -189,6 +189,117 @@ pub enum CodexErr {
 impl From<CancelErr> for CodexErr {
     fn from(_: CancelErr) -> Self {
         CodexErr::TurnAborted
+    }
+}
+
+impl From<codex_protocol::auth::RefreshTokenFailedReason> for RefreshTokenFailedReason {
+    fn from(reason: codex_protocol::auth::RefreshTokenFailedReason) -> Self {
+        match reason {
+            codex_protocol::auth::RefreshTokenFailedReason::Expired => Self::Expired,
+            codex_protocol::auth::RefreshTokenFailedReason::Exhausted => Self::Exhausted,
+            codex_protocol::auth::RefreshTokenFailedReason::Revoked => Self::Revoked,
+            codex_protocol::auth::RefreshTokenFailedReason::Other => Self::Other,
+        }
+    }
+}
+
+impl From<codex_protocol::error::CodexErr> for CodexErr {
+    fn from(err: codex_protocol::error::CodexErr) -> Self {
+        use codex_protocol::error::CodexErr as ProtocolCodexErr;
+        use codex_protocol::error::SandboxErr as ProtocolSandboxErr;
+
+        match err {
+            ProtocolCodexErr::TurnAborted => Self::TurnAborted,
+            ProtocolCodexErr::Stream(message, delay) => Self::Stream(message, delay),
+            ProtocolCodexErr::ContextWindowExceeded => Self::ContextWindowExceeded,
+            ProtocolCodexErr::ThreadNotFound(thread_id) => Self::ThreadNotFound(thread_id),
+            ProtocolCodexErr::AgentLimitReached { max_threads } => {
+                Self::AgentLimitReached { max_threads }
+            }
+            ProtocolCodexErr::SessionConfiguredNotFirstEvent => {
+                Self::SessionConfiguredNotFirstEvent
+            }
+            ProtocolCodexErr::Timeout => Self::Timeout,
+            ProtocolCodexErr::Spawn => Self::Spawn,
+            ProtocolCodexErr::Interrupted => Self::Interrupted,
+            ProtocolCodexErr::UnexpectedStatus(err) => {
+                Self::UnexpectedStatus(UnexpectedResponseError {
+                    status: err.status,
+                    body: err.body,
+                    url: err.url,
+                    cf_ray: err.cf_ray,
+                    request_id: err.request_id,
+                })
+            }
+            ProtocolCodexErr::InvalidRequest(message) => Self::InvalidRequest(message),
+            ProtocolCodexErr::InvalidImageRequest() => Self::InvalidImageRequest(),
+            ProtocolCodexErr::UsageLimitReached(err) => {
+                Self::UsageLimitReached(UsageLimitReachedError {
+                    plan_type: None,
+                    resets_at: err.resets_at,
+                    rate_limits: err.rate_limits,
+                    promo_message: err.promo_message,
+                })
+            }
+            ProtocolCodexErr::ServerOverloaded => Self::ServerOverloaded,
+            ProtocolCodexErr::ResponseStreamFailed(err) => {
+                Self::ResponseStreamFailed(ResponseStreamFailed {
+                    source: err.source,
+                    request_id: err.request_id,
+                })
+            }
+            ProtocolCodexErr::ConnectionFailed(err) => {
+                Self::ConnectionFailed(ConnectionFailedError { source: err.source })
+            }
+            ProtocolCodexErr::QuotaExceeded => Self::QuotaExceeded,
+            ProtocolCodexErr::UsageNotIncluded => Self::UsageNotIncluded,
+            ProtocolCodexErr::InternalServerError => Self::InternalServerError,
+            ProtocolCodexErr::RetryLimit(err) => Self::RetryLimit(RetryLimitReachedError {
+                status: err.status,
+                request_id: err.request_id,
+            }),
+            ProtocolCodexErr::InternalAgentDied => Self::InternalAgentDied,
+            ProtocolCodexErr::Sandbox(err) => match err {
+                ProtocolSandboxErr::Denied { output, .. } => {
+                    Self::Sandbox(SandboxErr::Denied { output })
+                }
+                ProtocolSandboxErr::Timeout { output } => {
+                    Self::Sandbox(SandboxErr::Timeout { output })
+                }
+                ProtocolSandboxErr::Signal(signal) => Self::Sandbox(SandboxErr::Signal(signal)),
+                ProtocolSandboxErr::LandlockRestrict => Self::Sandbox(SandboxErr::LandlockRestrict),
+                #[cfg(target_os = "linux")]
+                ProtocolSandboxErr::SeccompInstall(err) => {
+                    Self::Sandbox(SandboxErr::SeccompInstall(err))
+                }
+                #[cfg(target_os = "linux")]
+                ProtocolSandboxErr::SeccompBackend(err) => {
+                    Self::Sandbox(SandboxErr::SeccompBackend(err))
+                }
+            },
+            ProtocolCodexErr::LandlockSandboxExecutableNotProvided => {
+                Self::LandlockSandboxExecutableNotProvided
+            }
+            ProtocolCodexErr::UnsupportedOperation(message) => Self::UnsupportedOperation(message),
+            ProtocolCodexErr::RefreshTokenFailed(err) => {
+                Self::RefreshTokenFailed(RefreshTokenFailedError {
+                    reason: err.reason.into(),
+                    message: err.message,
+                })
+            }
+            ProtocolCodexErr::Fatal(message) => Self::Fatal(message),
+            ProtocolCodexErr::Io(err) => Self::Io(err),
+            ProtocolCodexErr::Json(err) => Self::Json(err),
+            #[cfg(target_os = "linux")]
+            ProtocolCodexErr::LandlockRuleset(err) => Self::LandlockRuleset(err),
+            #[cfg(target_os = "linux")]
+            ProtocolCodexErr::LandlockPathFd(err) => Self::LandlockPathFd(err),
+            ProtocolCodexErr::TokioJoin(err) => Self::TokioJoin(err),
+            ProtocolCodexErr::EnvVar(err) => Self::EnvVar(EnvVarError {
+                var: err.var,
+                instructions: err.instructions,
+            }),
+        }
     }
 }
 
@@ -449,7 +560,9 @@ impl std::fmt::Display for UsageLimitReachedError {
                 "You've hit your usage limit. Upgrade to Pro (https://chatgpt.com/explore/pro), visit https://chatgpt.com/codex/settings/usage to purchase more credits{}",
                 retry_suffix_after_or(self.resets_at.as_ref())
             ),
-            Some(PlanType::Known(KnownPlan::Team)) | Some(PlanType::Known(KnownPlan::Business)) => {
+            Some(PlanType::Known(KnownPlan::Team))
+            | Some(PlanType::Known(KnownPlan::Business))
+            | Some(PlanType::Known(KnownPlan::SelfServeBusinessUsageBased)) => {
                 format!(
                     "You've hit your usage limit. To get more access now, send a request to your admin{}",
                     retry_suffix_after_or(self.resets_at.as_ref())
@@ -461,11 +574,14 @@ impl std::fmt::Display for UsageLimitReachedError {
                     retry_suffix_after_or(self.resets_at.as_ref())
                 )
             }
-            Some(PlanType::Known(KnownPlan::Pro)) => format!(
-                "You've hit your usage limit. Visit https://chatgpt.com/codex/settings/usage to purchase more credits{}",
-                retry_suffix_after_or(self.resets_at.as_ref())
-            ),
+            Some(PlanType::Known(KnownPlan::Pro)) | Some(PlanType::Known(KnownPlan::ProLite)) => {
+                format!(
+                    "You've hit your usage limit. Visit https://chatgpt.com/codex/settings/usage to purchase more credits{}",
+                    retry_suffix_after_or(self.resets_at.as_ref())
+                )
+            }
             Some(PlanType::Known(KnownPlan::Enterprise))
+            | Some(PlanType::Known(KnownPlan::EnterpriseCbpUsageBased))
             | Some(PlanType::Known(KnownPlan::Edu)) => format!(
                 "You've hit your usage limit.{}",
                 retry_suffix(self.resets_at.as_ref())

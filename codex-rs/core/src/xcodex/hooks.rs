@@ -17,6 +17,13 @@ use std::time::UNIX_EPOCH;
 use async_channel::Sender;
 use chrono::DateTime;
 use chrono::Utc;
+use codex_protocol::permissions::FileSystemSandboxPolicy;
+use codex_protocol::permissions::NetworkSandboxPolicy;
+use codex_sandboxing::SandboxType;
+use codex_sandboxing::get_platform_sandbox;
+use codex_sandboxing::landlock::create_linux_sandbox_command_args_for_policies;
+use codex_sandboxing::seatbelt::MACOS_PATH_TO_SEATBELT_EXECUTABLE;
+use codex_sandboxing::seatbelt::create_seatbelt_command_args_for_policies;
 use regex::Regex;
 use serde::Serialize;
 use serde_json::Value;
@@ -1432,50 +1439,64 @@ struct HookHostSpawnInvocation {
 fn build_hook_host_spawn_invocation(
     program: String,
     args: Vec<String>,
-    sandbox: crate::exec::SandboxType,
+    sandbox: SandboxType,
     sandbox_policy: &SandboxPolicy,
     sandbox_policy_cwd: &Path,
     codex_linux_sandbox_exe: &Option<PathBuf>,
 ) -> HookHostSpawnInvocation {
     match sandbox {
-        crate::exec::SandboxType::None => HookHostSpawnInvocation {
+        SandboxType::None => HookHostSpawnInvocation {
             program,
             args,
             arg0_override: None,
         },
         #[cfg(target_os = "macos")]
-        crate::exec::SandboxType::MacosSeatbelt => {
+        SandboxType::MacosSeatbelt => {
             let wrapped = vec![program].into_iter().chain(args).collect::<Vec<_>>();
-            let args = crate::seatbelt::create_seatbelt_command_args(
-                wrapped,
+            let file_system_sandbox_policy = FileSystemSandboxPolicy::from_legacy_sandbox_policy(
                 sandbox_policy,
                 sandbox_policy_cwd,
-                false,
+            );
+            let network_sandbox_policy = NetworkSandboxPolicy::from(sandbox_policy);
+            let args = create_seatbelt_command_args_for_policies(
+                wrapped,
+                &file_system_sandbox_policy,
+                network_sandbox_policy,
+                sandbox_policy_cwd,
+                /*enforce_managed_network*/ false,
                 None,
             );
             HookHostSpawnInvocation {
-                program: crate::seatbelt::MACOS_PATH_TO_SEATBELT_EXECUTABLE.to_string(),
+                program: MACOS_PATH_TO_SEATBELT_EXECUTABLE.to_string(),
                 args,
                 arg0_override: None,
             }
         }
         #[cfg(not(target_os = "macos"))]
-        crate::exec::SandboxType::MacosSeatbelt => HookHostSpawnInvocation {
+        SandboxType::MacosSeatbelt => HookHostSpawnInvocation {
             program,
             args,
             arg0_override: None,
         },
-        crate::exec::SandboxType::LinuxSeccomp => {
+        SandboxType::LinuxSeccomp => {
             let exe = codex_linux_sandbox_exe
                 .clone()
                 .unwrap_or_else(|| PathBuf::from("codex-linux-sandbox"));
             let wrapped = vec![program].into_iter().chain(args).collect::<Vec<_>>();
-            let args = crate::landlock::create_linux_sandbox_command_args(
-                wrapped,
+            let file_system_sandbox_policy = FileSystemSandboxPolicy::from_legacy_sandbox_policy(
                 sandbox_policy,
                 sandbox_policy_cwd,
-                false,
-                false,
+            );
+            let network_sandbox_policy = NetworkSandboxPolicy::from(sandbox_policy);
+            let args = create_linux_sandbox_command_args_for_policies(
+                wrapped,
+                sandbox_policy_cwd,
+                sandbox_policy,
+                &file_system_sandbox_policy,
+                network_sandbox_policy,
+                sandbox_policy_cwd,
+                /*use_legacy_landlock*/ false,
+                /*allow_network_for_proxy*/ false,
             );
             HookHostSpawnInvocation {
                 program: exe.to_string_lossy().to_string(),
@@ -1483,7 +1504,7 @@ fn build_hook_host_spawn_invocation(
                 arg0_override: Some("codex-linux-sandbox".to_string()),
             }
         }
-        crate::exec::SandboxType::WindowsRestrictedToken => HookHostSpawnInvocation {
+        SandboxType::WindowsRestrictedToken => HookHostSpawnInvocation {
             program,
             args,
             arg0_override: None,
@@ -1492,11 +1513,11 @@ fn build_hook_host_spawn_invocation(
 }
 
 fn downgrade_hook_host_sandbox_if_unavailable(
-    sandbox: crate::exec::SandboxType,
+    sandbox: SandboxType,
     codex_linux_sandbox_exe: &Option<PathBuf>,
-) -> crate::exec::SandboxType {
-    if sandbox == crate::exec::SandboxType::LinuxSeccomp && codex_linux_sandbox_exe.is_none() {
-        crate::exec::SandboxType::None
+) -> SandboxType {
+    if sandbox == SandboxType::LinuxSeccomp && codex_linux_sandbox_exe.is_none() {
+        SandboxType::None
     } else {
         sandbox
     }
@@ -1516,23 +1537,21 @@ async fn spawn_hook_host_process(
 
     let mut sandbox = match &cfg.sandbox_policy {
         SandboxPolicy::DangerFullAccess | SandboxPolicy::ExternalSandbox { .. } => {
-            crate::exec::SandboxType::None
+            SandboxType::None
         }
-        _ => crate::safety::get_platform_sandbox(false).unwrap_or(crate::exec::SandboxType::None),
+        _ => get_platform_sandbox(false).unwrap_or(SandboxType::None),
     };
 
     let downgraded =
         downgrade_hook_host_sandbox_if_unavailable(sandbox, &cfg.codex_linux_sandbox_exe);
-    if sandbox == crate::exec::SandboxType::LinuxSeccomp
-        && downgraded == crate::exec::SandboxType::None
-    {
+    if sandbox == SandboxType::LinuxSeccomp && downgraded == SandboxType::None {
         warn!(
             "linux sandbox requested for hook host, but codex_linux_sandbox_exe is not configured; spawning unsandboxed"
         );
     }
     sandbox = downgraded;
 
-    if sandbox == crate::exec::SandboxType::WindowsRestrictedToken {
+    if sandbox == SandboxType::WindowsRestrictedToken {
         warn!("hook host sandboxing is not supported on Windows yet; spawning unsandboxed");
     }
 
@@ -3119,6 +3138,11 @@ fn review_decision_hook_metadata(
             ApprovalDetailDecision::ApprovedWithAmendment,
             Some(proposed_execpolicy_amendment.clone()),
         ),
+        ReviewDecision::NetworkPolicyAmendment { .. } => (
+            ApprovalOutcome::Accepted,
+            ApprovalDetailDecision::ApprovedWithAmendment,
+            None,
+        ),
         ReviewDecision::ApprovedForSession => (
             ApprovalOutcome::Accepted,
             ApprovalDetailDecision::ApprovedForSession,
@@ -3132,6 +3156,11 @@ fn review_decision_hook_metadata(
         ReviewDecision::Abort => (
             ApprovalOutcome::Declined,
             ApprovalDetailDecision::Aborted,
+            None,
+        ),
+        ReviewDecision::TimedOut => (
+            ApprovalOutcome::Declined,
+            ApprovalDetailDecision::Canceled,
             None,
         ),
     }
@@ -5313,7 +5342,7 @@ def on_event(event):
         let invocation = build_hook_host_spawn_invocation(
             "python3".to_string(),
             vec!["-u".to_string(), "hooks/host/python/host.py".to_string()],
-            crate::exec::SandboxType::LinuxSeccomp,
+            SandboxType::LinuxSeccomp,
             &sandbox_policy,
             tmp.path(),
             &exe,
@@ -5343,11 +5372,8 @@ def on_event(event):
 
     #[test]
     fn hook_host_sandbox_downgrades_linux_seccomp_without_helper() {
-        let sandbox = downgrade_hook_host_sandbox_if_unavailable(
-            crate::exec::SandboxType::LinuxSeccomp,
-            &None,
-        );
-        assert_eq!(sandbox, crate::exec::SandboxType::None);
+        let sandbox = downgrade_hook_host_sandbox_if_unavailable(SandboxType::LinuxSeccomp, &None);
+        assert_eq!(sandbox, SandboxType::None);
     }
 
     #[cfg(target_os = "macos")]
@@ -5359,16 +5385,13 @@ def on_event(event):
         let invocation = build_hook_host_spawn_invocation(
             "python3".to_string(),
             vec!["-u".to_string(), "hooks/host/python/host.py".to_string()],
-            crate::exec::SandboxType::MacosSeatbelt,
+            SandboxType::MacosSeatbelt,
             &sandbox_policy,
             tmp.path(),
             &None,
         );
 
-        assert_eq!(
-            invocation.program,
-            crate::seatbelt::MACOS_PATH_TO_SEATBELT_EXECUTABLE
-        );
+        assert_eq!(invocation.program, MACOS_PATH_TO_SEATBELT_EXECUTABLE);
         assert_eq!(invocation.args.first().map(String::as_str), Some("-p"));
         assert!(invocation.args.iter().any(|arg| arg == "--"));
         assert!(invocation.args.iter().any(|arg| arg == "python3"));

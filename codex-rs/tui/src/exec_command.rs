@@ -1,7 +1,7 @@
 use std::path::Path;
 use std::path::PathBuf;
 
-use codex_core::parse_command::extract_shell_command;
+use codex_shell_command::parse_command::extract_shell_command;
 use dirs::home_dir;
 use shlex::try_join;
 
@@ -31,6 +31,22 @@ pub(crate) fn build_copy_command_snippet(pretty_command: &str) -> String {
     }
 
     format!("bash -lc \"$(cat <<'{delimiter}'\n{trimmed}\n{delimiter}\n)\"")
+}
+
+pub(crate) fn split_command_string(command: &str) -> Vec<String> {
+    let Some(parts) = shlex::split(command) else {
+        return vec![command.to_string()];
+    };
+    match shlex::try_join(parts.iter().map(String::as_str)) {
+        Ok(round_trip)
+            if round_trip == command
+                || (!command.contains(":\\")
+                    && shlex::split(&round_trip).as_ref() == Some(&parts)) =>
+        {
+            parts
+        }
+        _ => vec![command.to_string()],
+    }
 }
 
 /// If `path` is absolute and inside $HOME, return the part *after* the home
@@ -98,5 +114,26 @@ mod tests {
     fn build_copy_command_snippet_avoids_delimiter_collision() {
         let snippet = build_copy_command_snippet("echo one\nXCXCODEX_EOF\n");
         assert!(snippet.contains("XCXCODEX_EOF_1"));
+    }
+
+    #[test]
+    fn split_command_string_round_trips_shell_wrappers() {
+        let command =
+            shlex::try_join(["/bin/zsh", "-lc", r#"python3 -c 'print("Hello, world!")'"#])
+                .expect("round-trippable command");
+        assert_eq!(
+            split_command_string(&command),
+            vec![
+                "/bin/zsh".to_string(),
+                "-lc".to_string(),
+                r#"python3 -c 'print("Hello, world!")'"#.to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn split_command_string_preserves_non_roundtrippable_windows_commands() {
+        let command = r#"C:\Program Files\Git\bin\bash.exe -lc "echo hi""#;
+        assert_eq!(split_command_string(command), vec![command.to_string()]);
     }
 }

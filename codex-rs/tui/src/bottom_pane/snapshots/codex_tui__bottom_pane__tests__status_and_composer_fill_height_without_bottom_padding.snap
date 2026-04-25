@@ -2,7 +2,7 @@
 source: tui/src/bottom_pane/mod.rs
 expression: "render_snapshot(&pane, area)"
 ---
-• Charging (0s • esc to interr
+• Charging (0s • esc to inter…
                               
                               
 › Ask xcodex to do anything   

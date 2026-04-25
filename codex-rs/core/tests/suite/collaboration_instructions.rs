@@ -1,11 +1,11 @@
 use anyhow::Result;
-use codex_core::protocol::COLLABORATION_MODE_CLOSE_TAG;
-use codex_core::protocol::COLLABORATION_MODE_OPEN_TAG;
-use codex_core::protocol::EventMsg;
-use codex_core::protocol::Op;
 use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::Settings;
+use codex_protocol::protocol::COLLABORATION_MODE_CLOSE_TAG;
+use codex_protocol::protocol::COLLABORATION_MODE_OPEN_TAG;
+use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::Op;
 use codex_protocol::user_input::UserInput;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_response_created;
@@ -39,28 +39,29 @@ fn collab_mode_with_instructions(instructions: Option<&str>) -> CollaborationMod
 fn developer_texts(input: &[Value]) -> Vec<String> {
     input
         .iter()
-        .filter_map(|item| {
-            let role = item.get("role")?.as_str()?;
-            if role != "developer" {
-                return None;
-            }
-            let text = item
-                .get("content")?
-                .as_array()?
-                .first()?
-                .get("text")?
-                .as_str()?;
+        .filter(|item| item.get("role").and_then(Value::as_str) == Some("developer"))
+        .filter_map(|item| item.get("content")?.as_array().cloned())
+        .flatten()
+        .filter_map(|content| {
+            let text = content.get("text")?.as_str()?;
             Some(text.to_string())
         })
         .collect()
+}
+
+fn developer_message_count(input: &[Value]) -> usize {
+    input
+        .iter()
+        .filter(|item| item.get("role").and_then(Value::as_str) == Some("developer"))
+        .count()
 }
 
 fn collab_xml(text: &str) -> String {
     format!("{COLLABORATION_MODE_OPEN_TAG}{text}{COLLABORATION_MODE_CLOSE_TAG}")
 }
 
-fn count_exact(texts: &[String], target: &str) -> usize {
-    texts.iter().filter(|text| text.as_str() == target).count()
+fn count_messages_containing(texts: &[String], target: &str) -> usize {
+    texts.iter().filter(|text| text.contains(target)).count()
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -83,14 +84,24 @@ async fn no_collaboration_instructions_by_default() -> Result<()> {
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
+            responsesapi_client_metadata: None,
         })
         .await?;
     wait_for_event(&test.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 
     let input = req.single_request().input();
+    assert_eq!(developer_message_count(&input), 1);
     let dev_texts = developer_texts(&input);
-    assert_eq!(dev_texts.len(), 1);
-    assert!(dev_texts[0].contains("<permissions instructions>"));
+    assert!(
+        dev_texts
+            .iter()
+            .any(|text| text.contains("<permissions instructions>")),
+        "expected permissions instructions in developer messages, got {dev_texts:?}"
+    );
+    assert_eq!(
+        count_messages_containing(&dev_texts, COLLABORATION_MODE_OPEN_TAG),
+        0
+    );
 
     Ok(())
 }
@@ -114,11 +125,13 @@ async fn user_input_includes_collaboration_instructions_after_override() -> Resu
         .submit(Op::OverrideTurnContext {
             cwd: None,
             approval_policy: None,
+            approvals_reviewer: None,
             sandbox_policy: None,
             windows_sandbox_level: None,
             model: None,
             effort: None,
             summary: None,
+            service_tier: None,
             collaboration_mode: Some(collaboration_mode),
             personality: None,
         })
@@ -131,6 +144,7 @@ async fn user_input_includes_collaboration_instructions_after_override() -> Resu
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
+            responsesapi_client_metadata: None,
         })
         .await?;
     wait_for_event(&test.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
@@ -138,7 +152,7 @@ async fn user_input_includes_collaboration_instructions_after_override() -> Resu
     let input = req.single_request().input();
     let dev_texts = developer_texts(&input);
     let collab_text = collab_xml(collab_text);
-    assert_eq!(count_exact(&dev_texts, &collab_text), 1);
+    assert_eq!(count_messages_containing(&dev_texts, &collab_text), 1);
 
     Ok(())
 }
@@ -164,12 +178,18 @@ async fn collaboration_instructions_added_on_user_turn() -> Result<()> {
                 text: "hello".into(),
                 text_elements: Vec::new(),
             }],
-            cwd: test.config.cwd.clone(),
+            cwd: test.config.cwd.to_path_buf(),
             approval_policy: test.config.permissions.approval_policy.value(),
+            approvals_reviewer: None,
             sandbox_policy: test.config.permissions.sandbox_policy.get().clone(),
             model: test.session_configured.model.clone(),
             effort: None,
-            summary: test.config.model_reasoning_summary,
+            summary: Some(
+                test.config
+                    .model_reasoning_summary
+                    .unwrap_or(codex_protocol::config_types::ReasoningSummary::Auto),
+            ),
+            service_tier: None,
             collaboration_mode: Some(collaboration_mode),
             final_output_json_schema: None,
             personality: None,
@@ -180,7 +200,7 @@ async fn collaboration_instructions_added_on_user_turn() -> Result<()> {
     let input = req.single_request().input();
     let dev_texts = developer_texts(&input);
     let collab_text = collab_xml(collab_text);
-    assert_eq!(count_exact(&dev_texts, &collab_text), 1);
+    assert_eq!(count_messages_containing(&dev_texts, &collab_text), 1);
 
     Ok(())
 }
@@ -204,11 +224,13 @@ async fn override_then_next_turn_uses_updated_collaboration_instructions() -> Re
         .submit(Op::OverrideTurnContext {
             cwd: None,
             approval_policy: None,
+            approvals_reviewer: None,
             sandbox_policy: None,
             windows_sandbox_level: None,
             model: None,
             effort: None,
             summary: None,
+            service_tier: None,
             collaboration_mode: Some(collaboration_mode),
             personality: None,
         })
@@ -221,6 +243,7 @@ async fn override_then_next_turn_uses_updated_collaboration_instructions() -> Re
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
+            responsesapi_client_metadata: None,
         })
         .await?;
     wait_for_event(&test.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
@@ -228,7 +251,7 @@ async fn override_then_next_turn_uses_updated_collaboration_instructions() -> Re
     let input = req.single_request().input();
     let dev_texts = developer_texts(&input);
     let collab_text = collab_xml(collab_text);
-    assert_eq!(count_exact(&dev_texts, &collab_text), 1);
+    assert_eq!(count_messages_containing(&dev_texts, &collab_text), 1);
 
     Ok(())
 }
@@ -254,11 +277,13 @@ async fn user_turn_overrides_collaboration_instructions_after_override() -> Resu
         .submit(Op::OverrideTurnContext {
             cwd: None,
             approval_policy: None,
+            approvals_reviewer: None,
             sandbox_policy: None,
             windows_sandbox_level: None,
             model: None,
             effort: None,
             summary: None,
+            service_tier: None,
             collaboration_mode: Some(base_mode),
             personality: None,
         })
@@ -270,12 +295,18 @@ async fn user_turn_overrides_collaboration_instructions_after_override() -> Resu
                 text: "hello".into(),
                 text_elements: Vec::new(),
             }],
-            cwd: test.config.cwd.clone(),
+            cwd: test.config.cwd.to_path_buf(),
             approval_policy: test.config.permissions.approval_policy.value(),
+            approvals_reviewer: None,
             sandbox_policy: test.config.permissions.sandbox_policy.get().clone(),
             model: test.session_configured.model.clone(),
             effort: None,
-            summary: test.config.model_reasoning_summary,
+            summary: Some(
+                test.config
+                    .model_reasoning_summary
+                    .unwrap_or(codex_protocol::config_types::ReasoningSummary::Auto),
+            ),
+            service_tier: None,
             collaboration_mode: Some(turn_mode),
             final_output_json_schema: None,
             personality: None,
@@ -287,8 +318,8 @@ async fn user_turn_overrides_collaboration_instructions_after_override() -> Resu
     let dev_texts = developer_texts(&input);
     let base_text = collab_xml(base_text);
     let turn_text = collab_xml(turn_text);
-    assert_eq!(count_exact(&dev_texts, &base_text), 0);
-    assert_eq!(count_exact(&dev_texts, &turn_text), 1);
+    assert_eq!(count_messages_containing(&dev_texts, &base_text), 0);
+    assert_eq!(count_messages_containing(&dev_texts, &turn_text), 1);
 
     Ok(())
 }
@@ -317,11 +348,13 @@ async fn collaboration_mode_update_emits_new_instruction_message() -> Result<()>
         .submit(Op::OverrideTurnContext {
             cwd: None,
             approval_policy: None,
+            approvals_reviewer: None,
             sandbox_policy: None,
             windows_sandbox_level: None,
             model: None,
             effort: None,
             summary: None,
+            service_tier: None,
             collaboration_mode: Some(collab_mode_with_instructions(Some(first_text))),
             personality: None,
         })
@@ -334,6 +367,7 @@ async fn collaboration_mode_update_emits_new_instruction_message() -> Result<()>
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
+            responsesapi_client_metadata: None,
         })
         .await?;
     wait_for_event(&test.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
@@ -342,11 +376,13 @@ async fn collaboration_mode_update_emits_new_instruction_message() -> Result<()>
         .submit(Op::OverrideTurnContext {
             cwd: None,
             approval_policy: None,
+            approvals_reviewer: None,
             sandbox_policy: None,
             windows_sandbox_level: None,
             model: None,
             effort: None,
             summary: None,
+            service_tier: None,
             collaboration_mode: Some(collab_mode_with_instructions(Some(second_text))),
             personality: None,
         })
@@ -359,6 +395,7 @@ async fn collaboration_mode_update_emits_new_instruction_message() -> Result<()>
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
+            responsesapi_client_metadata: None,
         })
         .await?;
     wait_for_event(&test.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
@@ -367,8 +404,8 @@ async fn collaboration_mode_update_emits_new_instruction_message() -> Result<()>
     let dev_texts = developer_texts(&input);
     let first_text = collab_xml(first_text);
     let second_text = collab_xml(second_text);
-    assert_eq!(count_exact(&dev_texts, &first_text), 1);
-    assert_eq!(count_exact(&dev_texts, &second_text), 1);
+    assert_eq!(count_messages_containing(&dev_texts, &first_text), 1);
+    assert_eq!(count_messages_containing(&dev_texts, &second_text), 1);
 
     Ok(())
 }
@@ -396,11 +433,13 @@ async fn collaboration_mode_update_noop_does_not_append() -> Result<()> {
         .submit(Op::OverrideTurnContext {
             cwd: None,
             approval_policy: None,
+            approvals_reviewer: None,
             sandbox_policy: None,
             windows_sandbox_level: None,
             model: None,
             effort: None,
             summary: None,
+            service_tier: None,
             collaboration_mode: Some(collab_mode_with_instructions(Some(collab_text))),
             personality: None,
         })
@@ -413,6 +452,7 @@ async fn collaboration_mode_update_noop_does_not_append() -> Result<()> {
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
+            responsesapi_client_metadata: None,
         })
         .await?;
     wait_for_event(&test.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
@@ -421,11 +461,13 @@ async fn collaboration_mode_update_noop_does_not_append() -> Result<()> {
         .submit(Op::OverrideTurnContext {
             cwd: None,
             approval_policy: None,
+            approvals_reviewer: None,
             sandbox_policy: None,
             windows_sandbox_level: None,
             model: None,
             effort: None,
             summary: None,
+            service_tier: None,
             collaboration_mode: Some(collab_mode_with_instructions(Some(collab_text))),
             personality: None,
         })
@@ -438,6 +480,7 @@ async fn collaboration_mode_update_noop_does_not_append() -> Result<()> {
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
+            responsesapi_client_metadata: None,
         })
         .await?;
     wait_for_event(&test.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
@@ -445,7 +488,7 @@ async fn collaboration_mode_update_noop_does_not_append() -> Result<()> {
     let input = req2.single_request().input();
     let dev_texts = developer_texts(&input);
     let collab_text = collab_xml(collab_text);
-    assert_eq!(count_exact(&dev_texts, &collab_text), 1);
+    assert_eq!(count_messages_containing(&dev_texts, &collab_text), 1);
 
     Ok(())
 }
@@ -474,11 +517,13 @@ async fn collaboration_mode_update_emits_new_instruction_message_when_mode_chang
         .submit(Op::OverrideTurnContext {
             cwd: None,
             approval_policy: None,
+            approvals_reviewer: None,
             sandbox_policy: None,
             windows_sandbox_level: None,
             model: None,
             effort: None,
             summary: None,
+            service_tier: None,
             collaboration_mode: Some(collab_mode_with_mode_and_instructions(
                 ModeKind::Default,
                 Some(default_text),
@@ -494,6 +539,7 @@ async fn collaboration_mode_update_emits_new_instruction_message_when_mode_chang
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
+            responsesapi_client_metadata: None,
         })
         .await?;
     wait_for_event(&test.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
@@ -502,11 +548,13 @@ async fn collaboration_mode_update_emits_new_instruction_message_when_mode_chang
         .submit(Op::OverrideTurnContext {
             cwd: None,
             approval_policy: None,
+            approvals_reviewer: None,
             sandbox_policy: None,
             windows_sandbox_level: None,
             model: None,
             effort: None,
             summary: None,
+            service_tier: None,
             collaboration_mode: Some(collab_mode_with_mode_and_instructions(
                 ModeKind::Plan,
                 Some(plan_text),
@@ -522,6 +570,7 @@ async fn collaboration_mode_update_emits_new_instruction_message_when_mode_chang
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
+            responsesapi_client_metadata: None,
         })
         .await?;
     wait_for_event(&test.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
@@ -530,8 +579,8 @@ async fn collaboration_mode_update_emits_new_instruction_message_when_mode_chang
     let dev_texts = developer_texts(&input);
     let default_text = collab_xml(default_text);
     let plan_text = collab_xml(plan_text);
-    assert_eq!(count_exact(&dev_texts, &default_text), 1);
-    assert_eq!(count_exact(&dev_texts, &plan_text), 1);
+    assert_eq!(count_messages_containing(&dev_texts, &default_text), 1);
+    assert_eq!(count_messages_containing(&dev_texts, &plan_text), 1);
 
     Ok(())
 }
@@ -559,11 +608,13 @@ async fn collaboration_mode_update_noop_does_not_append_when_mode_is_unchanged()
         .submit(Op::OverrideTurnContext {
             cwd: None,
             approval_policy: None,
+            approvals_reviewer: None,
             sandbox_policy: None,
             windows_sandbox_level: None,
             model: None,
             effort: None,
             summary: None,
+            service_tier: None,
             collaboration_mode: Some(collab_mode_with_mode_and_instructions(
                 ModeKind::Default,
                 Some(collab_text),
@@ -579,6 +630,7 @@ async fn collaboration_mode_update_noop_does_not_append_when_mode_is_unchanged()
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
+            responsesapi_client_metadata: None,
         })
         .await?;
     wait_for_event(&test.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
@@ -587,11 +639,13 @@ async fn collaboration_mode_update_noop_does_not_append_when_mode_is_unchanged()
         .submit(Op::OverrideTurnContext {
             cwd: None,
             approval_policy: None,
+            approvals_reviewer: None,
             sandbox_policy: None,
             windows_sandbox_level: None,
             model: None,
             effort: None,
             summary: None,
+            service_tier: None,
             collaboration_mode: Some(collab_mode_with_mode_and_instructions(
                 ModeKind::Default,
                 Some(collab_text),
@@ -607,6 +661,7 @@ async fn collaboration_mode_update_noop_does_not_append_when_mode_is_unchanged()
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
+            responsesapi_client_metadata: None,
         })
         .await?;
     wait_for_event(&test.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
@@ -614,7 +669,7 @@ async fn collaboration_mode_update_noop_does_not_append_when_mode_is_unchanged()
     let input = req2.single_request().input();
     let dev_texts = developer_texts(&input);
     let collab_text = collab_xml(collab_text);
-    assert_eq!(count_exact(&dev_texts, &collab_text), 1);
+    assert_eq!(count_messages_containing(&dev_texts, &collab_text), 1);
 
     Ok(())
 }
@@ -650,11 +705,13 @@ async fn resume_replays_collaboration_instructions() -> Result<()> {
         .submit(Op::OverrideTurnContext {
             cwd: None,
             approval_policy: None,
+            approvals_reviewer: None,
             sandbox_policy: None,
             windows_sandbox_level: None,
             model: None,
             effort: None,
             summary: None,
+            service_tier: None,
             collaboration_mode: Some(collab_mode_with_instructions(Some(collab_text))),
             personality: None,
         })
@@ -668,6 +725,7 @@ async fn resume_replays_collaboration_instructions() -> Result<()> {
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
+            responsesapi_client_metadata: None,
         })
         .await?;
     wait_for_event(&initial.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
@@ -681,6 +739,7 @@ async fn resume_replays_collaboration_instructions() -> Result<()> {
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
+            responsesapi_client_metadata: None,
         })
         .await?;
     wait_for_event(&resumed.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
@@ -688,7 +747,7 @@ async fn resume_replays_collaboration_instructions() -> Result<()> {
     let input = req2.single_request().input();
     let dev_texts = developer_texts(&input);
     let collab_text = collab_xml(collab_text);
-    assert_eq!(count_exact(&dev_texts, &collab_text), 1);
+    assert_eq!(count_messages_containing(&dev_texts, &collab_text), 1);
 
     Ok(())
 }
@@ -711,11 +770,13 @@ async fn empty_collaboration_instructions_are_ignored() -> Result<()> {
         .submit(Op::OverrideTurnContext {
             cwd: None,
             approval_policy: None,
+            approvals_reviewer: None,
             sandbox_policy: None,
             windows_sandbox_level: None,
             model: None,
             effort: None,
             summary: None,
+            service_tier: None,
             collaboration_mode: Some(CollaborationMode {
                 mode: ModeKind::Default,
                 settings: Settings {
@@ -735,15 +796,16 @@ async fn empty_collaboration_instructions_are_ignored() -> Result<()> {
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
+            responsesapi_client_metadata: None,
         })
         .await?;
     wait_for_event(&test.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 
     let input = req.single_request().input();
+    assert_eq!(developer_message_count(&input), 1);
     let dev_texts = developer_texts(&input);
-    assert_eq!(dev_texts.len(), 1);
     let collab_text = collab_xml("");
-    assert_eq!(count_exact(&dev_texts, &collab_text), 0);
+    assert_eq!(count_messages_containing(&dev_texts, &collab_text), 0);
 
     Ok(())
 }

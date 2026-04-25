@@ -45,5 +45,20 @@ out="$@"
     visibility = ["//visibility:public"],
 )
 exports_files([
+    "clippy.toml",
     "node-version.txt",
 ])
+
+filegroup(
+    name = "workspace-files",
+    srcs = glob(
+        [
+            "*",
+            ".cargo/**",
+        ],
+        exclude = [
+            "BUILD.bazel",
+        ],
+    ),
+    visibility = ["//visibility:public"],
+)

@@ -153,6 +153,7 @@ animations = true
 # Footer status bar items. Defaults: false
 status_bar_show_git_branch = false
 status_bar_show_worktree = false
+status_bar_show_model = false
 
 # Render the active composer with only top/bottom borders. Default: false
 # minimal_composer = false

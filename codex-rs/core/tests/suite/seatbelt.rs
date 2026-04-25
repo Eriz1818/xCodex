@@ -7,10 +7,10 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::path::PathBuf;
 
-use codex_core::protocol::SandboxPolicy;
 use codex_core::seatbelt::spawn_command_under_seatbelt;
 use codex_core::spawn::CODEX_SANDBOX_ENV_VAR;
 use codex_core::spawn::StdioPolicy;
+use codex_protocol::protocol::SandboxPolicy;
 use tempfile::TempDir;
 
 struct TestScenario {
@@ -192,7 +192,7 @@ assert os.read(master, 4) == b"ping""#
         &policy,
         sandbox_cwd.as_path(),
         StdioPolicy::RedirectForShellTool,
-        None,
+        /*network*/ None,
         HashMap::new(),
     )
     .await
@@ -245,7 +245,7 @@ async fn java_home_finds_runtime_under_seatbelt() {
         &policy,
         sandbox_cwd.as_path(),
         StdioPolicy::RedirectForShellTool,
-        None,
+        /*network*/ None,
         env,
     )
     .await
@@ -302,7 +302,7 @@ async fn touch(path: &Path, policy: &SandboxPolicy) -> bool {
         policy,
         sandbox_cwd.as_path(),
         StdioPolicy::RedirectForShellTool,
-        None,
+        /*network*/ None,
         HashMap::new(),
     )
     .await

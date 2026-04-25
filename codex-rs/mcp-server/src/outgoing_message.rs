@@ -2,8 +2,8 @@ use std::collections::HashMap;
 use std::sync::atomic::AtomicI64;
 use std::sync::atomic::Ordering;
 
-use codex_core::protocol::Event;
 use codex_protocol::ThreadId;
+use codex_protocol::protocol::Event;
 use rmcp::model::CustomNotification;
 use rmcp::model::CustomRequest;
 use rmcp::model::ErrorData;
@@ -200,7 +200,7 @@ pub(crate) struct OutgoingNotificationParams {
     pub event: serde_json::Value,
 }
 
-// Additional mcp-specific data to be added to a [`codex_core::protocol::Event`] as notification.params._meta
+// Additional mcp-specific data to be added to a [`codex_protocol::protocol::Event`] as notification.params._meta
 // MCP Spec: https://modelcontextprotocol.io/specification/2025-06-18/basic#meta
 // Typescript Schema: https://github.com/modelcontextprotocol/modelcontextprotocol/blob/0695a497eb50a804fc0e88c18a93a21a675d6b3e/schema/2025-06-18/schema.ts
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -231,12 +231,12 @@ mod tests {
     use std::path::PathBuf;
 
     use anyhow::Result;
-    use codex_core::protocol::AskForApproval;
-    use codex_core::protocol::EventMsg;
-    use codex_core::protocol::SandboxPolicy;
-    use codex_core::protocol::SessionConfiguredEvent;
     use codex_protocol::ThreadId;
     use codex_protocol::openai_models::ReasoningEffort;
+    use codex_protocol::protocol::AskForApproval;
+    use codex_protocol::protocol::EventMsg;
+    use codex_protocol::protocol::SandboxPolicy;
+    use codex_protocol::protocol::SessionConfiguredEvent;
     use pretty_assertions::assert_eq;
     use serde_json::json;
     use tempfile::NamedTempFile;
@@ -300,7 +300,9 @@ mod tests {
                 thread_name: None,
                 model: "gpt-4o".to_string(),
                 model_provider_id: "test-provider".to_string(),
+                service_tier: None,
                 approval_policy: AskForApproval::Never,
+                approvals_reviewer: codex_protocol::config_types::ApprovalsReviewer::User,
                 sandbox_policy: SandboxPolicy::new_read_only_policy(),
                 cwd: PathBuf::from("/home/user/project"),
                 reasoning_effort: Some(ReasoningEffort::default()),
@@ -313,7 +315,7 @@ mod tests {
         };
 
         outgoing_message_sender
-            .send_event_as_notification(&event, None)
+            .send_event_as_notification(&event, /*meta*/ None)
             .await;
 
         let result = outgoing_rx.recv().await.unwrap();
@@ -342,7 +344,9 @@ mod tests {
             thread_name: None,
             model: "gpt-4o".to_string(),
             model_provider_id: "test-provider".to_string(),
+            service_tier: None,
             approval_policy: AskForApproval::Never,
+            approvals_reviewer: codex_protocol::config_types::ApprovalsReviewer::User,
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
             cwd: PathBuf::from("/home/user/project"),
             reasoning_effort: Some(ReasoningEffort::default()),
@@ -381,6 +385,7 @@ mod tests {
                 "model": "gpt-4o",
                 "model_provider_id": "test-provider",
                 "approval_policy": "never",
+                "approvals_reviewer": "user",
                 "sandbox_policy": {
                     "type": "read-only"
                 },
@@ -408,7 +413,9 @@ mod tests {
             thread_name: None,
             model: "gpt-4o".to_string(),
             model_provider_id: "test-provider".to_string(),
+            service_tier: None,
             approval_policy: AskForApproval::Never,
+            approvals_reviewer: codex_protocol::config_types::ApprovalsReviewer::User,
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
             cwd: PathBuf::from("/home/user/project"),
             reasoning_effort: Some(ReasoningEffort::default()),
@@ -448,6 +455,7 @@ mod tests {
                 "model": "gpt-4o",
                 "model_provider_id": "test-provider",
                 "approval_policy": "never",
+                "approvals_reviewer": "user",
                 "sandbox_policy": {
                     "type": "read-only"
                 },

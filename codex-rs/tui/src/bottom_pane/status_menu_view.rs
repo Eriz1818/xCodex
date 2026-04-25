@@ -37,6 +37,7 @@ pub(crate) enum StatusMenuTab {
 pub(crate) struct StatusMenuView {
     tab: StatusMenuTab,
     complete: bool,
+    status_bar_show_model: bool,
     status_bar_show_git_branch: bool,
     status_bar_show_worktree: bool,
     transcript_syntax_highlight: bool,
@@ -60,6 +61,7 @@ impl StatusMenuView {
         tab: StatusMenuTab,
         app_event_tx: AppEventSender,
         status_cell: Box<dyn HistoryCell>,
+        status_bar_show_model: bool,
         status_bar_show_git_branch: bool,
         status_bar_show_worktree: bool,
         transcript_syntax_highlight: bool,
@@ -78,6 +80,7 @@ impl StatusMenuView {
         Self {
             tab,
             complete: false,
+            status_bar_show_model,
             status_bar_show_git_branch,
             status_bar_show_worktree,
             transcript_syntax_highlight,
@@ -151,7 +154,7 @@ impl StatusMenuView {
     }
 
     fn settings_row_count(&self) -> usize {
-        8
+        9
     }
 
     fn tools_row_count(&self) -> usize {
@@ -279,9 +282,22 @@ impl StatusMenuView {
             );
         }
 
-        // Row 2: transcript syntax highlighting.
+        // Row 2: footer model name.
         {
             let selected = self.selected_settings_row == 2;
+            lines.push(
+                vec![
+                    selected_prefix(selected),
+                    checkbox(self.status_bar_show_model),
+                    "Footer: model name".into(),
+                ]
+                .into(),
+            );
+        }
+
+        // Row 3: transcript syntax highlighting.
+        {
+            let selected = self.selected_settings_row == 3;
             lines.push(
                 vec![
                     selected_prefix(selected),
@@ -292,9 +308,9 @@ impl StatusMenuView {
             );
         }
 
-        // Row 3: transcript diff highlight.
+        // Row 4: transcript diff highlight.
         {
-            let selected = self.selected_settings_row == 3;
+            let selected = self.selected_settings_row == 4;
             lines.push(
                 vec![
                     selected_prefix(selected),
@@ -305,9 +321,9 @@ impl StatusMenuView {
             );
         }
 
-        // Row 4: transcript side-by-side diff.
+        // Row 5: transcript side-by-side diff.
         {
-            let selected = self.selected_settings_row == 4;
+            let selected = self.selected_settings_row == 5;
             lines.push(
                 vec![
                     selected_prefix(selected),
@@ -318,9 +334,9 @@ impl StatusMenuView {
             );
         }
 
-        // Row 5: transcript user prompt highlight.
+        // Row 6: transcript user prompt highlight.
         {
-            let selected = self.selected_settings_row == 5;
+            let selected = self.selected_settings_row == 6;
             lines.push(
                 vec![
                     selected_prefix(selected),
@@ -331,9 +347,9 @@ impl StatusMenuView {
             );
         }
 
-        // Row 6: minimal composer borders.
+        // Row 7: minimal composer borders.
         {
-            let selected = self.selected_settings_row == 6;
+            let selected = self.selected_settings_row == 7;
             lines.push(
                 vec![
                     selected_prefix(selected),
@@ -344,9 +360,9 @@ impl StatusMenuView {
             );
         }
 
-        // Row 7: Worktrees settings editor.
+        // Row 8: Worktrees settings editor.
         {
-            let selected = self.selected_settings_row == 7;
+            let selected = self.selected_settings_row == 8;
             lines.push(vec![selected_prefix(selected), "Worktrees…".into()].into());
         }
 
@@ -598,29 +614,47 @@ impl StatusMenuView {
             StatusMenuTab::Settings => match self.selected_settings_row {
                 0 => {
                     self.status_bar_show_git_branch = !self.status_bar_show_git_branch;
-                    self.app_event_tx.send(AppEvent::UpdateStatusBarGitOptions {
+                    self.app_event_tx.send(AppEvent::UpdateFooterStatusOptions {
+                        show_model: self.status_bar_show_model,
                         show_git_branch: self.status_bar_show_git_branch,
                         show_worktree: self.status_bar_show_worktree,
                     });
                     self.app_event_tx
-                        .send(AppEvent::PersistStatusBarGitOptions {
+                        .send(AppEvent::PersistFooterStatusOptions {
+                            show_model: self.status_bar_show_model,
                             show_git_branch: self.status_bar_show_git_branch,
                             show_worktree: self.status_bar_show_worktree,
                         });
                 }
                 1 => {
                     self.status_bar_show_worktree = !self.status_bar_show_worktree;
-                    self.app_event_tx.send(AppEvent::UpdateStatusBarGitOptions {
+                    self.app_event_tx.send(AppEvent::UpdateFooterStatusOptions {
+                        show_model: self.status_bar_show_model,
                         show_git_branch: self.status_bar_show_git_branch,
                         show_worktree: self.status_bar_show_worktree,
                     });
                     self.app_event_tx
-                        .send(AppEvent::PersistStatusBarGitOptions {
+                        .send(AppEvent::PersistFooterStatusOptions {
+                            show_model: self.status_bar_show_model,
                             show_git_branch: self.status_bar_show_git_branch,
                             show_worktree: self.status_bar_show_worktree,
                         });
                 }
                 2 => {
+                    self.status_bar_show_model = !self.status_bar_show_model;
+                    self.app_event_tx.send(AppEvent::UpdateFooterStatusOptions {
+                        show_model: self.status_bar_show_model,
+                        show_git_branch: self.status_bar_show_git_branch,
+                        show_worktree: self.status_bar_show_worktree,
+                    });
+                    self.app_event_tx
+                        .send(AppEvent::PersistFooterStatusOptions {
+                            show_model: self.status_bar_show_model,
+                            show_git_branch: self.status_bar_show_git_branch,
+                            show_worktree: self.status_bar_show_worktree,
+                        });
+                }
+                3 => {
                     self.transcript_syntax_highlight = !self.transcript_syntax_highlight;
                     self.app_event_tx
                         .send(AppEvent::UpdateTranscriptSyntaxHighlight(
@@ -631,7 +665,7 @@ impl StatusMenuView {
                             self.transcript_syntax_highlight,
                         ));
                 }
-                3 => {
+                4 => {
                     self.transcript_diff_highlight = !self.transcript_diff_highlight;
                     self.app_event_tx
                         .send(AppEvent::UpdateTranscriptDiffHighlight(
@@ -642,7 +676,7 @@ impl StatusMenuView {
                             self.transcript_diff_highlight,
                         ));
                 }
-                4 => {
+                5 => {
                     self.transcript_side_by_side = !self.transcript_side_by_side;
                     self.app_event_tx.send(AppEvent::UpdateTranscriptSideBySide(
                         self.transcript_side_by_side,
@@ -652,7 +686,7 @@ impl StatusMenuView {
                             self.transcript_side_by_side,
                         ));
                 }
-                5 => {
+                6 => {
                     self.transcript_user_prompt_highlight = !self.transcript_user_prompt_highlight;
                     self.app_event_tx
                         .send(AppEvent::UpdateTranscriptUserPromptHighlight(
@@ -663,14 +697,14 @@ impl StatusMenuView {
                             self.transcript_user_prompt_highlight,
                         ));
                 }
-                6 => {
+                7 => {
                     self.minimal_composer = !self.minimal_composer;
                     self.app_event_tx
                         .send(AppEvent::UpdateMinimalComposer(self.minimal_composer));
                     self.app_event_tx
                         .send(AppEvent::PersistMinimalComposer(self.minimal_composer));
                 }
-                7 => {
+                8 => {
                     self.app_event_tx.send(AppEvent::OpenWorktreesSettingsView);
                     self.complete = true;
                 }
@@ -1049,6 +1083,7 @@ mod tests {
             StatusMenuTab::Status,
             tx,
             status_cell,
+            false,
             true,
             false,
             true,
@@ -1074,6 +1109,7 @@ mod tests {
             StatusMenuTab::Status,
             tx,
             status_cell,
+            false,
             true,
             false,
             true,
@@ -1102,6 +1138,7 @@ mod tests {
             StatusMenuTab::Tools,
             tx,
             status_cell,
+            false,
             true,
             false,
             true,
@@ -1127,6 +1164,7 @@ mod tests {
             StatusMenuTab::Tools,
             tx,
             status_cell,
+            false,
             true,
             false,
             true,
@@ -1147,6 +1185,53 @@ mod tests {
         assert!(matches!(
             rx.try_recv(),
             Ok(AppEvent::PersistXtremeMode(XtremeMode::Off))
+        ));
+        assert!(rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn settings_tab_toggle_model_sends_update_and_persist() {
+        let (tx_raw, mut rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let status_cell = Box::new(crate::history_cell::new_info_event(
+            "Status card".to_string(),
+            None,
+        ));
+        let mut view = StatusMenuView::new(
+            StatusMenuTab::Settings,
+            tx,
+            status_cell,
+            false,
+            true,
+            false,
+            true,
+            false,
+            true,
+            false,
+            false,
+            XtremeMode::On,
+            false,
+        );
+
+        view.handle_key_event(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+        view.handle_key_event(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+        view.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+        assert!(matches!(
+            rx.try_recv(),
+            Ok(AppEvent::UpdateFooterStatusOptions {
+                show_model: true,
+                show_git_branch: true,
+                show_worktree: false,
+            })
+        ));
+        assert!(matches!(
+            rx.try_recv(),
+            Ok(AppEvent::PersistFooterStatusOptions {
+                show_model: true,
+                show_git_branch: true,
+                show_worktree: false,
+            })
         ));
         assert!(rx.try_recv().is_err());
     }

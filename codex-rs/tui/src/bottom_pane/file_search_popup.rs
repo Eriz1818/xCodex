@@ -73,7 +73,7 @@ impl FileSearchPopup {
         }
 
         self.display_query = query.to_string();
-        self.matches = matches;
+        self.matches = matches.into_iter().take(MAX_POPUP_ROWS).collect();
         self.waiting = false;
         let len = self.matches.len();
         self.state.clamp_selection(len);
@@ -126,6 +126,7 @@ impl WidgetRef for &FileSearchPopup {
                 .iter()
                 .map(|m| GenericDisplayRow {
                     name: m.path.to_string_lossy().to_string(),
+                    name_prefix_spans: Vec::new(),
                     match_indices: m
                         .indices
                         .as_ref()
@@ -149,7 +150,9 @@ impl WidgetRef for &FileSearchPopup {
 
         let base_style = transcript_popup_surface_style();
         render_rows(
-            area.inset(Insets::tlbr(0, 2, 0, 0)),
+            area.inset(Insets::tlbr(
+                /*top*/ 0, /*left*/ 2, /*bottom*/ 0, /*right*/ 0,
+            )),
             buf,
             &rows_all,
             &self.state,
@@ -164,6 +167,8 @@ impl WidgetRef for &FileSearchPopup {
 mod tests {
     use super::*;
     use crate::bottom_pane::selection_popup_common::assert_transcript_surface_bg;
+    use codex_file_search::MatchType;
+    use pretty_assertions::assert_eq;
     use ratatui::layout::Rect;
     use ratatui::widgets::WidgetRef;
 
@@ -173,5 +178,28 @@ mod tests {
         assert_transcript_surface_bg(Rect::new(0, 0, 32, 4), |area, buf| {
             (&popup).render_ref(area, buf);
         });
+    }
+
+    fn file_match(index: usize) -> FileMatch {
+        FileMatch {
+            score: index as u32,
+            path: PathBuf::from(format!("src/file_{index:02}.rs")),
+            match_type: MatchType::File,
+            root: PathBuf::from("/tmp/repo"),
+            indices: None,
+        }
+    }
+
+    #[test]
+    fn set_matches_keeps_only_the_first_page_of_results() {
+        let mut popup = FileSearchPopup::new();
+        popup.set_query("file");
+        popup.set_matches("file", (0..(MAX_POPUP_ROWS + 2)).map(file_match).collect());
+
+        assert_eq!(
+            popup.matches,
+            (0..MAX_POPUP_ROWS).map(file_match).collect::<Vec<_>>()
+        );
+        assert_eq!(popup.calculate_required_height(), MAX_POPUP_ROWS as u16);
     }
 }

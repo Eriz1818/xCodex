@@ -3,32 +3,42 @@ use std::sync::Arc;
 use std::time::Duration;
 use std::time::Instant;
 
-use crate::client_common::tools::ToolSpec;
 use crate::function_tool::FunctionCallError;
+use crate::hook_runtime::record_additional_contexts;
+use crate::hook_runtime::run_post_tool_use_hooks;
+use crate::hook_runtime::run_pre_tool_use_hooks;
+use crate::memories::usage::emit_metric_for_tool_read;
 use crate::protocol::EventMsg;
 use crate::protocol::ReviewDecision;
-use crate::protocol::SandboxPolicy;
 use crate::protocol::WarningEvent;
 use crate::sandbox_tags::sandbox_tag;
+use crate::tools::context::FunctionToolOutput;
+use crate::tools::context::McpToolOutput;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
 use crate::tools::context::ToolProvenance;
-use async_trait::async_trait;
 use codex_hooks::HookEvent;
 use codex_hooks::HookEventAfterToolUse;
 use codex_hooks::HookPayload;
+use codex_hooks::HookResult;
 use codex_hooks::HookToolInput;
 use codex_hooks::HookToolInputLocalShell;
 use codex_hooks::HookToolKind;
 use codex_protocol::config_types::ModeKind;
-use codex_protocol::models::FunctionCallOutputBody;
+use codex_protocol::mcp::CallToolResult;
 use codex_protocol::models::FunctionCallOutputContentItem;
 use codex_protocol::models::ResponseInputItem;
+use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::request_user_input::RequestUserInputArgs;
 use codex_protocol::request_user_input::RequestUserInputQuestion;
 use codex_protocol::request_user_input::RequestUserInputQuestionOption;
+use codex_tools::ConfiguredToolSpec;
+use codex_tools::ToolName;
+use codex_tools::ToolSpec;
 use codex_utils_readiness::Readiness;
+use futures::future::BoxFuture;
+use serde_json::Value;
 use sha2::Digest as _;
 use sha2::Sha256;
 use tracing::warn;
@@ -39,14 +49,16 @@ pub enum ToolKind {
     Mcp,
 }
 
-#[async_trait]
 pub trait ToolHandler: Send + Sync {
+    type Output: ToolOutput + 'static;
+
     fn kind(&self) -> ToolKind;
 
     fn matches_kind(&self, payload: &ToolPayload) -> bool {
         matches!(
             (self.kind(), payload),
             (ToolKind::Function, ToolPayload::Function { .. })
+                | (ToolKind::Function, ToolPayload::ToolSearch { .. })
                 | (ToolKind::Mcp, ToolPayload::Mcp { .. })
         )
     }
@@ -55,53 +67,160 @@ pub trait ToolHandler: Send + Sync {
     /// user (through file system, OS operations, ...).
     /// This function must remains defensive and return `true` if a doubt exist on the
     /// exact effect of a ToolInvocation.
-    async fn is_mutating(&self, _invocation: &ToolInvocation) -> bool {
-        false
+    fn is_mutating(
+        &self,
+        _invocation: &ToolInvocation,
+    ) -> impl std::future::Future<Output = bool> + Send {
+        async { false }
+    }
+
+    fn pre_tool_use_payload(&self, _invocation: &ToolInvocation) -> Option<PreToolUsePayload> {
+        None
+    }
+
+    fn post_tool_use_payload(
+        &self,
+        _call_id: &str,
+        _payload: &ToolPayload,
+        _result: &dyn ToolOutput,
+    ) -> Option<PostToolUsePayload> {
+        None
     }
 
     /// Perform the actual [ToolInvocation] and returns a [ToolOutput] containing
     /// the final output to return to the model.
-    async fn handle(&self, invocation: ToolInvocation) -> Result<ToolOutput, FunctionCallError>;
+    fn handle(
+        &self,
+        invocation: ToolInvocation,
+    ) -> impl std::future::Future<Output = Result<Self::Output, FunctionCallError>> + Send;
+}
+
+pub(crate) struct AnyToolResult {
+    pub(crate) call_id: String,
+    pub(crate) payload: ToolPayload,
+    pub(crate) result: Box<dyn ToolOutput>,
+}
+
+impl AnyToolResult {
+    pub(crate) fn into_response(self) -> ResponseInputItem {
+        let Self {
+            call_id,
+            payload,
+            result,
+        } = self;
+        result.to_response_item(&call_id, &payload)
+    }
+
+    pub(crate) fn code_mode_result(self) -> serde_json::Value {
+        let Self {
+            payload, result, ..
+        } = self;
+        result.code_mode_result(&payload)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct PreToolUsePayload {
+    pub(crate) command: String,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct PostToolUsePayload {
+    pub(crate) command: String,
+    pub(crate) tool_response: Value,
+}
+
+trait AnyToolHandler: Send + Sync {
+    fn matches_kind(&self, payload: &ToolPayload) -> bool;
+
+    fn is_mutating<'a>(&'a self, invocation: &'a ToolInvocation) -> BoxFuture<'a, bool>;
+
+    fn pre_tool_use_payload(&self, invocation: &ToolInvocation) -> Option<PreToolUsePayload>;
+
+    fn post_tool_use_payload(
+        &self,
+        call_id: &str,
+        payload: &ToolPayload,
+        result: &dyn ToolOutput,
+    ) -> Option<PostToolUsePayload>;
+
+    fn handle_any<'a>(
+        &'a self,
+        invocation: ToolInvocation,
+    ) -> BoxFuture<'a, Result<AnyToolResult, FunctionCallError>>;
+}
+
+impl<T> AnyToolHandler for T
+where
+    T: ToolHandler,
+{
+    fn matches_kind(&self, payload: &ToolPayload) -> bool {
+        ToolHandler::matches_kind(self, payload)
+    }
+
+    fn is_mutating<'a>(&'a self, invocation: &'a ToolInvocation) -> BoxFuture<'a, bool> {
+        Box::pin(ToolHandler::is_mutating(self, invocation))
+    }
+
+    fn pre_tool_use_payload(&self, invocation: &ToolInvocation) -> Option<PreToolUsePayload> {
+        ToolHandler::pre_tool_use_payload(self, invocation)
+    }
+
+    fn post_tool_use_payload(
+        &self,
+        call_id: &str,
+        payload: &ToolPayload,
+        result: &dyn ToolOutput,
+    ) -> Option<PostToolUsePayload> {
+        ToolHandler::post_tool_use_payload(self, call_id, payload, result)
+    }
+
+    fn handle_any<'a>(
+        &'a self,
+        invocation: ToolInvocation,
+    ) -> BoxFuture<'a, Result<AnyToolResult, FunctionCallError>> {
+        Box::pin(async move {
+            let call_id = invocation.call_id.clone();
+            let payload = invocation.payload.clone();
+            let output = self.handle(invocation).await?;
+            Ok(AnyToolResult {
+                call_id,
+                payload,
+                result: Box::new(output),
+            })
+        })
+    }
 }
 
 pub struct ToolRegistry {
-    handlers: HashMap<String, Arc<dyn ToolHandler>>,
+    handlers: HashMap<ToolName, Arc<dyn AnyToolHandler>>,
 }
 
 impl ToolRegistry {
-    pub fn new(handlers: HashMap<String, Arc<dyn ToolHandler>>) -> Self {
+    fn new(handlers: HashMap<ToolName, Arc<dyn AnyToolHandler>>) -> Self {
         Self { handlers }
     }
 
-    pub fn handler(&self, name: &str) -> Option<Arc<dyn ToolHandler>> {
-        if let Some(handler) = self.handlers.get(name) {
-            return Some(Arc::clone(handler));
-        }
-        if name.starts_with("mcp__") {
-            return self.handlers.get("mcp__").cloned();
-        }
-        None
+    fn handler(&self, name: &ToolName) -> Option<Arc<dyn AnyToolHandler>> {
+        self.handlers.get(name).map(Arc::clone)
     }
 
-    // TODO(jif) for dynamic tools.
-    // pub fn register(&mut self, name: impl Into<String>, handler: Arc<dyn ToolHandler>) {
-    //     let name = name.into();
-    //     if self.handlers.insert(name.clone(), handler).is_some() {
-    //         warn!("overwriting handler for tool {name}");
-    //     }
-    // }
+    #[cfg(test)]
+    pub(crate) fn has_handler(&self, name: &ToolName) -> bool {
+        self.handler(name).is_some()
+    }
 
-    pub async fn dispatch(
+    pub(crate) async fn dispatch_any(
         &self,
         invocation: ToolInvocation,
-    ) -> Result<ResponseInputItem, FunctionCallError> {
+    ) -> Result<AnyToolResult, FunctionCallError> {
         let tool_name = invocation.tool_name.clone();
+        let display_name = tool_name.display();
         let call_id_owned = invocation.call_id.clone();
-        let session = invocation.session.clone();
-        let turn = invocation.turn.clone();
-        let otel = invocation.turn.otel_manager.clone();
-        let payload_for_response = invocation.payload.clone();
-        let log_payload = payload_for_response.log_payload();
+        let session = Arc::clone(&invocation.session);
+        let turn = Arc::clone(&invocation.turn);
+        let otel = invocation.turn.session_telemetry.clone();
+        let log_payload = invocation.payload.log_payload();
         let metric_tags = [
             (
                 "sandbox",
@@ -115,81 +234,125 @@ impl ToolRegistry {
                 sandbox_policy_tag(&invocation.turn.sandbox_policy),
             ),
         ];
+        let (mcp_server, mcp_server_origin) = match &invocation.payload {
+            ToolPayload::Mcp { server, .. } => {
+                let manager = invocation
+                    .session
+                    .services
+                    .mcp_connection_manager
+                    .read()
+                    .await;
+                let origin = manager.server_origin(server).map(str::to_owned);
+                (Some(server.clone()), origin)
+            }
+            _ => (None, None),
+        };
+        let mcp_server_ref = mcp_server.as_deref();
+        let mcp_server_origin_ref = mcp_server_origin.as_deref();
 
-        if let Some(message) = plan_mode_tool_block_message(
-            invocation.turn.collaboration_mode.mode,
-            tool_name.as_ref(),
-        ) {
+        if let Some(message) =
+            plan_mode_tool_block_message(invocation.turn.collaboration_mode.mode, &display_name)
+        {
             otel.tool_result_with_tags(
-                tool_name.as_ref(),
+                &display_name,
                 &call_id_owned,
                 log_payload.as_ref(),
                 Duration::ZERO,
-                false,
+                /*success*/ false,
                 &message,
                 &metric_tags,
+                mcp_server_ref,
+                mcp_server_origin_ref,
             );
             return Err(FunctionCallError::RespondToModel(message));
         }
 
-        let handler = match self.handler(tool_name.as_ref()) {
+        {
+            let mut active = invocation.session.active_turn.lock().await;
+            if let Some(active_turn) = active.as_mut() {
+                let mut turn_state = active_turn.turn_state.lock().await;
+                turn_state.tool_calls = turn_state.tool_calls.saturating_add(1);
+            }
+        }
+
+        let handler = match self.handler(&tool_name) {
             Some(handler) => handler,
             None => {
-                let message =
-                    unsupported_tool_call_message(&invocation.payload, tool_name.as_ref());
+                let message = unsupported_tool_call_message(&invocation.payload, &tool_name);
                 otel.tool_result_with_tags(
-                    tool_name.as_ref(),
+                    &display_name,
                     &call_id_owned,
                     log_payload.as_ref(),
                     Duration::ZERO,
-                    false,
+                    /*success*/ false,
                     &message,
                     &metric_tags,
+                    mcp_server_ref,
+                    mcp_server_origin_ref,
                 );
                 return Err(FunctionCallError::RespondToModel(message));
             }
         };
 
         if !handler.matches_kind(&invocation.payload) {
-            let message = format!("tool {tool_name} invoked with incompatible payload");
+            let message = format!("tool {display_name} invoked with incompatible payload");
             otel.tool_result_with_tags(
-                tool_name.as_ref(),
+                &display_name,
                 &call_id_owned,
                 log_payload.as_ref(),
                 Duration::ZERO,
-                false,
+                /*success*/ false,
                 &message,
                 &metric_tags,
+                mcp_server_ref,
+                mcp_server_origin_ref,
             );
             return Err(FunctionCallError::Fatal(message));
         }
 
+        if let Some(pre_tool_use_payload) = handler.pre_tool_use_payload(&invocation)
+            && let Some(reason) = run_pre_tool_use_hooks(
+                &invocation.session,
+                &invocation.turn,
+                invocation.call_id.clone(),
+                pre_tool_use_payload.command.clone(),
+            )
+            .await
+        {
+            return Err(FunctionCallError::RespondToModel(format!(
+                "Command blocked by PreToolUse hook: {reason}. Command: {}",
+                pre_tool_use_payload.command
+            )));
+        }
+
         let is_mutating = handler.is_mutating(&invocation).await;
-        let output_cell = tokio::sync::Mutex::new(None);
+        let response_cell = tokio::sync::Mutex::new(None);
         let invocation_for_tool = invocation.clone();
 
         let started = Instant::now();
         let result = otel
             .log_tool_result_with_tags(
-                tool_name.as_ref(),
+                &display_name,
                 &call_id_owned,
                 log_payload.as_ref(),
                 &metric_tags,
+                mcp_server_ref,
+                mcp_server_origin_ref,
                 || {
                     let handler = handler.clone();
-                    let output_cell = &output_cell;
+                    let response_cell = &response_cell;
                     async move {
                         if is_mutating {
                             tracing::trace!("waiting for tool gate");
                             invocation_for_tool.turn.tool_call_gate.wait_ready().await;
                             tracing::trace!("tool gate released");
                         }
-                        match handler.handle(invocation_for_tool).await {
-                            Ok(output) => {
-                                let preview = output.log_preview();
-                                let success = output.success_for_logging();
-                                let mut guard = output_cell.lock().await;
-                                *guard = Some(output);
+                        match handler.handle_any(invocation_for_tool).await {
+                            Ok(result) => {
+                                let preview = result.result.log_preview();
+                                let success = result.result.success_for_logging();
+                                let mut guard = response_cell.lock().await;
+                                *guard = Some(result);
                                 Ok((preview, success))
                             }
                             Err(err) => Err(err),
@@ -203,7 +366,35 @@ impl ToolRegistry {
             Ok((preview, success)) => (preview.clone(), *success),
             Err(err) => (err.to_string(), false),
         };
-        dispatch_after_tool_use_hook(AfterToolUseHookDispatch {
+        emit_metric_for_tool_read(&invocation, success).await;
+        let post_tool_use_payload = if success {
+            let guard = response_cell.lock().await;
+            guard.as_ref().and_then(|result| {
+                handler.post_tool_use_payload(
+                    &result.call_id,
+                    &result.payload,
+                    result.result.as_ref(),
+                )
+            })
+        } else {
+            None
+        };
+        let post_tool_use_outcome = if let Some(post_tool_use_payload) = post_tool_use_payload {
+            Some(
+                run_post_tool_use_hooks(
+                    &invocation.session,
+                    &invocation.turn,
+                    invocation.call_id.clone(),
+                    post_tool_use_payload.command,
+                    post_tool_use_payload.tool_response,
+                )
+                .await,
+            )
+        } else {
+            None
+        };
+        // Deprecated: this is the legacy AfterToolUse hook. Prefer the new PostToolUse
+        let hook_abort_error = dispatch_after_tool_use_hook(AfterToolUseHookDispatch {
             invocation: &invocation,
             output_preview,
             success,
@@ -213,21 +404,52 @@ impl ToolRegistry {
         })
         .await;
 
+        if let Some(err) = hook_abort_error {
+            return Err(err);
+        }
+
+        if let Some(outcome) = &post_tool_use_outcome {
+            record_additional_contexts(
+                &invocation.session,
+                &invocation.turn,
+                outcome.additional_contexts.clone(),
+            )
+            .await;
+
+            let replacement_text = if outcome.should_stop {
+                Some(
+                    outcome
+                        .feedback_message
+                        .clone()
+                        .or_else(|| outcome.stop_reason.clone())
+                        .unwrap_or_else(|| "PostToolUse hook stopped execution".to_string()),
+                )
+            } else {
+                outcome.feedback_message.clone()
+            };
+            if let Some(replacement_text) = replacement_text {
+                let mut guard = response_cell.lock().await;
+                if let Some(result) = guard.as_mut() {
+                    result.result = Box::new(FunctionToolOutput::from_text(replacement_text, None));
+                }
+            }
+        }
+
         match result {
             Ok(_) => {
-                let mut guard = output_cell.lock().await;
-                let output = guard.take().ok_or_else(|| {
+                let mut guard = response_cell.lock().await;
+                let mut result = guard.take().ok_or_else(|| {
                     FunctionCallError::Fatal("tool produced no output".to_string())
                 })?;
-                let output = enforce_sensitive_send_policy(
-                    output,
+                result.result = enforce_sensitive_send_policy(
+                    result.result,
                     session.as_ref(),
-                    &turn,
-                    &tool_name,
+                    turn.as_ref(),
+                    &display_name,
                     &call_id_owned,
                 )
                 .await;
-                Ok(output.into_response(&call_id_owned, &payload_for_response))
+                Ok(result)
             }
             Err(err) => Err(err),
         }
@@ -235,52 +457,40 @@ impl ToolRegistry {
 }
 
 async fn enforce_sensitive_send_policy(
-    output: ToolOutput,
+    mut output: Box<dyn ToolOutput>,
     session: &crate::codex::Session,
     turn: &crate::codex::TurnContext,
     tool_name: &str,
     call_id: &str,
-) -> ToolOutput {
-    let output = match output {
-        ToolOutput::Function {
-            body,
-            success,
-            provenance: ToolProvenance::Filesystem { path },
-        } if turn.exclusion.layer_send_firewall_enabled()
-            && turn.sensitive_paths.decision_send(&path)
-                == crate::sensitive_paths::SensitivePathDecision::Deny =>
-        {
-            if turn.exclusion.prompt_on_blocked
-                && maybe_prompt_for_send(session, turn, call_id, &path).await
-            {
-                ToolOutput::Function {
-                    body,
-                    success,
-                    provenance: ToolProvenance::Filesystem { path },
-                }
-            } else {
-                let mut counters = turn
-                    .exclusion_counters
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner);
-                counters.record(
-                    crate::exclusion_counters::ExclusionLayer::Layer3SendFirewall,
-                    crate::exclusion_counters::ExclusionSource::Filesystem,
-                    tool_name,
-                    /* redacted */ false,
-                    /* blocked */ true,
-                );
-                ToolOutput::Function {
-                    body: FunctionCallOutputBody::Text(
-                        turn.sensitive_paths.format_denied_message(),
-                    ),
-                    success: Some(false),
-                    provenance: ToolProvenance::Filesystem { path },
-                }
-            }
+) -> Box<dyn ToolOutput> {
+    if turn.exclusion.layer_send_firewall_enabled()
+        && let Some(ToolProvenance::Filesystem { path }) = output.provenance().cloned()
+        && turn.sensitive_paths.decision_send(&path)
+            == crate::sensitive_paths::SensitivePathDecision::Deny
+    {
+        let allow = turn.exclusion.prompt_on_blocked
+            && maybe_prompt_for_send(session, turn, call_id, &path).await;
+        if !allow {
+            let mut counters = turn
+                .exclusion_counters
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            counters.record(
+                crate::exclusion_counters::ExclusionLayer::Layer3SendFirewall,
+                crate::exclusion_counters::ExclusionSource::Filesystem,
+                tool_name,
+                /*redacted*/ false,
+                /*blocked*/ true,
+            );
+            output = Box::new(
+                FunctionToolOutput::from_text(
+                    turn.sensitive_paths.format_denied_message(),
+                    Some(false),
+                )
+                .with_provenance(ToolProvenance::Filesystem { path }),
+            );
         }
-        other => other,
-    };
+    }
 
     let output = if turn.exclusion.layer_output_sanitization_enabled() {
         enforce_sensitive_content_gateway(output, session, turn, tool_name, call_id).await
@@ -288,7 +498,7 @@ async fn enforce_sensitive_send_policy(
         output
     };
 
-    if !is_unattested_output(&output) {
+    if !is_unattested_output(output.as_ref()) {
         return output;
     }
 
@@ -307,9 +517,13 @@ async fn enforce_sensitive_send_policy(
                 .request_command_approval(
                     turn,
                     call_id.to_string(),
+                    None,
                     command,
-                    turn.cwd.clone(),
+                    turn.cwd.clone().to_path_buf(),
                     Some("unattested MCP output would be sent to the model".to_string()),
+                    None,
+                    None,
+                    None,
                     None,
                 )
                 .await
@@ -833,20 +1047,16 @@ async fn resolve_redaction_decision(
 }
 
 async fn enforce_sensitive_content_gateway(
-    output: ToolOutput,
+    mut output: Box<dyn ToolOutput>,
     session: &crate::codex::Session,
     turn: &crate::codex::TurnContext,
     tool_name: &str,
     call_id: &str,
-) -> ToolOutput {
+) -> Box<dyn ToolOutput> {
     let epoch = turn.sensitive_paths.ignore_epoch();
 
-    match output {
-        ToolOutput::Function {
-            body,
-            mut success,
-            provenance,
-        } => {
+    if let Some(provenance) = output.provenance().cloned() {
+        if let Some(function_output) = output.as_any_mut().downcast_mut::<FunctionToolOutput>() {
             let mut gateway_cfg =
                 crate::content_gateway::GatewayConfig::from_exclusion(&turn.exclusion);
             if is_trusted_local_code_output(&provenance) {
@@ -896,85 +1106,45 @@ async fn enforce_sensitive_content_gateway(
                 }
             };
 
-            let body = match body {
-                FunctionCallOutputBody::Text(content) => {
-                    let original_content = content;
+            for item in &mut function_output.body {
+                if let FunctionCallOutputContentItem::InputText { text } = item {
+                    let original_text = text.clone();
                     let (sanitized, report) = gateway.scan_text(
-                        &original_content,
+                        &original_text,
                         &turn.sensitive_paths,
                         &session.content_gateway_cache,
                         epoch,
                     );
-                    let (content, report) = resolve_redaction_decision(
+                    let (next, report) = resolve_redaction_decision(
                         session,
                         turn,
                         call_id,
                         &context_label,
-                        original_content.clone(),
+                        original_text.clone(),
                         sanitized,
                         report,
                     )
                     .await;
+                    *text = next;
                     if should_log && (report.redacted || report.blocked) {
                         crate::exclusion_log::log_redaction_event(
                             &log_context,
                             &report,
-                            &original_content,
-                            &content,
+                            &original_text,
+                            text.as_str(),
                         );
                     }
                     record_report(&report);
                     if report.redacted {
-                        success = Some(false);
+                        function_output.success = Some(false);
                     }
-                    FunctionCallOutputBody::Text(content)
                 }
-                FunctionCallOutputBody::ContentItems(mut items) => {
-                    for item in &mut items {
-                        if let FunctionCallOutputContentItem::InputText { text } = item {
-                            let original_text = text.clone();
-                            let (sanitized, report) = gateway.scan_text(
-                                &original_text,
-                                &turn.sensitive_paths,
-                                &session.content_gateway_cache,
-                                epoch,
-                            );
-                            let (next, report) = resolve_redaction_decision(
-                                session,
-                                turn,
-                                call_id,
-                                &context_label,
-                                original_text.clone(),
-                                sanitized,
-                                report,
-                            )
-                            .await;
-                            *text = next;
-                            if should_log && (report.redacted || report.blocked) {
-                                crate::exclusion_log::log_redaction_event(
-                                    &log_context,
-                                    &report,
-                                    &original_text,
-                                    text.as_str(),
-                                );
-                            }
-                            record_report(&report);
-                            if report.redacted {
-                                success = Some(false);
-                            }
-                        }
-                    }
-                    FunctionCallOutputBody::ContentItems(items)
-                }
-            };
-
-            ToolOutput::Function {
-                body,
-                success,
-                provenance,
             }
+
+            return output;
         }
-        ToolOutput::Mcp { result, provenance } => {
+
+        if let Some(mcp_output) = output.as_any_mut().downcast_mut::<McpToolOutput>() {
             let gateway = crate::content_gateway::ContentGateway::new(
                 crate::content_gateway::GatewayConfig::from_exclusion(&turn.exclusion),
             );
@@ -995,63 +1165,38 @@ async fn enforce_sensitive_content_gateway(
                 max_files: turn.exclusion.log_redactions_max_files,
             };
 
-            fn scan_json_value(
-                value: &mut serde_json::Value,
-                scan_string: &mut impl FnMut(&mut String),
-            ) {
-                match value {
-                    serde_json::Value::String(s) => scan_string(s),
-                    serde_json::Value::Array(items) => {
-                        for item in items {
-                            scan_json_value(item, scan_string);
-                        }
-                    }
-                    serde_json::Value::Object(map) => {
-                        for value in map.values_mut() {
-                            scan_json_value(value, scan_string);
-                        }
-                    }
-                    serde_json::Value::Null
-                    | serde_json::Value::Bool(_)
-                    | serde_json::Value::Number(_) => {}
-                }
-            }
-
-            let result = result.map(|mut ok| {
-                let mut scan_string = |s: &mut String| {
-                    let original = s.clone();
-                    let (next, r) = gateway.scan_text(
+            let mut scan_string = |s: &mut String| {
+                let original = s.clone();
+                let (next, r) = gateway.scan_text(
+                    &original,
+                    &turn.sensitive_paths,
+                    &session.content_gateway_cache,
+                    epoch,
+                );
+                *s = next;
+                report.layers.extend(r.layers.iter().copied());
+                report.redacted |= r.redacted;
+                report.blocked |= r.blocked;
+                report.reasons.extend(r.reasons.iter().copied());
+                if should_log && (r.redacted || r.blocked) {
+                    crate::exclusion_log::log_redaction_event(
+                        &log_context,
+                        &r,
                         &original,
-                        &turn.sensitive_paths,
-                        &session.content_gateway_cache,
-                        epoch,
+                        s.as_str(),
                     );
-                    *s = next;
-                    report.layers.extend(r.layers.iter().copied());
-                    report.redacted |= r.redacted;
-                    report.blocked |= r.blocked;
-                    report.reasons.extend(r.reasons.iter().copied());
-                    if should_log && (r.redacted || r.blocked) {
-                        crate::exclusion_log::log_redaction_event(
-                            &log_context,
-                            &r,
-                            &original,
-                            s.as_str(),
-                        );
-                    }
-                };
+                }
+            };
 
-                for block in &mut ok.content {
-                    scan_json_value(block, &mut scan_string);
-                }
-                if let Some(structured_content) = &mut ok.structured_content {
-                    scan_json_value(structured_content, &mut scan_string);
-                }
-                if let Some(meta) = &mut ok.meta {
-                    scan_json_value(meta, &mut scan_string);
-                }
-                ok
-            });
+            for block in &mut mcp_output.result.content {
+                scan_json_value(block, &mut scan_string);
+            }
+            if let Some(structured_content) = &mut mcp_output.result.structured_content {
+                scan_json_value(structured_content, &mut scan_string);
+            }
+            if let Some(meta) = &mut mcp_output.result.meta {
+                scan_json_value(meta, &mut scan_string);
+            }
 
             if report.redacted || report.blocked {
                 let mut counters = turn
@@ -1066,21 +1211,40 @@ async fn enforce_sensitive_content_gateway(
                     report.blocked,
                 );
             }
-            ToolOutput::Mcp { result, provenance }
+
+            return output;
         }
+    }
+
+    output
+}
+
+fn scan_json_value(value: &mut serde_json::Value, scan_string: &mut impl FnMut(&mut String)) {
+    match value {
+        serde_json::Value::String(s) => scan_string(s),
+        serde_json::Value::Array(items) => {
+            for item in items {
+                scan_json_value(item, scan_string);
+            }
+        }
+        serde_json::Value::Object(map) => {
+            for value in map.values_mut() {
+                scan_json_value(value, scan_string);
+            }
+        }
+        serde_json::Value::Null | serde_json::Value::Bool(_) | serde_json::Value::Number(_) => {}
     }
 }
 
-fn is_unattested_output(output: &ToolOutput) -> bool {
-    match output {
-        ToolOutput::Mcp { provenance, .. } => matches!(provenance, ToolProvenance::Mcp { .. }),
-        ToolOutput::Function { provenance, .. } => matches!(
-            provenance,
+fn is_unattested_output(output: &dyn ToolOutput) -> bool {
+    matches!(
+        output.provenance(),
+        Some(
             ToolProvenance::Shell { .. }
                 | ToolProvenance::Mcp { .. }
                 | ToolProvenance::Unattested { .. }
-        ),
-    }
+        )
+    )
 }
 
 fn is_trusted_local_code_output(provenance: &ToolProvenance) -> bool {
@@ -1124,13 +1288,13 @@ fn is_trusted_local_code_output(provenance: &ToolProvenance) -> bool {
 }
 
 async fn enforce_unattested_output_policy<WarnFut, WarnFn, ApprovalFut, ApprovalFn>(
-    output: ToolOutput,
+    output: Box<dyn ToolOutput>,
     policy: crate::config::types::UnattestedOutputPolicy,
     tool_name: &str,
     call_id: &str,
     mut warn: WarnFn,
     mut request_approval: ApprovalFn,
-) -> ToolOutput
+) -> Box<dyn ToolOutput>
 where
     WarnFn: FnMut(String) -> WarnFut,
     WarnFut: std::future::Future<Output = ()>,
@@ -1141,26 +1305,29 @@ where
         crate::config::types::UnattestedOutputPolicy::Allow => output,
         crate::config::types::UnattestedOutputPolicy::Warn => {
             warn(unattested_output_warning_message(
-                &output, policy, tool_name, call_id,
+                output.as_ref(),
+                policy,
+                tool_name,
+                call_id,
             ))
             .await;
             output
         }
         crate::config::types::UnattestedOutputPolicy::Confirm => {
             warn(unattested_output_warning_message(
-                &output, policy, tool_name, call_id,
+                output.as_ref(),
+                policy,
+                tool_name,
+                call_id,
             ))
             .await;
 
-            let provenance = match &output {
-                ToolOutput::Function { provenance, .. } => provenance,
-                ToolOutput::Mcp { provenance, .. } => provenance,
-            };
-
             let mut command = vec!["send_unattested_output".to_string(), tool_name.to_string()];
-            command.push(provenance.origin_type().to_string());
-            if let Some(path) = provenance.origin_path() {
-                command.push(path);
+            if let Some(provenance) = output.provenance() {
+                command.push(provenance.origin_type().to_string());
+                if let Some(path) = provenance.origin_path() {
+                    command.push(path);
+                }
             }
 
             let decision = request_approval(command).await;
@@ -1168,7 +1335,10 @@ where
                 ReviewDecision::Approved
                 | ReviewDecision::ApprovedForSession
                 | ReviewDecision::ApprovedExecpolicyAmendment { .. } => output,
-                ReviewDecision::Denied | ReviewDecision::Abort => block_unattested_output(output),
+                ReviewDecision::Denied
+                | ReviewDecision::Abort
+                | ReviewDecision::NetworkPolicyAmendment { .. }
+                | ReviewDecision::TimedOut => block_unattested_output(output),
             }
         }
         crate::config::types::UnattestedOutputPolicy::Block => block_unattested_output(output),
@@ -1176,72 +1346,267 @@ where
 }
 
 fn unattested_output_warning_message(
-    output: &ToolOutput,
+    output: &dyn ToolOutput,
     policy: crate::config::types::UnattestedOutputPolicy,
     tool_name: &str,
     call_id: &str,
 ) -> String {
-    let provenance = match output {
-        ToolOutput::Function { provenance, .. } => provenance,
-        ToolOutput::Mcp { provenance, .. } => provenance,
-    };
-    let origin = provenance
-        .origin_path()
+    let origin = output
+        .provenance()
+        .and_then(ToolProvenance::origin_path)
         .unwrap_or_else(|| String::from("<unknown>"));
     format!(
         "unattested tool output ({tool_name}, call_id={call_id}, origin={origin}) may contain sensitive data; policy={policy:?}"
     )
 }
 
-fn block_unattested_output(output: ToolOutput) -> ToolOutput {
+fn block_unattested_output(mut output: Box<dyn ToolOutput>) -> Box<dyn ToolOutput> {
     let message = "unattested tool output blocked by policy".to_string();
-    match output {
-        ToolOutput::Function { provenance, .. } => ToolOutput::Function {
-            body: FunctionCallOutputBody::Text(message),
-            success: Some(false),
-            provenance,
-        },
-        ToolOutput::Mcp { provenance, .. } => ToolOutput::Mcp {
-            result: Err(message),
-            provenance,
-        },
+    if let Some(function_output) = output.as_any_mut().downcast_mut::<FunctionToolOutput>() {
+        function_output.body = vec![FunctionCallOutputContentItem::InputText { text: message }];
+        function_output.success = Some(false);
+        return output;
+    }
+    if let Some(mcp_output) = output.as_any_mut().downcast_mut::<McpToolOutput>() {
+        mcp_output.result = CallToolResult::from_error_text(message);
+        return output;
+    }
+    output
+}
+
+pub struct ToolRegistryBuilder {
+    handlers: HashMap<ToolName, Arc<dyn AnyToolHandler>>,
+    specs: Vec<ConfiguredToolSpec>,
+}
+
+impl ToolRegistryBuilder {
+    pub fn new() -> Self {
+        Self {
+            handlers: HashMap::new(),
+            specs: Vec::new(),
+        }
+    }
+
+    pub fn push_spec(&mut self, spec: ToolSpec) {
+        self.push_spec_with_parallel_support(spec, /*supports_parallel_tool_calls*/ false);
+    }
+
+    pub fn push_spec_with_parallel_support(
+        &mut self,
+        spec: ToolSpec,
+        supports_parallel_tool_calls: bool,
+    ) {
+        self.specs
+            .push(ConfiguredToolSpec::new(spec, supports_parallel_tool_calls));
+    }
+
+    pub fn register_handler<H>(&mut self, name: impl Into<ToolName>, handler: Arc<H>)
+    where
+        H: ToolHandler + 'static,
+    {
+        let name = name.into();
+        let display_name = name.display();
+        let handler: Arc<dyn AnyToolHandler> = handler;
+        if self.handlers.insert(name, handler).is_some() {
+            warn!("overwriting handler for tool {display_name}");
+        }
+    }
+
+    pub fn build(self) -> (Vec<ConfiguredToolSpec>, ToolRegistry) {
+        let registry = ToolRegistry::new(self.handlers);
+        (self.specs, registry)
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::config::types::UnattestedOutputPolicy;
-    use codex_protocol::config_types::ModeKind;
-    use pretty_assertions::assert_eq;
+fn unsupported_tool_call_message(payload: &ToolPayload, tool_name: &ToolName) -> String {
+    let tool_name = tool_name.display();
+    match payload {
+        ToolPayload::Custom { .. } => format!("unsupported custom tool call: {tool_name}"),
+        _ => format!("unsupported call: {tool_name}"),
+    }
+}
 
-    fn unattested_output() -> ToolOutput {
-        ToolOutput::Function {
-            body: FunctionCallOutputBody::Text("payload".to_string()),
-            success: Some(true),
-            provenance: ToolProvenance::Unattested {
-                origin_type: "mcp",
-                origin_path: Some("server/tool".to_string()),
+fn plan_mode_tool_block_message(mode: ModeKind, tool_name: &str) -> Option<String> {
+    if mode != ModeKind::Plan || !is_plan_mode_file_mutation_tool(tool_name) {
+        return None;
+    }
+
+    Some(format!(
+        "`{tool_name}` is blocked in Plan mode because it can mutate files. Switch to Default mode to run file edits."
+    ))
+}
+
+fn is_plan_mode_file_mutation_tool(tool_name: &str) -> bool {
+    let trailing = tool_name
+        .rsplit_once("__")
+        .map_or(tool_name, |(_, suffix)| suffix);
+    let canonical = trailing
+        .rsplit_once('/')
+        .map_or(trailing, |(_, suffix)| suffix);
+    matches!(canonical, "apply_patch" | "write_file" | "edit_file")
+}
+
+fn sandbox_policy_tag(policy: &SandboxPolicy) -> &'static str {
+    match policy {
+        SandboxPolicy::ReadOnly { .. } => "read-only",
+        SandboxPolicy::WorkspaceWrite { .. } => "workspace-write",
+        SandboxPolicy::DangerFullAccess => "danger-full-access",
+        SandboxPolicy::ExternalSandbox { .. } => "external-sandbox",
+    }
+}
+
+impl From<&ToolPayload> for HookToolInput {
+    fn from(payload: &ToolPayload) -> Self {
+        match payload {
+            ToolPayload::Function { arguments } => HookToolInput::Function {
+                arguments: arguments.clone(),
+            },
+            ToolPayload::ToolSearch { arguments } => HookToolInput::Function {
+                arguments: serde_json::json!({
+                    "query": arguments.query,
+                    "limit": arguments.limit,
+                })
+                .to_string(),
+            },
+            ToolPayload::Custom { input } => HookToolInput::Custom {
+                input: input.clone(),
+            },
+            ToolPayload::LocalShell { params } => HookToolInput::LocalShell {
+                params: HookToolInputLocalShell {
+                    command: params.command.clone(),
+                    workdir: params.workdir.clone(),
+                    timeout_ms: params.timeout_ms,
+                    sandbox_permissions: params.sandbox_permissions,
+                    prefix_rule: params.prefix_rule.clone(),
+                    justification: params.justification.clone(),
+                },
+            },
+            ToolPayload::Mcp {
+                server,
+                tool,
+                raw_arguments,
+            } => HookToolInput::Mcp {
+                server: server.clone(),
+                tool: tool.clone(),
+                arguments: raw_arguments.clone(),
             },
         }
+    }
+}
+
+fn hook_tool_kind(tool_input: &HookToolInput) -> HookToolKind {
+    match tool_input {
+        HookToolInput::Function { .. } => HookToolKind::Function,
+        HookToolInput::Custom { .. } => HookToolKind::Custom,
+        HookToolInput::LocalShell { .. } => HookToolKind::LocalShell,
+        HookToolInput::Mcp { .. } => HookToolKind::Mcp,
+    }
+}
+
+struct AfterToolUseHookDispatch<'a> {
+    invocation: &'a ToolInvocation,
+    output_preview: String,
+    success: bool,
+    executed: bool,
+    duration: Duration,
+    mutating: bool,
+}
+
+async fn dispatch_after_tool_use_hook(
+    dispatch: AfterToolUseHookDispatch<'_>,
+) -> Option<FunctionCallError> {
+    let AfterToolUseHookDispatch { invocation, .. } = dispatch;
+    let session = invocation.session.as_ref();
+    let turn = invocation.turn.as_ref();
+    let tool_input = HookToolInput::from(&invocation.payload);
+    let hook_outcomes = session
+        .hooks()
+        .dispatch(HookPayload {
+            session_id: session.conversation_id,
+            cwd: turn.cwd.to_path_buf(),
+            client: turn.app_server_client_name.clone(),
+            triggered_at: chrono::Utc::now(),
+            hook_event: HookEvent::AfterToolUse {
+                event: HookEventAfterToolUse {
+                    turn_id: turn.sub_id.clone(),
+                    call_id: invocation.call_id.clone(),
+                    tool_name: invocation.tool_name.display(),
+                    tool_kind: hook_tool_kind(&tool_input),
+                    tool_input,
+                    executed: dispatch.executed,
+                    success: dispatch.success,
+                    duration_ms: u64::try_from(dispatch.duration.as_millis()).unwrap_or(u64::MAX),
+                    mutating: dispatch.mutating,
+                    sandbox: sandbox_tag(&turn.sandbox_policy, turn.windows_sandbox_level)
+                        .to_string(),
+                    sandbox_policy: sandbox_policy_tag(&turn.sandbox_policy).to_string(),
+                    output_preview: dispatch.output_preview.clone(),
+                },
+            },
+        })
+        .await;
+
+    for hook_outcome in hook_outcomes {
+        let hook_name = hook_outcome.hook_name;
+        match hook_outcome.result {
+            HookResult::Success => {}
+            HookResult::FailedContinue(error) => {
+                warn!(
+                    call_id = %invocation.call_id,
+                    tool_name = %invocation.tool_name.display(),
+                    hook_name = %hook_name,
+                    error = %error,
+                    "after_tool_use hook failed; continuing"
+                );
+            }
+            HookResult::FailedAbort(error) => {
+                warn!(
+                    call_id = %invocation.call_id,
+                    tool_name = %invocation.tool_name.display(),
+                    hook_name = %hook_name,
+                    error = %error,
+                    "after_tool_use hook failed; aborting operation"
+                );
+                return Some(FunctionCallError::Fatal(format!(
+                    "after_tool_use hook '{hook_name}' failed and aborted operation: {error}"
+                )));
+            }
+        }
+    }
+
+    None
+}
+
+#[cfg(test)]
+mod policy_tests {
+    use super::*;
+    use pretty_assertions::assert_eq;
+
+    fn unattested_output() -> Box<dyn ToolOutput> {
+        Box::new(
+            FunctionToolOutput::from_text("payload".to_string(), Some(true)).with_provenance(
+                ToolProvenance::Unattested {
+                    origin_type: "mcp",
+                    origin_path: Some("server/tool".to_string()),
+                },
+            ),
+        )
     }
 
     #[test]
     fn is_unattested_output_matches_expected_provenance() {
         let output = unattested_output();
-        assert_eq!(true, super::is_unattested_output(&output));
+        assert_eq!(true, super::is_unattested_output(output.as_ref()));
 
-        let output = ToolOutput::Function {
-            body: FunctionCallOutputBody::Text("payload".to_string()),
-            success: Some(true),
-            provenance: ToolProvenance::Filesystem {
+        let output = FunctionToolOutput::from_text("payload".to_string(), Some(true))
+            .with_provenance(ToolProvenance::Filesystem {
                 path: std::path::PathBuf::from("/tmp/file"),
-            },
-        };
+            });
         assert_eq!(false, super::is_unattested_output(&output));
 
-        let output = ToolOutput::Mcp {
-            result: Err("boom".to_string()),
+        let output = McpToolOutput {
+            result: CallToolResult::from_error_text("boom".to_string()),
+            wall_time: Duration::ZERO,
             provenance: ToolProvenance::Mcp {
                 server: "server".to_string(),
                 tool: "tool".to_string(),
@@ -1270,33 +1635,34 @@ mod tests {
 
     #[test]
     fn block_unattested_output_replaces_payload_with_policy_message() {
-        let output = unattested_output();
-        let blocked = super::block_unattested_output(output);
-        match blocked {
-            ToolOutput::Function {
-                body: FunctionCallOutputBody::Text(content),
-                success: Some(false),
-                provenance:
-                    ToolProvenance::Unattested {
-                        origin_type: "mcp",
-                        origin_path: Some(origin),
-                    },
-            } => {
-                assert_eq!(content, "unattested tool output blocked by policy");
-                assert_eq!(origin, "server/tool");
-            }
-            _ => panic!("unexpected output variant"),
-        }
+        let mut blocked = super::block_unattested_output(unattested_output());
+        let function_output = blocked
+            .as_any_mut()
+            .downcast_mut::<FunctionToolOutput>()
+            .expect("expected function output");
+        assert_eq!(
+            function_output.body,
+            vec![FunctionCallOutputContentItem::InputText {
+                text: "unattested tool output blocked by policy".to_string(),
+            }]
+        );
+        assert_eq!(function_output.success, Some(false));
+        assert_eq!(
+            function_output.provenance(),
+            Some(&ToolProvenance::Unattested {
+                origin_type: "mcp",
+                origin_path: Some("server/tool".to_string()),
+            })
+        );
     }
 
     #[tokio::test]
     async fn enforce_unattested_output_policy_warn_emits_warning() {
-        let output = unattested_output();
         let warnings = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
 
-        let output = super::enforce_unattested_output_policy(
-            output,
-            UnattestedOutputPolicy::Warn,
+        let mut output = super::enforce_unattested_output_policy(
+            unattested_output(),
+            crate::config::types::UnattestedOutputPolicy::Warn,
             "mcp__server__tool",
             "call-1",
             {
@@ -1323,32 +1689,21 @@ mod tests {
             warnings[0],
             "unattested tool output (mcp__server__tool, call_id=call-1, origin=server/tool) may contain sensitive data; policy=Warn"
         );
-        match output {
-            ToolOutput::Function {
-                body: FunctionCallOutputBody::Text(content),
-                success: Some(true),
-                provenance:
-                    ToolProvenance::Unattested {
-                        origin_type: "mcp",
-                        origin_path: Some(origin),
-                    },
-            } => {
-                assert_eq!(content, "payload");
-                assert_eq!(origin, "server/tool");
-            }
-            _ => panic!("unexpected output variant"),
-        }
+        let function_output = output
+            .as_any_mut()
+            .downcast_mut::<FunctionToolOutput>()
+            .expect("expected function output");
+        assert_eq!(function_output.success, Some(true));
     }
 
     #[tokio::test]
     async fn enforce_unattested_output_policy_confirm_requests_approval_and_blocks_on_denied() {
-        let output = unattested_output();
         let warnings = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
         let approval_commands = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
 
-        let output = super::enforce_unattested_output_policy(
-            output,
-            UnattestedOutputPolicy::Confirm,
+        let mut output = super::enforce_unattested_output_policy(
+            unattested_output(),
+            crate::config::types::UnattestedOutputPolicy::Confirm,
             "mcp__server__tool",
             "call-1",
             {
@@ -1396,32 +1751,20 @@ mod tests {
                 "server/tool".to_string(),
             ]
         );
-
-        match output {
-            ToolOutput::Function {
-                body: FunctionCallOutputBody::Text(content),
-                success: Some(false),
-                provenance:
-                    ToolProvenance::Unattested {
-                        origin_type: "mcp",
-                        origin_path: Some(origin),
-                    },
-            } => {
-                assert_eq!(content, "unattested tool output blocked by policy");
-                assert_eq!(origin, "server/tool");
-            }
-            _ => panic!("unexpected output variant"),
-        }
+        let function_output = output
+            .as_any_mut()
+            .downcast_mut::<FunctionToolOutput>()
+            .expect("expected function output");
+        assert_eq!(function_output.success, Some(false));
     }
 
     #[tokio::test]
     async fn enforce_unattested_output_policy_confirm_allows_on_approved() {
-        let output = unattested_output();
         let approvals = std::sync::Arc::new(std::sync::Mutex::new(0_u64));
 
-        let output = super::enforce_unattested_output_policy(
-            output,
-            UnattestedOutputPolicy::Confirm,
+        let mut output = super::enforce_unattested_output_policy(
+            unattested_output(),
+            crate::config::types::UnattestedOutputPolicy::Confirm,
             "mcp__server__tool",
             "call-1",
             |_message| async {},
@@ -1447,21 +1790,11 @@ mod tests {
                 .unwrap_or_else(std::sync::PoisonError::into_inner),
             1
         );
-        match output {
-            ToolOutput::Function {
-                body: FunctionCallOutputBody::Text(content),
-                success: Some(true),
-                provenance:
-                    ToolProvenance::Unattested {
-                        origin_type: "mcp",
-                        origin_path: Some(origin),
-                    },
-            } => {
-                assert_eq!(content, "payload");
-                assert_eq!(origin, "server/tool");
-            }
-            _ => panic!("unexpected output variant"),
-        }
+        let function_output = output
+            .as_any_mut()
+            .downcast_mut::<FunctionToolOutput>()
+            .expect("expected function output");
+        assert_eq!(function_output.success, Some(true));
     }
 
     #[test]
@@ -1498,10 +1831,7 @@ mod tests {
             super::parse_redaction_prompt_answer("Hide matched values"),
             Some(super::RedactionPromptAnswer::HideMatches)
         ));
-        assert_eq!(
-            super::parse_redaction_prompt_answer("unknown").is_none(),
-            true
-        );
+        assert_eq!(super::parse_redaction_prompt_answer("unknown"), None);
     }
 
     #[test]
@@ -1577,197 +1907,6 @@ mod tests {
     }
 }
 
-#[derive(Debug, Clone)]
-pub struct ConfiguredToolSpec {
-    pub spec: ToolSpec,
-    pub supports_parallel_tool_calls: bool,
-}
-
-impl ConfiguredToolSpec {
-    pub fn new(spec: ToolSpec, supports_parallel_tool_calls: bool) -> Self {
-        Self {
-            spec,
-            supports_parallel_tool_calls,
-        }
-    }
-}
-
-pub struct ToolRegistryBuilder {
-    handlers: HashMap<String, Arc<dyn ToolHandler>>,
-    specs: Vec<ConfiguredToolSpec>,
-}
-
-impl ToolRegistryBuilder {
-    pub fn new() -> Self {
-        Self {
-            handlers: HashMap::new(),
-            specs: Vec::new(),
-        }
-    }
-
-    pub fn push_spec(&mut self, spec: ToolSpec) {
-        self.push_spec_with_parallel_support(spec, false);
-    }
-
-    pub fn push_spec_with_parallel_support(
-        &mut self,
-        spec: ToolSpec,
-        supports_parallel_tool_calls: bool,
-    ) {
-        self.specs
-            .push(ConfiguredToolSpec::new(spec, supports_parallel_tool_calls));
-    }
-
-    pub fn register_handler(&mut self, name: impl Into<String>, handler: Arc<dyn ToolHandler>) {
-        let name = name.into();
-        if self
-            .handlers
-            .insert(name.clone(), handler.clone())
-            .is_some()
-        {
-            warn!("overwriting handler for tool {name}");
-        }
-    }
-
-    // TODO(jif) for dynamic tools.
-    // pub fn register_many<I>(&mut self, names: I, handler: Arc<dyn ToolHandler>)
-    // where
-    //     I: IntoIterator,
-    //     I::Item: Into<String>,
-    // {
-    //     for name in names {
-    //         let name = name.into();
-    //         if self
-    //             .handlers
-    //             .insert(name.clone(), handler.clone())
-    //             .is_some()
-    //         {
-    //             warn!("overwriting handler for tool {name}");
-    //         }
-    //     }
-    // }
-
-    pub fn build(self) -> (Vec<ConfiguredToolSpec>, ToolRegistry) {
-        let registry = ToolRegistry::new(self.handlers);
-        (self.specs, registry)
-    }
-}
-
-fn unsupported_tool_call_message(payload: &ToolPayload, tool_name: &str) -> String {
-    match payload {
-        ToolPayload::Custom { .. } => format!("unsupported custom tool call: {tool_name}"),
-        _ => format!("unsupported call: {tool_name}"),
-    }
-}
-
-fn plan_mode_tool_block_message(mode: ModeKind, tool_name: &str) -> Option<String> {
-    if mode != ModeKind::Plan || !is_plan_mode_file_mutation_tool(tool_name) {
-        return None;
-    }
-
-    Some(format!(
-        "`{tool_name}` is blocked in Plan mode because it can mutate files. Switch to Default mode to run file edits."
-    ))
-}
-
-fn is_plan_mode_file_mutation_tool(tool_name: &str) -> bool {
-    let trailing = tool_name
-        .rsplit_once("__")
-        .map_or(tool_name, |(_, suffix)| suffix);
-    let canonical = trailing
-        .rsplit_once('/')
-        .map_or(trailing, |(_, suffix)| suffix);
-    matches!(canonical, "apply_patch" | "write_file" | "edit_file")
-}
-fn sandbox_policy_tag(policy: &SandboxPolicy) -> &'static str {
-    match policy {
-        SandboxPolicy::ReadOnly { .. } => "read-only",
-        SandboxPolicy::WorkspaceWrite { .. } => "workspace-write",
-        SandboxPolicy::DangerFullAccess => "danger-full-access",
-        SandboxPolicy::ExternalSandbox { .. } => "external-sandbox",
-    }
-}
-
-// Hooks use a separate wire-facing input type so hook payload JSON stays stable
-// and decoupled from core's internal tool runtime representation.
-impl From<&ToolPayload> for HookToolInput {
-    fn from(payload: &ToolPayload) -> Self {
-        match payload {
-            ToolPayload::Function { arguments } => HookToolInput::Function {
-                arguments: arguments.clone(),
-            },
-            ToolPayload::Custom { input } => HookToolInput::Custom {
-                input: input.clone(),
-            },
-            ToolPayload::LocalShell { params } => HookToolInput::LocalShell {
-                params: HookToolInputLocalShell {
-                    command: params.command.clone(),
-                    workdir: params.workdir.clone(),
-                    timeout_ms: params.timeout_ms,
-                    sandbox_permissions: params.sandbox_permissions,
-                    prefix_rule: params.prefix_rule.clone(),
-                    justification: params.justification.clone(),
-                },
-            },
-            ToolPayload::Mcp {
-                server,
-                tool,
-                raw_arguments,
-            } => HookToolInput::Mcp {
-                server: server.clone(),
-                tool: tool.clone(),
-                arguments: raw_arguments.clone(),
-            },
-        }
-    }
-}
-
-fn hook_tool_kind(tool_input: &HookToolInput) -> HookToolKind {
-    match tool_input {
-        HookToolInput::Function { .. } => HookToolKind::Function,
-        HookToolInput::Custom { .. } => HookToolKind::Custom,
-        HookToolInput::LocalShell { .. } => HookToolKind::LocalShell,
-        HookToolInput::Mcp { .. } => HookToolKind::Mcp,
-    }
-}
-
-struct AfterToolUseHookDispatch<'a> {
-    invocation: &'a ToolInvocation,
-    output_preview: String,
-    success: bool,
-    executed: bool,
-    duration: Duration,
-    mutating: bool,
-}
-
-async fn dispatch_after_tool_use_hook(dispatch: AfterToolUseHookDispatch<'_>) {
-    let AfterToolUseHookDispatch { invocation, .. } = dispatch;
-    let session = invocation.session.as_ref();
-    let turn = invocation.turn.as_ref();
-    let tool_input = HookToolInput::from(&invocation.payload);
-    session
-        .hooks()
-        .dispatch(HookPayload {
-            session_id: session.conversation_id,
-            cwd: turn.cwd.clone(),
-            triggered_at: chrono::Utc::now(),
-            hook_event: HookEvent::AfterToolUse {
-                event: HookEventAfterToolUse {
-                    turn_id: turn.sub_id.clone(),
-                    call_id: invocation.call_id.clone(),
-                    tool_name: invocation.tool_name.clone(),
-                    tool_kind: hook_tool_kind(&tool_input),
-                    tool_input,
-                    executed: dispatch.executed,
-                    success: dispatch.success,
-                    duration_ms: u64::try_from(dispatch.duration.as_millis()).unwrap_or(u64::MAX),
-                    mutating: dispatch.mutating,
-                    sandbox: sandbox_tag(&turn.sandbox_policy, turn.windows_sandbox_level)
-                        .to_string(),
-                    sandbox_policy: sandbox_policy_tag(&turn.sandbox_policy).to_string(),
-                    output_preview: dispatch.output_preview.clone(),
-                },
-            },
-        })
-        .await;
-}
+#[cfg(test)]
+#[path = "registry_tests.rs"]
+mod tests;

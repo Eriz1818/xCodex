@@ -5,6 +5,7 @@ use crate::provider::Provider;
 use crate::telemetry::run_with_request_telemetry;
 use codex_client::HttpTransport;
 use codex_client::Request;
+use codex_client::RequestBody;
 use codex_client::RequestTelemetry;
 use codex_client::Response;
 use codex_client::StreamResponse;
@@ -12,6 +13,7 @@ use http::HeaderMap;
 use http::Method;
 use serde_json::Value;
 use std::sync::Arc;
+use tracing::instrument;
 
 pub(crate) struct EndpointSession<T: HttpTransport, A: AuthProvider> {
     transport: T,
@@ -52,7 +54,7 @@ impl<T: HttpTransport, A: AuthProvider> EndpointSession<T, A> {
         let mut req = self.provider.build_request(method.clone(), path);
         req.headers.extend(extra_headers.clone());
         if let Some(body) = body {
-            req.body = Some(body.clone());
+            req.body = Some(RequestBody::Json(body.clone()));
         }
         add_auth_headers(&self.auth, req)
     }
@@ -68,6 +70,12 @@ impl<T: HttpTransport, A: AuthProvider> EndpointSession<T, A> {
             .await
     }
 
+    #[instrument(
+        name = "endpoint_session.execute_with",
+        level = "info",
+        skip_all,
+        fields(http.method = %method, api.path = path)
+    )]
     pub(crate) async fn execute_with<C>(
         &self,
         method: Method,
@@ -96,6 +104,12 @@ impl<T: HttpTransport, A: AuthProvider> EndpointSession<T, A> {
         Ok(response)
     }
 
+    #[instrument(
+        name = "endpoint_session.stream_with",
+        level = "info",
+        skip_all,
+        fields(http.method = %method, api.path = path)
+    )]
     pub(crate) async fn stream_with<C>(
         &self,
         method: Method,

@@ -13,6 +13,7 @@ pub enum SlashCommand {
     // DO NOT ALPHA-SORT! Enum order is presentation order in the popup, so
     // more frequently used commands should be listed first.
     Model,
+    Fast,
     Approvals,
     Permissions,
     #[strum(serialize = "setup-default-sandbox")]
@@ -33,7 +34,7 @@ pub enum SlashCommand {
     Plan,
     Collab,
     Agent,
-    // Undo,
+    Copy,
     Diff,
     Mention,
     Status,
@@ -45,9 +46,11 @@ pub enum SlashCommand {
     Exclusions,
     Hooks,
     DebugConfig,
+    Title,
     Statusline,
     Mcp,
     Apps,
+    Plugins,
     Logout,
     Quit,
     Exit,
@@ -55,9 +58,16 @@ pub enum SlashCommand {
     Rollout,
     Ps,
     PsKill,
+    #[strum(serialize = "clean")]
+    Stop,
+    #[strum(disabled)]
     Clean,
+    Clear,
     Personality,
+    Realtime,
     TestApproval,
+    #[strum(serialize = "subagents")]
+    MultiAgents,
     // Debugging commands.
     #[strum(serialize = "debug-m-drop")]
     MemoryDrop,
@@ -77,9 +87,10 @@ impl SlashCommand {
             SlashCommand::Review => "review my current changes and find issues",
             SlashCommand::Rename => "rename the current thread",
             SlashCommand::Resume => "resume a saved chat",
+            SlashCommand::Clear => "clear the terminal and start a new chat",
             SlashCommand::Fork => "fork the current chat",
-            // SlashCommand::Undo => "ask Codex to undo a turn",
             SlashCommand::Quit | SlashCommand::Exit => "exit xcodex",
+            SlashCommand::Copy => "copy last response as markdown",
             SlashCommand::Diff => "show git diff (including untracked files)",
             SlashCommand::Mention => "mention a file",
             SlashCommand::Skills => "use skills to improve how xcodex performs specific tasks",
@@ -92,27 +103,31 @@ impl SlashCommand {
             SlashCommand::Exclusions => "review and update exclusions for this session",
             SlashCommand::Hooks => "learn how to automate xcodex with hooks",
             SlashCommand::DebugConfig => "show config layers and requirement sources for debugging",
+            SlashCommand::Title => "configure which items appear in the terminal title",
             SlashCommand::Statusline => "configure which items appear in the status line",
             SlashCommand::Ps => "list background terminals",
             SlashCommand::PsKill => "terminate background terminals",
-            SlashCommand::Clean => "stop all background terminals",
+            SlashCommand::Stop | SlashCommand::Clean => "stop all background terminals",
             SlashCommand::MemoryDrop => "DO NOT USE",
             SlashCommand::MemoryUpdate => "DO NOT USE",
             SlashCommand::Model => "choose what model and reasoning effort to use",
+            SlashCommand::Fast => "toggle Fast mode to enable fastest inference at 2X plan usage",
             SlashCommand::Approvals => "choose what xcodex can do without approval",
             SlashCommand::Permissions => "choose what xcodex is allowed to do",
             SlashCommand::Personality => "choose a communication style for xcodex",
+            SlashCommand::Realtime => "toggle realtime voice mode (experimental)",
             SlashCommand::Plan => "open the Plan menu (plans + settings)",
             SlashCommand::Collab => "change collaboration mode (experimental)",
-            SlashCommand::Agent => "switch the active agent thread",
+            SlashCommand::Agent | SlashCommand::MultiAgents => "switch the active agent thread",
             SlashCommand::ElevateSandbox => "set up elevated agent sandbox",
             SlashCommand::SandboxReadRoot => {
                 "let sandbox read a directory: /sandbox-add-read-dir <absolute_path>"
             }
             SlashCommand::Experimental => "toggle experimental features",
             SlashCommand::Mcp => "list configured MCP tools",
-            SlashCommand::Logout => "log out of xcodex",
             SlashCommand::Apps => "manage apps",
+            SlashCommand::Plugins => "browse plugins",
+            SlashCommand::Logout => "log out of xcodex",
             SlashCommand::Rollout => "print the rollout file path",
             SlashCommand::TestApproval => "test approval request",
         }
@@ -133,6 +148,8 @@ impl SlashCommand {
                 | SlashCommand::Plan
                 | SlashCommand::Theme
                 | SlashCommand::Worktree
+                | SlashCommand::Fast
+                | SlashCommand::Resume
                 | SlashCommand::SandboxReadRoot
         )
     }
@@ -146,8 +163,8 @@ impl SlashCommand {
             | SlashCommand::Init
             | SlashCommand::Compact
             | SlashCommand::Autocompact
-            // | SlashCommand::Undo
             | SlashCommand::Model
+            | SlashCommand::Fast
             | SlashCommand::Personality
             | SlashCommand::Approvals
             | SlashCommand::Permissions
@@ -157,9 +174,11 @@ impl SlashCommand {
             | SlashCommand::Review
             | SlashCommand::Logout
             | SlashCommand::MemoryDrop
-            | SlashCommand::MemoryUpdate => false,
+            | SlashCommand::MemoryUpdate
+            | SlashCommand::Clear => false,
             SlashCommand::Diff
             | SlashCommand::Plan
+            | SlashCommand::Copy
             | SlashCommand::Rename
             | SlashCommand::Mention
             | SlashCommand::Skills
@@ -174,24 +193,30 @@ impl SlashCommand {
             | SlashCommand::DebugConfig
             | SlashCommand::Ps
             | SlashCommand::PsKill
+            | SlashCommand::Stop
             | SlashCommand::Clean
             | SlashCommand::Mcp
             | SlashCommand::Apps
+            | SlashCommand::Plugins
             | SlashCommand::Feedback
             | SlashCommand::Quit
-            | SlashCommand::Exit => true,
-            SlashCommand::Rollout => true,
-            SlashCommand::TestApproval => true,
-            SlashCommand::Collab => true,
-            SlashCommand::Agent => true,
-            SlashCommand::Statusline => false,
+            | SlashCommand::Exit
+            | SlashCommand::Rollout
+            | SlashCommand::TestApproval
+            | SlashCommand::Realtime
+            | SlashCommand::Collab
+            | SlashCommand::Agent
+            | SlashCommand::MultiAgents => true,
+            SlashCommand::Statusline | SlashCommand::Title => false,
         }
     }
 
     fn is_visible(self) -> bool {
         match self {
             SlashCommand::SandboxReadRoot => cfg!(target_os = "windows"),
+            SlashCommand::Copy => !cfg!(target_os = "android"),
             SlashCommand::Rollout | SlashCommand::TestApproval => cfg!(debug_assertions),
+            SlashCommand::Clean => false,
             _ => true,
         }
     }
@@ -203,4 +228,22 @@ pub fn built_in_slash_commands() -> Vec<(&'static str, SlashCommand)> {
         .filter(|command| command.is_visible())
         .map(|c| (c.command(), c))
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use pretty_assertions::assert_eq;
+    use std::str::FromStr;
+
+    use super::SlashCommand;
+
+    #[test]
+    fn stop_command_is_canonical_name() {
+        assert_eq!(SlashCommand::Stop.command(), "stop");
+    }
+
+    #[test]
+    fn clean_alias_parses_to_stop_command() {
+        assert_eq!(SlashCommand::from_str("clean"), Ok(SlashCommand::Stop));
+    }
 }

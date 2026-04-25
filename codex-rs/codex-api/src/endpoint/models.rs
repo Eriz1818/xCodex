@@ -41,13 +41,19 @@ impl<T: HttpTransport, A: AuthProvider> ModelsClient<T, A> {
     ) -> Result<(Vec<ModelInfo>, Option<String>), ApiError> {
         let resp = self
             .session
-            .execute_with(Method::GET, Self::path(), extra_headers, None, |req| {
-                append_client_version_query(req, client_version);
-                set_upstream_version_header_for_openai_or_chatgpt(
-                    req,
-                    &self.session.provider().base_url,
-                );
-            })
+            .execute_with(
+                Method::GET,
+                Self::path(),
+                extra_headers,
+                /*body*/ None,
+                |req| {
+                    append_client_version_query(req, client_version);
+                    set_upstream_version_header_for_openai_or_chatgpt(
+                        req,
+                        &self.session.provider().base_url,
+                    );
+                },
+            )
             .await?;
 
         let header_etag = resp
@@ -250,6 +256,7 @@ mod tests {
                     "apply_patch_tool_type": null,
                     "truncation_policy": {"mode": "bytes", "limit": 10_000},
                     "supports_parallel_tool_calls": false,
+                    "supports_image_detail_original": false,
                     "context_window": 272_000,
                     "experimental_supported_tools": [],
                 }))

@@ -1,10 +1,9 @@
 use anyhow::Result;
-use codex_core::features::Feature;
-use codex_core::protocol::AskForApproval;
-use codex_core::protocol::EventMsg;
-use codex_core::protocol::Op;
-use codex_core::protocol::SandboxPolicy;
-use codex_protocol::config_types::ReasoningSummary;
+use codex_model_provider_info::WireApi;
+use codex_protocol::protocol::AskForApproval;
+use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::Op;
+use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::user_input::UserInput;
 use core_test_support::responses;
 use core_test_support::responses::ev_completed;
@@ -45,8 +44,8 @@ async fn websocket_fallback_switches_to_http_on_upgrade_required_connect() -> Re
         let base_url = format!("{}/v1", server.uri());
         move |config| {
             config.model_provider.base_url = Some(base_url);
-            config.model_provider.wire_api = codex_core::WireApi::Responses;
-            config.features.enable(Feature::ResponsesWebsockets);
+            config.model_provider.wire_api = WireApi::Responses;
+            config.model_provider.supports_websockets = true;
             // If we don't treat 426 specially, the sampling loop would retry the WebSocket
             // handshake before switching to the HTTP transport.
             config.model_provider.stream_max_retries = Some(2);
@@ -67,10 +66,9 @@ async fn websocket_fallback_switches_to_http_on_upgrade_required_connect() -> Re
         .filter(|req| req.method == Method::POST && req.url.path().ends_with("/responses"))
         .count();
 
-    // One websocket attempt comes from startup preconnect and one from the first turn's stream
-    // attempt before fallback activates; after fallback, transport is HTTP. This matches the
-    // retry-budget tradeoff documented in [`codex_core::client`] module docs.
-    assert_eq!(websocket_attempts, 2);
+    // The startup prewarm request sees 426 and immediately switches the session to HTTP fallback,
+    // so the first turn goes straight to HTTP with no additional websocket connect attempt.
+    assert_eq!(websocket_attempts, 1);
     assert_eq!(http_attempts, 1);
     assert_eq!(response_mock.requests().len(), 1);
 
@@ -92,8 +90,8 @@ async fn websocket_fallback_switches_to_http_after_retries_exhausted() -> Result
         let base_url = format!("{}/v1", server.uri());
         move |config| {
             config.model_provider.base_url = Some(base_url);
-            config.model_provider.wire_api = codex_core::WireApi::Responses;
-            config.features.enable(Feature::ResponsesWebsockets);
+            config.model_provider.wire_api = WireApi::Responses;
+            config.model_provider.supports_websockets = true;
             config.model_provider.stream_max_retries = Some(2);
             config.model_provider.request_max_retries = Some(0);
         }
@@ -112,7 +110,7 @@ async fn websocket_fallback_switches_to_http_after_retries_exhausted() -> Result
         .filter(|req| req.method == Method::POST && req.url.path().ends_with("/responses"))
         .count();
 
-    // One websocket attempt comes from startup preconnect.
+    // Deferred request prewarm is attempted at startup.
     // The first turn then makes 3 websocket stream attempts (initial try + 2 retries),
     // after which fallback activates and the request is replayed over HTTP.
     assert_eq!(websocket_attempts, 4);
@@ -137,8 +135,8 @@ async fn websocket_fallback_hides_first_websocket_retry_stream_error() -> Result
         let base_url = format!("{}/v1", server.uri());
         move |config| {
             config.model_provider.base_url = Some(base_url);
-            config.model_provider.wire_api = codex_core::WireApi::Responses;
-            config.features.enable(Feature::ResponsesWebsockets);
+            config.model_provider.wire_api = WireApi::Responses;
+            config.model_provider.supports_websockets = true;
             config.model_provider.stream_max_retries = Some(2);
             config.model_provider.request_max_retries = Some(0);
         }
@@ -159,10 +157,12 @@ async fn websocket_fallback_hides_first_websocket_retry_stream_error() -> Result
             final_output_json_schema: None,
             cwd: cwd.path().to_path_buf(),
             approval_policy: AskForApproval::Never,
+            approvals_reviewer: None,
             sandbox_policy: SandboxPolicy::DangerFullAccess,
             model: session_configured.model.clone(),
             effort: None,
-            summary: ReasoningSummary::Auto,
+            summary: None,
+            service_tier: None,
             collaboration_mode: None,
             personality: None,
         })
@@ -211,8 +211,8 @@ async fn websocket_fallback_is_sticky_across_turns() -> Result<()> {
         let base_url = format!("{}/v1", server.uri());
         move |config| {
             config.model_provider.base_url = Some(base_url);
-            config.model_provider.wire_api = codex_core::WireApi::Responses;
-            config.features.enable(Feature::ResponsesWebsockets);
+            config.model_provider.wire_api = WireApi::Responses;
+            config.model_provider.supports_websockets = true;
             config.model_provider.stream_max_retries = Some(2);
             config.model_provider.request_max_retries = Some(0);
         }
@@ -233,7 +233,8 @@ async fn websocket_fallback_is_sticky_across_turns() -> Result<()> {
         .count();
 
     // WebSocket attempts all happen on the first turn:
-    // 1 startup preconnect + 3 stream attempts (initial try + 2 retries) before fallback.
+    // 1 deferred request prewarm attempt (startup) + 3 stream attempts
+    // (initial try + 2 retries) before fallback.
     // Fallback is sticky, so the second turn stays on HTTP and adds no websocket attempts.
     assert_eq!(websocket_attempts, 4);
     assert_eq!(http_attempts, 2);

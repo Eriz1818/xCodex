@@ -53,8 +53,6 @@ use codex_core::config::edit::ConfigEditsBuilder;
 #[cfg(target_os = "windows")]
 use codex_core::features::Feature;
 use codex_core::models_manager::manager::RefreshStrategy;
-use codex_core::models_manager::model_presets::HIDE_GPT_5_1_CODEX_MAX_MIGRATION_PROMPT_CONFIG;
-use codex_core::models_manager::model_presets::HIDE_GPT5_1_MIGRATION_PROMPT_CONFIG;
 use codex_core::protocol::DeprecationNoticeEvent;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::FinalOutput;
@@ -66,6 +64,8 @@ use codex_core::protocol::TokenUsage;
 use codex_core::terminal::terminal_info;
 #[cfg(target_os = "windows")]
 use codex_core::windows_sandbox::WindowsSandboxLevelExt;
+use codex_models_manager::model_presets::HIDE_GPT_5_1_CODEX_MAX_MIGRATION_PROMPT_CONFIG;
+use codex_models_manager::model_presets::HIDE_GPT5_1_MIGRATION_PROMPT_CONFIG;
 use codex_protocol::ThreadId;
 #[cfg(target_os = "windows")]
 use codex_protocol::config_types::WindowsSandboxLevel;
@@ -480,11 +480,11 @@ impl App {
         ));
         let mut model = thread_manager
             .get_models_manager()
-            .get_default_model(&config.model, &config, RefreshStrategy::Offline)
+            .get_default_model(&config.model, RefreshStrategy::Offline)
             .await;
         let available_models = thread_manager
             .get_models_manager()
-            .list_models(&config, RefreshStrategy::Offline)
+            .list_models(RefreshStrategy::Offline)
             .await;
         let exit_info = handle_model_migration_prompt_if_needed(
             tui,

@@ -43,7 +43,7 @@ pub(crate) fn build_user_hooks(config: &Config, tx_event: Sender<Event>) -> User
         config.permissions.sandbox_policy.get().clone(),
         config.codex_linux_sandbox_exe.clone(),
         config.exclusion.clone(),
-        config.cwd.clone(),
+        config.cwd.to_path_buf(),
     )
 }
 

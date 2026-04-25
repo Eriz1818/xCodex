@@ -3,18 +3,16 @@ use std::time::Duration;
 use anyhow::Result;
 use async_trait::async_trait;
 use bytes::Bytes;
-use codex_api::AggregateStreamExt;
 use codex_api::AuthProvider;
+use codex_api::Compression;
 use codex_api::Provider;
 use codex_api::ResponseEvent;
 use codex_api::ResponsesClient;
-use codex_api::requests::responses::Compression;
 use codex_client::HttpTransport;
 use codex_client::Request;
 use codex_client::Response;
 use codex_client::StreamResponse;
 use codex_client::TransportError;
-use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
 use futures::StreamExt;
 use http::HeaderMap;
@@ -66,7 +64,7 @@ fn provider(name: &str) -> Provider {
         base_url: "https://example.com/v1".to_string(),
         query_params: None,
         headers: HeaderMap::new(),
-        retry: codex_api::provider::RetryConfig {
+        retry: codex_api::RetryConfig {
             max_attempts: 1,
             base_delay: Duration::from_millis(1),
             retry_429: false,
@@ -127,7 +125,7 @@ async fn responses_stream_parses_items_and_completed_end_to_end() -> Result<()> 
             serde_json::json!({"echo": true}),
             HeaderMap::new(),
             Compression::None,
-            None,
+            /*turn_state*/ None,
         )
         .await?;
 
@@ -161,79 +159,11 @@ async fn responses_stream_parses_items_and_completed_end_to_end() -> Result<()> 
         ResponseEvent::Completed {
             response_id,
             token_usage,
-            can_append,
         } => {
             assert_eq!(response_id, "resp1");
             assert!(token_usage.is_none());
-            assert!(!can_append);
         }
         other => panic!("unexpected third event: {other:?}"),
-    }
-
-    Ok(())
-}
-
-#[tokio::test]
-async fn responses_stream_aggregates_output_text_deltas() -> Result<()> {
-    let delta1 = serde_json::json!({
-        "type": "response.output_text.delta",
-        "delta": "Hello, "
-    });
-
-    let delta2 = serde_json::json!({
-        "type": "response.output_text.delta",
-        "delta": "world"
-    });
-
-    let completed = serde_json::json!({
-        "type": "response.completed",
-        "response": { "id": "resp-agg" }
-    });
-
-    let body = build_responses_body(vec![delta1, delta2, completed]);
-    let transport = FixtureSseTransport::new(body);
-    let client = ResponsesClient::new(transport, provider("openai"), NoAuth);
-
-    let stream = client
-        .stream(
-            serde_json::json!({"echo": true}),
-            HeaderMap::new(),
-            Compression::None,
-            None,
-        )
-        .await?;
-
-    let mut stream = stream.aggregate();
-    let mut events = Vec::new();
-    while let Some(ev) = stream.next().await {
-        events.push(ev?);
-    }
-
-    let events: Vec<ResponseEvent> = events
-        .into_iter()
-        .filter(|ev| !matches!(ev, ResponseEvent::RateLimits(_)))
-        .collect();
-
-    assert_eq!(events.len(), 2);
-
-    match &events[0] {
-        ResponseEvent::OutputItemDone(ResponseItem::Message { content, .. }) => {
-            let mut aggregated = String::new();
-            for item in content {
-                if let ContentItem::OutputText { text } = item {
-                    aggregated.push_str(text);
-                }
-            }
-            assert_eq!(aggregated, "Hello, world");
-        }
-        other => panic!("unexpected first event: {other:?}"),
-    }
-
-    match &events[1] {
-        ResponseEvent::Completed { response_id, .. } => {
-            assert_eq!(response_id, "resp-agg");
-        }
-        other => panic!("unexpected second event: {other:?}"),
     }
 
     Ok(())

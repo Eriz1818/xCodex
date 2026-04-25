@@ -464,7 +464,9 @@ impl ContentGateway {
                 }
             }
             ResponseItem::CustomToolCallOutput { output, .. } => {
-                scan_string(output);
+                if let Some(text) = output.text_content_mut() {
+                    scan_string(text);
+                }
             }
             _ => {}
         }
@@ -561,7 +563,9 @@ pub fn remember_safe_response_item_text_fields(
             }
         },
         ResponseItem::CustomToolCallOutput { output, .. } => {
-            cache.remember_safe_text_for_epoch(output, epoch);
+            if let Some(text) = output.text_content() {
+                cache.remember_safe_text_for_epoch(text, epoch);
+            }
         }
         _ => {}
     }

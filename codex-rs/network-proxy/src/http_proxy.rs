@@ -1,5 +1,6 @@
 use crate::config::NetworkMode;
-use crate::metadata::attempt_id_from_proxy_authorization;
+use crate::mitm;
+use crate::network_policy::BlockDecisionAuditEventArgs;
 use crate::network_policy::NetworkDecision;
 use crate::network_policy::NetworkDecisionSource;
 use crate::network_policy::NetworkPolicyDecider;
@@ -7,11 +8,15 @@ use crate::network_policy::NetworkPolicyDecision;
 use crate::network_policy::NetworkPolicyRequest;
 use crate::network_policy::NetworkPolicyRequestArgs;
 use crate::network_policy::NetworkProtocol;
+use crate::network_policy::emit_allow_decision_audit_event;
+use crate::network_policy::emit_block_decision_audit_event;
 use crate::network_policy::evaluate_host_policy;
 use crate::policy::normalize_host;
 use crate::reasons::REASON_METHOD_NOT_ALLOWED;
+use crate::reasons::REASON_MITM_REQUIRED;
 use crate::reasons::REASON_NOT_ALLOWED;
 use crate::reasons::REASON_PROXY_DISABLED;
+use crate::reasons::REASON_UNIX_SOCKET_UNSUPPORTED;
 use crate::responses::PolicyDecisionDetails;
 use crate::responses::blocked_header_value;
 use crate::responses::blocked_message_with_policy;
@@ -25,6 +30,7 @@ use crate::upstream::UpstreamClient;
 use crate::upstream::proxy_for_connect;
 use anyhow::Context as _;
 use anyhow::Result;
+use codex_utils_rustls_provider::ensure_rustls_crypto_provider;
 use rama_core::Layer;
 use rama_core::Service;
 use rama_core::error::BoxError;
@@ -33,7 +39,6 @@ use rama_core::error::OpaqueError;
 use rama_core::extensions::ExtensionsMut;
 use rama_core::extensions::ExtensionsRef;
 use rama_core::layer::AddInputExtensionLayer;
-use rama_core::rt::Executor;
 use rama_core::service::service_fn;
 use rama_http::Body;
 use rama_http::HeaderMap;
@@ -43,6 +48,8 @@ use rama_http::Request;
 use rama_http::Response;
 use rama_http::StatusCode;
 use rama_http::header;
+use rama_http::headers::HeaderMapExt;
+use rama_http::headers::Host;
 use rama_http::layer::remove_header::RemoveResponseHeaderLayer;
 use rama_http::matcher::MethodMatcher;
 use rama_http_backend::client::proxy::layer::HttpProxyConnector;
@@ -106,11 +113,17 @@ async fn run_http_proxy_with_listener(
     listener: TcpListener,
     policy_decider: Option<Arc<dyn NetworkPolicyDecider>>,
 ) -> Result<()> {
+    ensure_rustls_crypto_provider();
+
     let addr = listener
         .local_addr()
         .context("read HTTP proxy listener local addr")?;
 
-    let http_service = HttpServer::auto(Executor::new()).service(
+    // This proxy listener only needs HTTP/1 proxy semantics. Using Rama's auto builder
+    // forces every accepted socket through the HTTP version sniffing pre-read path before proxy
+    // request parsing, which can stall some local clients on macOS before CONNECT/absolute-form
+    // handling runs at all.
+    let http_service = HttpServer::http1().service(
         (
             UpgradeLayer::new(
                 MethodMatcher::CONNECT,
@@ -160,8 +173,6 @@ async fn http_connect_accept(
     }
 
     let client = client_addr(&req);
-    let network_attempt_id = request_network_attempt_id(&req);
-
     let enabled = app_state
         .enabled()
         .await
@@ -176,6 +187,7 @@ async fn http_connect_accept(
             client_addr(&req),
             Some("CONNECT".to_string()),
             NetworkProtocol::HttpsConnect,
+            /*audit_endpoint_override*/ None,
         )
         .await);
     }
@@ -188,7 +200,6 @@ async fn http_connect_accept(
         method: Some("CONNECT".to_string()),
         command: None,
         exec_policy_hint: None,
-        attempt_id: network_attempt_id.clone(),
     });
 
     match evaluate_host_policy(&app_state, policy_decider.as_ref(), &request).await {
@@ -213,7 +224,6 @@ async fn http_connect_accept(
                     method: Some("CONNECT".to_string()),
                     mode: None,
                     protocol: "http-connect".to_string(),
-                    attempt_id: network_attempt_id.clone(),
                     decision: Some(details.decision.as_str().to_string()),
                     source: Some(details.source.as_str().to_string()),
                     port: Some(authority.port),
@@ -238,10 +248,32 @@ async fn http_connect_accept(
         .await
         .map_err(|err| internal_error("failed to read network mode", err))?;
 
-    if mode == NetworkMode::Limited {
+    let mitm_state = match app_state.mitm_state().await {
+        Ok(state) => state,
+        Err(err) => {
+            error!("failed to load MITM state: {err}");
+            return Err(text_response(StatusCode::INTERNAL_SERVER_ERROR, "error"));
+        }
+    };
+
+    if mode == NetworkMode::Limited && mitm_state.is_none() {
+        // Limited mode is designed to be read-only. Without MITM, a CONNECT tunnel would hide the
+        // inner HTTP method/headers from the proxy, effectively bypassing method policy.
+        emit_http_block_decision_audit_event(
+            &app_state,
+            BlockDecisionAuditEventArgs {
+                source: NetworkDecisionSource::ModeGuard,
+                reason: REASON_MITM_REQUIRED,
+                protocol: NetworkProtocol::HttpsConnect,
+                server_address: host.as_str(),
+                server_port: authority.port,
+                method: Some("CONNECT"),
+                client_addr: client.as_deref(),
+            },
+        );
         let details = PolicyDecisionDetails {
             decision: NetworkPolicyDecision::Deny,
-            reason: REASON_METHOD_NOT_ALLOWED,
+            reason: REASON_MITM_REQUIRED,
             source: NetworkDecisionSource::ModeGuard,
             protocol: NetworkProtocol::HttpsConnect,
             host: &host,
@@ -250,27 +282,28 @@ async fn http_connect_accept(
         let _ = app_state
             .record_blocked(BlockedRequest::new(BlockedRequestArgs {
                 host: host.clone(),
-                reason: REASON_METHOD_NOT_ALLOWED.to_string(),
+                reason: REASON_MITM_REQUIRED.to_string(),
                 client: client.clone(),
                 method: Some("CONNECT".to_string()),
                 mode: Some(NetworkMode::Limited),
                 protocol: "http-connect".to_string(),
-                attempt_id: network_attempt_id,
                 decision: Some(details.decision.as_str().to_string()),
                 source: Some(details.source.as_str().to_string()),
                 port: Some(authority.port),
             }))
             .await;
         let client = client.as_deref().unwrap_or_default();
-        warn!("CONNECT blocked by method policy (client={client}, host={host}, mode=limited)");
-        return Err(blocked_text_with_details(
-            REASON_METHOD_NOT_ALLOWED,
-            &details,
-        ));
+        warn!(
+            "CONNECT blocked; MITM required for read-only HTTPS in limited mode (client={client}, host={host}, mode=limited, allowed_methods=GET, HEAD, OPTIONS)"
+        );
+        return Err(blocked_text_with_details(REASON_MITM_REQUIRED, &details));
     }
 
     req.extensions_mut().insert(ProxyTarget(authority));
     req.extensions_mut().insert(mode);
+    if let Some(mitm_state) = mitm_state {
+        req.extensions_mut().insert(mitm_state);
+    }
 
     Ok((
         Response::builder()
@@ -282,8 +315,33 @@ async fn http_connect_accept(
 }
 
 async fn http_connect_proxy(upgraded: Upgraded) -> Result<(), Infallible> {
-    if upgraded.extensions().get::<ProxyTarget>().is_none() {
+    let mode = upgraded
+        .extensions()
+        .get::<NetworkMode>()
+        .copied()
+        .unwrap_or(NetworkMode::Full);
+
+    let Some(target) = upgraded
+        .extensions()
+        .get::<ProxyTarget>()
+        .map(|t| t.0.clone())
+    else {
         warn!("CONNECT missing proxy target");
+        return Ok(());
+    };
+
+    if mode == NetworkMode::Limited
+        && upgraded
+            .extensions()
+            .get::<Arc<mitm::MitmState>>()
+            .is_some()
+    {
+        let host = normalize_host(&target.host.to_string());
+        let port = target.port;
+        info!("CONNECT MITM enabled (host={host}, port={port}, mode={mode:?})");
+        if let Err(err) = mitm::mitm_tunnel(upgraded).await {
+            warn!("MITM tunnel error: {err}");
+        }
         return Ok(());
     }
 
@@ -374,8 +432,6 @@ async fn http_plain_proxy(
         }
     };
     let client = client_addr(&req);
-    let network_attempt_id = request_network_attempt_id(&req);
-
     let method_allowed = match app_state
         .method_allowed(req.method().as_str())
         .await
@@ -386,8 +442,8 @@ async fn http_plain_proxy(
     };
 
     // `x-unix-socket` is an escape hatch for talking to local daemons. We keep it tightly scoped:
-    // macOS-only + explicit allowlist, to avoid turning the proxy into a general local capability
-    // escalation mechanism.
+    // macOS-only + explicit allowlist by default, to avoid turning the proxy into a general local
+    // capability escalation mechanism.
     if let Some(unix_socket_header) = req.headers().get("x-unix-socket") {
         let socket_path = match unix_socket_header.to_str() {
             Ok(value) => value.to_string(),
@@ -413,23 +469,52 @@ async fn http_plain_proxy(
             return Ok(proxy_disabled_response(
                 &app_state,
                 socket_path,
-                0,
+                /*port*/ 0,
                 client_addr(&req),
                 Some(req.method().as_str().to_string()),
                 NetworkProtocol::Http,
+                Some(("unix-socket", 0)),
             )
             .await);
         }
         if !method_allowed {
+            emit_http_block_decision_audit_event(
+                &app_state,
+                BlockDecisionAuditEventArgs {
+                    source: NetworkDecisionSource::ModeGuard,
+                    reason: REASON_METHOD_NOT_ALLOWED,
+                    protocol: NetworkProtocol::Http,
+                    server_address: "unix-socket",
+                    server_port: 0,
+                    method: Some(req.method().as_str()),
+                    client_addr: client.as_deref(),
+                },
+            );
             let client = client.as_deref().unwrap_or_default();
             let method = req.method();
             warn!(
                 "unix socket blocked by method policy (client={client}, method={method}, mode=limited, allowed_methods=GET, HEAD, OPTIONS)"
             );
-            return Ok(json_blocked("unix-socket", REASON_METHOD_NOT_ALLOWED, None));
+            return Ok(json_blocked(
+                "unix-socket",
+                REASON_METHOD_NOT_ALLOWED,
+                /*details*/ None,
+            ));
         }
 
         if !unix_socket_permissions_supported() {
+            emit_http_block_decision_audit_event(
+                &app_state,
+                BlockDecisionAuditEventArgs {
+                    source: NetworkDecisionSource::ProxyState,
+                    reason: REASON_UNIX_SOCKET_UNSUPPORTED,
+                    protocol: NetworkProtocol::Http,
+                    server_address: "unix-socket",
+                    server_port: 0,
+                    method: Some(req.method().as_str()),
+                    client_addr: client.as_deref(),
+                },
+            );
             warn!("unix socket proxy unsupported on this platform (path={socket_path})");
             return Ok(text_response(
                 StatusCode::NOT_IMPLEMENTED,
@@ -439,6 +524,18 @@ async fn http_plain_proxy(
 
         return match app_state.is_unix_socket_allowed(&socket_path).await {
             Ok(true) => {
+                emit_http_allow_decision_audit_event(
+                    &app_state,
+                    BlockDecisionAuditEventArgs {
+                        source: NetworkDecisionSource::ProxyState,
+                        reason: "allow",
+                        protocol: NetworkProtocol::Http,
+                        server_address: "unix-socket",
+                        server_port: 0,
+                        method: Some(req.method().as_str()),
+                        client_addr: client.as_deref(),
+                    },
+                );
                 let client = client.as_deref().unwrap_or_default();
                 info!("unix socket allowed (client={client}, path={socket_path})");
                 match proxy_via_unix_socket(req, &socket_path).await {
@@ -453,9 +550,25 @@ async fn http_plain_proxy(
                 }
             }
             Ok(false) => {
+                emit_http_block_decision_audit_event(
+                    &app_state,
+                    BlockDecisionAuditEventArgs {
+                        source: NetworkDecisionSource::ProxyState,
+                        reason: REASON_NOT_ALLOWED,
+                        protocol: NetworkProtocol::Http,
+                        server_address: "unix-socket",
+                        server_port: 0,
+                        method: Some(req.method().as_str()),
+                        client_addr: client.as_deref(),
+                    },
+                );
                 let client = client.as_deref().unwrap_or_default();
                 warn!("unix socket blocked (client={client}, path={socket_path})");
-                Ok(json_blocked("unix-socket", REASON_NOT_ALLOWED, None))
+                Ok(json_blocked(
+                    "unix-socket",
+                    REASON_NOT_ALLOWED,
+                    /*details*/ None,
+                ))
             }
             Err(err) => {
                 warn!("unix socket check failed: {err}");
@@ -464,15 +577,28 @@ async fn http_plain_proxy(
         };
     }
 
-    let authority = match RequestContext::try_from(&req).map(|ctx| ctx.host_with_port()) {
-        Ok(authority) => authority,
+    let request_ctx = match RequestContext::try_from(&req) {
+        Ok(request_ctx) => request_ctx,
         Err(err) => {
             warn!("missing host: {err}");
             return Ok(text_response(StatusCode::BAD_REQUEST, "missing host"));
         }
     };
+    let authority = request_ctx.host_with_port();
     let host = normalize_host(&authority.host.to_string());
     let port = authority.port;
+    if let Err(reason) = validate_absolute_form_host_header(&req, &request_ctx) {
+        let client = client.as_deref().unwrap_or_default();
+        let host_header = req
+            .headers()
+            .get(header::HOST)
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or("<missing>");
+        warn!(
+            "request rejected due to mismatched Host header (client={client}, target={host}:{port}, host_header={host_header}, reason={reason})"
+        );
+        return Ok(text_response(StatusCode::BAD_REQUEST, reason));
+    }
     let enabled = match app_state
         .enabled()
         .await
@@ -492,6 +618,7 @@ async fn http_plain_proxy(
             client_addr(&req),
             Some(req.method().as_str().to_string()),
             NetworkProtocol::Http,
+            /*audit_endpoint_override*/ None,
         )
         .await);
     }
@@ -504,7 +631,6 @@ async fn http_plain_proxy(
         method: Some(req.method().as_str().to_string()),
         command: None,
         exec_policy_hint: None,
-        attempt_id: network_attempt_id.clone(),
     });
 
     match evaluate_host_policy(&app_state, policy_decider.as_ref(), &request).await {
@@ -529,7 +655,6 @@ async fn http_plain_proxy(
                     method: Some(req.method().as_str().to_string()),
                     mode: None,
                     protocol: "http".to_string(),
-                    attempt_id: network_attempt_id.clone(),
                     decision: Some(details.decision.as_str().to_string()),
                     source: Some(details.source.as_str().to_string()),
                     port: Some(port),
@@ -547,6 +672,18 @@ async fn http_plain_proxy(
     }
 
     if !method_allowed {
+        emit_http_block_decision_audit_event(
+            &app_state,
+            BlockDecisionAuditEventArgs {
+                source: NetworkDecisionSource::ModeGuard,
+                reason: REASON_METHOD_NOT_ALLOWED,
+                protocol: NetworkProtocol::Http,
+                server_address: host.as_str(),
+                server_port: port,
+                method: Some(req.method().as_str()),
+                client_addr: client.as_deref(),
+            },
+        );
         let details = PolicyDecisionDetails {
             decision: NetworkPolicyDecision::Deny,
             reason: REASON_METHOD_NOT_ALLOWED,
@@ -563,7 +700,6 @@ async fn http_plain_proxy(
                 method: Some(req.method().as_str().to_string()),
                 mode: Some(NetworkMode::Limited),
                 protocol: "http".to_string(),
-                attempt_id: network_attempt_id,
                 decision: Some(details.decision.as_str().to_string()),
                 source: Some(details.source.as_str().to_string()),
                 port: Some(port),
@@ -645,12 +781,39 @@ fn client_addr<T: ExtensionsRef>(input: &T) -> Option<String> {
         .map(|info| info.peer_addr().to_string())
 }
 
-fn request_network_attempt_id(req: &Request) -> Option<String> {
-    // Some HTTP stacks normalize proxy credentials into `authorization`; accept both.
-    attempt_id_from_proxy_authorization(req.headers().get("proxy-authorization"))
-        .or_else(|| attempt_id_from_proxy_authorization(req.headers().get("authorization")))
-}
+fn validate_absolute_form_host_header(
+    req: &Request,
+    request_ctx: &RequestContext,
+) -> Result<(), &'static str> {
+    if req.uri().scheme_str().is_none() {
+        return Ok(());
+    }
 
+    let Some(host_header) = req
+        .headers()
+        .typed_try_get::<Host>()
+        .map_err(|_| "invalid Host header")?
+    else {
+        return Ok(());
+    };
+
+    if host_header.0.host != request_ctx.authority.host {
+        return Err("Host header does not match request target");
+    }
+
+    if let Some(host_port) = host_header.0.port {
+        if Some(host_port) != request_ctx.authority.port {
+            return Err("Host header does not match request target");
+        }
+        return Ok(());
+    }
+
+    if !request_ctx.authority_has_default_port() {
+        return Err("Host header does not match request target");
+    }
+
+    Ok(())
+}
 fn remove_hop_by_hop_request_headers(headers: &mut HeaderMap) {
     while let Some(raw_connection) = headers.get(header::CONNECTION).cloned() {
         headers.remove(header::CONNECTION);
@@ -728,7 +891,23 @@ async fn proxy_disabled_response(
     client: Option<String>,
     method: Option<String>,
     protocol: NetworkProtocol,
+    audit_endpoint_override: Option<(&str, u16)>,
 ) -> Response {
+    let (audit_server_address, audit_server_port) =
+        audit_endpoint_override.unwrap_or((host.as_str(), port));
+    emit_http_block_decision_audit_event(
+        app_state,
+        BlockDecisionAuditEventArgs {
+            source: NetworkDecisionSource::ProxyState,
+            reason: REASON_PROXY_DISABLED,
+            protocol,
+            server_address: audit_server_address,
+            server_port: audit_server_port,
+            method: method.as_deref(),
+            client_addr: client.as_deref(),
+        },
+    );
+
     let blocked_host = host.clone();
     let _ = app_state
         .record_blocked(BlockedRequest::new(BlockedRequestArgs {
@@ -738,7 +917,6 @@ async fn proxy_disabled_response(
             method,
             mode: None,
             protocol: protocol.as_policy_protocol().to_string(),
-            attempt_id: None,
             decision: Some("deny".to_string()),
             source: Some("proxy_state".to_string()),
             port: Some(port),
@@ -772,6 +950,20 @@ fn text_response(status: StatusCode, body: &str) -> Response {
         .unwrap_or_else(|_| Response::new(Body::from(body.to_string())))
 }
 
+fn emit_http_block_decision_audit_event(
+    app_state: &NetworkProxyState,
+    args: BlockDecisionAuditEventArgs<'_>,
+) {
+    emit_block_decision_audit_event(app_state, args);
+}
+
+fn emit_http_allow_decision_audit_event(
+    app_state: &NetworkProxyState,
+    args: BlockDecisionAuditEventArgs<'_>,
+) {
+    emit_allow_decision_audit_event(app_state, args);
+}
+
 #[derive(Serialize)]
 struct BlockedResponse<'a> {
     status: &'static str,
@@ -796,18 +988,24 @@ mod tests {
     use crate::config::NetworkMode;
     use crate::config::NetworkProxySettings;
     use crate::runtime::network_proxy_state_for_policy;
-    use base64::Engine;
-    use base64::engine::general_purpose::STANDARD;
     use pretty_assertions::assert_eq;
     use rama_http::Method;
     use rama_http::Request;
+    use std::net::Ipv4Addr;
+    use std::net::TcpListener as StdTcpListener;
     use std::sync::Arc;
+    use tokio::io::AsyncReadExt;
+    use tokio::io::AsyncWriteExt;
+    use tokio::net::TcpListener as TokioTcpListener;
+    use tokio::time::Duration;
+    use tokio::time::timeout;
 
     #[tokio::test]
     async fn http_connect_accept_blocks_in_limited_mode() {
-        let policy = NetworkProxySettings {
-            allowed_domains: vec!["example.com".to_string()],
-            ..Default::default()
+        let policy = {
+            let mut policy = NetworkProxySettings::default();
+            policy.set_allowed_domains(vec!["example.com".to_string()]);
+            policy
         };
         let state = Arc::new(network_proxy_state_for_policy(policy));
         state.set_network_mode(NetworkMode::Limited).await.unwrap();
@@ -820,7 +1018,123 @@ mod tests {
             .unwrap();
         req.extensions_mut().insert(state);
 
-        let response = http_connect_accept(None, req).await.unwrap_err();
+        let response = http_connect_accept(/*policy_decider*/ None, req)
+            .await
+            .unwrap_err();
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        assert_eq!(
+            response.headers().get("x-proxy-error").unwrap(),
+            "blocked-by-mitm-required"
+        );
+    }
+
+    #[tokio::test]
+    async fn http_connect_accept_allows_allowlisted_host_in_full_mode() {
+        let policy = {
+            let mut policy = NetworkProxySettings::default();
+            policy.set_allowed_domains(vec!["example.com".to_string()]);
+            policy
+        };
+        let state = Arc::new(network_proxy_state_for_policy(policy));
+
+        let mut req = Request::builder()
+            .method(Method::CONNECT)
+            .uri("https://example.com:443")
+            .header("host", "example.com:443")
+            .body(Body::empty())
+            .unwrap();
+        req.extensions_mut().insert(state);
+
+        let (response, _request) = http_connect_accept(/*policy_decider*/ None, req)
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn http_proxy_listener_accepts_plain_http1_connect_requests() {
+        let target_listener = TokioTcpListener::bind((Ipv4Addr::LOCALHOST, 0))
+            .await
+            .expect("target listener should bind");
+        let target_addr = target_listener
+            .local_addr()
+            .expect("target listener should expose local addr");
+        let target_task = tokio::spawn(async move {
+            let (mut stream, _) = target_listener
+                .accept()
+                .await
+                .expect("target listener should accept");
+            let mut buf = [0_u8; 1];
+            let _ = timeout(Duration::from_secs(1), stream.read(&mut buf)).await;
+        });
+
+        let state = Arc::new(network_proxy_state_for_policy({
+            let mut network = NetworkProxySettings::default();
+            network.set_allowed_domains(vec!["127.0.0.1".to_string()]);
+            network.allow_local_binding = true;
+            network
+        }));
+        let listener =
+            StdTcpListener::bind((Ipv4Addr::LOCALHOST, 0)).expect("proxy listener should bind");
+        let proxy_addr = listener
+            .local_addr()
+            .expect("proxy listener should expose local addr");
+        let proxy_task = tokio::spawn(run_http_proxy_with_std_listener(
+            state, listener, /*policy_decider*/ None,
+        ));
+
+        let mut stream = tokio::net::TcpStream::connect(proxy_addr)
+            .await
+            .expect("client should connect to proxy");
+        let request = format!(
+            "CONNECT 127.0.0.1:{port} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\n\r\n",
+            port = target_addr.port()
+        );
+        stream
+            .write_all(request.as_bytes())
+            .await
+            .expect("client should write CONNECT request");
+
+        let mut buf = [0_u8; 256];
+        let bytes_read = timeout(Duration::from_secs(2), stream.read(&mut buf))
+            .await
+            .expect("proxy should respond before timeout")
+            .expect("client should read proxy response");
+        let response = String::from_utf8_lossy(&buf[..bytes_read]);
+        assert!(
+            response.starts_with("HTTP/1.1 200 OK\r\n"),
+            "unexpected proxy response: {response:?}"
+        );
+
+        drop(stream);
+        proxy_task.abort();
+        let _ = proxy_task.await;
+        target_task.abort();
+        let _ = target_task.await;
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn http_plain_proxy_blocks_unix_socket_when_method_not_allowed() {
+        let state = Arc::new(network_proxy_state_for_policy(
+            NetworkProxySettings::default(),
+        ));
+        state
+            .set_network_mode(NetworkMode::Limited)
+            .await
+            .expect("network mode should update");
+
+        let mut req = Request::builder()
+            .method(Method::POST)
+            .uri("http://example.com")
+            .header("x-unix-socket", "/tmp/test.sock")
+            .body(Body::empty())
+            .expect("request should build");
+        req.extensions_mut().insert(state);
+
+        let response = http_plain_proxy(/*policy_decider*/ None, req)
+            .await
+            .unwrap();
+
         assert_eq!(response.status(), StatusCode::FORBIDDEN);
         assert_eq!(
             response.headers().get("x-proxy-error").unwrap(),
@@ -828,33 +1142,145 @@ mod tests {
         );
     }
 
-    #[test]
-    fn request_network_attempt_id_reads_proxy_authorization_header() {
-        let encoded = STANDARD.encode("codex-net-attempt-attempt-1:");
-        let req = Request::builder()
+    #[tokio::test(flavor = "current_thread")]
+    async fn http_plain_proxy_rejects_unix_socket_when_not_allowlisted() {
+        let state = Arc::new(network_proxy_state_for_policy(
+            NetworkProxySettings::default(),
+        ));
+
+        let mut req = Request::builder()
             .method(Method::GET)
             .uri("http://example.com")
-            .header("proxy-authorization", format!("Basic {encoded}"))
+            .header("x-unix-socket", "/tmp/test.sock")
+            .body(Body::empty())
+            .expect("request should build");
+        req.extensions_mut().insert(state);
+
+        let response = http_plain_proxy(/*policy_decider*/ None, req)
+            .await
+            .unwrap();
+
+        if cfg!(target_os = "macos") {
+            assert_eq!(response.status(), StatusCode::FORBIDDEN);
+            assert_eq!(
+                response.headers().get("x-proxy-error").unwrap(),
+                "blocked-by-allowlist"
+            );
+        } else {
+            assert_eq!(response.status(), StatusCode::NOT_IMPLEMENTED);
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    #[tokio::test(flavor = "current_thread")]
+    async fn http_plain_proxy_attempts_allowed_unix_socket_proxy() {
+        let state = Arc::new(network_proxy_state_for_policy({
+            let mut network = NetworkProxySettings::default();
+            network.set_allow_unix_sockets(vec!["/tmp/test.sock".to_string()]);
+            network
+        }));
+
+        let mut req = Request::builder()
+            .method(Method::GET)
+            .uri("http://example.com")
+            .header("x-unix-socket", "/tmp/test.sock")
+            .body(Body::empty())
+            .expect("request should build");
+        req.extensions_mut().insert(state);
+
+        let response = http_plain_proxy(/*policy_decider*/ None, req)
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
+    }
+
+    #[tokio::test]
+    async fn http_connect_accept_denies_denylisted_host() {
+        let policy = {
+            let mut policy = NetworkProxySettings::default();
+            policy.set_allowed_domains(vec!["**.openai.com".to_string()]);
+            policy.set_denied_domains(vec!["api.openai.com".to_string()]);
+            policy
+        };
+        let state = Arc::new(network_proxy_state_for_policy(policy));
+
+        let mut req = Request::builder()
+            .method(Method::CONNECT)
+            .uri("https://api.openai.com:443")
+            .header("host", "api.openai.com:443")
             .body(Body::empty())
             .unwrap();
+        req.extensions_mut().insert(state);
+
+        let response = http_connect_accept(/*policy_decider*/ None, req)
+            .await
+            .unwrap_err();
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
         assert_eq!(
-            request_network_attempt_id(&req),
-            Some("attempt-1".to_string())
+            response.headers().get("x-proxy-error").unwrap(),
+            "blocked-by-denylist"
+        );
+    }
+
+    #[tokio::test]
+    async fn http_plain_proxy_rejects_absolute_uri_host_header_mismatch() {
+        let state = Arc::new(network_proxy_state_for_policy(
+            NetworkProxySettings::default(),
+        ));
+        let mut req = Request::builder()
+            .method(Method::GET)
+            .uri("http://raw.githubusercontent.com/openai/codex/main/README.md")
+            .header(header::HOST, "api.github.com")
+            .body(Body::empty())
+            .unwrap();
+        req.extensions_mut().insert(state);
+
+        let response = http_plain_proxy(/*policy_decider*/ None, req).await;
+        assert_eq!(response.unwrap().status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[test]
+    fn validate_absolute_form_host_header_allows_matching_default_port() {
+        let req = Request::builder()
+            .method(Method::GET)
+            .uri("http://example.com/")
+            .header("host", "example.com")
+            .body(Body::empty())
+            .unwrap();
+
+        assert_eq!(
+            validate_absolute_form_host_header(&req, &RequestContext::try_from(&req).unwrap(),),
+            Ok(())
         );
     }
 
     #[test]
-    fn request_network_attempt_id_reads_authorization_header_fallback() {
-        let encoded = STANDARD.encode("codex-net-attempt-attempt-2:");
+    fn validate_absolute_form_host_header_rejects_mismatched_host() {
         let req = Request::builder()
             .method(Method::GET)
-            .uri("http://example.com")
-            .header("authorization", format!("Basic {encoded}"))
+            .uri("http://raw.githubusercontent.com/")
+            .header("host", "api.github.com")
             .body(Body::empty())
             .unwrap();
+
         assert_eq!(
-            request_network_attempt_id(&req),
-            Some("attempt-2".to_string())
+            validate_absolute_form_host_header(&req, &RequestContext::try_from(&req).unwrap(),),
+            Err("Host header does not match request target")
+        );
+    }
+
+    #[test]
+    fn validate_absolute_form_host_header_rejects_missing_non_default_port() {
+        let req = Request::builder()
+            .method(Method::GET)
+            .uri("http://example.com:8080/")
+            .header("host", "example.com")
+            .body(Body::empty())
+            .unwrap();
+
+        assert_eq!(
+            validate_absolute_form_host_header(&req, &RequestContext::try_from(&req).unwrap(),),
+            Err("Host header does not match request target")
         );
     }
 

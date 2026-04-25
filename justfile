@@ -26,6 +26,11 @@ xcodex-install *args:
 xcodex-pyo3-install *args:
     bash ../scripts/install-xcodex-pyo3.sh "$@"
 
+# Start `codex exec-server` and run codex-tui.
+[no-cd]
+tui-with-exec-server *args:
+    ./scripts/run_tui_with_exec_server.sh "$@"
+
 # Run the CLI version of the file-search crate.
 file-search *args:
     bazel run //codex-rs/file-search:codex-file-search -- "$@"
@@ -136,7 +141,7 @@ fix *args:
           exit 1; \
         fi; \
       fi; \
-      cargo clippy --fix --allow-dirty --allow-staged "$@"'
+      cargo clippy --fix --tests --allow-dirty --allow-staged "$@"'
 
 clippy *args:
     bash -lc 'set -euo pipefail; \
@@ -150,9 +155,15 @@ clippy *args:
           exit 1; \
         fi; \
       fi; \
-      cargo clippy "$@"'
+      cargo clippy --tests "$@"'
 
 # Default test runner
+# Run `cargo nextest` since it's faster than `cargo test`, though including
+# --no-fail-fast is important to ensure all tests are run.
+#
+# Run `cargo install cargo-nextest` if you don't have it installed.
+# Prefer this for routine local runs. Workspace crate features are banned, so
+# there should be no need to add `--all-features`.
 test:
     bazel test //... --keep_going
 
@@ -167,11 +178,27 @@ mcp-server-run *args:
 bazel-codex *args:
     bazel run //codex-rs/cli:codex --run_under="cd $PWD &&" -- "$@"
 
+[no-cd]
+bazel-lock-update:
+    bazel mod deps --lockfile_mode=update
+
+[no-cd]
+bazel-lock-check:
+    ./scripts/check-module-bazel-lock.sh
+
 bazel-test:
-    bazel test //... --keep_going
+    bazel test --test_tag_filters=-argument-comment-lint //... --keep_going
+
+[no-cd]
+bazel-clippy:
+    bazel_targets="$(./scripts/list-bazel-clippy-targets.sh)" && bazel build --config=clippy -- ${bazel_targets}
+
+[no-cd]
+bazel-argument-comment-lint:
+    bazel build --config=argument-comment-lint -- $(./tools/argument-comment-lint/list-bazel-targets.sh)
 
 bazel-remote-test:
-    bazel test //... --config=remote --platforms=//:rbe --keep_going
+    bazel test --test_tag_filters=-argument-comment-lint //... --config=remote --platforms=//:rbe --keep_going
 
 build-for-release:
     bazel build //codex-rs/cli:release_binaries --config=remote
@@ -187,6 +214,23 @@ write-config-schema:
 # Regenerate vendored app-server protocol schema artifacts.
 write-app-server-schema *args:
     cargo run -p codex-app-server-protocol --bin write_schema_fixtures -- "$@"
+
+[no-cd]
+write-hooks-schema:
+    cargo run --manifest-path ./codex-rs/Cargo.toml -p codex-hooks --bin write_hooks_schema_fixtures
+
+# Run the argument-comment Dylint checks across codex-rs.
+[no-cd]
+argument-comment-lint *args:
+    if [ "$#" -eq 0 ]; then \
+      bazel build --config=argument-comment-lint -- $(./tools/argument-comment-lint/list-bazel-targets.sh); \
+    else \
+      ./tools/argument-comment-lint/run-prebuilt-linter.py "$@"; \
+    fi
+
+[no-cd]
+argument-comment-lint-from-source *args:
+    ./tools/argument-comment-lint/run.py "$@"
 
 # Tail logs from the state SQLite database
 log *args:

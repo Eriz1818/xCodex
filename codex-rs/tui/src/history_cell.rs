@@ -19,6 +19,12 @@ use crate::exec_cell::output_lines;
 use crate::exec_cell::spinner;
 use crate::exec_command::relativize_to_home;
 use crate::exec_command::strip_bash_lc_and_escape;
+#[cfg(test)]
+use crate::legacy_core::McpManager;
+use crate::legacy_core::config::Config;
+#[cfg(test)]
+use crate::legacy_core::plugins::PluginsManager;
+use crate::legacy_core::web_search_detail;
 use crate::live_wrap::take_prefix_by_width;
 use crate::markdown::append_markdown;
 use crate::render::line_utils::line_to_static;
@@ -27,37 +33,48 @@ use crate::render::line_utils::push_owned_lines;
 use crate::render::renderable::Renderable;
 use crate::shimmer::shimmer_spans;
 use crate::style::proposed_plan_style;
+use crate::style::user_message_style;
+#[cfg(test)]
+use crate::test_support::PathBufExt;
 use crate::text_formatting::format_and_truncate_tool_result;
 use crate::text_formatting::truncate_text;
 use crate::tooltips;
 use crate::ui_consts::LIVE_PREFIX_COLS;
 use crate::version::CODEX_CLI_VERSION;
 use crate::wrapping::RtOptions;
-use crate::wrapping::word_wrap_line;
-use crate::wrapping::word_wrap_lines;
+use crate::wrapping::adaptive_wrap_line;
+use crate::wrapping::adaptive_wrap_lines;
 use base64::Engine;
+use codex_app_server_protocol::McpServerStatus;
+use codex_app_server_protocol::McpServerStatusDetail;
+use codex_config::types::McpServerTransportConfig;
 use codex_core::config::Config;
-use codex_core::config::types::McpServerTransportConfig;
-use codex_core::protocol::FileChange;
-use codex_core::protocol::McpAuthStatus;
-use codex_core::protocol::McpInvocation;
 use codex_core::protocol::McpServerSnapshotState;
 use codex_core::protocol::McpStartupStatus;
-use codex_core::protocol::SessionConfiguredEvent;
 use codex_core::web_search::web_search_detail;
+#[cfg(test)]
+use codex_mcp::qualified_mcp_tool_name_prefix;
 use codex_otel::RuntimeMetricsSummary;
 use codex_protocol::account::PlanType;
+use codex_protocol::config_types::ServiceTier;
+#[cfg(test)]
 use codex_protocol::mcp::Resource;
+#[cfg(test)]
 use codex_protocol::mcp::ResourceTemplate;
 use codex_protocol::models::WebSearchAction;
+use codex_protocol::models::local_image_label_text;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::plan_tool::PlanItemArg;
 use codex_protocol::plan_tool::StepStatus;
 use codex_protocol::plan_tool::UpdatePlanArgs;
+use codex_protocol::protocol::FileChange;
+use codex_protocol::protocol::McpAuthStatus;
+use codex_protocol::protocol::McpInvocation;
+use codex_protocol::protocol::SessionConfiguredEvent;
 use codex_protocol::request_user_input::RequestUserInputAnswer;
 use codex_protocol::request_user_input::RequestUserInputQuestion;
 use codex_protocol::user_input::TextElement;
-use codex_utils_cli::format_env_display::format_env_display;
+use codex_utils_cli::format_env_display;
 use image::DynamicImage;
 use image::ImageReader;
 use ratatui::prelude::*;
@@ -72,6 +89,8 @@ use std::collections::HashMap;
 use std::io::Cursor;
 use std::path::Path;
 use std::path::PathBuf;
+#[cfg(test)]
+use std::sync::Arc;
 use std::time::Duration;
 use std::time::Instant;
 use tracing::error;
@@ -89,17 +108,31 @@ pub(crate) struct McpStartupRenderInfo<'a> {
 fn transcript_spacer_line() -> Line<'static> {
     Line::from("").style(crate::theme::transcript_style())
 }
+mod hook_cell;
+
+pub(crate) use hook_cell::HookCell;
+pub(crate) use hook_cell::new_active_hook_cell;
+pub(crate) use hook_cell::new_completed_hook_cell;
 
 /// Represents an event to display in the conversation history. Returns its
 /// `Vec<Line<'static>>` representation to make it easier to display in a
 /// scrollable list.
+/// A single renderable unit of conversation history.
+///
+/// Each cell produces logical `Line`s and reports how many viewport
+/// rows those lines occupy at a given terminal width. The default
+/// height implementations use `Paragraph::wrap` to account for lines
+/// that overflow the viewport width (e.g. long URLs that are kept
+/// intact by adaptive wrapping). Concrete types only need to override
+/// heights when they apply additional layout logic beyond what
+/// `Paragraph::line_count` captures.
 pub(crate) trait HistoryCell: std::fmt::Debug + Send + Sync + Any {
+    /// Returns the logical lines for the main chat viewport.
     fn display_lines(&self, width: u16) -> Vec<Line<'static>>;
 
     fn render_style(&self) -> Style {
         crate::theme::transcript_style()
     }
-
     fn desired_height(&self, width: u16) -> u16 {
         Paragraph::new(Text::from(self.display_lines(width)))
             .wrap(Wrap { trim: false })
@@ -108,13 +141,24 @@ pub(crate) trait HistoryCell: std::fmt::Debug + Send + Sync + Any {
             .unwrap_or(0)
     }
 
+    /// Returns lines for the transcript overlay (`Ctrl+T`).
+    ///
+    /// Defaults to `display_lines`. Override when the transcript
+    /// representation differs (e.g. `ExecCell` shows all calls with
+    /// `$`-prefixed commands and exit status).
     fn transcript_lines(&self, width: u16) -> Vec<Line<'static>> {
         self.display_lines(width)
     }
 
+    /// Returns the number of viewport rows for the transcript overlay.
+    ///
+    /// Uses the same `Paragraph::line_count` measurement as
+    /// `desired_height`. Contains a workaround for a ratatui bug where
+    /// a single whitespace-only line reports 2 rows instead of 1.
     fn desired_transcript_height(&self, width: u16) -> u16 {
         let lines = self.transcript_lines(width);
-        // Workaround for ratatui bug: if there's only one line and it's whitespace-only, ratatui gives 2 lines.
+        // Workaround: ratatui's line_count returns 2 for a single
+        // whitespace-only line. Clamp to 1 in that case.
         if let [line] = &lines[..]
             && line
                 .spans
@@ -153,13 +197,16 @@ pub(crate) trait HistoryCell: std::fmt::Debug + Send + Sync + Any {
 impl Renderable for Box<dyn HistoryCell> {
     fn render(&self, area: Rect, buf: &mut Buffer) {
         let lines = self.display_lines(area.width);
+        let paragraph = Paragraph::new(Text::from(lines)).wrap(Wrap { trim: false });
         let y = if area.height == 0 {
             0
         } else {
-            let overflow = lines.len().saturating_sub(usize::from(area.height));
+            let overflow = paragraph
+                .line_count(area.width)
+                .saturating_sub(usize::from(area.height));
             u16::try_from(overflow).unwrap_or(u16::MAX)
         };
-        Paragraph::new(Text::from(lines))
+        paragraph
             .style(self.render_style())
             .scroll((y, 0))
             .render(area, buf);
@@ -186,6 +233,7 @@ pub(crate) struct UserHistoryCell {
     #[allow(dead_code)]
     pub local_image_paths: Vec<PathBuf>,
     pub highlight: bool,
+    pub remote_image_urls: Vec<String>,
 }
 
 /// Build logical lines for a user message with styled text elements.
@@ -260,10 +308,22 @@ impl UserHistoryCell {
     }
 }
 
+fn remote_image_display_line(style: Style, index: usize) -> Line<'static> {
+    Line::from(local_image_label_text(index)).style(style)
+}
+
+fn trim_trailing_blank_lines(mut lines: Vec<Line<'static>>) -> Vec<Line<'static>> {
+    while lines
+        .last()
+        .is_some_and(|line| line.spans.iter().all(|span| span.content.trim().is_empty()))
+    {
+        lines.pop();
+    }
+    lines
+}
+
 impl HistoryCell for UserHistoryCell {
     fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
-        let mut lines: Vec<Line<'static>> = Vec::new();
-
         let wrap_width = width
             .saturating_sub(
                 LIVE_PREFIX_COLS + 1, /* keep a one-column right margin for wrapping */
@@ -273,13 +333,35 @@ impl HistoryCell for UserHistoryCell {
         let style = self.style();
         let element_style = style.patch(crate::theme::accent_style());
 
-        let wrapped = if self.text_elements.is_empty() {
-            word_wrap_lines(
-                self.message.split('\n').map(|l| Line::from(l).style(style)),
+        let wrapped_remote_images = if self.remote_image_urls.is_empty() {
+            None
+        } else {
+            Some(adaptive_wrap_lines(
+                self.remote_image_urls
+                    .iter()
+                    .enumerate()
+                    .map(|(idx, _url)| {
+                        remote_image_display_line(element_style, idx.saturating_add(1))
+                    }),
+                RtOptions::new(usize::from(wrap_width))
+                    .wrap_algorithm(textwrap::WrapAlgorithm::FirstFit),
+            ))
+        };
+
+        let wrapped_message = if self.message.is_empty() && self.text_elements.is_empty() {
+            None
+        } else if self.text_elements.is_empty() {
+            let message_without_trailing_newlines = self.message.trim_end_matches(['\r', '\n']);
+            let wrapped = adaptive_wrap_lines(
+                message_without_trailing_newlines
+                    .split('\n')
+                    .map(|line| Line::from(line).style(style)),
                 // Wrap algorithm matches textarea.rs.
                 RtOptions::new(usize::from(wrap_width))
                     .wrap_algorithm(textwrap::WrapAlgorithm::FirstFit),
-            )
+            );
+            let wrapped = trim_trailing_blank_lines(wrapped);
+            (!wrapped.is_empty()).then_some(wrapped)
         } else {
             let raw_lines = build_user_message_lines_with_elements(
                 &self.message,
@@ -287,19 +369,39 @@ impl HistoryCell for UserHistoryCell {
                 style,
                 element_style,
             );
-            word_wrap_lines(
+            let wrapped = adaptive_wrap_lines(
                 raw_lines,
                 RtOptions::new(usize::from(wrap_width))
                     .wrap_algorithm(textwrap::WrapAlgorithm::FirstFit),
-            )
+            );
+            let wrapped = trim_trailing_blank_lines(wrapped);
+            (!wrapped.is_empty()).then_some(wrapped)
         };
 
-        lines.push(Line::from("").style(style));
-        lines.extend(
-            prefix_lines(wrapped, "› ".bold().dim(), "  ".into())
-                .into_iter()
-                .map(|line| line.style(style)),
-        );
+        if wrapped_remote_images.is_none() && wrapped_message.is_none() {
+            return Vec::new();
+        }
+
+        let mut lines: Vec<Line<'static>> = vec![Line::from("").style(style)];
+
+        if let Some(wrapped_remote_images) = wrapped_remote_images {
+            lines.extend(prefix_lines(
+                wrapped_remote_images,
+                "  ".into(),
+                "  ".into(),
+            ));
+            if wrapped_message.is_some() {
+                lines.push(Line::from("").style(style));
+            }
+        }
+
+        if let Some(wrapped_message) = wrapped_message {
+            lines.extend(prefix_lines(
+                wrapped_message,
+                "› ".bold().dim(),
+                "  ".into(),
+            ));
+        }
         lines.push(Line::from("").style(style));
         lines
     }
@@ -309,14 +411,19 @@ impl HistoryCell for UserHistoryCell {
 pub(crate) struct ReasoningSummaryCell {
     _header: String,
     content: String,
+    /// Session cwd used to render local file links inside the reasoning body.
+    cwd: PathBuf,
     transcript_only: bool,
 }
 
 impl ReasoningSummaryCell {
-    pub(crate) fn new(header: String, content: String, transcript_only: bool) -> Self {
+    /// Create a reasoning summary cell that will render local file links relative to the session
+    /// cwd active when the summary was recorded.
+    pub(crate) fn new(header: String, content: String, cwd: &Path, transcript_only: bool) -> Self {
         Self {
             _header: header,
             content,
+            cwd: cwd.to_path_buf(),
             transcript_only,
         }
     }
@@ -330,7 +437,7 @@ impl ReasoningSummaryCell {
 
         if header.is_empty() {
             let mut lines: Vec<Line<'static>> = Vec::new();
-            append_markdown(content, md_width, &mut lines);
+            append_markdown(content, md_width, Some(self.cwd.as_path()), &mut lines);
 
             let summary_style = Style::default().dim().italic();
             let summary_lines = lines
@@ -354,7 +461,12 @@ impl ReasoningSummaryCell {
         }
 
         let mut header_lines: Vec<Line<'static>> = Vec::new();
-        append_markdown(header, md_width, &mut header_lines);
+        append_markdown(
+            header,
+            md_width,
+            Some(self.cwd.as_path()),
+            &mut header_lines,
+        );
         let header_style = Style::default().dim();
         let header_lines = header_lines
             .into_iter()
@@ -369,7 +481,12 @@ impl ReasoningSummaryCell {
             .collect::<Vec<_>>();
 
         let mut content_lines: Vec<Line<'static>> = Vec::new();
-        append_markdown(content, md_width, &mut content_lines);
+        append_markdown(
+            content,
+            md_width,
+            Some(self.cwd.as_path()),
+            &mut content_lines,
+        );
         let summary_style = Style::default().dim().italic();
         let content_lines = content_lines
             .into_iter()
@@ -408,20 +525,8 @@ impl HistoryCell for ReasoningSummaryCell {
         }
     }
 
-    fn desired_height(&self, width: u16) -> u16 {
-        if self.transcript_only {
-            0
-        } else {
-            self.lines(width).len() as u16
-        }
-    }
-
     fn transcript_lines(&self, width: u16) -> Vec<Line<'static>> {
         self.lines(width)
-    }
-
-    fn desired_transcript_height(&self, width: u16) -> u16 {
-        self.lines(width).len() as u16
     }
 }
 
@@ -442,7 +547,7 @@ impl AgentMessageCell {
 
 impl HistoryCell for AgentMessageCell {
     fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
-        word_wrap_lines(
+        adaptive_wrap_lines(
             &self.lines,
             RtOptions::new(width as usize)
                 .initial_indent(if self.is_first_line {
@@ -505,14 +610,7 @@ impl HistoryCell for PrefixedWrappedHistoryCell {
         let opts = RtOptions::new(width.max(1) as usize)
             .initial_indent(self.initial_prefix.clone())
             .subsequent_indent(self.subsequent_prefix.clone());
-        let wrapped = word_wrap_lines(&self.text, opts);
-        let mut out = Vec::new();
-        push_owned_lines(&wrapped, &mut out);
-        out
-    }
-
-    fn desired_height(&self, width: u16) -> u16 {
-        self.display_lines(width).len() as u16
+        adaptive_wrap_lines(&self.text, opts)
     }
 }
 
@@ -537,8 +635,13 @@ impl HistoryCell for UnifiedExecInteractionCell {
             return Vec::new();
         }
         let wrap_width = width as usize;
+        let waited_only = self.stdin.is_empty();
 
-        let mut header_spans = vec!["↳ ".dim(), "Interacted with background terminal".bold()];
+        let mut header_spans = if waited_only {
+            vec!["• Waited for background terminal".bold()]
+        } else {
+            vec!["↳ ".dim(), "Interacted with background terminal".bold()]
+        };
         if let Some(command) = &self.command_display
             && !command.is_empty()
         {
@@ -548,19 +651,20 @@ impl HistoryCell for UnifiedExecInteractionCell {
         let header = Line::from(header_spans);
 
         let mut out: Vec<Line<'static>> = Vec::new();
-        let header_wrapped = word_wrap_line(&header, RtOptions::new(wrap_width));
+        let header_wrapped = adaptive_wrap_line(&header, RtOptions::new(wrap_width));
         push_owned_lines(&header_wrapped, &mut out);
 
-        let input_lines: Vec<Line<'static>> = if self.stdin.is_empty() {
-            vec![vec!["(waited)".dim()].into()]
-        } else {
-            self.stdin
-                .lines()
-                .map(|line| Line::from(line.to_string()))
-                .collect()
-        };
+        if waited_only {
+            return out;
+        }
 
-        let input_wrapped = word_wrap_lines(
+        let input_lines: Vec<Line<'static>> = self
+            .stdin
+            .lines()
+            .map(|line| Line::from(line.to_string()))
+            .collect();
+
+        let input_wrapped = adaptive_wrap_lines(
             input_lines,
             RtOptions::new(wrap_width)
                 .initial_indent(Line::from("  └ ".dim()))
@@ -568,10 +672,6 @@ impl HistoryCell for UnifiedExecInteractionCell {
         );
         out.extend(input_wrapped);
         out
-    }
-
-    fn desired_height(&self, width: u16) -> u16 {
-        self.display_lines(width).len() as u16
     }
 }
 
@@ -799,7 +899,7 @@ fn truncate_exec_snippet(full_cmd: &str) -> String {
         Some((first, _)) => format!("{first} ..."),
         None => full_cmd.to_string(),
     };
-    snippet = truncate_text(&snippet, 80);
+    snippet = truncate_text(&snippet, /*max_graphemes*/ 80);
     snippet
 }
 
@@ -810,9 +910,11 @@ fn exec_snippet(command: &[String]) -> String {
 
 pub fn new_approval_decision_cell(
     command: Vec<String>,
-    decision: codex_core::protocol::ReviewDecision,
+    decision: codex_protocol::protocol::ReviewDecision,
+    actor: ApprovalDecisionActor,
 ) -> Box<dyn HistoryCell> {
-    use codex_core::protocol::ReviewDecision::*;
+    use codex_protocol::protocol::NetworkPolicyRuleAction;
+    use codex_protocol::protocol::ReviewDecision::*;
 
     let agent_name = crate::xcodex_plugins::history_cell::approval_agent_name();
     let (symbol, summary): (Span<'static>, Vec<Span<'static>>) = match decision {
@@ -821,7 +923,7 @@ pub fn new_approval_decision_cell(
             (
                 "✔ ".green(),
                 vec![
-                    "You ".into(),
+                    actor.subject().into(),
                     "approved".bold(),
                     format!(" {agent_name} to run ").into(),
                     snippet,
@@ -836,7 +938,7 @@ pub fn new_approval_decision_cell(
             (
                 "✔ ".green(),
                 vec![
-                    "You ".into(),
+                    actor.subject().into(),
                     "approved".bold(),
                     format!(" {agent_name} to run ").into(),
                     snippet,
@@ -848,7 +950,7 @@ pub fn new_approval_decision_cell(
             (
                 "✔ ".green(),
                 vec![
-                    "You ".into(),
+                    actor.subject().into(),
                     "approved".bold(),
                     format!(" {agent_name} to run ").into(),
                     snippet,
@@ -856,14 +958,55 @@ pub fn new_approval_decision_cell(
                 ],
             )
         }
+        NetworkPolicyAmendment {
+            network_policy_amendment,
+        } => match network_policy_amendment.action {
+            NetworkPolicyRuleAction::Allow => (
+                "✔ ".green(),
+                vec![
+                    actor.subject().into(),
+                    "persisted".bold(),
+                    " Codex network access to ".into(),
+                    Span::from(network_policy_amendment.host).dim(),
+                ],
+            ),
+            NetworkPolicyRuleAction::Deny => (
+                "✗ ".red(),
+                vec![
+                    actor.subject().into(),
+                    "denied".bold(),
+                    " codex network access to ".into(),
+                    Span::from(network_policy_amendment.host).dim(),
+                    " and saved that rule".into(),
+                ],
+            ),
+        },
         Denied => {
+            let snippet = Span::from(exec_snippet(&command)).dim();
+            let summary = match actor {
+                ApprovalDecisionActor::User => vec![
+                    actor.subject().into(),
+                    "did not approve".bold(),
+                    " codex to run ".into(),
+                    snippet,
+                ],
+                ApprovalDecisionActor::Guardian => vec![
+                    "Request ".into(),
+                    "denied".bold(),
+                    " for codex to run ".into(),
+                    snippet,
+                ],
+            };
+            ("✗ ".red(), summary)
+        }
+        TimedOut => {
             let snippet = Span::from(exec_snippet(&command)).dim();
             (
                 "✗ ".red(),
                 vec![
-                    "You ".into(),
-                    "did not approve".bold(),
-                    format!(" {agent_name} to run ").into(),
+                    "Review ".into(),
+                    "timed out".bold(),
+                    format!(" before {agent_name} could run ").into(),
                     snippet,
                 ],
             )
@@ -873,7 +1016,7 @@ pub fn new_approval_decision_cell(
             (
                 "✗ ".red(),
                 vec![
-                    "You ".into(),
+                    actor.subject().into(),
                     "canceled".bold(),
                     " the request to run ".into(),
                     snippet,
@@ -887,6 +1030,63 @@ pub fn new_approval_decision_cell(
         symbol,
         "  ",
     ))
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ApprovalDecisionActor {
+    User,
+    Guardian,
+}
+
+impl ApprovalDecisionActor {
+    fn subject(self) -> &'static str {
+        match self {
+            Self::User => "You ",
+            Self::Guardian => "Auto-reviewer ",
+        }
+    }
+}
+
+pub fn new_guardian_denied_patch_request(files: Vec<String>) -> Box<dyn HistoryCell> {
+    let mut summary = vec![
+        "Request ".into(),
+        "denied".bold(),
+        " for codex to apply ".into(),
+    ];
+    if files.len() == 1 {
+        summary.push("a patch touching ".into());
+        summary.push(Span::from(files[0].clone()).dim());
+    } else {
+        summary.push("a patch touching ".into());
+        summary.push(Span::from(files.len().to_string()).dim());
+        summary.push(" files".into());
+    }
+
+    Box::new(PrefixedWrappedHistoryCell::new(
+        Line::from(summary),
+        "✗ ".red(),
+        "  ",
+    ))
+}
+
+pub fn new_guardian_denied_action_request(summary: String) -> Box<dyn HistoryCell> {
+    let line = Line::from(vec![
+        "Request ".into(),
+        "denied".bold(),
+        " for ".into(),
+        Span::from(summary).dim(),
+    ]);
+    Box::new(PrefixedWrappedHistoryCell::new(line, "✗ ".red(), "  "))
+}
+
+pub fn new_guardian_approved_action_request(summary: String) -> Box<dyn HistoryCell> {
+    let line = Line::from(vec![
+        "Request ".into(),
+        "approved".bold(),
+        " for ".into(),
+        Span::from(summary).dim(),
+    ]);
+    Box::new(PrefixedWrappedHistoryCell::new(line, "✔ ".green(), "  "))
 }
 
 /// Cyan history cell line showing the current review status.
@@ -938,7 +1138,7 @@ pub(crate) fn card_inner_width(width: u16, max_inner_width: usize) -> Option<usi
 
 /// Render `lines` inside a border sized to the widest span in the content.
 pub(crate) fn with_border(lines: Vec<Line<'static>>) -> Vec<Line<'static>> {
-    with_border_internal(lines, None)
+    with_border_internal(lines, /*forced_inner_width*/ None)
 }
 
 /// Render `lines` inside a border whose inner width is at least `inner_width`.
@@ -1021,12 +1221,16 @@ pub(crate) fn padded_emoji(emoji: &str) -> String {
 #[derive(Debug)]
 struct TooltipHistoryCell {
     tip: String,
+    cwd: PathBuf,
 }
 
 #[allow(dead_code)]
 impl TooltipHistoryCell {
-    fn new(tip: String) -> Self {
-        Self { tip }
+    fn new(tip: String, cwd: &Path) -> Self {
+        Self {
+            tip,
+            cwd: cwd.to_path_buf(),
+        }
     }
 }
 
@@ -1042,6 +1246,7 @@ impl HistoryCell for TooltipHistoryCell {
         append_markdown(
             &format!("**Tips:** {}", self.tip),
             Some(wrap_width),
+            Some(self.cwd.as_path()),
             &mut lines,
         );
 
@@ -1078,7 +1283,9 @@ pub(crate) fn new_session_info(
     requested_model: &str,
     event: SessionConfiguredEvent,
     is_first_event: bool,
+    tooltip_override: Option<String>,
     auth_plan: Option<PlanType>,
+    show_fast_status: bool,
 ) -> SessionInfoCell {
     let SessionConfiguredEvent {
         model,
@@ -1089,7 +1296,8 @@ pub(crate) fn new_session_info(
     let header = SessionHeaderHistoryCell::new(
         model.clone(),
         reasoning_effort,
-        config.cwd.clone(),
+        show_fast_status,
+        config.cwd.to_path_buf(),
         CODEX_CLI_VERSION,
     );
     let mut parts: Vec<Box<dyn HistoryCell>> = vec![Box::new(header)];
@@ -1130,7 +1338,14 @@ pub(crate) fn new_session_info(
         parts.push(Box::new(PlainHistoryCell { lines: help_lines }));
     } else {
         if config.show_tooltips
-            && let Some(tooltips) = tooltips::get_tooltip(auth_plan).map(TooltipHistoryCell::new)
+            && let Some(tooltips) = tooltip_override
+                .or_else(|| {
+                    tooltips::get_tooltip(
+                        auth_plan,
+                        matches!(config.service_tier, Some(ServiceTier::Fast)),
+                    )
+                })
+                .map(|tip| TooltipHistoryCell::new(tip, &config.cwd))
         {
             parts.push(Box::new(tooltips));
         }
@@ -1152,17 +1367,19 @@ pub(crate) fn new_user_prompt(
     text_elements: Vec<TextElement>,
     local_image_paths: Vec<PathBuf>,
     highlight: bool,
+    remote_image_urls: Vec<String>,
 ) -> UserHistoryCell {
     UserHistoryCell {
         message,
         text_elements,
         local_image_paths,
         highlight,
+        remote_image_urls,
     }
 }
 
 pub(crate) fn new_user_prompt_preview(message: String, highlight: bool) -> UserHistoryCell {
-    new_user_prompt(message, Vec::new(), Vec::new(), highlight)
+    new_user_prompt(message, Vec::new(), Vec::new(), highlight, Vec::new())
 }
 
 #[derive(Debug)]
@@ -1171,6 +1388,7 @@ pub(crate) struct SessionHeaderHistoryCell {
     model: String,
     model_style: Style,
     reasoning_effort: Option<ReasoningEffortConfig>,
+    show_fast_status: bool,
     directory: PathBuf,
 }
 
@@ -1179,6 +1397,7 @@ impl SessionHeaderHistoryCell {
     pub(crate) fn new(
         model: String,
         reasoning_effort: Option<ReasoningEffortConfig>,
+        show_fast_status: bool,
         directory: PathBuf,
         version: &'static str,
     ) -> Self {
@@ -1186,6 +1405,7 @@ impl SessionHeaderHistoryCell {
             model,
             Style::default(),
             reasoning_effort,
+            show_fast_status,
             directory,
             version,
         )
@@ -1195,6 +1415,7 @@ impl SessionHeaderHistoryCell {
         model: String,
         model_style: Style,
         reasoning_effort: Option<ReasoningEffortConfig>,
+        show_fast_status: bool,
         directory: PathBuf,
         version: &'static str,
     ) -> Self {
@@ -1203,6 +1424,7 @@ impl SessionHeaderHistoryCell {
             model,
             model_style,
             reasoning_effort,
+            show_fast_status,
             directory,
         }
     }
@@ -1280,6 +1502,10 @@ impl HistoryCell for SessionHeaderHistoryCell {
             if let Some(reasoning) = reasoning_label {
                 spans.push(Span::from(" "));
                 spans.push(Span::from(reasoning));
+            }
+            if self.show_fast_status {
+                spans.push("   ".into());
+                spans.push(Span::styled("fast", self.model_style.magenta()));
             }
             spans.push("   ".dim());
             spans.push(CHANGE_MODEL_HINT_COMMAND.cyan());
@@ -1452,7 +1678,7 @@ impl HistoryCell for McpToolCallCell {
             let opts = RtOptions::new((width as usize).saturating_sub(4))
                 .initial_indent("".into())
                 .subsequent_indent("    ".into());
-            let wrapped = word_wrap_line(&invocation_line, opts);
+            let wrapped = adaptive_wrap_line(&invocation_line, opts);
             let body_lines: Vec<Line<'static>> = wrapped.iter().map(line_to_static).collect();
             lines.extend(prefix_lines(body_lines, "  └ ".dim(), "    ".into()));
         }
@@ -1469,7 +1695,7 @@ impl HistoryCell for McpToolCallCell {
                             let text = Self::render_content_block(block, detail_wrap_width);
                             for segment in text.split('\n') {
                                 let line = Line::from(segment.to_string().dim());
-                                let wrapped = word_wrap_line(
+                                let wrapped = adaptive_wrap_line(
                                     &line,
                                     RtOptions::new(detail_wrap_width)
                                         .initial_indent("".into())
@@ -1487,7 +1713,7 @@ impl HistoryCell for McpToolCallCell {
                         width as usize,
                     );
                     let err_line = Line::from(err_text.dim());
-                    let wrapped = word_wrap_line(
+                    let wrapped = adaptive_wrap_line(
                         &err_line,
                         RtOptions::new(detail_wrap_width)
                             .initial_indent("".into())
@@ -1598,7 +1824,7 @@ pub(crate) fn new_active_web_search_call(
     query: String,
     animations_enabled: bool,
 ) -> WebSearchCell {
-    WebSearchCell::new(call_id, query, None, animations_enabled)
+    WebSearchCell::new(call_id, query, /*action*/ None, animations_enabled)
 }
 
 pub(crate) fn new_web_search_call(
@@ -1606,7 +1832,12 @@ pub(crate) fn new_web_search_call(
     query: String,
     action: WebSearchAction,
 ) -> WebSearchCell {
-    let mut cell = WebSearchCell::new(call_id, query, Some(action), false);
+    let mut cell = WebSearchCell::new(
+        call_id,
+        query,
+        Some(action),
+        /*animations_enabled*/ false,
+    );
     cell.complete();
     cell
 }
@@ -1789,11 +2020,9 @@ impl HistoryCell for DeprecationNoticeCell {
         let wrap_width = width.saturating_sub(4).max(1) as usize;
 
         if let Some(details) = &self.details {
-            let line = textwrap::wrap(details, wrap_width)
-                .into_iter()
-                .map(|s| s.to_string().dim().into())
-                .collect::<Vec<_>>();
-            lines.extend(line);
+            let detail_line = Line::from(details.clone().dim());
+            let wrapped = adaptive_wrap_line(&detail_line, RtOptions::new(wrap_width));
+            push_owned_lines(&wrapped, &mut lines);
         }
 
         lines
@@ -1820,6 +2049,7 @@ pub(crate) fn empty_mcp_output() -> PlainHistoryCell {
     PlainHistoryCell { lines }
 }
 
+#[cfg(test)]
 /// Render MCP tools grouped by connection using the fully-qualified tool names.
 #[allow(dead_code)] // Upstream parity seam: MCP tools transcript view retained for plugin parity.
 pub(crate) fn new_mcp_tools_output(
@@ -1882,13 +2112,15 @@ pub(crate) fn new_mcp_tools_output(
         lines.push(transcript_spacer_line());
     }
 
-    let mut servers: Vec<_> = config.mcp_servers.iter().collect();
+    let mcp_manager = McpManager::new(Arc::new(PluginsManager::new(config.codex_home.clone())));
+    let effective_servers = mcp_manager.effective_servers(config, /*auth*/ None);
+    let mut servers: Vec<_> = effective_servers.iter().collect();
     servers.sort_by(|(a, _), (b, _)| a.cmp(b));
 
     let mut retryable_servers: Vec<String> = Vec::new();
 
     for (server, cfg) in servers {
-        let prefix = format!("mcp__{server}__");
+        let prefix = qualified_mcp_tool_name_prefix(server);
         let mut names: Vec<String> = tools
             .keys()
             .filter(|k| k.starts_with(&prefix))
@@ -2106,6 +2338,183 @@ pub(crate) fn new_mcp_tools_output(
 
     PlainHistoryCell { lines }
 }
+
+/// Build the `/mcp` history cell from app-server `McpServerStatus` responses.
+///
+/// The server list comes directly from the app-server status response, sorted
+/// alphabetically. Local config is only used to enrich returned servers with
+/// transport details such as command, URL, cwd, and environment display.
+///
+/// This mirrors the layout of [`new_mcp_tools_output`] but sources data from
+/// the paginated RPC response rather than the in-process `McpManager`. The
+/// `detail` flag controls whether resources and resource templates are rendered.
+pub(crate) fn new_mcp_tools_output_from_statuses(
+    config: &Config,
+    statuses: &[McpServerStatus],
+    detail: McpServerStatusDetail,
+) -> PlainHistoryCell {
+    let mut lines: Vec<Line<'static>> = vec![
+        "/mcp".magenta().into(),
+        "".into(),
+        vec!["🔌  ".into(), "MCP Tools".bold()].into(),
+        "".into(),
+    ];
+
+    let mut statuses_by_name = HashMap::new();
+    for status in statuses {
+        statuses_by_name.insert(status.name.as_str(), status);
+    }
+
+    let mut server_names: Vec<String> = statuses.iter().map(|status| status.name.clone()).collect();
+    server_names.sort();
+
+    let has_any_tools = statuses.iter().any(|status| !status.tools.is_empty());
+    if !has_any_tools {
+        lines.push("  • No MCP tools available.".italic().into());
+        lines.push("".into());
+    }
+
+    for server in server_names {
+        let cfg = config.mcp_servers.get().get(server.as_str());
+        let status = statuses_by_name.get(server.as_str()).copied();
+        let header: Vec<Span<'static>> = vec!["  • ".into(), server.clone().into()];
+
+        lines.push(header.into());
+        let auth_status = status
+            .map(|status| match status.auth_status {
+                codex_app_server_protocol::McpAuthStatus::Unsupported => McpAuthStatus::Unsupported,
+                codex_app_server_protocol::McpAuthStatus::NotLoggedIn => McpAuthStatus::NotLoggedIn,
+                codex_app_server_protocol::McpAuthStatus::BearerToken => McpAuthStatus::BearerToken,
+                codex_app_server_protocol::McpAuthStatus::OAuth => McpAuthStatus::OAuth,
+            })
+            .unwrap_or(McpAuthStatus::Unsupported);
+        lines.push(vec!["    • Auth: ".into(), auth_status.to_string().into()].into());
+
+        if let Some(cfg) = cfg {
+            match &cfg.transport {
+                McpServerTransportConfig::Stdio {
+                    command,
+                    args,
+                    env,
+                    env_vars,
+                    cwd,
+                } => {
+                    let args_suffix = if args.is_empty() {
+                        String::new()
+                    } else {
+                        format!(" {}", args.join(" "))
+                    };
+                    let cmd_display = format!("{command}{args_suffix}");
+                    lines.push(vec!["    • Command: ".into(), cmd_display.into()].into());
+
+                    if let Some(cwd) = cwd.as_ref() {
+                        lines.push(
+                            vec!["    • Cwd: ".into(), cwd.display().to_string().into()].into(),
+                        );
+                    }
+
+                    let env_display = format_env_display(env.as_ref(), env_vars.as_slice());
+                    if env_display != "-" {
+                        lines.push(vec!["    • Env: ".into(), env_display.into()].into());
+                    }
+                }
+                McpServerTransportConfig::StreamableHttp {
+                    url,
+                    http_headers,
+                    env_http_headers,
+                    ..
+                } => {
+                    lines.push(vec!["    • URL: ".into(), url.clone().into()].into());
+                    if let Some(headers) = http_headers.as_ref()
+                        && !headers.is_empty()
+                    {
+                        let mut pairs: Vec<_> = headers.iter().collect();
+                        pairs.sort_by(|(a, _), (b, _)| a.cmp(b));
+                        let display = pairs
+                            .into_iter()
+                            .map(|(name, _)| format!("{name}=*****"))
+                            .collect::<Vec<_>>()
+                            .join(", ");
+                        lines.push(vec!["    • HTTP headers: ".into(), display.into()].into());
+                    }
+                    if let Some(headers) = env_http_headers.as_ref()
+                        && !headers.is_empty()
+                    {
+                        let mut pairs: Vec<_> = headers.iter().collect();
+                        pairs.sort_by(|(a, _), (b, _)| a.cmp(b));
+                        let display = pairs
+                            .into_iter()
+                            .map(|(name, var)| format!("{name}={var}"))
+                            .collect::<Vec<_>>()
+                            .join(", ");
+                        lines.push(vec!["    • Env HTTP headers: ".into(), display.into()].into());
+                    }
+                }
+            }
+        }
+
+        let mut names = status
+            .map(|status| status.tools.keys().cloned().collect::<Vec<_>>())
+            .unwrap_or_default();
+        names.sort();
+        if names.is_empty() {
+            lines.push("    • Tools: (none)".into());
+        } else {
+            lines.push(vec!["    • Tools: ".into(), names.join(", ").into()].into());
+        }
+
+        if matches!(detail, McpServerStatusDetail::Full) {
+            let server_resources = status
+                .map(|status| status.resources.clone())
+                .unwrap_or_default();
+            if server_resources.is_empty() {
+                lines.push("    • Resources: (none)".into());
+            } else {
+                let mut spans: Vec<Span<'static>> = vec!["    • Resources: ".into()];
+
+                for (idx, resource) in server_resources.iter().enumerate() {
+                    if idx > 0 {
+                        spans.push(", ".into());
+                    }
+
+                    let label = resource.title.as_ref().unwrap_or(&resource.name);
+                    spans.push(label.clone().into());
+                    spans.push(" ".into());
+                    spans.push(format!("({})", resource.uri).dim());
+                }
+
+                lines.push(spans.into());
+            }
+
+            let server_templates = status
+                .map(|status| status.resource_templates.clone())
+                .unwrap_or_default();
+            if server_templates.is_empty() {
+                lines.push("    • Resource templates: (none)".into());
+            } else {
+                let mut spans: Vec<Span<'static>> = vec!["    • Resource templates: ".into()];
+
+                for (idx, template) in server_templates.iter().enumerate() {
+                    if idx > 0 {
+                        spans.push(", ".into());
+                    }
+
+                    let label = template.title.as_ref().unwrap_or(&template.name);
+                    spans.push(label.clone().into());
+                    spans.push(" ".into());
+                    spans.push(format!("({})", template.uri_template).dim());
+                }
+
+                lines.push(spans.into());
+            }
+        }
+
+        lines.push(Line::from(""));
+    }
+
+    PlainHistoryCell { lines }
+}
+
 pub(crate) fn new_info_event(message: String, hint: Option<String>) -> PlainHistoryCell {
     let mut line = vec!["• ".dim(), message.into()];
     if let Some(hint) = hint {
@@ -2122,6 +2531,54 @@ pub(crate) fn new_error_event(message: String) -> PlainHistoryCell {
     // in terminals like Ghostty.
     let lines: Vec<Line<'static>> = vec![vec![format!("■ {message}").red()].into()];
     PlainHistoryCell { lines }
+}
+
+/// A transient history cell that shows an animated spinner while the MCP
+/// inventory RPC is in flight.
+///
+/// Inserted as the `active_cell` by `ChatWidget::add_mcp_output()` and removed
+/// once the fetch completes. The app removes committed copies from transcript
+/// history, while `ChatWidget::clear_mcp_inventory_loading()` only clears the
+/// in-flight `active_cell`.
+#[derive(Debug)]
+pub(crate) struct McpInventoryLoadingCell {
+    start_time: Instant,
+    animations_enabled: bool,
+}
+
+impl McpInventoryLoadingCell {
+    pub(crate) fn new(animations_enabled: bool) -> Self {
+        Self {
+            start_time: Instant::now(),
+            animations_enabled,
+        }
+    }
+}
+
+impl HistoryCell for McpInventoryLoadingCell {
+    fn display_lines(&self, _width: u16) -> Vec<Line<'static>> {
+        vec![
+            vec![
+                spinner(Some(self.start_time), self.animations_enabled),
+                " ".into(),
+                "Loading MCP inventory".bold(),
+                "…".dim(),
+            ]
+            .into(),
+        ]
+    }
+
+    fn transcript_animation_tick(&self) -> Option<u64> {
+        if !self.animations_enabled {
+            return None;
+        }
+        Some((self.start_time.elapsed().as_millis() / 50) as u64)
+    }
+}
+
+/// Convenience constructor for [`McpInventoryLoadingCell`].
+pub(crate) fn new_mcp_inventory_loading(animations_enabled: bool) -> McpInventoryLoadingCell {
+    McpInventoryLoadingCell::new(animations_enabled)
 }
 
 /// Renders a completed (or interrupted) request_user_input exchange in history.
@@ -2240,17 +2697,14 @@ fn wrap_with_prefix(
     subsequent_prefix: Span<'static>,
     style: Style,
 ) -> Vec<Line<'static>> {
-    let prefix_width = initial_prefix
-        .content
-        .width()
-        .max(subsequent_prefix.content.width());
-    let wrap_width = width.saturating_sub(prefix_width).max(1);
-    let wrapped = textwrap::wrap(text, wrap_width);
-    let wrapped_lines = wrapped
-        .into_iter()
-        .map(|segment| Span::from(segment.to_string()).set_style(style).into())
-        .collect::<Vec<Line<'static>>>();
-    prefix_lines(wrapped_lines, initial_prefix, subsequent_prefix)
+    let line = Line::from(vec![Span::from(text.to_string()).set_style(style)]);
+    let opts = RtOptions::new(width.max(1))
+        .initial_indent(Line::from(vec![initial_prefix]))
+        .subsequent_indent(Line::from(vec![subsequent_prefix]));
+    let wrapped = adaptive_wrap_line(&line, opts);
+    let mut out = Vec::new();
+    push_owned_lines(&wrapped, &mut out);
+    out
 }
 
 /// Split a request_user_input answer into option labels and an optional freeform note.
@@ -2276,8 +2730,12 @@ pub(crate) fn new_plan_update(update: UpdatePlanArgs) -> PlanUpdateCell {
     PlanUpdateCell { explanation, plan }
 }
 
-pub(crate) fn new_proposed_plan(plan_markdown: String) -> ProposedPlanCell {
-    ProposedPlanCell { plan_markdown }
+/// Create a proposed-plan cell that snapshots the session cwd for later markdown rendering.
+pub(crate) fn new_proposed_plan(plan_markdown: String, cwd: &Path) -> ProposedPlanCell {
+    ProposedPlanCell {
+        plan_markdown,
+        cwd: cwd.to_path_buf(),
+    }
 }
 
 pub(crate) fn new_proposed_plan_stream(
@@ -2293,6 +2751,8 @@ pub(crate) fn new_proposed_plan_stream(
 #[derive(Debug)]
 pub(crate) struct ProposedPlanCell {
     plan_markdown: String,
+    /// Session cwd used to keep local file-link display aligned with live streamed plan rendering.
+    cwd: PathBuf,
 }
 
 #[derive(Debug)]
@@ -2311,7 +2771,12 @@ impl HistoryCell for ProposedPlanCell {
         let plan_style = proposed_plan_style();
         let wrap_width = width.saturating_sub(4).max(1) as usize;
         let mut body: Vec<Line<'static>> = Vec::new();
-        append_markdown(&self.plan_markdown, Some(wrap_width), &mut body);
+        append_markdown(
+            &self.plan_markdown,
+            Some(wrap_width),
+            Some(self.cwd.as_path()),
+            &mut body,
+        );
         if body.is_empty() {
             body.push(Line::from("(empty)".dim().italic()));
         }
@@ -2343,10 +2808,11 @@ impl HistoryCell for PlanUpdateCell {
     fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
         let render_note = |text: &str| -> Vec<Line<'static>> {
             let wrap_width = width.saturating_sub(4).max(1) as usize;
-            textwrap::wrap(text, wrap_width)
-                .into_iter()
-                .map(|s| s.to_string().dim().italic().into())
-                .collect()
+            let note = Line::from(text.to_string().dim().italic());
+            let wrapped = adaptive_wrap_line(&note, RtOptions::new(wrap_width));
+            let mut out = Vec::new();
+            push_owned_lines(&wrapped, &mut out);
+            out
         };
 
         let render_step = |status: &StepStatus, text: &str| -> Vec<Line<'static>> {
@@ -2361,16 +2827,15 @@ impl HistoryCell for PlanUpdateCell {
                 ),
                 StepStatus::Pending => ("□ ", crate::theme::dim_style()),
             };
-            let wrap_width = (width as usize)
-                .saturating_sub(4)
-                .saturating_sub(box_str.width())
-                .max(1);
-            let parts = textwrap::wrap(text, wrap_width);
-            let step_text = parts
-                .into_iter()
-                .map(|s| s.to_string().set_style(step_style).into())
-                .collect();
-            prefix_lines(step_text, box_str.into(), "  ".into())
+
+            let opts = RtOptions::new(width.saturating_sub(4).max(1) as usize)
+                .initial_indent(box_str.into())
+                .subsequent_indent("  ".into());
+            let step = Line::from(text.to_string().set_style(step_style));
+            let wrapped = adaptive_wrap_line(&step, opts);
+            let mut out = Vec::new();
+            push_owned_lines(&wrapped, &mut out);
+            out
         };
 
         let mut lines: Vec<Line<'static>> = vec![];
@@ -2462,10 +2927,33 @@ pub(crate) fn new_view_image_tool_call(path: PathBuf, cwd: &Path) -> PlainHistor
     PlainHistoryCell { lines }
 }
 
+pub(crate) fn new_image_generation_call(
+    call_id: String,
+    revised_prompt: Option<String>,
+    saved_path: Option<String>,
+) -> PlainHistoryCell {
+    let detail = revised_prompt.unwrap_or_else(|| call_id.clone());
+
+    let mut lines: Vec<Line<'static>> = vec![
+        vec!["• ".dim(), "Generated Image:".bold()].into(),
+        vec!["  └ ".dim(), detail.dim()].into(),
+    ];
+    if let Some(saved_path) = saved_path {
+        lines.push(vec!["  └ ".dim(), "Saved to: ".dim(), saved_path.into()].into());
+    }
+
+    PlainHistoryCell { lines }
+}
+
+/// Create the reasoning history cell emitted at the end of a reasoning block.
+///
+/// The helper snapshots `cwd` into the returned cell so local file links render the same way they
+/// did while the turn was live, even if rendering happens after other app state has advanced.
 pub(crate) fn new_reasoning_summary_block(
     full_reasoning_buffer: String,
-    transcript_only: bool,
+    cwd: &Path,
 ) -> Box<dyn HistoryCell> {
+    let cwd = cwd.to_path_buf();
     let full_reasoning_buffer = full_reasoning_buffer.trim();
     if let Some(open) = full_reasoning_buffer.find("**") {
         let after_open = &full_reasoning_buffer[(open + 2)..];
@@ -2476,10 +2964,13 @@ pub(crate) fn new_reasoning_summary_block(
             if after_close_idx < full_reasoning_buffer.len() {
                 let header_buffer = full_reasoning_buffer[..after_close_idx].to_string();
                 let summary_buffer = full_reasoning_buffer[after_close_idx..].to_string();
+                // Preserve the session cwd so local file links render the same way in the
+                // collapsed reasoning block as they did while streaming live content.
                 return Box::new(ReasoningSummaryCell::new(
                     header_buffer,
                     summary_buffer,
-                    transcript_only,
+                    &cwd,
+                    /*transcript_only*/ false,
                 ));
             }
         }
@@ -2487,7 +2978,8 @@ pub(crate) fn new_reasoning_summary_block(
     Box::new(ReasoningSummaryCell::new(
         "".to_string(),
         full_reasoning_buffer.to_string(),
-        true,
+        &cwd,
+        /*transcript_only*/ true,
     ))
 }
 
@@ -2668,27 +3160,33 @@ mod tests {
     use crate::exec_cell::CommandOutput;
     use crate::exec_cell::ExecCall;
     use crate::exec_cell::ExecCell;
+    use crate::legacy_core::config::Config;
+    use crate::legacy_core::config::ConfigBuilder;
     use crate::xcodex_plugins::history_cell::BackgroundActivityEntry;
     use crate::xcodex_plugins::history_cell::new_unified_exec_processes_output as xcodex_new_unified_exec_processes_output;
-    use codex_core::config::Config;
-    use codex_core::config::ConfigBuilder;
-    use codex_core::config::types::McpServerConfig;
-    use codex_core::config::types::McpServerTransportConfig;
-    use codex_core::protocol::McpAuthStatus;
+    use codex_config::types::McpServerConfig;
+    use codex_config::types::McpServerDisabledReason;
     use codex_otel::RuntimeMetricTotals;
     use codex_otel::RuntimeMetricsSummary;
+    use codex_protocol::ThreadId;
+    use codex_protocol::account::PlanType;
     use codex_protocol::models::WebSearchAction;
 
     use codex_protocol::parse_command::ParsedCommand;
+    use codex_protocol::protocol::AskForApproval;
+    use codex_protocol::protocol::McpAuthStatus;
+    use codex_protocol::protocol::SandboxPolicy;
+    use codex_protocol::protocol::SessionConfiguredEvent;
     use codex_protocol::user_input::TextElement;
     use dirs::home_dir;
     use pretty_assertions::assert_eq;
     use serde_json::json;
     use std::collections::HashMap;
+    use std::path::PathBuf;
 
-    use codex_core::protocol::ExecCommandSource;
     use codex_protocol::mcp::CallToolResult;
     use codex_protocol::mcp::Tool;
+    use codex_protocol::protocol::ExecCommandSource;
     use rmcp::model::Content;
 
     const SMALL_PNG_BASE64: &str = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg==";
@@ -2699,6 +3197,94 @@ mod tests {
             .build()
             .await
             .expect("config")
+    }
+
+    fn test_cwd() -> PathBuf {
+        // These tests only need a stable absolute cwd; using temp_dir() avoids baking Unix- or
+        // Windows-specific root semantics into the fixtures.
+        std::env::temp_dir()
+    }
+
+    fn stdio_server_config(
+        command: &str,
+        args: Vec<&str>,
+        env: Option<HashMap<String, String>>,
+        env_vars: Vec<&str>,
+    ) -> McpServerConfig {
+        let mut table = toml::Table::new();
+        table.insert(
+            "command".to_string(),
+            toml::Value::String(command.to_string()),
+        );
+        if !args.is_empty() {
+            table.insert(
+                "args".to_string(),
+                toml::Value::Array(
+                    args.into_iter()
+                        .map(|arg| toml::Value::String(arg.to_string()))
+                        .collect(),
+                ),
+            );
+        }
+        if let Some(env) = env {
+            table.insert("env".to_string(), string_map_to_toml_value(env));
+        }
+        if !env_vars.is_empty() {
+            table.insert(
+                "env_vars".to_string(),
+                toml::Value::Array(
+                    env_vars
+                        .into_iter()
+                        .map(|name| toml::Value::String(name.to_string()))
+                        .collect(),
+                ),
+            );
+        }
+
+        toml::Value::Table(table)
+            .try_into()
+            .expect("test stdio MCP config should deserialize")
+    }
+
+    fn streamable_http_server_config(
+        url: &str,
+        bearer_token_env_var: Option<&str>,
+        http_headers: Option<HashMap<String, String>>,
+        env_http_headers: Option<HashMap<String, String>>,
+    ) -> McpServerConfig {
+        let mut table = toml::Table::new();
+        table.insert("url".to_string(), toml::Value::String(url.to_string()));
+        if let Some(bearer_token_env_var) = bearer_token_env_var {
+            table.insert(
+                "bearer_token_env_var".to_string(),
+                toml::Value::String(bearer_token_env_var.to_string()),
+            );
+        }
+        if let Some(http_headers) = http_headers {
+            table.insert(
+                "http_headers".to_string(),
+                string_map_to_toml_value(http_headers),
+            );
+        }
+        if let Some(env_http_headers) = env_http_headers {
+            table.insert(
+                "env_http_headers".to_string(),
+                string_map_to_toml_value(env_http_headers),
+            );
+        }
+
+        toml::Value::Table(table)
+            .try_into()
+            .expect("test streamable_http MCP config should deserialize")
+    }
+
+    fn string_map_to_toml_value(entries: HashMap<String, String>) -> toml::Value {
+        toml::Value::Table(
+            entries
+                .into_iter()
+                .map(|(key, value)| (key, toml::Value::String(value)))
+                .collect(),
+        )
     }
 
     fn render_lines(lines: &[Line<'static>]) -> Vec<String> {
@@ -2721,7 +3307,13 @@ mod tests {
     fn user_history_cell_image_placeholder_uses_accent() {
         let message = "[Image #1]".to_string();
         let element = TextElement::new((0..message.len()).into(), None);
-        let cell = new_user_prompt(message.clone(), vec![element], Vec::new(), false);
+        let cell = new_user_prompt(
+            message.clone(),
+            vec![element],
+            Vec::new(),
+            false,
+            Vec::new(),
+        );
         let lines = cell.display_lines(80);
         let mut found = false;
         for line in lines {
@@ -2773,6 +3365,46 @@ mod tests {
     }
 
     #[test]
+    fn image_generation_call_renders_saved_path() {
+        let saved_path = "file:///tmp/generated-image.png".to_string();
+        let cell = new_image_generation_call(
+            "call-image-generation".to_string(),
+            Some("A tiny blue square".to_string()),
+            Some(saved_path.clone()),
+        );
+
+        assert_eq!(
+            render_lines(&cell.display_lines(/*width*/ 80)),
+            vec![
+                "• Generated Image:".to_string(),
+                "  └ A tiny blue square".to_string(),
+                format!("  └ Saved to: {saved_path}"),
+            ],
+        );
+    }
+
+    fn session_configured_event(model: &str) -> SessionConfiguredEvent {
+        SessionConfiguredEvent {
+            session_id: ThreadId::new(),
+            forked_from_id: None,
+            thread_name: None,
+            model: model.to_string(),
+            model_provider_id: "test-provider".to_string(),
+            service_tier: None,
+            approval_policy: AskForApproval::Never,
+            approvals_reviewer: codex_protocol::config_types::ApprovalsReviewer::User,
+            sandbox_policy: SandboxPolicy::new_read_only_policy(),
+            cwd: PathBuf::from("/tmp/project").abs().to_path_buf(),
+            reasoning_effort: None,
+            history_log_id: 0,
+            history_entry_count: 0,
+            initial_messages: None,
+            network_proxy: None,
+            rollout_path: Some(PathBuf::new()),
+        }
+    }
+
+    #[test]
     fn unified_exec_interaction_cell_renders_input() {
         let cell =
             new_unified_exec_interaction(Some("echo hello".to_string()), "ls\npwd".to_string());
@@ -2789,12 +3421,9 @@ mod tests {
 
     #[test]
     fn unified_exec_interaction_cell_renders_wait() {
-        let cell = new_unified_exec_interaction(None, String::new());
+        let cell = new_unified_exec_interaction(/*command_display*/ None, String::new());
         let lines = render_transcript(&cell);
-        assert_eq!(
-            lines,
-            vec!["↳ Interacted with background terminal", "  └ (waited)"],
-        );
+        assert_eq!(lines, vec!["• Waited for background terminal"]);
     }
 
     #[test]
@@ -2826,9 +3455,11 @@ mod tests {
             responses_api_engine_service_ttft_ms: 460,
             responses_api_engine_iapi_tbt_ms: 1_180,
             responses_api_engine_service_tbt_ms: 1_240,
+            turn_ttft_ms: 0,
+            turn_ttfm_ms: 0,
         };
         let cell = FinalMessageSeparator::new(Some(12), Some(summary));
-        let rendered = render_lines(&cell.display_lines(600));
+        let rendered = render_lines(&cell.display_lines(/*width*/ 600));
 
         assert_eq!(rendered.len(), 1);
         assert!(!rendered[0].contains("Worked for"));
@@ -2845,8 +3476,8 @@ mod tests {
 
     #[test]
     fn final_message_separator_includes_worked_label_after_one_minute() {
-        let cell = FinalMessageSeparator::new(Some(61), None);
-        let rendered = render_lines(&cell.display_lines(200));
+        let cell = FinalMessageSeparator::new(Some(61), /*runtime_metrics*/ None);
+        let rendered = render_lines(&cell.display_lines(/*width*/ 200));
 
         assert_eq!(rendered.len(), 1);
         assert!(rendered[0].contains("Worked for"));
@@ -2855,8 +3486,83 @@ mod tests {
     #[test]
     fn ps_output_empty_snapshot() {
         let cell = xcodex_new_unified_exec_processes_output(Vec::new(), Vec::new());
-        let rendered = render_lines(&cell.display_lines(60)).join("\n");
+        let rendered = render_lines(&cell.display_lines(/*width*/ 60)).join("\n");
         insta::assert_snapshot!(rendered);
+    }
+
+    #[tokio::test]
+    async fn session_info_uses_availability_nux_tooltip_override() {
+        let config = test_config().await;
+        let cell = new_session_info(
+            &config,
+            "gpt-5",
+            session_configured_event("gpt-5"),
+            /*is_first_event*/ false,
+            Some("Model just became available".to_string()),
+            Some(PlanType::Free),
+            /*show_fast_status*/ false,
+        );
+
+        let rendered = render_transcript(&cell).join("\n");
+        assert!(rendered.contains("Model just became available"));
+    }
+
+    #[tokio::test]
+    #[cfg_attr(
+        target_os = "windows",
+        ignore = "snapshot path rendering differs on Windows"
+    )]
+    async fn session_info_availability_nux_tooltip_snapshot() {
+        let mut config = test_config().await;
+        config.cwd = PathBuf::from("/tmp/project").abs();
+        let cell = new_session_info(
+            &config,
+            "gpt-5",
+            session_configured_event("gpt-5"),
+            /*is_first_event*/ false,
+            Some("Model just became available".to_string()),
+            Some(PlanType::Free),
+            /*show_fast_status*/ false,
+        );
+
+        let rendered = render_transcript(&cell).join("\n");
+        insta::assert_snapshot!(rendered);
+    }
+
+    #[tokio::test]
+    async fn session_info_first_event_suppresses_tooltips_and_nux() {
+        let config = test_config().await;
+        let cell = new_session_info(
+            &config,
+            "gpt-5",
+            session_configured_event("gpt-5"),
+            /*is_first_event*/ true,
+            Some("Model just became available".to_string()),
+            Some(PlanType::Free),
+            /*show_fast_status*/ false,
+        );
+
+        let rendered = render_transcript(&cell).join("\n");
+        assert!(!rendered.contains("Model just became available"));
+        assert!(rendered.contains("To get started"));
+    }
+
+    #[tokio::test]
+    async fn session_info_hides_tooltips_when_disabled() {
+        let mut config = test_config().await;
+        config.show_tooltips = false;
+        let cell = new_session_info(
+            &config,
+            "gpt-5",
+            session_configured_event("gpt-5"),
+            /*is_first_event*/ false,
+            Some("Model just became available".to_string()),
+            Some(PlanType::Free),
+            /*show_fast_status*/ false,
+        );
+
+        let rendered = render_transcript(&cell).join("\n");
+        assert!(!rendered.contains("Model just became available"));
     }
 
     #[test]
@@ -2871,8 +3577,7 @@ mod tests {
                 recent_chunks: vec!["src/main.rs:12:foo".to_string()],
             },
         ]);
-
-        let rendered = render_lines(&cell.display_lines(40)).join("\n");
+        let rendered = render_lines(&cell.display_lines(/*width*/ 40)).join("\n");
         insta::assert_snapshot!(rendered);
     }
 
@@ -2884,8 +3589,7 @@ mod tests {
             ),
             recent_chunks: vec!["searching...".to_string()],
         }]);
-
-        let rendered = render_lines(&cell.display_lines(36)).join("\n");
+        let rendered = render_lines(&cell.display_lines(/*width*/ 36)).join("\n");
         insta::assert_snapshot!(rendered);
     }
 
@@ -2899,7 +3603,7 @@ mod tests {
                 })
                 .collect(),
         );
-        let rendered = render_lines(&cell.display_lines(32)).join("\n");
+        let rendered = render_lines(&cell.display_lines(/*width*/ 32)).join("\n");
         insta::assert_snapshot!(rendered);
     }
 
@@ -2912,7 +3616,17 @@ mod tests {
                 "    more indented".to_string(),
             ],
         }]);
-        let rendered = render_lines(&cell.display_lines(60)).join("\n");
+        let rendered = render_lines(&cell.display_lines(/*width*/ 60)).join("\n");
+        insta::assert_snapshot!(rendered);
+    }
+
+    #[test]
+    fn error_event_oversized_input_snapshot() {
+        let cell = new_error_event(
+            "Message exceeds the maximum length of 1048576 characters (1048577 provided)."
+                .to_string(),
+        );
+        let rendered = render_lines(&cell.display_lines(/*width*/ 120)).join("\n");
         insta::assert_snapshot!(rendered);
     }
 
@@ -2921,24 +3635,7 @@ mod tests {
         let mut config = test_config().await;
         let mut env = HashMap::new();
         env.insert("TOKEN".to_string(), "secret".to_string());
-        let stdio_config = McpServerConfig {
-            transport: McpServerTransportConfig::Stdio {
-                command: "docs-server".to_string(),
-                args: vec![],
-                env: Some(env),
-                env_vars: vec!["APP_TOKEN".to_string()],
-                cwd: None,
-            },
-            enabled: true,
-            required: false,
-            disabled_reason: None,
-            startup_timeout_sec: None,
-            tool_timeout_sec: None,
-            enabled_tools: None,
-            disabled_tools: None,
-            scopes: None,
-            startup_mode: None,
-        };
+        let stdio_config = stdio_server_config("docs-server", vec![], Some(env), vec!["APP_TOKEN"]);
         let mut servers = config.mcp_servers.get().clone();
         servers.insert("docs".to_string(), stdio_config);
 
@@ -2946,23 +3643,12 @@ mod tests {
         headers.insert("Authorization".to_string(), "Bearer secret".to_string());
         let mut env_headers = HashMap::new();
         env_headers.insert("X-API-Key".to_string(), "API_KEY_ENV".to_string());
-        let http_config = McpServerConfig {
-            transport: McpServerTransportConfig::StreamableHttp {
-                url: "https://example.com/mcp".to_string(),
-                bearer_token_env_var: Some("MCP_TOKEN".to_string()),
-                http_headers: Some(headers),
-                env_http_headers: Some(env_headers),
-            },
-            enabled: true,
-            required: false,
-            disabled_reason: None,
-            startup_timeout_sec: None,
-            tool_timeout_sec: None,
-            enabled_tools: None,
-            disabled_tools: None,
-            scopes: None,
-            startup_mode: None,
-        };
+        let http_config = streamable_http_server_config(
+            "https://example.com/mcp",
+            Some("MCP_TOKEN"),
+            Some(headers),
+            Some(env_headers),
+        );
         servers.insert("http".to_string(), http_config);
         let cache_config = McpServerConfig {
             transport: McpServerTransportConfig::Stdio {
@@ -3056,16 +3742,99 @@ mod tests {
                 server_states: Some(&server_states),
             },
         );
-        let rendered = render_lines(&cell.display_lines(120)).join("\n");
+        let rendered = render_lines(&cell.display_lines(/*width*/ 120)).join("\n");
+
+        insta::assert_snapshot!(rendered);
+    }
+
+    #[tokio::test]
+    async fn mcp_tools_output_lists_tools_for_hyphenated_server_names() {
+        let mut config = test_config().await;
+        let mut servers = config.mcp_servers.get().clone();
+        servers.insert(
+            "some-server".to_string(),
+            stdio_server_config("docs-server", vec!["--stdio"], /*env*/ None, vec![]),
+        );
+        config
+            .mcp_servers
+            .set(servers)
+            .expect("test mcp servers should accept any configuration");
+
+        let tools = HashMap::from([(
+            "mcp__some_server__lookup".to_string(),
+            Tool {
+                description: None,
+                name: "lookup".to_string(),
+                title: None,
+                input_schema: serde_json::json!({"type": "object", "properties": {}}),
+                output_schema: None,
+                annotations: None,
+                icons: None,
+                meta: None,
+            },
+        )]);
+
+        let auth_statuses: HashMap<String, McpAuthStatus> = HashMap::new();
+        let cell = new_mcp_tools_output(
+            &config,
+            tools,
+            HashMap::new(),
+            HashMap::new(),
+            &auth_statuses,
+        );
+        let rendered = render_lines(&cell.display_lines(/*width*/ 120)).join("\n");
+
+        insta::assert_snapshot!(rendered);
+    }
+
+    #[tokio::test]
+    async fn mcp_tools_output_from_statuses_renders_status_only_servers() {
+        let mut config = test_config().await;
+        let mut plugin_docs =
+            stdio_server_config("docs-server", vec!["--stdio"], /*env*/ None, vec![]);
+        plugin_docs.enabled = false;
+        plugin_docs.disabled_reason = Some(McpServerDisabledReason::Unknown);
+        let servers = HashMap::from([("plugin_docs".to_string(), plugin_docs)]);
+        config
+            .mcp_servers
+            .set(servers)
+            .expect("test mcp servers should accept any configuration");
+
+        let statuses = vec![McpServerStatus {
+            name: "plugin_docs".to_string(),
+            tools: HashMap::from([(
+                "lookup".to_string(),
+                Tool {
+                    description: None,
+                    name: "lookup".to_string(),
+                    title: None,
+                    input_schema: serde_json::json!({"type": "object", "properties": {}}),
+                    output_schema: None,
+                    annotations: None,
+                    icons: None,
+                    meta: None,
+                },
+            )]),
+            resources: Vec::new(),
+            resource_templates: Vec::new(),
+            auth_status: codex_app_server_protocol::McpAuthStatus::Unsupported,
+        }];
+
+        let cell = new_mcp_tools_output_from_statuses(
+            &config,
+            &statuses,
+            McpServerStatusDetail::ToolsAndAuthOnly,
+        );
+        let rendered = render_lines(&cell.display_lines(/*width*/ 120)).join("\n");
 
         insta::assert_snapshot!(rendered);
     }
 
     #[test]
     fn empty_agent_message_cell_transcript() {
-        let cell = AgentMessageCell::new(vec![Line::default()], false);
-        assert_eq!(cell.transcript_lines(80), vec![Line::from("  ")]);
-        assert_eq!(cell.desired_transcript_height(80), 1);
+        let cell = AgentMessageCell::new(vec![Line::default()], /*is_first_line*/ false);
+        assert_eq!(cell.transcript_lines(/*width*/ 80), vec![Line::from("  ")]);
+        assert_eq!(cell.desired_transcript_height(/*width*/ 80), 1);
     }
 
     #[test]
@@ -3078,7 +3847,7 @@ mod tests {
             " this time".bold(),
         ]);
         let cell = PrefixedWrappedHistoryCell::new(summary, "✔ ".green(), "  ");
-        let rendered = render_lines(&cell.display_lines(24));
+        let rendered = render_lines(&cell.display_lines(/*width*/ 24));
         assert_eq!(
             rendered,
             vec![
@@ -3088,6 +3857,113 @@ mod tests {
                 "  wrapping happens this".to_string(),
                 "  time".to_string(),
             ]
+        );
+    }
+
+    #[test]
+    fn prefixed_wrapped_history_cell_does_not_split_url_like_token() {
+        let url_like =
+            "example.test/api/v1/projects/alpha-team/releases/2026-02-17/builds/1234567890";
+        let cell = PrefixedWrappedHistoryCell::new(Line::from(url_like), "✔ ".green(), "  ");
+        let rendered = render_lines(&cell.display_lines(/*width*/ 24));
+
+        assert_eq!(
+            rendered
+                .iter()
+                .filter(|line| line.contains(url_like))
+                .count(),
+            1,
+            "expected full URL-like token in one rendered line, got: {rendered:?}"
+        );
+    }
+
+    #[test]
+    fn unified_exec_interaction_cell_does_not_split_url_like_stdin_token() {
+        let url_like =
+            "example.test/api/v1/projects/alpha-team/releases/2026-02-17/builds/1234567890";
+        let cell = UnifiedExecInteractionCell::new(Some("true".to_string()), url_like.to_string());
+        let rendered = render_lines(&cell.display_lines(/*width*/ 24));
+
+        assert_eq!(
+            rendered
+                .iter()
+                .filter(|line| line.contains(url_like))
+                .count(),
+            1,
+            "expected full URL-like token in one rendered line, got: {rendered:?}"
+        );
+    }
+
+    #[test]
+    fn prefixed_wrapped_history_cell_height_matches_wrapped_rendering() {
+        let url_like = "example.test/api/v1/projects/alpha-team/releases/2026-02-17/builds/1234567890/artifacts/reports/performance/summary/detail/with/a/very/long/path";
+        let cell: Box<dyn HistoryCell> = Box::new(PrefixedWrappedHistoryCell::new(
+            Line::from(url_like),
+            "✔ ".green(),
+            "  ",
+        ));
+
+        let width: u16 = 24;
+        let logical_height = cell.display_lines(width).len() as u16;
+        let wrapped_height = cell.desired_height(width);
+        assert!(
+            wrapped_height > logical_height,
+            "expected wrapped height to exceed logical line count ({logical_height}), got {wrapped_height}"
+        );
+
+        let area = Rect::new(0, 0, width, wrapped_height);
+        let mut buf = ratatui::buffer::Buffer::empty(area);
+        cell.render(area, &mut buf);
+
+        let first_row = (0..area.width)
+            .map(|x| {
+                let symbol = buf[(x, 0)].symbol();
+                if symbol.is_empty() {
+                    ' '
+                } else {
+                    symbol.chars().next().unwrap_or(' ')
+                }
+            })
+            .collect::<String>();
+        assert!(
+            first_row.contains("✔"),
+            "expected first rendered row to keep the prefix visible, got: {first_row:?}"
+        );
+    }
+
+    #[test]
+    fn unified_exec_interaction_cell_height_matches_wrapped_rendering() {
+        let url_like = "example.test/api/v1/projects/alpha-team/releases/2026-02-17/builds/1234567890/artifacts/reports/performance/summary/detail/with/a/very/long/path";
+        let cell: Box<dyn HistoryCell> = Box::new(UnifiedExecInteractionCell::new(
+            Some("true".to_string()),
+            url_like.to_string(),
+        ));
+
+        let width: u16 = 24;
+        let logical_height = cell.display_lines(width).len() as u16;
+        let wrapped_height = cell.desired_height(width);
+        assert!(
+            wrapped_height > logical_height,
+            "expected wrapped height to exceed logical line count ({logical_height}), got {wrapped_height}"
+        );
+
+        let area = Rect::new(0, 0, width, wrapped_height);
+        let mut buf = ratatui::buffer::Buffer::empty(area);
+        cell.render(area, &mut buf);
+
+        let first_row = (0..area.width)
+            .map(|x| {
+                let symbol = buf[(x, 0)].symbol();
+                if symbol.is_empty() {
+                    ' '
+                } else {
+                    symbol.chars().next().unwrap_or(' ')
+                }
+            })
+            .collect::<String>();
+        assert!(
+            first_row.contains("Interacted with"),
+            "expected first rendered row to keep the header visible, got: {first_row:?}"
         );
     }
 
@@ -3103,7 +3979,7 @@ mod tests {
                 queries: None,
             },
         );
-        let rendered = render_lines(&cell.display_lines(64)).join("\n");
+        let rendered = render_lines(&cell.display_lines(/*width*/ 64)).join("\n");
 
         insta::assert_snapshot!(rendered);
     }
@@ -3120,7 +3996,7 @@ mod tests {
                 queries: None,
             },
         );
-        let rendered = render_lines(&cell.display_lines(64));
+        let rendered = render_lines(&cell.display_lines(/*width*/ 64));
 
         assert_eq!(
             rendered,
@@ -3142,7 +4018,7 @@ mod tests {
                 queries: None,
             },
         );
-        let rendered = render_lines(&cell.display_lines(64));
+        let rendered = render_lines(&cell.display_lines(/*width*/ 64));
 
         assert_eq!(rendered, vec!["• Searched short query".to_string()]);
     }
@@ -3159,7 +4035,7 @@ mod tests {
                 queries: None,
             },
         );
-        let rendered = render_lines(&cell.transcript_lines(64)).join("\n");
+        let rendered = render_lines(&cell.transcript_lines(/*width*/ 64)).join("\n");
 
         insta::assert_snapshot!(rendered);
     }
@@ -3175,8 +4051,20 @@ mod tests {
             })),
         };
 
-        let cell = new_active_mcp_tool_call("call-1".into(), invocation, true);
-        let rendered = render_lines(&cell.display_lines(80)).join("\n");
+        let cell = new_active_mcp_tool_call(
+            "call-1".into(),
+            invocation,
+            /*animations_enabled*/ true,
+        );
+        let rendered = render_lines(&cell.display_lines(/*width*/ 80)).join("\n");
+
+        insta::assert_snapshot!(rendered);
+    }
+
+    #[test]
+    fn mcp_inventory_loading_snapshot() {
+        let cell = new_mcp_inventory_loading(/*animations_enabled*/ true);
+        let rendered = render_lines(&cell.display_lines(/*width*/ 80)).join("\n");
 
         insta::assert_snapshot!(rendered);
     }
@@ -3199,13 +4087,17 @@ mod tests {
             meta: None,
         };
 
-        let mut cell = new_active_mcp_tool_call("call-2".into(), invocation, true);
+        let mut cell = new_active_mcp_tool_call(
+            "call-2".into(),
+            invocation,
+            /*animations_enabled*/ true,
+        );
         assert!(
             cell.complete(Duration::from_millis(1420), Ok(result))
                 .is_none()
         );
 
-        let rendered = render_lines(&cell.display_lines(80)).join("\n");
+        let rendered = render_lines(&cell.display_lines(/*width*/ 80)).join("\n");
 
         insta::assert_snapshot!(rendered);
     }
@@ -3230,12 +4122,16 @@ mod tests {
             meta: None,
         };
 
-        let mut cell = new_active_mcp_tool_call("call-image".into(), invocation, true);
+        let mut cell = new_active_mcp_tool_call(
+            "call-image".into(),
+            invocation,
+            /*animations_enabled*/ true,
+        );
         let extra_cell = cell
             .complete(Duration::from_millis(25), Ok(result))
             .expect("expected image cell");
 
-        let rendered = render_lines(&extra_cell.display_lines(80));
+        let rendered = render_lines(&extra_cell.display_lines(/*width*/ 80));
         assert_eq!(rendered, vec!["tool result (image output)"]);
     }
 
@@ -3257,12 +4153,16 @@ mod tests {
             meta: None,
         };
 
-        let mut cell = new_active_mcp_tool_call("call-image-data-url".into(), invocation, true);
+        let mut cell = new_active_mcp_tool_call(
+            "call-image-data-url".into(),
+            invocation,
+            /*animations_enabled*/ true,
+        );
         let extra_cell = cell
             .complete(Duration::from_millis(25), Ok(result))
             .expect("expected image cell");
 
-        let rendered = render_lines(&extra_cell.display_lines(80));
+        let rendered = render_lines(&extra_cell.display_lines(/*width*/ 80));
         assert_eq!(rendered, vec!["tool result (image output)"]);
     }
 
@@ -3283,12 +4183,16 @@ mod tests {
             meta: None,
         };
 
-        let mut cell = new_active_mcp_tool_call("call-image-2".into(), invocation, true);
+        let mut cell = new_active_mcp_tool_call(
+            "call-image-2".into(),
+            invocation,
+            /*animations_enabled*/ true,
+        );
         let extra_cell = cell
             .complete(Duration::from_millis(25), Ok(result))
             .expect("expected image cell");
 
-        let rendered = render_lines(&extra_cell.display_lines(80));
+        let rendered = render_lines(&extra_cell.display_lines(/*width*/ 80));
         assert_eq!(rendered, vec!["tool result (image output)"]);
     }
 
@@ -3303,13 +4207,17 @@ mod tests {
             })),
         };
 
-        let mut cell = new_active_mcp_tool_call("call-3".into(), invocation, true);
+        let mut cell = new_active_mcp_tool_call(
+            "call-3".into(),
+            invocation,
+            /*animations_enabled*/ true,
+        );
         assert!(
             cell.complete(Duration::from_secs(2), Err("network timeout".into()))
                 .is_none()
         );
 
-        let rendered = render_lines(&cell.display_lines(80)).join("\n");
+        let rendered = render_lines(&cell.display_lines(/*width*/ 80)).join("\n");
 
         insta::assert_snapshot!(rendered);
     }
@@ -3342,13 +4250,17 @@ mod tests {
             meta: None,
         };
 
-        let mut cell = new_active_mcp_tool_call("call-4".into(), invocation, true);
+        let mut cell = new_active_mcp_tool_call(
+            "call-4".into(),
+            invocation,
+            /*animations_enabled*/ true,
+        );
         assert!(
             cell.complete(Duration::from_millis(640), Ok(result))
                 .is_none()
         );
 
-        let rendered = render_lines(&cell.display_lines(48)).join("\n");
+        let rendered = render_lines(&cell.display_lines(/*width*/ 48)).join("\n");
 
         insta::assert_snapshot!(rendered);
     }
@@ -3373,13 +4285,17 @@ mod tests {
             meta: None,
         };
 
-        let mut cell = new_active_mcp_tool_call("call-5".into(), invocation, true);
+        let mut cell = new_active_mcp_tool_call(
+            "call-5".into(),
+            invocation,
+            /*animations_enabled*/ true,
+        );
         assert!(
             cell.complete(Duration::from_millis(1280), Ok(result))
                 .is_none()
         );
 
-        let rendered = render_lines(&cell.display_lines(40)).join("\n");
+        let rendered = render_lines(&cell.display_lines(/*width*/ 40)).join("\n");
 
         insta::assert_snapshot!(rendered);
     }
@@ -3405,13 +4321,17 @@ mod tests {
             meta: None,
         };
 
-        let mut cell = new_active_mcp_tool_call("call-6".into(), invocation, true);
+        let mut cell = new_active_mcp_tool_call(
+            "call-6".into(),
+            invocation,
+            /*animations_enabled*/ true,
+        );
         assert!(
             cell.complete(Duration::from_millis(320), Ok(result))
                 .is_none()
         );
 
-        let rendered = render_lines(&cell.display_lines(120)).join("\n");
+        let rendered = render_lines(&cell.display_lines(/*width*/ 120)).join("\n");
 
         insta::assert_snapshot!(rendered);
     }
@@ -3421,18 +4341,39 @@ mod tests {
         let cell = SessionHeaderHistoryCell::new(
             "gpt-4o".to_string(),
             Some(ReasoningEffortConfig::High),
+            /*show_fast_status*/ true,
             std::env::temp_dir(),
             "test",
         );
 
-        let lines = render_lines(&cell.display_lines(80));
+        let lines = render_lines(&cell.display_lines(/*width*/ 80));
         let model_line = lines
-            .into_iter()
+            .iter()
+            .find(|line| line.contains("model:"))
+            .expect("model line");
+
+        assert!(model_line.contains("gpt-4o high   fast"));
+        assert!(model_line.contains("/model to change"));
+    }
+
+    #[test]
+    fn session_header_hides_fast_status_when_disabled() {
+        let cell = SessionHeaderHistoryCell::new(
+            "gpt-4o".to_string(),
+            Some(ReasoningEffortConfig::High),
+            /*show_fast_status*/ false,
+            std::env::temp_dir(),
+            "test",
+        );
+
+        let lines = render_lines(&cell.display_lines(/*width*/ 80));
+        let model_line = lines
+            .iter()
             .find(|line| line.contains("model:"))
             .expect("model line");
 
         assert!(model_line.contains("gpt-4o high"));
-        assert!(model_line.contains("/model to change"));
+        assert!(!model_line.contains("fast"));
     }
 
     #[test]
@@ -3490,12 +4431,12 @@ mod tests {
                 duration: None,
                 interaction_input: None,
             },
-            true,
+            /*animations_enabled*/ true,
         );
         // Mark call complete so markers are ✓
         cell.complete_call(&call_id, CommandOutput::default(), Duration::from_millis(1));
 
-        let lines = cell.display_lines(80);
+        let lines = cell.display_lines(/*width*/ 80);
         let rendered = render_lines(&lines).join("\n");
         insta::assert_snapshot!(rendered);
     }
@@ -3517,7 +4458,7 @@ mod tests {
                 duration: None,
                 interaction_input: None,
             },
-            true,
+            /*animations_enabled*/ true,
         );
         // Call 1: Search only
         cell.complete_call("c1", CommandOutput::default(), Duration::from_millis(1));
@@ -3532,7 +4473,7 @@ mod tests {
                     path: "shimmer.rs".into(),
                 }],
                 ExecCommandSource::Agent,
-                None,
+                /*interaction_input*/ None,
             )
             .unwrap();
         cell.complete_call("c2", CommandOutput::default(), Duration::from_millis(1));
@@ -3547,12 +4488,12 @@ mod tests {
                     path: "status_indicator_widget.rs".into(),
                 }],
                 ExecCommandSource::Agent,
-                None,
+                /*interaction_input*/ None,
             )
             .unwrap();
         cell.complete_call("c3", CommandOutput::default(), Duration::from_millis(1));
 
-        let lines = cell.display_lines(80);
+        let lines = cell.display_lines(/*width*/ 80);
         let rendered = render_lines(&lines).join("\n");
         insta::assert_snapshot!(rendered);
     }
@@ -3586,10 +4527,10 @@ mod tests {
                 duration: None,
                 interaction_input: None,
             },
-            true,
+            /*animations_enabled*/ true,
         );
         cell.complete_call("c1", CommandOutput::default(), Duration::from_millis(1));
-        let lines = cell.display_lines(80);
+        let lines = cell.display_lines(/*width*/ 80);
         let rendered = render_lines(&lines).join("\n");
         insta::assert_snapshot!(rendered);
     }
@@ -3597,7 +4538,7 @@ mod tests {
     #[test]
     fn multiline_command_wraps_with_extra_indent_on_subsequent_lines() {
         // Create a completed exec cell with a multiline command
-        let cmd = "set -o pipefail\ncargo test --all-features --quiet".to_string();
+        let cmd = "set -o pipefail\ncargo test -p codex-tui --quiet".to_string();
         let call_id = "c1".to_string();
         let mut cell = ExecCell::new(
             ExecCall {
@@ -3610,12 +4551,12 @@ mod tests {
                 duration: None,
                 interaction_input: None,
             },
-            true,
+            /*animations_enabled*/ true,
         );
         // Mark call complete so it renders as "Ran"
         cell.complete_call(&call_id, CommandOutput::default(), Duration::from_millis(1));
 
-        // Small width to force wrapping on both lines
+        // Small width to keep the wrapped continuation-indent path covered.
         let width: u16 = 28;
         let lines = cell.display_lines(width);
         let rendered = render_lines(&lines).join("\n");
@@ -3636,11 +4577,11 @@ mod tests {
                 duration: None,
                 interaction_input: None,
             },
-            true,
+            /*animations_enabled*/ true,
         );
         cell.complete_call(&call_id, CommandOutput::default(), Duration::from_millis(1));
         // Wide enough that it fits inline
-        let lines = cell.display_lines(80);
+        let lines = cell.display_lines(/*width*/ 80);
         let rendered = render_lines(&lines).join("\n");
         insta::assert_snapshot!(rendered);
     }
@@ -3660,10 +4601,10 @@ mod tests {
                 duration: None,
                 interaction_input: None,
             },
-            true,
+            /*animations_enabled*/ true,
         );
         cell.complete_call(&call_id, CommandOutput::default(), Duration::from_millis(1));
-        let lines = cell.display_lines(24);
+        let lines = cell.display_lines(/*width*/ 24);
         let rendered = render_lines(&lines).join("\n");
         insta::assert_snapshot!(rendered);
     }
@@ -3683,10 +4624,10 @@ mod tests {
                 duration: None,
                 interaction_input: None,
             },
-            true,
+            /*animations_enabled*/ true,
         );
         cell.complete_call(&call_id, CommandOutput::default(), Duration::from_millis(1));
-        let lines = cell.display_lines(80);
+        let lines = cell.display_lines(/*width*/ 80);
         let rendered = render_lines(&lines).join("\n");
         insta::assert_snapshot!(rendered);
     }
@@ -3707,10 +4648,10 @@ mod tests {
                 duration: None,
                 interaction_input: None,
             },
-            true,
+            /*animations_enabled*/ true,
         );
         cell.complete_call(&call_id, CommandOutput::default(), Duration::from_millis(1));
-        let lines = cell.display_lines(28);
+        let lines = cell.display_lines(/*width*/ 28);
         let rendered = render_lines(&lines).join("\n");
         insta::assert_snapshot!(rendered);
     }
@@ -3731,7 +4672,7 @@ mod tests {
                 duration: None,
                 interaction_input: None,
             },
-            true,
+            /*animations_enabled*/ true,
         );
         let stderr: String = (1..=10)
             .map(|n| n.to_string())
@@ -3748,7 +4689,7 @@ mod tests {
         );
 
         let rendered = cell
-            .display_lines(80)
+            .display_lines(/*width*/ 80)
             .iter()
             .map(|l| {
                 l.spans
@@ -3781,7 +4722,7 @@ mod tests {
                 duration: None,
                 interaction_input: None,
             },
-            true,
+            /*animations_enabled*/ true,
         );
 
         let stderr = "error: first line on stderr\nerror: second line on stderr".to_string();
@@ -3818,6 +4759,7 @@ mod tests {
             text_elements: Vec::new(),
             local_image_paths: Vec::new(),
             highlight: false,
+            remote_image_urls: Vec::new(),
         };
 
         // Small width to force wrapping more clearly. Effective wrap width is width-2 due to the ▌ prefix and trailing space.
@@ -3826,6 +4768,169 @@ mod tests {
         let rendered = render_lines(&lines).join("\n");
 
         insta::assert_snapshot!(rendered);
+    }
+
+    #[test]
+    fn user_history_cell_renders_remote_image_urls() {
+        let cell = UserHistoryCell {
+            message: "describe these".to_string(),
+            text_elements: Vec::new(),
+            local_image_paths: Vec::new(),
+            remote_image_urls: vec!["https://example.com/example.png".to_string()],
+        };
+
+        let rendered = render_lines(&cell.display_lines(/*width*/ 80)).join("\n");
+
+        assert!(rendered.contains("[Image #1]"));
+        assert!(rendered.contains("describe these"));
+        insta::assert_snapshot!(rendered);
+    }
+
+    #[test]
+    fn user_history_cell_summarizes_inline_data_urls() {
+        let cell = UserHistoryCell {
+            message: "describe inline image".to_string(),
+            text_elements: Vec::new(),
+            local_image_paths: Vec::new(),
+            remote_image_urls: vec!["data:image/png;base64,aGVsbG8=".to_string()],
+        };
+
+        let rendered = render_lines(&cell.display_lines(/*width*/ 80)).join("\n");
+
+        assert!(rendered.contains("[Image #1]"));
+        assert!(rendered.contains("describe inline image"));
+    }
+
+    #[test]
+    fn user_history_cell_numbers_multiple_remote_images() {
+        let cell = UserHistoryCell {
+            message: "describe both".to_string(),
+            text_elements: Vec::new(),
+            local_image_paths: Vec::new(),
+            remote_image_urls: vec![
+                "https://example.com/one.png".to_string(),
+                "https://example.com/two.png".to_string(),
+            ],
+        };
+
+        let rendered = render_lines(&cell.display_lines(/*width*/ 80)).join("\n");
+
+        assert!(rendered.contains("[Image #1]"));
+        assert!(rendered.contains("[Image #2]"));
+        insta::assert_snapshot!(rendered);
+    }
+
+    #[test]
+    fn user_history_cell_height_matches_rendered_lines_with_remote_images() {
+        let cell = UserHistoryCell {
+            message: "line one\nline two".to_string(),
+            text_elements: Vec::new(),
+            local_image_paths: Vec::new(),
+            remote_image_urls: vec![
+                "https://example.com/one.png".to_string(),
+                "https://example.com/two.png".to_string(),
+            ],
+        };
+
+        let width = 80;
+        let rendered_len: u16 = cell
+            .display_lines(width)
+            .len()
+            .try_into()
+            .unwrap_or(u16::MAX);
+        assert_eq!(cell.desired_height(width), rendered_len);
+        assert_eq!(cell.desired_transcript_height(width), rendered_len);
+    }
+
+    #[test]
+    fn user_history_cell_trims_trailing_blank_message_lines() {
+        let cell = UserHistoryCell {
+            message: "line one\n\n   \n\t \n".to_string(),
+            text_elements: Vec::new(),
+            local_image_paths: Vec::new(),
+            remote_image_urls: vec!["https://example.com/one.png".to_string()],
+        };
+
+        let rendered = render_lines(&cell.display_lines(/*width*/ 80));
+        let trailing_blank_count = rendered
+            .iter()
+            .rev()
+            .take_while(|line| line.trim().is_empty())
+            .count();
+        assert_eq!(trailing_blank_count, 1);
+        assert!(rendered.iter().any(|line| line.contains("line one")));
+    }
+
+    #[test]
+    fn user_history_cell_trims_trailing_blank_message_lines_with_text_elements() {
+        let message = "tokenized\n\n\n".to_string();
+        let cell = UserHistoryCell {
+            message,
+            text_elements: vec![TextElement::new(
+                (0..8).into(),
+                Some("tokenized".to_string()),
+            )],
+            local_image_paths: Vec::new(),
+            remote_image_urls: vec!["https://example.com/one.png".to_string()],
+        };
+
+        let rendered = render_lines(&cell.display_lines(/*width*/ 80));
+        let trailing_blank_count = rendered
+            .iter()
+            .rev()
+            .take_while(|line| line.trim().is_empty())
+            .count();
+        assert_eq!(trailing_blank_count, 1);
+        assert!(rendered.iter().any(|line| line.contains("tokenized")));
+    }
+
+    #[test]
+    fn render_uses_wrapping_for_long_url_like_line() {
+        let url = "https://example.test/api/v1/projects/alpha-team/releases/2026-02-17/builds/1234567890/artifacts/reports/performance/summary/detail/with/a/very/long/path/that/keeps/going/for/testing/purposes-only-and-does/not/need/to/resolve/index.html?session_id=abc123def456ghi789jkl012mno345pqr678stu901vwx234yz";
+        let cell: Box<dyn HistoryCell> = Box::new(UserHistoryCell {
+            message: url.to_string(),
+            text_elements: Vec::new(),
+            local_image_paths: Vec::new(),
+            remote_image_urls: Vec::new(),
+        });
+
+        let width: u16 = 52;
+        let height = cell.desired_height(width);
+        assert!(
+            height > 1,
+            "expected wrapped height for long URL, got {height}"
+        );
+
+        let area = Rect::new(0, 0, width, height);
+        let mut buf = ratatui::buffer::Buffer::empty(area);
+        cell.render(area, &mut buf);
+
+        let rendered = (0..area.height)
+            .map(|y| {
+                (0..area.width)
+                    .map(|x| {
+                        let symbol = buf[(x, y)].symbol();
+                        if symbol.is_empty() {
+                            ' '
+                        } else {
+                            symbol.chars().next().unwrap_or(' ')
+                        }
+                    })
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>();
+        let rendered_blob = rendered.join("\n");
+
+        assert!(
+            rendered_blob.contains("session_id=abc123"),
+            "expected URL tail to be visible after wrapping, got:\n{rendered_blob}"
+        );
+
+        let non_empty_rows = rendered.iter().filter(|row| !row.trim().is_empty()).count() as u16;
+        assert!(
+            non_empty_rows > 3,
+            "expected long URL to span multiple visible rows, got:\n{rendered_blob}"
+        );
     }
 
     #[test]
@@ -3854,7 +4959,7 @@ mod tests {
 
         let cell = new_plan_update(update);
         // Narrow width to force wrapping for both the note and steps
-        let lines = cell.display_lines(32);
+        let lines = cell.display_lines(/*width*/ 32);
         let rendered = render_lines(&lines).join("\n");
         insta::assert_snapshot!(rendered);
     }
@@ -3876,18 +4981,55 @@ mod tests {
         };
 
         let cell = new_plan_update(update);
-        let lines = cell.display_lines(40);
+        let lines = cell.display_lines(/*width*/ 40);
         let rendered = render_lines(&lines).join("\n");
         insta::assert_snapshot!(rendered);
     }
+
+    #[test]
+    fn plan_update_does_not_split_url_like_tokens_in_note_or_step() {
+        let note_url =
+            "example.test/api/v1/projects/alpha-team/releases/2026-02-17/builds/1234567890";
+        let step_url = "example.test/api/v1/projects/beta-team/releases/2026-02-17/builds/0987654321/artifacts/reports/performance";
+        let update = UpdatePlanArgs {
+            explanation: Some(format!(
+                "Investigate failures under {note_url} immediately."
+            )),
+            plan: vec![PlanItemArg {
+                step: format!("Validate callbacks under {step_url} before rollout."),
+                status: StepStatus::InProgress,
+            }],
+        };
+
+        let cell = new_plan_update(update);
+        let rendered = render_lines(&cell.display_lines(/*width*/ 30));
+
+        assert_eq!(
+            rendered
+                .iter()
+                .filter(|line| line.contains(note_url))
+                .count(),
+            1,
+            "expected full note URL-like token in one rendered line, got: {rendered:?}"
+        );
+        assert_eq!(
+            rendered
+                .iter()
+                .filter(|line| line.contains(step_url))
+                .count(),
+            1,
+            "expected full step URL-like token in one rendered line, got: {rendered:?}"
+        );
+    }
+
     #[test]
     fn reasoning_summary_block() {
         let cell = new_reasoning_summary_block(
             "**High level reasoning**\n\nDetailed reasoning goes here.".to_string(),
-            false,
+            &test_cwd(),
         );
 
-        let rendered_display = render_lines(&cell.display_lines(80));
+        let rendered_display = render_lines(&cell.display_lines(/*width*/ 80));
         assert_eq!(
             rendered_display,
             vec!["• High level reasoning", "  Detailed reasoning goes here."]
@@ -3901,8 +5043,54 @@ mod tests {
     }
 
     #[test]
+    fn reasoning_summary_height_matches_wrapped_rendering_for_url_like_content() {
+        let summary = "example.test/api/v1/projects/alpha-team/releases/2026-02-17/builds/1234567890/artifacts/reports/performance/summary/detail/with/a/very/long/path/that/keeps/going";
+        let cell: Box<dyn HistoryCell> = Box::new(ReasoningSummaryCell::new(
+            "High level reasoning".to_string(),
+            summary.to_string(),
+            &test_cwd(),
+            /*transcript_only*/ false,
+        ));
+        let width: u16 = 24;
+
+        let logical_height = cell.display_lines(width).len() as u16;
+        let wrapped_height = cell.desired_height(width);
+        let expected_wrapped_height = Paragraph::new(Text::from(cell.display_lines(width)))
+            .wrap(Wrap { trim: false })
+            .line_count(width) as u16;
+        assert_eq!(wrapped_height, expected_wrapped_height);
+        assert!(
+            wrapped_height >= logical_height,
+            "expected wrapped height to be at least logical line count ({logical_height}), got {wrapped_height}"
+        );
+
+        let wrapped_transcript_height = cell.desired_transcript_height(width);
+        assert_eq!(wrapped_transcript_height, wrapped_height);
+
+        let area = Rect::new(0, 0, width, wrapped_height);
+        let mut buf = ratatui::buffer::Buffer::empty(area);
+        cell.render(area, &mut buf);
+
+        let first_row = (0..area.width)
+            .map(|x| {
+                let symbol = buf[(x, 0)].symbol();
+                if symbol.is_empty() {
+                    ' '
+                } else {
+                    symbol.chars().next().unwrap_or(' ')
+                }
+            })
+            .collect::<String>();
+        assert!(
+            first_row.contains("•"),
+            "expected first rendered row to keep summary bullet visible, got: {first_row:?}"
+        );
+    }
+
+    #[test]
     fn reasoning_summary_block_returns_reasoning_cell_when_feature_disabled() {
-        let cell = new_reasoning_summary_block("Detailed reasoning goes here.".to_string(), false);
+        let cell =
+            new_reasoning_summary_block("Detailed reasoning goes here.".to_string(), &test_cwd());
 
         let rendered = render_transcript(cell.as_ref());
         assert_eq!(rendered, vec!["• Detailed reasoning goes here."]);
@@ -3915,10 +5103,10 @@ mod tests {
         config.model_supports_reasoning_summaries = Some(true);
         let cell = new_reasoning_summary_block(
             "**High level reasoning**\n\nDetailed reasoning goes here.".to_string(),
-            false,
+            &test_cwd(),
         );
 
-        let rendered_display = render_lines(&cell.display_lines(80));
+        let rendered_display = render_lines(&cell.display_lines(/*width*/ 80));
         assert_eq!(
             rendered_display,
             vec!["• High level reasoning", "  Detailed reasoning goes here."]
@@ -3929,7 +5117,7 @@ mod tests {
     fn reasoning_summary_block_falls_back_when_header_is_missing() {
         let cell = new_reasoning_summary_block(
             "**High level reasoning without closing".to_string(),
-            false,
+            &test_cwd(),
         );
 
         let rendered = render_transcript(cell.as_ref());
@@ -3940,7 +5128,7 @@ mod tests {
     fn reasoning_summary_block_falls_back_when_summary_is_missing() {
         let cell = new_reasoning_summary_block(
             "**High level reasoning without closing**".to_string(),
-            false,
+            &test_cwd(),
         );
 
         let rendered = render_transcript(cell.as_ref());
@@ -3948,7 +5136,7 @@ mod tests {
 
         let cell = new_reasoning_summary_block(
             "**High level reasoning without closing**\n\n  ".to_string(),
-            false,
+            &test_cwd(),
         );
 
         let rendered = render_transcript(cell.as_ref());
@@ -3959,10 +5147,10 @@ mod tests {
     fn reasoning_summary_block_splits_header_and_summary_when_present() {
         let cell = new_reasoning_summary_block(
             "**High level plan**\n\nWe should fix the bug next.".to_string(),
-            false,
+            &test_cwd(),
         );
 
-        let rendered_display = render_lines(&cell.display_lines(80));
+        let rendered_display = render_lines(&cell.display_lines(/*width*/ 80));
         assert_eq!(
             rendered_display,
             vec!["• High level plan", "  We should fix the bug next."]
@@ -3981,7 +5169,7 @@ mod tests {
             "Feature flag `foo`".to_string(),
             Some("Use flag `bar` instead.".to_string()),
         );
-        let lines = cell.display_lines(80);
+        let lines = cell.display_lines(/*width*/ 80);
         let rendered = render_lines(&lines);
         assert_eq!(
             rendered,

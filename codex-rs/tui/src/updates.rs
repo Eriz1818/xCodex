@@ -1,10 +1,12 @@
 #![cfg(not(debug_assertions))]
 
+use crate::legacy_core::config::Config;
+use crate::update_action;
+use crate::update_action::UpdateAction;
 use chrono::DateTime;
 use chrono::Duration;
 use chrono::Utc;
-use codex_core::config::Config;
-use codex_core::default_client::create_client;
+use codex_login::default_client::create_client;
 use serde::Deserialize;
 use serde::Serialize;
 use std::path::Path;
@@ -18,7 +20,7 @@ pub fn get_upgrade_version(config: &Config) -> Option<String> {
     if !UPDATE_CHECK_ENABLED {
         return None;
     }
-    if !config.check_for_update_on_startup {
+    if !config.check_for_update_on_startup || is_source_build_version(CODEX_CLI_VERSION) {
         return None;
     }
 
@@ -165,7 +167,7 @@ pub fn get_upgrade_version_for_popup(config: &Config) -> Option<String> {
     if !UPDATE_CHECK_ENABLED {
         return None;
     }
-    if !config.check_for_update_on_startup {
+    if !config.check_for_update_on_startup || is_source_build_version(CODEX_CLI_VERSION) {
         return None;
     }
 
@@ -206,6 +208,10 @@ fn parse_version(v: &str) -> Option<(u64, u64, u64)> {
     let min = iter.next()?.parse::<u64>().ok()?;
     let pat = iter.next()?.parse::<u64>().ok()?;
     Some((maj, min, pat))
+}
+
+fn is_source_build_version(version: &str) -> bool {
+    parse_version(version) == Some((0, 0, 0))
 }
 
 #[cfg(test)]

@@ -1,6 +1,5 @@
-use std::cell::RefCell;
-use std::path::PathBuf;
-
+use codex_feedback::FEEDBACK_DIAGNOSTICS_ATTACHMENT_FILENAME;
+use codex_feedback::FeedbackDiagnostics;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyModifiers;
@@ -13,6 +12,9 @@ use ratatui::widgets::Clear;
 use ratatui::widgets::Paragraph;
 use ratatui::widgets::StatefulWidgetRef;
 use ratatui::widgets::Widget;
+use std::cell::RefCell;
+use std::path::Path;
+use std::path::PathBuf;
 
 use crate::app_event::AppEvent;
 use crate::app_event::FeedbackCategory;
@@ -36,11 +38,10 @@ pub(crate) enum FeedbackAudience {
 /// a local report for troubleshooting.
 pub(crate) struct FeedbackNoteView {
     category: FeedbackCategory,
-    snapshot: codex_feedback::CodexLogSnapshot,
+    snapshot: codex_feedback::FeedbackSnapshot,
     rollout_path: Option<PathBuf>,
     app_event_tx: AppEventSender,
     include_logs: bool,
-    _feedback_audience: FeedbackAudience,
 
     // UI state
     textarea: TextArea,
@@ -51,11 +52,10 @@ pub(crate) struct FeedbackNoteView {
 impl FeedbackNoteView {
     pub(crate) fn new(
         category: FeedbackCategory,
-        snapshot: codex_feedback::CodexLogSnapshot,
+        snapshot: codex_feedback::FeedbackSnapshot,
         rollout_path: Option<PathBuf>,
         app_event_tx: AppEventSender,
         include_logs: bool,
-        feedback_audience: FeedbackAudience,
     ) -> Self {
         Self {
             category,
@@ -63,7 +63,6 @@ impl FeedbackNoteView {
             rollout_path,
             app_event_tx,
             include_logs,
-            _feedback_audience: feedback_audience,
             textarea: TextArea::new(),
             textarea_state: RefCell::new(TextAreaState::default()),
             complete: false,
@@ -73,8 +72,7 @@ impl FeedbackNoteView {
     fn submit(&mut self) {
         let note = self.textarea.text().trim().to_string();
         let classification = feedback_classification(self.category);
-
-        let mut thread_id = self.snapshot.thread_id.clone();
+        let thread_id = self.snapshot.thread_id.clone();
 
         let note_path = if note.is_empty() {
             None
@@ -108,46 +106,35 @@ impl FeedbackNoteView {
             None
         };
 
-        let mut lines = vec![Line::from(if self.include_logs {
-            "• Feedback saved locally (no network upload)."
+        let diagnostics_path = if self.include_logs {
+            match self.snapshot.feedback_diagnostics_attachment_text(true) {
+                Some(contents) => match save_feedback_diagnostics(&thread_id, &contents) {
+                    Ok(path) => Some(path),
+                    Err(err) => {
+                        self.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
+                            history_cell::new_error_event(format!(
+                                "Failed to save diagnostics: {err}"
+                            )),
+                        )));
+                        self.complete = true;
+                        return;
+                    }
+                },
+                None => None,
+            }
         } else {
-            "• Feedback saved locally (no network upload, no logs)."
-        })];
-
-        lines.extend([
-            "".into(),
-            Line::from(vec![
-                "  Thread ID: ".into(),
-                std::mem::take(&mut thread_id).bold(),
-            ]),
-        ]);
-
-        if let Some(path) = note_path {
-            lines.push(Line::from(vec![
-                "  Note: ".into(),
-                path.display().to_string().cyan().underlined(),
-            ]));
-        }
-        if let Some(path) = log_path {
-            lines.push(Line::from(vec![
-                "  Logs: ".into(),
-                path.display().to_string().cyan().underlined(),
-            ]));
-        }
-        if let Some(path) = self.rollout_path.as_deref() {
-            lines.push(Line::from(vec![
-                "  Rollout: ".into(),
-                path.display().to_string().cyan().underlined(),
-            ]));
-        }
-
-        lines.extend([
-            "".into(),
-            Line::from("  Attach these files when filing an issue in your fork.".dim()),
-        ]);
+            None
+        };
 
         self.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
-            history_cell::PlainHistoryCell::new(lines),
+            local_feedback_saved_cell(
+                self.include_logs,
+                &thread_id,
+                note_path.as_deref(),
+                log_path.as_deref(),
+                diagnostics_path.as_deref(),
+                self.rollout_path.as_deref(),
+            ),
         )));
         self.complete = true;
     }
@@ -200,21 +187,21 @@ impl BottomPaneView for FeedbackNoteView {
 
 impl Renderable for FeedbackNoteView {
     fn desired_height(&self, width: u16) -> u16 {
-        1u16 + self.input_height(width) + 3u16
+        self.intro_lines(width).len() as u16 + self.input_height(width) + 2u16
     }
 
     fn cursor_pos(&self, area: Rect) -> Option<(u16, u16)> {
         if area.height < 2 || area.width <= 2 {
             return None;
         }
+        let intro_height = self.intro_lines(area.width).len() as u16;
         let text_area_height = self.input_height(area.width).saturating_sub(1);
         if text_area_height == 0 {
             return None;
         }
-        let top_line_count = 1u16; // title only
         let textarea_rect = Rect {
             x: area.x.saturating_add(2),
-            y: area.y.saturating_add(top_line_count).saturating_add(1),
+            y: area.y.saturating_add(intro_height).saturating_add(1),
             width: area.width.saturating_sub(2),
             height: text_area_height,
         };
@@ -227,23 +214,26 @@ impl Renderable for FeedbackNoteView {
             return;
         }
 
-        let (title, placeholder) = feedback_title_and_placeholder(self.category);
+        let intro_lines = self.intro_lines(area.width);
+        let (_, placeholder) = feedback_title_and_placeholder(self.category);
         let input_height = self.input_height(area.width);
 
-        // Title line
-        let title_area = Rect {
-            x: area.x,
-            y: area.y,
-            width: area.width,
-            height: 1,
-        };
-        let title_spans: Vec<Span<'static>> = vec![gutter(), title.bold()];
-        Paragraph::new(Line::from(title_spans)).render(title_area, buf);
+        for (offset, line) in intro_lines.iter().enumerate() {
+            Paragraph::new(line.clone()).render(
+                Rect {
+                    x: area.x,
+                    y: area.y.saturating_add(offset as u16),
+                    width: area.width,
+                    height: 1,
+                },
+                buf,
+            );
+        }
 
         // Input line
         let input_area = Rect {
             x: area.x,
-            y: area.y.saturating_add(1),
+            y: area.y.saturating_add(intro_lines.len() as u16),
             width: area.width,
             height: input_height,
         };
@@ -317,6 +307,18 @@ impl FeedbackNoteView {
         let text_height = self.textarea.desired_height(usable_width).clamp(1, 8);
         text_height.saturating_add(1).min(9)
     }
+
+    fn intro_lines(&self, _width: u16) -> Vec<Line<'static>> {
+        let (title, _) = feedback_title_and_placeholder(self.category);
+        vec![Line::from(vec![gutter(), title.bold()])]
+    }
+}
+
+pub(crate) fn should_show_feedback_connectivity_details(
+    category: FeedbackCategory,
+    diagnostics: &FeedbackDiagnostics,
+) -> bool {
+    category != FeedbackCategory::GoodResult && !diagnostics.is_empty()
 }
 
 fn gutter() -> Span<'static> {
@@ -337,6 +339,10 @@ fn feedback_title_and_placeholder(category: FeedbackCategory) -> (String, String
             "Tell us more (bug)".to_string(),
             "(optional) Write a short description to help us further".to_string(),
         ),
+        FeedbackCategory::SafetyCheck => (
+            "Tell us more (safety check)".to_string(),
+            "(optional) Share what was refused and why it should have been allowed".to_string(),
+        ),
         FeedbackCategory::Other => (
             "Tell us more (other)".to_string(),
             "(optional) Write a short description to help us further".to_string(),
@@ -344,11 +350,12 @@ fn feedback_title_and_placeholder(category: FeedbackCategory) -> (String, String
     }
 }
 
-fn feedback_classification(category: FeedbackCategory) -> &'static str {
+pub(crate) fn feedback_classification(category: FeedbackCategory) -> &'static str {
     match category {
         FeedbackCategory::BadResult => "bad_result",
         FeedbackCategory::GoodResult => "good_result",
         FeedbackCategory::Bug => "bug",
+        FeedbackCategory::SafetyCheck => "safety_check",
         FeedbackCategory::Other => "other",
     }
 }
@@ -363,6 +370,85 @@ fn save_feedback_note(
     let contents = format!("thread_id={thread_id}\nclassification={classification}\n\n{note}\n");
     std::fs::write(&path, contents)?;
     Ok(path)
+}
+
+fn save_feedback_diagnostics(thread_id: &str, contents: &str) -> std::io::Result<PathBuf> {
+    let dir = std::env::temp_dir();
+    let path = dir.join(format!(
+        "xcodex-feedback-{thread_id}-{FEEDBACK_DIAGNOSTICS_ATTACHMENT_FILENAME}"
+    ));
+    std::fs::write(&path, contents)?;
+    Ok(path)
+}
+
+fn local_feedback_saved_cell(
+    include_logs: bool,
+    thread_id: &str,
+    note_path: Option<&Path>,
+    log_path: Option<&Path>,
+    diagnostics_path: Option<&Path>,
+    rollout_path: Option<&Path>,
+) -> history_cell::PlainHistoryCell {
+    let mut lines = vec![Line::from(if include_logs {
+        "• Feedback saved locally (no network upload)."
+    } else {
+        "• Feedback saved locally (no network upload, no logs)."
+    })];
+
+    lines.extend([
+        "".into(),
+        Line::from(vec!["  Thread ID: ".into(), thread_id.to_string().bold()]),
+    ]);
+
+    if let Some(path) = note_path {
+        lines.push(Line::from(vec![
+            "  Note: ".into(),
+            path.display().to_string().cyan().underlined(),
+        ]));
+    }
+    if let Some(path) = log_path {
+        lines.push(Line::from(vec![
+            "  Logs: ".into(),
+            path.display().to_string().cyan().underlined(),
+        ]));
+    }
+    if let Some(path) = diagnostics_path {
+        lines.push(Line::from(vec![
+            "  Diagnostics: ".into(),
+            path.display().to_string().cyan().underlined(),
+        ]));
+    }
+    if let Some(path) = rollout_path {
+        lines.push(Line::from(vec![
+            "  Rollout: ".into(),
+            path.display().to_string().cyan().underlined(),
+        ]));
+    }
+
+    lines.extend([
+        "".into(),
+        Line::from("  Attach these files when filing an issue in your fork.".dim()),
+    ]);
+
+    history_cell::PlainHistoryCell::new(lines)
+}
+
+pub(crate) fn feedback_success_cell(
+    _category: FeedbackCategory,
+    include_logs: bool,
+    thread_id: &str,
+    _feedback_audience: FeedbackAudience,
+) -> history_cell::PlainHistoryCell {
+    let mut lines = vec![Line::from(if include_logs {
+        "• Feedback uploaded."
+    } else {
+        "• Feedback recorded (no logs)."
+    })];
+    lines.extend([
+        "".into(),
+        Line::from(vec!["  Thread ID: ".into(), thread_id.to_string().bold()]),
+    ]);
+    history_cell::PlainHistoryCell::new(lines)
 }
 
 // Build the selection popup params for feedback categories.
@@ -389,6 +475,12 @@ pub(crate) fn feedback_selection_params(
                 "good result",
                 "Helpful, correct, high‑quality, or delightful result worth celebrating.",
                 FeedbackCategory::GoodResult,
+            ),
+            make_feedback_item(
+                app_event_tx.clone(),
+                "safety check",
+                "Benign usage blocked due to safety checks or refusals.",
+                FeedbackCategory::SafetyCheck,
             ),
             make_feedback_item(
                 app_event_tx,
@@ -439,6 +531,7 @@ pub(crate) fn feedback_upload_consent_params(
     app_event_tx: AppEventSender,
     category: FeedbackCategory,
     rollout_path: Option<std::path::PathBuf>,
+    feedback_diagnostics: &FeedbackDiagnostics,
 ) -> super::SelectionViewParams {
     use super::popup_consts::standard_popup_hint_line;
     let yes_action: super::SelectionAction = Box::new({
@@ -479,6 +572,26 @@ pub(crate) fn feedback_upload_consent_params(
     {
         header_lines.push(Line::from(vec!["  • ".into(), name.into()]).into());
     }
+    if !feedback_diagnostics.is_empty() {
+        header_lines.push(
+            Line::from(vec![
+                "  • ".into(),
+                FEEDBACK_DIAGNOSTICS_ATTACHMENT_FILENAME.into(),
+            ])
+            .into(),
+        );
+    }
+    if should_show_feedback_connectivity_details(category, feedback_diagnostics) {
+        header_lines.push(Line::from("").into());
+        header_lines.push(Line::from("Connectivity diagnostics".bold()).into());
+        for diagnostic in feedback_diagnostics.diagnostics() {
+            header_lines
+                .push(Line::from(vec!["  - ".into(), diagnostic.headline.clone().into()]).into());
+            for detail in &diagnostic.details {
+                header_lines.push(Line::from(vec!["    - ".dim(), detail.clone().into()]).into());
+            }
+        }
+    }
 
     super::SelectionViewParams {
         footer_hint: Some(standard_popup_hint_line()),
@@ -494,7 +607,6 @@ pub(crate) fn feedback_upload_consent_params(
             },
             super::SelectionItem {
                 name: "No".to_string(),
-                description: Some("".to_string()),
                 actions: vec![no_action],
                 dismiss_on_select: true,
                 ..Default::default()
@@ -512,6 +624,10 @@ mod tests {
     use super::*;
     use crate::app_event::AppEvent;
     use crate::app_event_sender::AppEventSender;
+    use codex_feedback::CodexFeedback;
+    use codex_feedback::FeedbackDiagnostic;
+    use codex_protocol::ThreadId;
+    use pretty_assertions::assert_eq;
 
     fn render(view: &FeedbackNoteView, width: u16) -> String {
         let height = view.desired_height(width);
@@ -543,45 +659,62 @@ mod tests {
         lines.join("\n")
     }
 
+    fn render_cell(cell: &impl history_cell::HistoryCell, width: u16) -> String {
+        cell.display_lines(width)
+            .into_iter()
+            .map(|line| {
+                line.spans
+                    .into_iter()
+                    .map(|span| span.content.into_owned())
+                    .collect::<String>()
+                    .trim_end()
+                    .to_string()
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    fn make_snapshot() -> codex_feedback::FeedbackSnapshot {
+        CodexFeedback::new().snapshot(Some(ThreadId::new()))
+    }
+
     fn make_view(category: FeedbackCategory) -> FeedbackNoteView {
         let (tx_raw, _rx) = tokio::sync::mpsc::unbounded_channel::<AppEvent>();
         let tx = AppEventSender::new(tx_raw);
-        let snapshot = codex_feedback::CodexFeedback::new().snapshot(None);
         FeedbackNoteView::new(
             category,
-            snapshot,
-            None,
+            make_snapshot(),
+            /*rollout_path*/ None,
             tx,
-            true,
-            FeedbackAudience::External,
+            /*include_logs*/ true,
         )
     }
 
     #[test]
     fn feedback_view_bad_result() {
         let view = make_view(FeedbackCategory::BadResult);
-        let rendered = render(&view, 60);
+        let rendered = render(&view, /*width*/ 60);
         insta::assert_snapshot!("feedback_view_bad_result", rendered);
     }
 
     #[test]
     fn feedback_view_good_result() {
         let view = make_view(FeedbackCategory::GoodResult);
-        let rendered = render(&view, 60);
+        let rendered = render(&view, /*width*/ 60);
         insta::assert_snapshot!("feedback_view_good_result", rendered);
     }
 
     #[test]
     fn feedback_view_bug() {
         let view = make_view(FeedbackCategory::Bug);
-        let rendered = render(&view, 60);
+        let rendered = render(&view, /*width*/ 60);
         insta::assert_snapshot!("feedback_view_bug", rendered);
     }
 
     #[test]
     fn feedback_view_other() {
         let view = make_view(FeedbackCategory::Other);
-        let rendered = render(&view, 60);
+        let rendered = render(&view, /*width*/ 60);
         insta::assert_snapshot!("feedback_view_other", rendered);
     }
 
@@ -593,5 +726,107 @@ mod tests {
         assert!(contents.contains("classification=bug"));
         assert!(contents.contains("hello"));
         let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn feedback_view_safety_check() {
+        let view = make_view(FeedbackCategory::SafetyCheck);
+        let rendered = render(&view, /*width*/ 60);
+        insta::assert_snapshot!("feedback_view_safety_check", rendered);
+    }
+
+    #[test]
+    fn submit_feedback_inserts_history_cell_with_local_artifacts() {
+        let (tx_raw, mut rx) = tokio::sync::mpsc::unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let mut view = FeedbackNoteView::new(
+            FeedbackCategory::Bug,
+            make_snapshot(),
+            Some(PathBuf::from("/tmp/rollout.jsonl")),
+            tx,
+            /*include_logs*/ true,
+        );
+        view.textarea.insert_str("  something broke  ");
+
+        view.submit();
+
+        let event = rx.try_recv().expect("history event");
+        assert!(matches!(event, AppEvent::InsertHistoryCell(_)));
+        assert_eq!(view.is_complete(), true);
+    }
+
+    #[test]
+    fn should_show_feedback_connectivity_details_only_for_non_good_result_with_diagnostics() {
+        let diagnostics = FeedbackDiagnostics::new(vec![FeedbackDiagnostic {
+            headline: "Proxy environment variables are set and may affect connectivity."
+                .to_string(),
+            details: vec!["HTTP_PROXY = http://proxy.example.com:8080".to_string()],
+        }]);
+
+        assert_eq!(
+            should_show_feedback_connectivity_details(FeedbackCategory::Bug, &diagnostics),
+            true
+        );
+        assert_eq!(
+            should_show_feedback_connectivity_details(FeedbackCategory::GoodResult, &diagnostics),
+            false
+        );
+        assert_eq!(
+            should_show_feedback_connectivity_details(
+                FeedbackCategory::BadResult,
+                &FeedbackDiagnostics::default()
+            ),
+            false
+        );
+    }
+
+    #[test]
+    fn local_feedback_saved_cell_matches_copy() {
+        let rendered = render_cell(
+            &local_feedback_saved_cell(
+                /*include_logs*/ true,
+                "thread-1",
+                Some(Path::new("/tmp/note.txt")),
+                Some(Path::new("/tmp/log.txt")),
+                Some(Path::new("/tmp/diag.txt")),
+                Some(Path::new("/tmp/rollout.jsonl")),
+            ),
+            /*width*/ 120,
+        );
+        assert_eq!(
+            rendered,
+            "• Feedback saved locally (no network upload).\n\n  Thread ID: thread-1\n  Note: /tmp/note.txt\n  Logs: /tmp/log.txt\n  Diagnostics: /tmp/diag.txt\n  Rollout: /tmp/rollout.jsonl\n\n  Attach these files when filing an issue in your fork."
+        );
+    }
+
+    #[test]
+    fn feedback_success_cell_matches_neutral_bug_copy() {
+        let rendered = render_cell(
+            &feedback_success_cell(
+                FeedbackCategory::Bug,
+                /*include_logs*/ true,
+                "thread-2",
+                FeedbackAudience::OpenAiEmployee,
+            ),
+            /*width*/ 120,
+        );
+        assert_eq!(rendered, "• Feedback uploaded.\n\n  Thread ID: thread-2");
+    }
+
+    #[test]
+    fn feedback_success_cell_matches_neutral_good_result_copy() {
+        let rendered = render_cell(
+            &feedback_success_cell(
+                FeedbackCategory::GoodResult,
+                /*include_logs*/ false,
+                "thread-3",
+                FeedbackAudience::External,
+            ),
+            /*width*/ 120,
+        );
+        assert_eq!(
+            rendered,
+            "• Feedback recorded (no logs).\n\n  Thread ID: thread-3"
+        );
     }
 }

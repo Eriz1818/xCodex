@@ -2,7 +2,6 @@ packages:
   - codex-cli
   - codex-rs/responses-api-proxy/npm
   - sdk/typescript
-  - shell-tool-mcp
 
 ignoredBuiltDependencies:
   - esbuild
@@ -10,3 +9,4 @@ ignoredBuiltDependencies:
 minimumReleaseAge: 10080
 
 blockExoticSubdeps: true
+strictDepBuilds: true

@@ -1,5 +1,7 @@
 use std::sync::Arc;
 
+use codex_app_server_protocol::McpServerElicitationAction;
+use codex_app_server_protocol::McpServerElicitationRequestResponse;
 use codex_core::CodexThread;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::Op;
@@ -34,6 +36,29 @@ pub(crate) async fn handle_xcodex_non_interactive_event(
         thread.submit(op).await?;
     }
     Ok(())
+}
+
+pub(crate) fn canceled_mcp_server_elicitation_response() -> McpServerElicitationRequestResponse {
+    McpServerElicitationRequestResponse {
+        action: McpServerElicitationAction::Cancel,
+        content: None,
+        meta: None,
+    }
+}
+
+pub(crate) fn unsupported_exec_mode_thread_request(feature: &str, thread_id: &str) -> String {
+    format!("{feature} is not supported in exec mode for thread `{thread_id}`")
+}
+
+pub(crate) fn unsupported_exec_mode_conversation_request(
+    feature: &str,
+    conversation_id: &str,
+) -> String {
+    format!("{feature} is not supported in exec mode for thread `{conversation_id}`")
+}
+
+pub(crate) fn unsupported_exec_mode_global_request(feature: &str) -> String {
+    format!("{feature} is not supported in exec mode")
 }
 
 #[cfg(test)]

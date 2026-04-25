@@ -1,4 +1,5 @@
 use crate::bash::parse_shell_lc_plain_commands;
+use std::path::Path;
 #[cfg(windows)]
 #[path = "windows_dangerous_commands.rs"]
 mod windows_dangerous_commands;
@@ -52,6 +53,55 @@ fn is_git_global_option_with_inline_value(arg: &str) -> bool {
     ) || ((arg.starts_with("-C") || arg.starts_with("-c")) && arg.len() > 2)
 }
 
+/// Git global options that can redirect config, repository, or helper lookup
+/// and therefore must never be auto-approved as "safe".
+pub(crate) fn git_global_option_requires_prompt(arg: &str) -> bool {
+    matches!(
+        arg,
+        "-c" | "--config-env"
+            | "--exec-path"
+            | "--git-dir"
+            | "--namespace"
+            | "--super-prefix"
+            | "--work-tree"
+    ) || matches!(
+        arg,
+        s if (s.starts_with("-c") && s.len() > 2)
+            || s.starts_with("--config-env=")
+            || s.starts_with("--exec-path=")
+            || s.starts_with("--git-dir=")
+            || s.starts_with("--namespace=")
+            || s.starts_with("--super-prefix=")
+            || s.starts_with("--work-tree=")
+    )
+}
+
+pub(crate) fn executable_name_lookup_key(raw: &str) -> Option<String> {
+    #[cfg(windows)]
+    {
+        Path::new(raw)
+            .file_name()
+            .and_then(|name| name.to_str())
+            .map(|name| {
+                let name = name.to_ascii_lowercase();
+                for suffix in [".exe", ".cmd", ".bat", ".com"] {
+                    if let Some(stripped) = name.strip_suffix(suffix) {
+                        return stripped.to_string();
+                    }
+                }
+                name
+            })
+    }
+
+    #[cfg(not(windows))]
+    {
+        Path::new(raw)
+            .file_name()
+            .and_then(|name| name.to_str())
+            .map(std::borrow::ToOwned::to_owned)
+    }
+}
+
 /// Find the first matching git subcommand, skipping known global options that
 /// may appear before it (e.g., `-C`, `-c`, `--git-dir`).
 ///
@@ -61,7 +111,7 @@ pub(crate) fn find_git_subcommand<'a>(
     subcommands: &[&str],
 ) -> Option<(usize, &'a str)> {
     let cmd0 = command.first().map(String::as_str)?;
-    if !cmd0.ends_with("git") {
+    if executable_name_lookup_key(cmd0).as_deref() != Some("git") {
         return None;
     }
 

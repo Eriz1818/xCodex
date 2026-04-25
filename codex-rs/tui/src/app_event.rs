@@ -10,41 +10,72 @@
 
 use std::path::PathBuf;
 
+use codex_app_server_protocol::McpServerStatus;
+use codex_app_server_protocol::PluginInstallResponse;
+use codex_app_server_protocol::PluginListResponse;
+use codex_app_server_protocol::PluginReadParams;
+use codex_app_server_protocol::PluginReadResponse;
+use codex_app_server_protocol::PluginUninstallResponse;
 use codex_chatgpt::connectors::AppInfo;
 use codex_core::git_info::GitWorktreeEntry;
 use codex_core::protocol::Event;
-use codex_core::protocol::RateLimitSnapshot;
+use codex_core::protocol::Op as CoreOp;
 use codex_core::themes::ThemeVariant;
 use codex_file_search::FileMatch;
 use codex_protocol::ThreadId;
 use codex_protocol::openai_models::ModelPreset;
+use codex_protocol::protocol::GetHistoryEntryResponseEvent;
+use codex_protocol::protocol::Op as ThreadOp;
+use codex_protocol::protocol::RateLimitSnapshot;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_approval_presets::ApprovalPreset;
 
 use crate::bottom_pane::ApprovalRequest;
 use crate::bottom_pane::StatusLineItem;
+use crate::bottom_pane::TerminalTitleItem;
 use crate::history_cell::HistoryCell;
 use crate::slash_command::SlashCommand;
 
+use codex_config::types::ApprovalsReviewer;
 use codex_core::config::types::ExclusionConfig;
 use codex_core::config::types::XtremeMode;
-use codex_core::features::Feature;
-use codex_core::protocol::AskForApproval;
-use codex_core::protocol::SandboxPolicy;
+use codex_features::Feature;
 use codex_protocol::config_types::CollaborationModeMask;
 use codex_protocol::config_types::Personality;
+use codex_protocol::config_types::ServiceTier;
 use codex_protocol::openai_models::ReasoningEffort;
+use codex_protocol::protocol::AskForApproval;
+use codex_protocol::protocol::SandboxPolicy;
+use codex_realtime_webrtc::RealtimeWebrtcEvent;
+use codex_realtime_webrtc::RealtimeWebrtcSessionHandle;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RealtimeAudioDeviceKind {
+    Microphone,
+    Speaker,
+}
+
+impl RealtimeAudioDeviceKind {
+    pub(crate) fn title(self) -> &'static str {
+        match self {
+            Self::Microphone => "Microphone",
+            Self::Speaker => "Speaker",
+        }
+    }
+
+    pub(crate) fn noun(self) -> &'static str {
+        match self {
+            Self::Microphone => "microphone",
+            Self::Speaker => "speaker",
+        }
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
 pub(crate) enum WindowsSandboxEnableMode {
     Elevated,
     Legacy,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
-pub(crate) enum WindowsSandboxFallbackReason {
-    ElevationFailed,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -63,10 +94,27 @@ pub(crate) enum PlanFixAndStartAction {
     UpdatePlanContextAndStart,
     StartWithoutContextChange,
 }
-
 #[derive(Debug, Clone)]
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
 pub(crate) struct ConnectorsSnapshot {
     pub(crate) connectors: Vec<AppInfo>,
+}
+
+/// Distinguishes why a rate-limit refresh was requested so the completion
+/// handler can route the result correctly.
+///
+/// A `StartupPrefetch` fires once, concurrently with the rest of TUI init, and
+/// only updates the cached snapshots (no status card to finalize). A
+/// `StatusCommand` is tied to a specific `/status` invocation and must call
+/// `finish_status_rate_limit_refresh` when done so the card stops showing a
+/// "refreshing" state.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RateLimitRefreshOrigin {
+    /// Eagerly fetched after bootstrap so the first `/status` already has data.
+    StartupPrefetch,
+    /// User-initiated via `/status`; the `request_id` correlates with the
+    /// status card that should be updated when the fetch completes.
+    StatusCommand { request_id: u64 },
 }
 
 #[allow(clippy::large_enum_variant)]
@@ -78,8 +126,24 @@ pub(crate) enum AppEvent {
     /// Switch the active thread to the selected agent.
     SelectAgentThread(ThreadId),
 
+    /// Submit an op to the specified thread, regardless of current focus.
+    SubmitThreadOp {
+        thread_id: ThreadId,
+        op: ThreadOp,
+    },
+
+    /// Deliver a synthetic history lookup response to a specific thread channel.
+    ThreadHistoryEntryResponse {
+        thread_id: ThreadId,
+        event: GetHistoryEntryResponseEvent,
+    },
+
     /// Start a new session.
     NewSession,
+
+    /// Clear the terminal UI (screen + scrollback), start a fresh session, and keep the
+    /// previous chat resumable.
+    ClearUi,
 
     /// Open the resume picker inside the running TUI session.
     OpenResumePicker,
@@ -89,6 +153,9 @@ pub(crate) enum AppEvent {
 
     /// Open transcript overlay (same as pressing Ctrl+T).
     OpenTranscriptOverlay,
+
+    /// Resume a thread by UUID or thread name inside the running TUI session.
+    ResumeSessionByIdOrName(String),
 
     /// Fork the current session into a new thread.
     ForkCurrentSession,
@@ -102,11 +169,12 @@ pub(crate) enum AppEvent {
     Exit(ExitMode),
 
     /// Request to exit the application due to a fatal error.
+    #[allow(dead_code)]
     FatalExitRequest(String),
 
     /// Forward an `Op` to the Agent. Using an `AppEvent` for this avoids
     /// bubbling channels through layers of widgets.
-    CodexOp(codex_core::protocol::Op),
+    CodexOp(CoreOp),
 
     /// Kick off an asynchronous file search for the given query (text after
     /// the `@`). Previous searches may be cancelled by the app layer so there
@@ -121,8 +189,16 @@ pub(crate) enum AppEvent {
         matches: Vec<FileMatch>,
     },
 
-    /// Result of refreshing rate limits
-    RateLimitSnapshotFetched(RateLimitSnapshot),
+    /// Refresh account rate limits in the background.
+    RefreshRateLimits {
+        origin: RateLimitRefreshOrigin,
+    },
+
+    /// Result of refreshing rate limits.
+    RateLimitsLoaded {
+        origin: RateLimitRefreshOrigin,
+        result: Result<Vec<RateLimitSnapshot>, String>,
+    },
 
     /// Result of prefetching connectors.
     ConnectorsLoaded {
@@ -144,8 +220,9 @@ pub(crate) enum AppEvent {
         branches: Vec<String>,
     },
 
-    /// Update status bar item toggles (runtime).
-    UpdateStatusBarGitOptions {
+    /// Update footer/status-bar item toggles (runtime).
+    UpdateFooterStatusOptions {
+        show_model: bool,
         show_git_branch: bool,
         show_worktree: bool,
     },
@@ -341,6 +418,92 @@ pub(crate) enum AppEvent {
         force_refetch: bool,
     },
 
+    /// Fetch plugin marketplace state for the provided working directory.
+    FetchPluginsList {
+        cwd: PathBuf,
+    },
+
+    /// Result of fetching plugin marketplace state.
+    PluginsLoaded {
+        cwd: PathBuf,
+        result: Result<PluginListResponse, String>,
+    },
+
+    /// Replace the plugins popup with a plugin-detail loading state.
+    OpenPluginDetailLoading {
+        plugin_display_name: String,
+    },
+
+    /// Fetch detail for a specific plugin from a marketplace.
+    FetchPluginDetail {
+        cwd: PathBuf,
+        params: PluginReadParams,
+    },
+
+    /// Result of fetching plugin detail.
+    PluginDetailLoaded {
+        cwd: PathBuf,
+        result: Result<PluginReadResponse, String>,
+    },
+
+    /// Replace the plugins popup with an install loading state.
+    OpenPluginInstallLoading {
+        plugin_display_name: String,
+    },
+
+    /// Replace the plugins popup with an uninstall loading state.
+    OpenPluginUninstallLoading {
+        plugin_display_name: String,
+    },
+
+    /// Install a specific plugin from a marketplace.
+    FetchPluginInstall {
+        cwd: PathBuf,
+        marketplace_path: AbsolutePathBuf,
+        plugin_name: String,
+        plugin_display_name: String,
+    },
+
+    /// Result of installing a plugin.
+    PluginInstallLoaded {
+        cwd: PathBuf,
+        marketplace_path: AbsolutePathBuf,
+        plugin_name: String,
+        plugin_display_name: String,
+        result: Result<PluginInstallResponse, String>,
+    },
+
+    /// Uninstall a specific plugin by canonical plugin id.
+    FetchPluginUninstall {
+        cwd: PathBuf,
+        plugin_id: String,
+        plugin_display_name: String,
+    },
+
+    /// Result of uninstalling a plugin.
+    PluginUninstallLoaded {
+        cwd: PathBuf,
+        plugin_id: String,
+        plugin_display_name: String,
+        result: Result<PluginUninstallResponse, String>,
+    },
+
+    /// Advance the post-install plugin app-auth flow.
+    PluginInstallAuthAdvance {
+        refresh_connectors: bool,
+    },
+
+    /// Abandon the post-install plugin app-auth flow.
+    PluginInstallAuthAbandon,
+
+    /// Fetch MCP inventory via app-server RPCs and render it into history.
+    FetchMcpInventory,
+
+    /// Result of fetching MCP inventory via app-server RPCs.
+    McpInventoryLoaded {
+        result: Result<Vec<McpServerStatus>, String>,
+    },
+
     InsertHistoryCell(Box<dyn HistoryCell>),
 
     /// Apply rollback semantics to local transcript cells.
@@ -384,8 +547,9 @@ pub(crate) enum AppEvent {
         personality: Personality,
     },
 
-    /// Persist status bar item toggles to the appropriate config.
-    PersistStatusBarGitOptions {
+    /// Persist footer/status-bar item toggles to the appropriate config.
+    PersistFooterStatusOptions {
+        show_model: bool,
         show_git_branch: bool,
         show_worktree: bool,
     },
@@ -463,9 +627,48 @@ pub(crate) enum AppEvent {
         startup_timeout_sec: u64,
     },
 
+    /// Persist the selected service tier to the appropriate config.
+    PersistServiceTierSelection {
+        service_tier: Option<ServiceTier>,
+    },
+
+    /// Open the device picker for a realtime microphone or speaker.
+    OpenRealtimeAudioDeviceSelection {
+        kind: RealtimeAudioDeviceKind,
+    },
+
+    /// Persist the selected realtime microphone or speaker to top-level config.
+    #[cfg_attr(target_os = "linux", allow(dead_code))]
+    PersistRealtimeAudioDeviceSelection {
+        kind: RealtimeAudioDeviceKind,
+        name: Option<String>,
+    },
+
+    /// Restart the selected realtime microphone or speaker locally.
+    RestartRealtimeAudioDevice {
+        kind: RealtimeAudioDeviceKind,
+    },
+
+    /// Result of creating a TUI-owned realtime WebRTC offer.
+    RealtimeWebrtcOfferCreated {
+        result: Result<RealtimeWebrtcOffer, String>,
+    },
+
+    /// Peer-connection lifecycle event from a TUI-owned realtime WebRTC session.
+    RealtimeWebrtcEvent(RealtimeWebrtcEvent),
+
+    /// Local microphone level from a TUI-owned realtime WebRTC session.
+    RealtimeWebrtcLocalAudioLevel(u16),
+
     /// Open the reasoning selection popup after picking a model.
     OpenReasoningPopup {
         model: ModelPreset,
+    },
+
+    /// Open the Plan-mode reasoning scope prompt for the selected model/effort.
+    OpenPlanReasoningScopePrompt {
+        model: String,
+        effort: Option<ReasoningEffort>,
     },
 
     /// Open the full model picker (non-auto models).
@@ -504,7 +707,6 @@ pub(crate) enum AppEvent {
     #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
     OpenWindowsSandboxFallbackPrompt {
         preset: ApprovalPreset,
-        reason: WindowsSandboxFallbackReason,
     },
 
     /// Begin the elevated Windows sandbox setup flow.
@@ -548,6 +750,9 @@ pub(crate) enum AppEvent {
     /// Update the current sandbox policy in the running app and widget.
     UpdateSandboxPolicy(SandboxPolicy),
 
+    /// Update the current approvals reviewer in the running app and widget.
+    UpdateApprovalsReviewer(ApprovalsReviewer),
+
     /// Update feature flags and persist them to the top-level config.
     UpdateFeatureFlags {
         updates: Vec<(Feature, bool)>,
@@ -563,6 +768,9 @@ pub(crate) enum AppEvent {
     /// Update whether the rate limit switch prompt has been acknowledged for the session.
     UpdateRateLimitSwitchPromptHidden(bool),
 
+    /// Update the Plan-mode-specific reasoning effort in memory.
+    UpdatePlanModeReasoningEffort(Option<ReasoningEffort>),
+
     /// Persist the acknowledgement flag for the full access warning prompt.
     PersistFullAccessWarningAcknowledged,
 
@@ -572,6 +780,9 @@ pub(crate) enum AppEvent {
 
     /// Persist the acknowledgement flag for the rate limit switch prompt.
     PersistRateLimitSwitchPromptHidden,
+
+    /// Persist the Plan-mode-specific reasoning effort.
+    PersistPlanModeReasoningEffort(Option<ReasoningEffort>),
 
     /// Persist the acknowledgement flag for the model migration prompt.
     PersistModelMigrationPromptAcknowledged {
@@ -610,6 +821,14 @@ pub(crate) enum AppEvent {
     /// Re-open the permissions presets popup.
     OpenPermissionsPopup,
 
+    /// Live update for the in-progress voice recording placeholder. Carries
+    /// the placeholder `id` and the text to display (e.g., an ASCII meter).
+    #[cfg(not(target_os = "linux"))]
+    UpdateRecordingMeter {
+        id: String,
+        text: String,
+    },
+
     /// Open the branch picker option from the review popup.
     OpenReviewBranchPicker(PathBuf),
 
@@ -639,6 +858,22 @@ pub(crate) enum AppEvent {
         category: FeedbackCategory,
     },
 
+    /// Submit feedback for the current thread via the app-server feedback RPC.
+    SubmitFeedback {
+        category: FeedbackCategory,
+        reason: Option<String>,
+        turn_id: Option<String>,
+        include_logs: bool,
+    },
+
+    /// Result of a feedback upload request initiated by the TUI.
+    FeedbackSubmitted {
+        origin_thread_id: Option<ThreadId>,
+        category: FeedbackCategory,
+        include_logs: bool,
+        result: Result<String, String>,
+    },
+
     /// Launch the external editor after a normal draw has completed.
     LaunchExternalEditor,
 
@@ -653,6 +888,28 @@ pub(crate) enum AppEvent {
     },
     /// Dismiss the status-line setup UI without changing config.
     StatusLineSetupCancelled,
+
+    /// Apply a user-confirmed terminal-title item ordering/selection.
+    TerminalTitleSetup {
+        items: Vec<TerminalTitleItem>,
+    },
+    /// Apply a temporary terminal-title preview while the setup UI is open.
+    TerminalTitleSetupPreview {
+        items: Vec<TerminalTitleItem>,
+    },
+    /// Dismiss the terminal-title setup UI without changing config.
+    TerminalTitleSetupCancelled,
+
+    /// Apply a user-confirmed syntax theme selection.
+    SyntaxThemeSelected {
+        name: String,
+    },
+}
+
+#[derive(Debug)]
+pub(crate) struct RealtimeWebrtcOffer {
+    pub(crate) offer_sdp: String,
+    pub(crate) handle: RealtimeWebrtcSessionHandle,
 }
 
 /// The exit strategy requested by the UI layer.
@@ -676,5 +933,6 @@ pub(crate) enum FeedbackCategory {
     BadResult,
     GoodResult,
     Bug,
+    SafetyCheck,
     Other,
 }

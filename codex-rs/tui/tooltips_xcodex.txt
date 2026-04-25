@@ -1,4 +1,4 @@
-Press Ctrl+O to open ⚡Tools.
+Press Ctrl+Alt+O to open ⚡Tools.
 Use /xtreme to open the ⚡Tools control panel.
 Use /hooks to automate xcodex workflows.
 Try /themes to preview a theme and save it.
