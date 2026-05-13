@@ -21,7 +21,11 @@ codex_rust_crate(
     test_data_extra = glob([
         "src/**/*.rs",
         "src/**/snapshots/**",
-    ]) + ["//codex-rs/core:model_availability_nux_fixtures"],
+    ]) + [
+        "//:AGENTS.md",
+        "//codex-rs/core:model_availability_nux_fixtures",
+        "//codex-rs/xcodex:snapshots",
+    ],
     integration_compile_data_extra = ["src/test_backend.rs"],
     extra_binaries = [
         "//codex-rs/cli:codex",

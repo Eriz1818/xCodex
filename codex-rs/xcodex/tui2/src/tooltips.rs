@@ -1,4 +1,4 @@
-use codex_core::features::FEATURES;
+use codex_features::FEATURES;
 use lazy_static::lazy_static;
 use rand::Rng;
 

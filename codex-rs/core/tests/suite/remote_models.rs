@@ -986,7 +986,7 @@ async fn remote_models_chatgpt_keeps_models_not_supported_in_api() -> Result<()>
     let auth = CodexAuth::create_dummy_chatgpt_auth_for_testing();
     let provider = ModelProviderInfo {
         base_url: Some(format!("{}/v1", server.uri())),
-        ..built_in_model_providers()["openai"].clone()
+        ..built_in_model_providers(/*openai_base_url*/ None)["openai"].clone()
     };
     let manager = models_manager_with_provider(
         codex_home.path().to_path_buf(),
@@ -1026,7 +1026,7 @@ async fn remote_models_api_key_hides_models_not_supported_in_api() -> Result<()>
     let auth = CodexAuth::from_api_key("sk-test");
     let provider = ModelProviderInfo {
         base_url: Some(format!("{}/v1", server.uri())),
-        ..built_in_model_providers()["openai"].clone()
+        ..built_in_model_providers(/*openai_base_url*/ None)["openai"].clone()
     };
     let manager = models_manager_with_provider(
         codex_home.path().to_path_buf(),

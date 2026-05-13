@@ -302,9 +302,9 @@ async fn live_agent_message_renders_during_review_mode() {
 async fn review_restores_context_window_indicator() {
     let (mut chat, mut rx, _ops) = make_chatwidget_manual(/*model_override*/ None).await;
 
-    let context_window = 13_000;
-    let pre_review_tokens = 12_700; // ~30% remaining after subtracting baseline.
-    let review_tokens = 12_030; // ~97% remaining after subtracting baseline.
+    let context_window = 10_000;
+    let pre_review_tokens = 7_000; // 30% remaining.
+    let review_tokens = 300; // 97% remaining.
 
     chat.handle_codex_event(Event {
         id: "token-before".into(),
@@ -361,7 +361,7 @@ async fn restore_thread_input_state_restores_pending_steers_without_downgrading_
         pending_steers,
         rejected_steers_queue,
         queued_user_messages,
-        current_collaboration_mode: chat.current_collaboration_mode.clone(),
+        current_collaboration_mode: chat.current_collaboration_mode().clone(),
         active_collaboration_mask: chat.active_collaboration_mask.clone(),
         task_running: false,
         agent_turn_running: false,

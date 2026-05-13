@@ -230,7 +230,7 @@ mod tests {
         // Full render of the same source
         let source: String = deltas.iter().copied().collect();
         let mut rendered: Vec<ratatui::text::Line<'static>> = Vec::new();
-        crate::markdown::append_markdown(&source, None, &mut rendered);
+        crate::markdown::append_markdown(&source, None, None, &mut rendered);
         let rendered_strs = lines_to_plain_strings(&rendered);
 
         assert_eq!(streamed, rendered_strs);

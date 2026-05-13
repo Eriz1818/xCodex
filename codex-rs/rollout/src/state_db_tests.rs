@@ -87,13 +87,17 @@ async fn apply_rollout_items_turn_context_refreshes_git_metadata() {
 
     let items = vec![RolloutItem::TurnContext(TurnContextItem {
         turn_id: Some("turn-1".to_string()),
+        trace_id: None,
         cwd: new_cwd.clone(),
+        current_date: None,
+        timezone: None,
         approval_policy: AskForApproval::OnRequest,
         sandbox_policy: SandboxPolicy::new_read_only_policy(),
         network: None,
         model: "gpt-5".to_string(),
         personality: None,
         collaboration_mode: None,
+        realtime_active: None,
         effort: None,
         summary: ReasoningSummary::Auto,
         user_instructions: None,

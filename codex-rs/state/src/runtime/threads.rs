@@ -1400,6 +1400,7 @@ mod tests {
                     },
                     last_token_usage: codex_protocol::protocol::TokenUsage::default(),
                     model_context_window: None,
+                    full_model_context_window: None,
                 }),
                 rate_limits: None,
             },

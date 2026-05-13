@@ -11,8 +11,6 @@ use crate::wrapping::word_wrap_lines;
 use crate::xtreme;
 use chrono::DateTime;
 use chrono::Local;
-use codex_app_server_protocol::AuthMode as CoreAuthMode;
-use codex_core::AuthManager;
 use codex_model_provider_info::WireApi;
 use codex_protocol::ThreadId;
 use codex_protocol::account::PlanType;
@@ -43,7 +41,6 @@ use super::helpers::compose_agents_summary;
 use super::helpers::compose_model_display;
 use super::helpers::format_directory_display;
 use super::helpers::format_tokens_compact;
-use super::helpers::plan_type_display_name;
 use super::rate_limits::RateLimitSnapshotDisplay;
 use super::rate_limits::StatusRateLimitData;
 use super::rate_limits::StatusRateLimitRow;
@@ -228,7 +225,7 @@ pub(crate) fn new_status_output(
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn new_status_output_with_session_stats(
     config: &Config,
-    auth_manager: &AuthManager,
+    account_display: Option<&StatusAccountDisplay>,
     token_info: Option<&TokenUsageInfo>,
     total_usage: &TokenUsage,
     session_id: &Option<ThreadId>,
@@ -245,7 +242,7 @@ pub(crate) fn new_status_output_with_session_stats(
     let snapshots = rate_limits.map(std::slice::from_ref).unwrap_or_default();
     new_status_output_inner(
         config,
-        compat_status_account_display(auth_manager, plan_type).as_ref(),
+        account_display,
         token_info,
         total_usage,
         session_id,
@@ -390,7 +387,7 @@ fn new_status_output_inner(
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn new_status_menu_summary_card(
     config: &Config,
-    auth_manager: &AuthManager,
+    account_display: Option<&StatusAccountDisplay>,
     token_info: Option<&TokenUsageInfo>,
     total_usage: &TokenUsage,
     session_id: &Option<ThreadId>,
@@ -405,7 +402,7 @@ pub(crate) fn new_status_menu_summary_card(
 ) -> Box<dyn HistoryCell> {
     new_status_menu_summary_card_with_session_stats(
         config,
-        auth_manager,
+        account_display,
         token_info,
         total_usage,
         session_id,
@@ -424,7 +421,7 @@ pub(crate) fn new_status_menu_summary_card(
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn new_status_menu_summary_card_with_session_stats(
     config: &Config,
-    auth_manager: &AuthManager,
+    account_display: Option<&StatusAccountDisplay>,
     token_info: Option<&TokenUsageInfo>,
     total_usage: &TokenUsage,
     session_id: &Option<ThreadId>,
@@ -441,7 +438,7 @@ pub(crate) fn new_status_menu_summary_card_with_session_stats(
     let snapshots = rate_limits.map(std::slice::from_ref).unwrap_or_default();
     let (cell, _) = StatusHistoryCell::new(
         config,
-        compat_status_account_display(auth_manager, plan_type).as_ref(),
+        account_display,
         token_info,
         total_usage,
         session_id,
@@ -455,6 +452,84 @@ pub(crate) fn new_status_menu_summary_card_with_session_stats(
         collaboration_mode,
         reasoning_effort_override,
         compat_compose_agents_summary(config),
+        /*refreshing_rate_limits*/ false,
+    );
+    Box::new(StatusMenuSummaryCell(cell))
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn new_status_menu_summary_card_with_account_display(
+    config: &Config,
+    account_display: Option<&StatusAccountDisplay>,
+    token_info: Option<&TokenUsageInfo>,
+    total_usage: &TokenUsage,
+    session_id: &Option<ThreadId>,
+    thread_name: Option<String>,
+    session_stats: Option<&SessionStats>,
+    forked_from: Option<ThreadId>,
+    rate_limits: Option<&RateLimitSnapshotDisplay>,
+    plan_type: Option<PlanType>,
+    now: DateTime<Local>,
+    model_name: &str,
+    collaboration_mode: Option<&str>,
+    reasoning_effort_override: Option<Option<ReasoningEffort>>,
+) -> Box<dyn HistoryCell> {
+    let snapshots = rate_limits.map(std::slice::from_ref).unwrap_or_default();
+    let (cell, _) = StatusHistoryCell::new(
+        config,
+        account_display,
+        token_info,
+        total_usage,
+        session_id,
+        thread_name,
+        session_stats,
+        forked_from,
+        snapshots,
+        plan_type,
+        now,
+        model_name,
+        collaboration_mode,
+        reasoning_effort_override,
+        compat_compose_agents_summary(config),
+        /*refreshing_rate_limits*/ false,
+    );
+    Box::new(StatusMenuSummaryCell(cell))
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn new_status_menu_summary_card_with_account_display_many(
+    config: &Config,
+    account_display: Option<&StatusAccountDisplay>,
+    token_info: Option<&TokenUsageInfo>,
+    total_usage: &TokenUsage,
+    session_id: &Option<ThreadId>,
+    thread_name: Option<String>,
+    session_stats: Option<&SessionStats>,
+    forked_from: Option<ThreadId>,
+    rate_limits: &[RateLimitSnapshotDisplay],
+    plan_type: Option<PlanType>,
+    now: DateTime<Local>,
+    model_name: &str,
+    collaboration_mode: Option<&str>,
+    reasoning_effort_override: Option<Option<ReasoningEffort>>,
+    agents_summary: String,
+) -> Box<dyn HistoryCell> {
+    let (cell, _) = StatusHistoryCell::new(
+        config,
+        account_display,
+        token_info,
+        total_usage,
+        session_id,
+        thread_name,
+        session_stats,
+        forked_from,
+        rate_limits,
+        plan_type,
+        now,
+        model_name,
+        collaboration_mode,
+        reasoning_effort_override,
+        agents_summary,
         /*refreshing_rate_limits*/ false,
     );
     Box::new(StatusMenuSummaryCell(cell))
@@ -589,6 +664,7 @@ impl HistoryCell for StatusMenuSummaryCell {
             "Directory",
             "Approval",
             "Sandbox",
+            "Agents.md",
             "Auto-compact",
             "Thoughts",
         ];
@@ -626,6 +702,7 @@ impl HistoryCell for StatusMenuSummaryCell {
         lines.push(formatter.line("Directory", vec![Span::from(directory_value)]));
         lines.push(formatter.line("Approval", vec![Span::from(status.approval.clone())]));
         lines.push(formatter.line("Sandbox", vec![Span::from(status.sandbox.clone())]));
+        lines.push(formatter.line("Agents.md", vec![Span::from(status.agents_summary.clone())]));
         lines.push(formatter.line(
             "Auto-compact",
             vec![Span::from(if status.auto_compact_enabled {
@@ -850,7 +927,7 @@ impl StatusHistoryCell {
                 ui_frontend: "tui".to_string(),
                 model_name,
                 model_details,
-                directory: config.cwd.clone(),
+                directory: config.cwd.to_path_buf(),
                 codex_home: config.codex_home.clone(),
                 approval_policy,
                 sandbox_policy,
@@ -1260,24 +1337,6 @@ impl HistoryCell for StatusHistoryCell {
             .collect();
 
         with_border_with_inner_width(truncated_lines, inner_width)
-    }
-}
-
-fn compat_status_account_display(
-    auth_manager: &AuthManager,
-    plan_type: Option<PlanType>,
-) -> Option<StatusAccountDisplay> {
-    match auth_manager.auth_mode()? {
-        CoreAuthMode::ApiKey => Some(StatusAccountDisplay::ApiKey),
-        CoreAuthMode::Chatgpt | CoreAuthMode::ChatgptAuthTokens => {
-            let email = auth_manager
-                .auth_cached()
-                .and_then(|auth| auth.get_account_email());
-            let plan = plan_type
-                .map(plan_type_display_name)
-                .or_else(|| Some("Unknown".to_string()));
-            Some(StatusAccountDisplay::ChatGpt { email, plan })
-        }
     }
 }
 

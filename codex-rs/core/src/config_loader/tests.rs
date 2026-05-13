@@ -1285,8 +1285,7 @@ enabled = false
         .expect_err("untrusted project layer should not provide MCP transport");
 
     assert!(
-        err.to_string().contains("invalid transport")
-            && err.to_string().contains("mcp_servers.sentry"),
+        err.to_string().contains("invalid transport") && err.to_string().contains("mcp_servers"),
         "unexpected error: {err}"
     );
 

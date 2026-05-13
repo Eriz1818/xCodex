@@ -2,7 +2,9 @@
 
 use super::*;
 use codex_apply_patch::MaybeApplyPatchVerified;
+use codex_exec_server::LOCAL_FS;
 use codex_protocol::protocol::GranularApprovalConfig;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use core_test_support::PathBufExt;
 use pretty_assertions::assert_eq;
 use std::collections::HashMap;
@@ -11,9 +13,17 @@ use std::fs;
 use std::path::PathBuf;
 use tempfile::tempdir;
 
-fn make_test_request(dir: &tempfile::TempDir, patch: &str) -> ApplyPatchRequest {
+async fn make_test_request(dir: &tempfile::TempDir, patch: &str) -> ApplyPatchRequest {
     let argv = vec!["apply_patch".to_string(), patch.to_string()];
-    let action = match codex_apply_patch::maybe_parse_apply_patch_verified(&argv, dir.path()) {
+    let cwd = AbsolutePathBuf::try_from(dir.path()).expect("tempdir should be absolute");
+    let action = match codex_apply_patch::maybe_parse_apply_patch_verified(
+        &argv,
+        &cwd,
+        LOCAL_FS.as_ref(),
+        /*sandbox*/ None,
+    )
+    .await
+    {
         MaybeApplyPatchVerified::Body(action) => action,
         other => panic!("expected Body apply_patch action, got {other:?}"),
     };
@@ -95,30 +105,31 @@ fn guardian_review_request_includes_patch_context() {
     );
 }
 
-#[test]
-fn apply_patch_in_process_rejects_empty_patch() {
+#[tokio::test]
+async fn apply_patch_in_process_rejects_empty_patch() {
     let dir = tempdir().expect("tempdir");
-    let req = make_test_request(&dir, "*** Begin Patch\n*** End Patch");
+    let req = make_test_request(&dir, "*** Begin Patch\n*** End Patch").await;
 
-    let out = ApplyPatchRuntime::apply_patch_in_process(&req);
+    let out = ApplyPatchRuntime::apply_patch_in_process(&req).await;
 
     assert_eq!(out.exit_code, 1);
     assert_eq!(out.stdout.text, "");
     assert_eq!(out.stderr.text, "No files were modified.\n");
 }
 
-#[test]
-fn apply_patch_in_process_avoids_absolute_paths_in_errors() {
+#[tokio::test]
+async fn apply_patch_in_process_avoids_absolute_paths_in_errors() {
     let dir = tempdir().expect("tempdir");
     let missing_path = dir.path().join("missing.txt");
     fs::write(&missing_path, "old\n").expect("seed file");
     let req = make_test_request(
         &dir,
         "*** Begin Patch\n*** Update File: missing.txt\n@@\n-old\n+new\n*** End Patch",
-    );
+    )
+    .await;
     fs::remove_file(&missing_path).expect("delete file after verification");
 
-    let out = ApplyPatchRuntime::apply_patch_in_process(&req);
+    let out = ApplyPatchRuntime::apply_patch_in_process(&req).await;
 
     assert_eq!(out.exit_code, 1);
     assert!(
@@ -133,17 +144,18 @@ fn apply_patch_in_process_avoids_absolute_paths_in_errors() {
     );
 }
 
-#[test]
-fn apply_patch_in_process_updates_files_and_reports_summary() {
+#[tokio::test]
+async fn apply_patch_in_process_updates_files_and_reports_summary() {
     let dir = tempdir().expect("tempdir");
     let path = dir.path().join("update.txt");
     fs::write(&path, "foo\nbar\n").expect("seed file");
     let req = make_test_request(
         &dir,
         "*** Begin Patch\n*** Update File: update.txt\n@@\n-bar\n+baz\n*** End Patch",
-    );
+    )
+    .await;
 
-    let out = ApplyPatchRuntime::apply_patch_in_process(&req);
+    let out = ApplyPatchRuntime::apply_patch_in_process(&req).await;
 
     assert_eq!(out.exit_code, 0);
     assert_eq!(

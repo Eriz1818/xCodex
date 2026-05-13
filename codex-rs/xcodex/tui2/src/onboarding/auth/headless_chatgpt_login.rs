@@ -1,4 +1,4 @@
-use codex_core::AuthManager;
+use codex_login::AuthManager;
 use codex_login::ServerOptions;
 use codex_login::complete_device_code_login;
 use codex_login::request_device_code;

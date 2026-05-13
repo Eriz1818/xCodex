@@ -1,8 +1,8 @@
+use crate::custom_prompts::CustomPrompt;
 use crate::slash_command::SlashCommand;
 use crate::xcodex_plugins::PluginSlashCommand;
 use crate::xcodex_plugins::plugin_slash_commands;
 use codex_common::fuzzy_match::fuzzy_match;
-use codex_protocol::custom_prompts::CustomPrompt;
 use std::collections::HashSet;
 
 #[derive(Debug)]

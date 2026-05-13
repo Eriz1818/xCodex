@@ -208,15 +208,29 @@ impl ApprovalOverlay {
         ]));
 
         let footer_hint = match request {
-            ApprovalRequest::Exec { .. } => Some(Line::from(vec![
-                "Press ".into(),
-                key_hint::plain(KeyCode::Enter).into(),
-                " to confirm, ".into(),
-                key_hint::plain(KeyCode::Esc).into(),
-                " to cancel, or ".into(),
-                key_hint::ctrl(KeyCode::Char('y')).into(),
-                " to copy command".into(),
-            ])),
+            ApprovalRequest::Exec { thread_label, .. } => {
+                let mut spans = vec![
+                    "Press ".into(),
+                    key_hint::plain(KeyCode::Enter).into(),
+                    " to confirm, ".into(),
+                    key_hint::plain(KeyCode::Esc).into(),
+                    " to cancel".into(),
+                ];
+                if thread_label.is_some() {
+                    spans.extend([
+                        ", ".into(),
+                        key_hint::plain(KeyCode::Char('o')).into(),
+                        " to open thread".into(),
+                    ]);
+                }
+                spans.extend([", or ".into(), key_hint::ctrl(KeyCode::Char('y')).into()]);
+                if thread_label.is_some() {
+                    spans.push(" to copy".into());
+                } else {
+                    spans.push(" to copy command".into());
+                }
+                Some(Line::from(spans))
+            }
             _ => Some(approval_footer_hint(request)),
         };
 

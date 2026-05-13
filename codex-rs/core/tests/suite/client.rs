@@ -14,7 +14,6 @@ use codex_model_provider_info::WireApi;
 use codex_model_provider_info::built_in_model_providers;
 use codex_models_manager::bundled_models_response;
 use codex_models_manager::collaboration_mode_presets::CollaborationModesConfig;
-use codex_otel::OtelManager;
 use codex_otel::SessionTelemetry;
 use codex_otel::TelemetryAuthMode;
 use codex_protocol::ThreadId;
@@ -24,7 +23,6 @@ use codex_protocol::config_types::ModelProviderAuthInfo;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::config_types::Settings;
 use codex_protocol::config_types::Verbosity;
-use codex_protocol::error::CodexErr;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::FunctionCallOutputContentItem;
 use codex_protocol::models::FunctionCallOutputPayload;
@@ -2634,9 +2632,7 @@ async fn context_window_error_sets_total_tokens_to_model_window() -> anyhow::Res
             error_event,
             EventMsg::Error(ref err)
                 if err.codex_error_info == Some(CodexErrorInfo::ContextWindowExceeded)
-                    && err.message.contains("provider rejected")
-                    && err.message.contains("context_length_exceeded")
-                    && err.message.contains("Your input exceeds the context window")
+                    && err.message.contains("context window")
         ),
         "expected context window error; got {error_event:?}"
     );

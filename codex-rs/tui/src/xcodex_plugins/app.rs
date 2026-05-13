@@ -24,10 +24,7 @@ pub(crate) async fn try_handle_event(
                 Ok(None)
             }
         }
-        AppEvent::CodexOp(op) => {
-            handle_codex_op(app, op).await;
-            Ok(None)
-        }
+        AppEvent::CodexOp(op) => handle_codex_op(app, op).await,
         AppEvent::UpdateXtremeMode(mode) => {
             app.config.xcodex.tui_xtreme_mode = mode;
             app.chat_widget.set_xtreme_mode(mode);
@@ -324,7 +321,10 @@ pub(crate) async fn try_handle_event(
         }
         AppEvent::WorktreeSwitched(cwd) => {
             let previous_cwd = app.config.cwd.clone();
-            app.config.cwd = cwd.clone();
+            if let Ok(abs_cwd) = codex_utils_absolute_path::AbsolutePathBuf::try_from(cwd.as_path())
+            {
+                app.config.cwd = abs_cwd;
+            }
             app.chat_widget.set_session_cwd(cwd);
             tui.frame_requester().schedule_frame();
 
@@ -742,7 +742,7 @@ fn handle_external_approval_request(app: &mut App, thread_id: ThreadId, mut even
     app.chat_widget.handle_codex_event(event);
 }
 
-async fn handle_codex_op(app: &mut App, op: Op) {
+async fn handle_codex_op(app: &mut App, op: Op) -> Result<Option<AppEvent>> {
     match op {
         // Catch potential approvals coming from an external thread and treat them
         // directly. This support both command and patch approval. In such case
@@ -768,13 +768,15 @@ async fn handle_codex_op(app: &mut App, op: Op) {
                 )
                 .await;
                 finish_external_approval(app);
+                Ok(None)
             } else {
-                // This is an approval but not external.
-                app.chat_widget.submit_op(Op::ExecApproval {
+                // This is an approval but not external; keep it on the normal
+                // app-server submission path.
+                Ok(Some(AppEvent::CodexOp(Op::ExecApproval {
                     id,
                     turn_id,
                     decision,
-                });
+                })))
             }
         }
         Op::PatchApproval { id, decision } => {
@@ -792,10 +794,11 @@ async fn handle_codex_op(app: &mut App, op: Op) {
                 )
                 .await;
                 finish_external_approval(app);
+                Ok(None)
             } else {
-                // This is an approval but not external.
-                app.chat_widget
-                    .submit_op(Op::PatchApproval { id, decision });
+                // This is an approval but not external; keep it on the normal
+                // app-server submission path.
+                Ok(Some(AppEvent::CodexOp(Op::PatchApproval { id, decision })))
             }
         }
         Op::UserInputAnswer { id, response } => {
@@ -812,27 +815,23 @@ async fn handle_codex_op(app: &mut App, op: Op) {
                 )
                 .await;
                 finish_external_approval(app);
+                Ok(None)
             } else {
-                app.chat_widget
-                    .submit_op(Op::UserInputAnswer { id, response });
+                Ok(Some(AppEvent::CodexOp(Op::UserInputAnswer {
+                    id,
+                    response,
+                })))
             }
         }
         // Standard path where this is not an external approval response.
-        _ => app.chat_widget.submit_op(op),
+        _ => Ok(Some(AppEvent::CodexOp(op))),
     }
 }
 
-async fn forward_external_op(app: &App, thread_id: ThreadId, op: Op) {
-    let thread = match app.server.get_thread(thread_id).await {
-        Ok(thread) => thread,
-        Err(err) => {
-            tracing::warn!("failed to find thread {thread_id} for approval response: {err}");
-            return;
-        }
-    };
-    if let Err(err) = thread.submit(op).await {
-        tracing::warn!("failed to submit approval response to thread {thread_id}: {err}");
-    }
+async fn forward_external_op(_app: &App, thread_id: ThreadId, _op: Op) {
+    tracing::warn!(
+        "external approval forwarding for thread {thread_id} is pending app-server routing parity"
+    );
 }
 
 fn finish_external_approval(app: &mut App) {

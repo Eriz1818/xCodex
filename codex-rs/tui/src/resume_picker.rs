@@ -629,7 +629,10 @@ impl PickerState {
             return CopyFeedback::Error("No session selected".to_string());
         };
 
-        let Some(session_id) = session_id_from_rollout_path(&row.path) else {
+        let Some(path) = row.path.as_deref() else {
+            return CopyFeedback::Error("Could not determine session path".to_string());
+        };
+        let Some(session_id) = session_id_from_rollout_path(path) else {
             return CopyFeedback::Error("Could not determine session id".to_string());
         };
 
@@ -2305,9 +2308,10 @@ mod tests {
             PAGE_SIZE,
             None,
             ThreadSortKey::CreatedAt,
-            INTERACTIVE_SESSION_SOURCES,
+            &INTERACTIVE_SESSION_SOURCES,
             Some(&[String::from("openai")]),
             "openai",
+            None,
         )
         .await
         .expect("list conversations");

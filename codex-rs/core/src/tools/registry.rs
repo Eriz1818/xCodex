@@ -26,7 +26,6 @@ use codex_hooks::HookToolInput;
 use codex_hooks::HookToolInputLocalShell;
 use codex_hooks::HookToolKind;
 use codex_protocol::config_types::ModeKind;
-use codex_protocol::mcp::CallToolResult;
 use codex_protocol::models::FunctionCallOutputContentItem;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::protocol::SandboxPolicy;
@@ -1362,14 +1361,20 @@ fn unattested_output_warning_message(
 
 fn block_unattested_output(mut output: Box<dyn ToolOutput>) -> Box<dyn ToolOutput> {
     let message = "unattested tool output blocked by policy".to_string();
+    let provenance = output.provenance().cloned();
     if let Some(function_output) = output.as_any_mut().downcast_mut::<FunctionToolOutput>() {
         function_output.body = vec![FunctionCallOutputContentItem::InputText { text: message }];
         function_output.success = Some(false);
         return output;
     }
-    if let Some(mcp_output) = output.as_any_mut().downcast_mut::<McpToolOutput>() {
-        mcp_output.result = CallToolResult::from_error_text(message);
-        return output;
+    if output
+        .as_any_mut()
+        .downcast_mut::<McpToolOutput>()
+        .is_some()
+    {
+        let mut blocked = FunctionToolOutput::from_text(message, Some(false));
+        blocked.provenance = provenance;
+        return Box::new(blocked);
     }
     output
 }
@@ -1580,6 +1585,7 @@ async fn dispatch_after_tool_use_hook(
 #[cfg(test)]
 mod policy_tests {
     use super::*;
+    use codex_protocol::mcp::CallToolResult;
     use pretty_assertions::assert_eq;
 
     fn unattested_output() -> Box<dyn ToolOutput> {

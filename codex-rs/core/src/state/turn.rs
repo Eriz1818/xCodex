@@ -19,7 +19,6 @@ use tokio::sync::oneshot;
 
 use crate::codex::TurnContext;
 use crate::tasks::AnySessionTask;
-use crate::tasks::SessionTask;
 use crate::xcodex::hooks::ApprovalKind;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::ReviewDecision;
@@ -168,6 +167,16 @@ impl TurnState {
         key: &str,
     ) -> Option<oneshot::Sender<RequestUserInputResponse>> {
         self.pending_user_input.remove(key)
+    }
+
+    pub(crate) fn remove_only_pending_user_input(
+        &mut self,
+    ) -> Option<oneshot::Sender<RequestUserInputResponse>> {
+        if self.pending_user_input.len() != 1 {
+            return None;
+        }
+        let key = self.pending_user_input.keys().next().cloned()?;
+        self.pending_user_input.remove(&key)
     }
 
     pub(crate) fn insert_pending_elicitation(

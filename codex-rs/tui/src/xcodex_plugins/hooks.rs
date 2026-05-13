@@ -3,7 +3,6 @@ use crate::chatwidget::ChatWidget;
 use crate::chatwidget::transcript_spacer_line;
 use crate::history_cell::CompositeHistoryCell;
 use crate::history_cell::PlainHistoryCell;
-use crate::slash_command::SlashCommand;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
 
@@ -32,7 +31,7 @@ pub(crate) fn handle_hooks_command(chat: &mut ChatWidget, rest: &str) {
     let args: Vec<&str> = rest.split_whitespace().collect();
     match args.as_slice() {
         [] => {
-            chat.dispatch_slash_command(SlashCommand::Hooks);
+            add_hooks_output(chat);
         }
         ["init"] => {
             use codex_common::hooks_samples_install::HookSample;

@@ -303,10 +303,9 @@ async fn find_thread_path_does_not_match_content_only_uuid_hits() {
     .unwrap();
 
     // Create an empty state DB so lookup exercises filesystem fallback.
-    let runtime =
-        codex_state::StateRuntime::init(home.to_path_buf(), TEST_PROVIDER.to_string(), None)
-            .await
-            .expect("state db should initialize");
+    let runtime = codex_state::StateRuntime::init(home.to_path_buf(), TEST_PROVIDER.to_string())
+        .await
+        .expect("state db should initialize");
     runtime
         .mark_backfill_complete(None)
         .await
@@ -325,7 +324,7 @@ async fn find_thread_path_does_not_match_content_only_uuid_hits() {
     )
     .unwrap();
 
-    let found = crate::rollout::find_thread_path_by_id_str(home, &target_uuid.to_string())
+    let found = find_thread_path_by_id_str(home, &target_uuid.to_string())
         .await
         .expect("lookup should succeed");
     assert_eq!(found, None);
@@ -702,13 +701,17 @@ async fn list_threads_uses_latest_turn_context_cwd_for_summary() {
         timestamp: "2025-01-03T12:00:01Z".to_string(),
         item: RolloutItem::TurnContext(TurnContextItem {
             turn_id: Some("turn-1".to_string()),
+            trace_id: None,
             cwd: Path::new("/tmp/latest-session-cwd").to_path_buf(),
+            current_date: None,
+            timezone: None,
             approval_policy: AskForApproval::OnRequest,
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
             network: None,
             model: "gpt-5".to_string(),
             personality: None,
             collaboration_mode: None,
+            realtime_active: None,
             effort: None,
             summary: codex_protocol::config_types::ReasoningSummary::Auto,
             user_instructions: None,
@@ -725,7 +728,7 @@ async fn list_threads_uses_latest_turn_context_cwd_for_summary() {
         10,
         None,
         ThreadSortKey::CreatedAt,
-        INTERACTIVE_SESSION_SOURCES,
+        &INTERACTIVE_SESSION_SOURCES,
         Some(provider_filter.as_slice()),
         TEST_PROVIDER,
     )

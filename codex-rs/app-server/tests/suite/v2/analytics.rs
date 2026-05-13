@@ -1,6 +1,6 @@
 use anyhow::Result;
 use app_test_support::ChatGptAuthFixture;
-use app_test_support::DEFAULT_CLIENT_NAME;
+use app_test_support::MCP_CLIENT_NAME;
 use app_test_support::write_chatgpt_auth;
 use codex_config::types::AuthCredentialsStoreMode;
 use codex_config::types::OtelExporterKind;
@@ -139,11 +139,11 @@ pub(crate) fn assert_basic_thread_initialized_event(
     assert_eq!(event["event_params"]["thread_id"], thread_id);
     assert_eq!(
         event["event_params"]["app_server_client"]["product_client_id"],
-        DEFAULT_CLIENT_NAME
+        MCP_CLIENT_NAME
     );
     assert_eq!(
         event["event_params"]["app_server_client"]["client_name"],
-        DEFAULT_CLIENT_NAME
+        MCP_CLIENT_NAME
     );
     assert_eq!(
         event["event_params"]["app_server_client"]["rpc_transport"],

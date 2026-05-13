@@ -280,12 +280,7 @@ impl ChatWidget {
     }
 
     pub(super) fn configured_status_line_items(&self) -> Vec<String> {
-        self.config.tui_status_line.clone().unwrap_or_else(|| {
-            DEFAULT_STATUS_LINE_ITEMS
-                .iter()
-                .map(ToString::to_string)
-                .collect()
-        })
+        self.config.tui_status_line.clone().unwrap_or_default()
     }
 
     /// Parses configured terminal-title ids into known items and collects unknown ids.

@@ -30,14 +30,12 @@ use std::time::Duration;
 use std::time::Instant;
 
 use codex_backend_client::Client as BackendClient;
+use codex_config::types::Notifications;
+use codex_core::DEFAULT_PROJECT_DOC_FILENAME;
 use codex_core::config::Config;
 use codex_core::config::ConstraintResult;
-use codex_core::config::types::Notifications;
-use codex_core::features::Feature;
 use codex_core::git_info::current_branch_name;
 use codex_core::git_info::local_git_branches;
-use codex_core::models_manager::manager::ModelsManager;
-use codex_core::project_doc::DEFAULT_PROJECT_DOC_FILENAME;
 use codex_core::protocol::AgentMessageDeltaEvent;
 use codex_core::protocol::AgentMessageEvent;
 use codex_core::protocol::AgentReasoningDeltaEvent;
@@ -59,7 +57,6 @@ use codex_core::protocol::ExecCommandSource;
 use codex_core::protocol::ExitedReviewModeEvent;
 use codex_core::protocol::HookProcessBeginEvent;
 use codex_core::protocol::HookProcessEndEvent;
-use codex_core::protocol::ListCustomPromptsResponseEvent;
 use codex_core::protocol::ListSkillsResponseEvent;
 use codex_core::protocol::McpListToolsResponseEvent;
 use codex_core::protocol::McpStartupCompleteEvent;
@@ -69,6 +66,7 @@ use codex_core::protocol::McpToolCallEndEvent;
 use codex_core::protocol::Op;
 use codex_core::protocol::PatchApplyBeginEvent;
 use codex_core::protocol::RateLimitSnapshot;
+use codex_core::protocol::ReviewDecision;
 use codex_core::protocol::ReviewRequest;
 use codex_core::protocol::ReviewTarget;
 use codex_core::protocol::SkillsListEntry;
@@ -92,6 +90,8 @@ use codex_core::skills::model::SkillMetadata;
 use codex_core::skills::model::SkillToolDependency;
 #[cfg(target_os = "windows")]
 use codex_core::windows_sandbox::WindowsSandboxLevelExt;
+use codex_features::Feature;
+use codex_models_manager::manager::ModelsManager;
 use codex_protocol::ThreadId;
 use codex_protocol::account::PlanType;
 use codex_protocol::approvals::ElicitationRequestEvent;
@@ -191,12 +191,12 @@ use crate::version::CODEX_CLI_VERSION;
 use chrono::Local;
 use codex_common::approval_presets::ApprovalPreset;
 use codex_common::approval_presets::builtin_approval_presets;
-use codex_core::AuthManager;
-use codex_core::CodexAuth;
 use codex_core::ThreadManager;
 use codex_core::protocol::AskForApproval;
 use codex_core::protocol::SandboxPolicy;
 use codex_file_search::FileMatch;
+use codex_login::AuthManager;
+use codex_login::CodexAuth;
 use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::plan_tool::UpdatePlanArgs;
@@ -610,7 +610,12 @@ impl ChatWidget {
     /// Passing `None` clears any existing details.
     fn set_status(&mut self, header: String, details: Option<String>) {
         self.current_status_header = header.clone();
-        self.bottom_pane.update_status(header, details);
+        self.bottom_pane.update_status(
+            header,
+            details,
+            crate::status_indicator_widget::StatusDetailsCapitalization::Preserve,
+            1,
+        );
     }
 
     /// Convenience wrapper around [`Self::set_status`];
@@ -662,8 +667,6 @@ impl ChatWidget {
         if let Some(messages) = initial_messages {
             self.replay_initial_messages(messages);
         }
-        // Ask codex-core to enumerate custom prompts for this session.
-        self.submit_op(Op::ListCustomPrompts);
         self.submit_op(Op::ListSkills {
             cwds: Vec::new(),
             force_reload: true,
@@ -1792,11 +1795,31 @@ impl ChatWidget {
         self.session_stats.approvals_requested =
             self.session_stats.approvals_requested.saturating_add(1);
 
+        let mut available_decisions = ev
+            .available_decisions
+            .unwrap_or_else(|| vec![ReviewDecision::Approved, ReviewDecision::Abort]);
+        if let Some(proposed_execpolicy_amendment) = ev.proposed_execpolicy_amendment
+            && !available_decisions.iter().any(|decision| {
+                matches!(decision, ReviewDecision::ApprovedExecpolicyAmendment { .. })
+            })
+        {
+            available_decisions.insert(
+                1,
+                ReviewDecision::ApprovedExecpolicyAmendment {
+                    proposed_execpolicy_amendment,
+                },
+            );
+        }
+
         let request = ApprovalRequest::Exec {
+            thread_id: self.conversation_id.unwrap_or_default(),
+            thread_label: None,
             id,
             command: ev.command,
             reason: ev.reason,
-            proposed_execpolicy_amendment: ev.proposed_execpolicy_amendment,
+            available_decisions,
+            network_approval_context: ev.network_approval_context,
+            additional_permissions: ev.additional_permissions,
         };
         self.bottom_pane
             .push_approval_request(request, &self.config.features);
@@ -1816,7 +1839,7 @@ impl ChatWidget {
             id,
             reason: ev.reason,
             changes: ev.changes.clone(),
-            cwd: self.config.cwd.clone(),
+            cwd: self.config.cwd.to_path_buf(),
             diff_highlight: self.config.tui_transcript_diff_highlight,
             side_by_side: self.config.tui_transcript_side_by_side,
         };
@@ -1824,7 +1847,7 @@ impl ChatWidget {
             .push_approval_request(request, &self.config.features);
         self.request_redraw();
         self.notify(Notification::EditApprovalRequested {
-            cwd: self.config.cwd.clone(),
+            cwd: self.config.cwd.to_path_buf(),
             changes: ev.changes.keys().cloned().collect(),
         });
     }
@@ -1839,7 +1862,7 @@ impl ChatWidget {
         let request = ApprovalRequest::McpElicitation {
             server_name: ev.server_name,
             request_id: ev.id,
-            message: ev.message,
+            message: ev.request.message().to_string(),
         };
         self.bottom_pane
             .push_approval_request(request, &self.config.features);
@@ -2698,7 +2721,7 @@ impl ChatWidget {
                     // msg: EventMsg::ExecApprovalRequest(ExecApprovalRequestEvent {
                     //     call_id: "1".to_string(),
                     //     command: vec!["git".into(), "apply".into()],
-                    //     cwd: self.config.cwd.clone(),
+                    //     cwd: self.config.cwd.to_path_buf(),
                     //     reason: Some("test".to_string()),
                     // }),
                     msg: EventMsg::ApplyPatchApprovalRequest(ApplyPatchApprovalRequestEvent {
@@ -3400,7 +3423,7 @@ impl ChatWidget {
             for skill in skill_mentions {
                 items.push(UserInput::Skill {
                     name: skill.name.clone(),
-                    path: skill.path.clone(),
+                    path: skill.path_to_skills_md.clone(),
                 });
             }
         }
@@ -3417,12 +3440,14 @@ impl ChatWidget {
         self.codex_op_tx
             .send(Op::UserTurn {
                 items,
-                cwd: self.config.cwd.clone(),
+                cwd: self.config.cwd.to_path_buf(),
                 approval_policy: self.config.permissions.approval_policy.value(),
+                approvals_reviewer: None,
                 sandbox_policy: self.config.permissions.sandbox_policy.get().clone(),
                 model: effective_mode.model().to_string(),
                 effort: effective_mode.reasoning_effort(),
                 summary: self.config.model_reasoning_summary,
+                service_tier: Some(self.config.service_tier),
                 final_output_json_schema: None,
                 collaboration_mode,
                 personality: None,
@@ -3494,7 +3519,9 @@ impl ChatWidget {
 
         match msg {
             EventMsg::SessionConfigured(e) => self.on_session_configured(e),
-            EventMsg::AgentMessage(AgentMessageEvent { message }) => self.on_agent_message(message),
+            EventMsg::AgentMessage(AgentMessageEvent { message, .. }) => {
+                self.on_agent_message(message)
+            }
             EventMsg::AgentMessageDelta(AgentMessageDeltaEvent { delta }) => {
                 self.on_agent_message_delta(delta)
             }
@@ -3564,9 +3591,7 @@ impl ChatWidget {
             EventMsg::WebSearchEnd(ev) => self.on_web_search_end(ev),
             EventMsg::GetHistoryEntryResponse(ev) => self.on_get_history_entry_response(ev),
             EventMsg::McpListToolsResponse(ev) => self.on_list_mcp_tools(ev),
-            EventMsg::ListCustomPromptsResponse(ev) => self.on_list_custom_prompts(ev),
             EventMsg::ListSkillsResponse(ev) => self.on_list_skills(ev),
-            EventMsg::ListRemoteSkillsResponse(_) | EventMsg::RemoteSkillDownloaded(_) => {}
             EventMsg::SkillsUpdateAvailable => {
                 self.submit_op(Op::ListSkills {
                     cwds: Vec::new(),
@@ -3586,10 +3611,8 @@ impl ChatWidget {
                 additional_details,
                 ..
             }) => self.on_stream_error(message, additional_details),
-            EventMsg::UserMessage(ev) => {
-                if from_replay {
-                    self.on_user_message_event(ev);
-                }
+            EventMsg::UserMessage(ev) if from_replay => {
+                self.on_user_message_event(ev);
             }
             EventMsg::EnteredReviewMode(review_request) => {
                 self.on_entered_review_mode(review_request)
@@ -3628,6 +3651,7 @@ impl ChatWidget {
             | EventMsg::DynamicToolCallRequest(_)
             | EventMsg::ReasoningContentDelta(_)
             | EventMsg::ReasoningRawContentDelta(_) => {}
+            _ => {}
         }
     }
 
@@ -3680,7 +3704,7 @@ impl ChatWidget {
                     // Show explanation when there are no structured findings.
                     let mut rendered: Vec<ratatui::text::Line<'static>> =
                         vec![transcript_spacer_line()];
-                    append_markdown(&explanation, None, &mut rendered);
+                    append_markdown(&explanation, None, None, &mut rendered);
                     let body_cell = AgentMessageCell::new(rendered, false);
                     self.app_event_tx
                         .send(AppEvent::InsertHistoryCell(Box::new(body_cell)));
@@ -3754,7 +3778,7 @@ impl ChatWidget {
     }
 
     fn notify(&mut self, notification: Notification) {
-        if !notification.allowed_for(&self.config.tui_notifications) {
+        if !notification.allowed_for(&self.config.tui_notifications.notifications) {
             return;
         }
         self.pending_notification = Some(notification);
@@ -4153,11 +4177,13 @@ impl ChatWidget {
             .send(AppEvent::CodexOp(Op::OverrideTurnContext {
                 cwd: Some(path.clone()),
                 approval_policy: None,
+                approvals_reviewer: None,
                 sandbox_policy: None,
                 windows_sandbox_level: None,
                 model: None,
                 effort: None,
                 summary: None,
+                service_tier: None,
                 collaboration_mode: None,
                 personality: None,
             }));
@@ -4168,7 +4194,9 @@ impl ChatWidget {
     }
 
     pub(crate) fn set_session_cwd(&mut self, cwd: PathBuf) {
-        self.config.cwd = cwd.clone();
+        if let Ok(abs_cwd) = codex_utils_absolute_path::AbsolutePathBuf::from_absolute_path(&cwd) {
+            self.config.cwd = abs_cwd;
+        }
         self.refresh_status_bar_git_poller();
         xcodex_plugins::worktree::spawn_worktree_detection(self, false);
 
@@ -4270,11 +4298,13 @@ impl ChatWidget {
             tx.send(AppEvent::CodexOp(Op::OverrideTurnContext {
                 cwd: None,
                 approval_policy: None,
+                approvals_reviewer: None,
                 sandbox_policy: None,
                 windows_sandbox_level: None,
                 model: Some(switch_model.clone()),
                 effort: Some(Some(default_effort)),
                 summary: None,
+                service_tier: None,
                 collaboration_mode: None,
                 personality: None,
             }));
@@ -4505,11 +4535,13 @@ impl ChatWidget {
             tx.send(AppEvent::CodexOp(Op::OverrideTurnContext {
                 cwd: None,
                 approval_policy: None,
+                approvals_reviewer: None,
                 sandbox_policy: None,
                 windows_sandbox_level: None,
                 model: Some(model_for_action.clone()),
                 effort: Some(effort_for_action),
                 summary: None,
+                service_tier: None,
                 collaboration_mode: None,
                 personality: None,
             }));
@@ -4679,11 +4711,13 @@ impl ChatWidget {
             .send(AppEvent::CodexOp(Op::OverrideTurnContext {
                 cwd: None,
                 approval_policy: None,
+                approvals_reviewer: None,
                 sandbox_policy: None,
                 windows_sandbox_level: None,
                 model: Some(model.clone()),
                 effort: Some(effort),
                 summary: None,
+                service_tier: None,
                 collaboration_mode: None,
                 personality: None,
             }));
@@ -4831,11 +4865,13 @@ impl ChatWidget {
             tx.send(AppEvent::CodexOp(Op::OverrideTurnContext {
                 cwd: None,
                 approval_policy: Some(approval),
+                approvals_reviewer: None,
                 sandbox_policy: Some(sandbox_clone.clone()),
                 windows_sandbox_level: None,
                 model: None,
                 effort: None,
                 summary: None,
+                service_tier: None,
                 collaboration_mode: None,
                 personality: None,
             }));
@@ -5386,9 +5422,9 @@ impl ChatWidget {
     #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
     pub(crate) fn set_feature_enabled(&mut self, feature: Feature, enabled: bool) {
         if enabled {
-            self.config.features.enable(feature);
+            let _ = self.config.features.enable(feature);
         } else {
-            self.config.features.disable(feature);
+            let _ = self.config.features.disable(feature);
         }
         if feature == Feature::Steer {
             self.bottom_pane.set_steer_enabled(enabled);
@@ -5705,7 +5741,7 @@ impl ChatWidget {
             DEFAULT_MODEL_DISPLAY_NAME.to_string(),
             placeholder_style,
             None,
-            config.cwd.clone(),
+            config.cwd.to_path_buf(),
             CODEX_CLI_VERSION,
             config.permissions.approval_policy.value(),
             config.permissions.sandbox_policy.get().clone(),
@@ -6080,13 +6116,6 @@ impl ChatWidget {
         ));
     }
 
-    fn on_list_custom_prompts(&mut self, ev: ListCustomPromptsResponseEvent) {
-        let len = ev.custom_prompts.len();
-        debug!("received {len} custom prompts");
-        // Forward to bottom pane so the slash popup can show them now.
-        self.bottom_pane.set_custom_prompts(ev.custom_prompts);
-    }
-
     fn on_list_skills(&mut self, ev: ListSkillsResponseEvent) {
         self.set_skills_from_response(&ev);
     }
@@ -6098,7 +6127,7 @@ impl ChatWidget {
             name: "Review against a base branch".to_string(),
             description: Some("(PR Style)".into()),
             actions: vec![Box::new({
-                let cwd = self.config.cwd.clone();
+                let cwd = self.config.cwd.to_path_buf();
                 move |tx| {
                     tx.send(AppEvent::OpenReviewBranchPicker(cwd.clone()));
                 }
@@ -6125,7 +6154,7 @@ impl ChatWidget {
         items.push(SelectionItem {
             name: "Review a commit".to_string(),
             actions: vec![Box::new({
-                let cwd = self.config.cwd.clone();
+                let cwd = self.config.cwd.to_path_buf();
                 move |tx| {
                     tx.send(AppEvent::OpenReviewCommitPicker(cwd.clone()));
                 }
@@ -6571,7 +6600,7 @@ fn skills_for_cwd(cwd: &Path, skills_entries: &[SkillsListEntry]) -> Vec<SkillMe
                         }
                     }),
                     policy: None,
-                    path: skill.path.clone(),
+                    path_to_skills_md: skill.path.clone(),
                     scope: skill.scope,
                 })
                 .collect()

@@ -46,7 +46,7 @@ model_provider = "ollama"
     let CodexCliOutput { exit_code, output } = run_codex_cli(codex_home, cwd).await?;
     assert_ne!(0, exit_code, "Codex CLI should exit nonzero.");
     assert!(
-        output.contains("ERROR: Failed to initialize codex:"),
+        output.contains("Error loading rules:"),
         "expected startup error in output, got: {output}"
     );
     assert!(

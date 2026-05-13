@@ -268,6 +268,65 @@ url = "{mcp_server_url}/mcp"
 }
 
 #[tokio::test]
+async fn mcp_server_status_lazy_does_not_start_server_for_inventory() -> Result<()> {
+    let server = create_mock_responses_server_sequence_unchecked(Vec::new()).await;
+    let (mcp_server_url, mcp_server_handle) = start_slow_inventory_mcp_server("lookup").await?;
+    let codex_home = TempDir::new()?;
+    write_mock_responses_config_toml(
+        codex_home.path(),
+        &server.uri(),
+        &BTreeMap::new(),
+        /*auto_compact_limit*/ 1024,
+        /*requires_openai_auth*/ None,
+        "mock_provider",
+        "compact",
+    )?;
+
+    let config_path = codex_home.path().join("config.toml");
+    let mut config_toml = std::fs::read_to_string(&config_path)?;
+    config_toml.push_str(&format!(
+        r#"
+[mcp_servers]
+startup_mode = "lazy"
+
+[mcp_servers.some-server]
+url = "{mcp_server_url}/mcp"
+"#
+    ));
+    std::fs::write(config_path, config_toml)?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let request_id = mcp
+        .send_list_mcp_server_status_request(ListMcpServerStatusParams {
+            cursor: None,
+            limit: None,
+            detail: Some(McpServerStatusDetail::ToolsAndAuthOnly),
+        })
+        .await?;
+    let response = timeout(
+        Duration::from_millis(500),
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    let response: ListMcpServerStatusResponse = to_response(response)?;
+
+    assert_eq!(response.next_cursor, None);
+    assert_eq!(response.data.len(), 1);
+    let status = &response.data[0];
+    assert_eq!(status.name, "some-server");
+    assert!(status.tools.is_empty());
+    assert_eq!(status.resources, Vec::new());
+    assert_eq!(status.resource_templates, Vec::new());
+
+    mcp_server_handle.abort();
+    let _ = mcp_server_handle.await;
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn mcp_server_status_list_keeps_tools_for_sanitized_name_collisions() -> Result<()> {
     let server = create_mock_responses_server_sequence_unchecked(Vec::new()).await;
     let (dash_server_url, dash_server_handle) = start_mcp_server("dash_lookup").await?;

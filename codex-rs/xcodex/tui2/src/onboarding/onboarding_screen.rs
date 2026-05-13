@@ -1,6 +1,6 @@
-use codex_core::AuthManager;
 use codex_core::config::Config;
 use codex_core::git_info::get_git_repo_root;
+use codex_login::AuthManager;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyEventKind;
@@ -118,7 +118,7 @@ impl OnboardingScreen {
         };
         if show_trust_screen {
             steps.push(Step::TrustDirectory(TrustDirectoryWidget {
-                cwd,
+                cwd: cwd.to_path_buf(),
                 codex_home,
                 is_git_repo,
                 selection: None,

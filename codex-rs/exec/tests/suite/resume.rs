@@ -5,6 +5,7 @@ use core_test_support::test_codex_exec::test_codex_exec;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
 use std::string::ToString;
+use std::time::Duration;
 use tempfile::TempDir;
 use uuid::Uuid;
 use walkdir::WalkDir;
@@ -247,14 +248,14 @@ fn exec_resume_last_respects_cwd_filter_and_all_flag() -> anyhow::Result<()> {
         .success();
 
     let sessions_dir = test.home_path().join("sessions");
-    find_session_file_containing_marker(&sessions_dir, &marker_a)
+    let path_a = find_session_file_containing_marker(&sessions_dir, &marker_a)
         .expect("no session file found for marker_a");
     let path_b = find_session_file_containing_marker(&sessions_dir, &marker_b)
         .expect("no session file found for marker_b");
 
     // `updated_at` is second-granularity, so ensure the touch lands in a later second
     // than the initial session creation on fast CI (especially Windows).
-    std::thread::sleep(std::time::Duration::from_millis(1100));
+    std::thread::sleep(Duration::from_millis(1100));
 
     // Make thread B deterministically newest according to rollout metadata.
     let session_id_b = extract_conversation_id(&path_b);
@@ -274,7 +275,7 @@ fn exec_resume_last_respects_cwd_filter_and_all_flag() -> anyhow::Result<()> {
     // `resume --last` sorts by `updated_at`, which is second-granularity. Sleep so
     // the upcoming `resume --last --all` write lands in a later second and becomes
     // deterministically newest (instead of tying and falling back to UUID order).
-    std::thread::sleep(std::time::Duration::from_millis(1100));
+    std::thread::sleep(Duration::from_millis(1100));
 
     let marker_a2 = format!("resume-cwd-a-2-{}", Uuid::new_v4());
     let prompt_a2 = format!("echo {marker_a2}");
@@ -298,15 +299,21 @@ fn exec_resume_last_respects_cwd_filter_and_all_flag() -> anyhow::Result<()> {
     );
 
     // `--all` can update the resumed thread's cwd metadata to the current cwd, so
-    // run the cwd-filtered case first. Then reset mtimes before asserting `--all`.
-    let file_a = OpenOptions::new().write(true).open(&path_a)?;
-    file_a.set_times(
-        FileTimes::new().set_modified(SystemTime::UNIX_EPOCH + Duration::from_secs(1)),
-    )?;
-    let file_b = OpenOptions::new().write(true).open(&path_b)?;
-    file_b.set_times(
-        FileTimes::new().set_modified(SystemTime::UNIX_EPOCH + Duration::from_secs(2)),
-    )?;
+    // run the cwd-filtered case first. Then make thread B newest through the same
+    // resume path that updates rollout/state metadata.
+    std::thread::sleep(Duration::from_millis(1100));
+    let marker_b_retouch = format!("resume-cwd-b-retouch-{}", Uuid::new_v4());
+    let prompt_b_retouch = format!("echo {marker_b_retouch}");
+    test.cmd()
+        .env("CODEX_RS_SSE_FIXTURE", &fixture)
+        .arg("--skip-git-repo-check")
+        .arg("-C")
+        .arg(dir_b.path())
+        .arg("resume")
+        .arg(&session_id_b)
+        .arg(&prompt_b_retouch)
+        .assert()
+        .success();
 
     let marker_b2 = format!("resume-cwd-b-2-{}", Uuid::new_v4());
     let prompt_b2 = format!("echo {marker_b2}");

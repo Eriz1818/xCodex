@@ -650,6 +650,7 @@ async fn tool_search_indexes_only_enabled_non_app_mcp_tools() -> Result<()> {
                     scopes: None,
                     oauth_resource: None,
                     tools: HashMap::new(),
+                    startup_mode: None,
                 },
             );
             config

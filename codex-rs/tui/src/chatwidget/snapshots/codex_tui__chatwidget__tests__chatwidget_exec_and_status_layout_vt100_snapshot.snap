@@ -1,6 +1,7 @@
 ---
-source: tui/src/chatwidget/tests.rs
-expression: term.backend().vt100().screen().contents()
+source: tui/src/chatwidget/tests/status_and_layout.rs
+assertion_line: 2109
+expression: normalize_snapshot_paths(term.backend().vt100().screen().contents())
 ---
 
 
@@ -31,14 +32,14 @@ expression: term.backend().vt100().screen().contents()
 
 • I’m going to search the repo for where “Change Approved” is rendered to update
   that view.
- 
+
 • Explored
   └ Search Change Approved
     Read diff_render.rs
- 
+
 • Charging (0s • esc to interrupt)
- 
- 
+
+
 › Summarize recent commits
- 
-  tab to queue message                                       100% context left
+
+  tab to queue message · gpt-5.3-codex                       100% context left

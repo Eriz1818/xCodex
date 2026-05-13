@@ -1,12 +1,23 @@
 ---
 source: tui/src/chatwidget/tests/slash_commands.rs
+assertion_line: 849
 expression: normalize_snapshot_paths(term.backend().vt100().screen().contents())
 ---
-• Working (0s • esc to interrupt)
+
+
+
+
+
+
+
+
+
+
+• Charging (0s • esc to interrupt)
 
 • Messages to be submitted at end of turn
   ↳ Steer submitted while /compact was running.
 
-› Ask Codex to do anything
+› Ask xcodex to do anything
 
-  gpt-5.3-codex default · /tmp/project
+  ? for shortcuts · gpt-5.3-codex                            100% context left

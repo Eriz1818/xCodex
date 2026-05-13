@@ -41,6 +41,10 @@ impl McpStartupState {
         self.status.as_ref()
     }
 
+    pub(crate) fn set_status_for_replay(&mut self, status: HashMap<String, McpStartupStatus>) {
+        self.status = Some(status);
+    }
+
     pub(crate) fn ready_duration(&self) -> Option<Duration> {
         self.ready_duration
     }

@@ -15,3 +15,9 @@ filegroup(
     ]),
     visibility = ["//visibility:public"],
 )
+
+filegroup(
+    name = "snapshots",
+    srcs = glob(["snapshots/**"]),
+    visibility = ["//visibility:public"],
+)

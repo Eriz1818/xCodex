@@ -440,13 +440,15 @@ pub(crate) fn feedback_success_cell(
     _feedback_audience: FeedbackAudience,
 ) -> history_cell::PlainHistoryCell {
     let mut lines = vec![Line::from(if include_logs {
-        "• Feedback uploaded."
+        "• Feedback saved locally (no network upload)."
     } else {
-        "• Feedback recorded (no logs)."
+        "• Feedback saved locally (no network upload, no logs)."
     })];
     lines.extend([
         "".into(),
         Line::from(vec!["  Thread ID: ".into(), thread_id.to_string().bold()]),
+        "".into(),
+        Line::from("  Attach these files when filing an issue in your fork.".dim()),
     ]);
     history_cell::PlainHistoryCell::new(lines)
 }
@@ -810,7 +812,10 @@ mod tests {
             ),
             /*width*/ 120,
         );
-        assert_eq!(rendered, "• Feedback uploaded.\n\n  Thread ID: thread-2");
+        assert_eq!(
+            rendered,
+            "• Feedback saved locally (no network upload).\n\n  Thread ID: thread-2\n\n  Attach these files when filing an issue in your fork."
+        );
     }
 
     #[test]
@@ -826,7 +831,7 @@ mod tests {
         );
         assert_eq!(
             rendered,
-            "• Feedback recorded (no logs).\n\n  Thread ID: thread-3"
+            "• Feedback saved locally (no network upload, no logs).\n\n  Thread ID: thread-3\n\n  Attach these files when filing an issue in your fork."
         );
     }
 }

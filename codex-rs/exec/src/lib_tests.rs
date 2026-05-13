@@ -1,4 +1,6 @@
 use super::*;
+use codex_app_server_protocol::McpServerElicitationAction;
+use codex_app_server_protocol::McpServerElicitationRequestResponse;
 use codex_otel::set_parent_from_w3c_trace_context;
 use codex_protocol::config_types::ApprovalsReviewer;
 use opentelemetry::trace::TraceContextExt;

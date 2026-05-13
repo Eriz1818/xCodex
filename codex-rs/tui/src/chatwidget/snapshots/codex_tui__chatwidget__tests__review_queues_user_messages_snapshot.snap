@@ -1,7 +1,18 @@
 ---
 source: tui/src/chatwidget/tests/review_mode.rs
+assertion_line: 1464
 expression: normalize_snapshot_paths(term.backend().vt100().screen().contents())
 ---
+
+
+
+
+
+
+
+
+
+
 • Charging (0s • esc to interrupt)
 
 • Messages to be submitted at end of turn
@@ -9,4 +20,4 @@ expression: normalize_snapshot_paths(term.backend().vt100().screen().contents())
 
 › Ask xcodex to do anything
 
-  gpt-5.3-codex default · /tmp/project
+  ? for shortcuts · gpt-5.3-codex                            100% context left

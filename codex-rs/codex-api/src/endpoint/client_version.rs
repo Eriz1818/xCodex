@@ -1,8 +1,10 @@
 use codex_client::Request;
+use http::HeaderMap;
 use http::HeaderValue;
 use http::header::HeaderName;
+use url::Url;
 
-pub(crate) const UPSTREAM_CODEX_CLIENT_VERSION: &str = "0.98.0";
+pub(crate) const UPSTREAM_CODEX_CLIENT_VERSION: &str = "0.130.0";
 
 pub(crate) fn append_client_version_query(req: &mut Request, client_version: &str) {
     let separator = if req.url.contains('?') { '&' } else { '?' };
@@ -25,12 +27,34 @@ pub(crate) fn set_upstream_version_header_for_openai_or_chatgpt(req: &mut Reques
     }
 }
 
+pub(crate) fn append_upstream_client_version_to_url_for_openai_or_chatgpt(
+    url: &mut Url,
+    base_url: &str,
+) {
+    if should_pin_upstream_client_version(base_url) {
+        url.query_pairs_mut()
+            .append_pair("client_version", UPSTREAM_CODEX_CLIENT_VERSION);
+    }
+}
+
+pub(crate) fn set_upstream_version_header_map_for_openai_or_chatgpt(
+    headers: &mut HeaderMap,
+    base_url: &str,
+) {
+    if should_pin_upstream_client_version(base_url) {
+        set_version_header_map(headers, UPSTREAM_CODEX_CLIENT_VERSION);
+    }
+}
+
 pub(crate) fn set_version_header(req: &mut Request, version: &str) {
+    set_version_header_map(&mut req.headers, version);
+}
+
+fn set_version_header_map(headers: &mut HeaderMap, version: &str) {
     let Ok(value) = HeaderValue::from_str(version) else {
         return;
     };
-    req.headers
-        .insert(HeaderName::from_static("version"), value);
+    headers.insert(HeaderName::from_static("version"), value);
 }
 
 fn should_pin_upstream_client_version(base_url: &str) -> bool {
@@ -54,7 +78,9 @@ fn should_pin_upstream_client_version(base_url: &str) -> bool {
 mod tests {
     use super::UPSTREAM_CODEX_CLIENT_VERSION;
     use super::append_upstream_client_version_for_openai_or_chatgpt;
+    use super::append_upstream_client_version_to_url_for_openai_or_chatgpt;
     use super::set_upstream_version_header_for_openai_or_chatgpt;
+    use super::set_upstream_version_header_map_for_openai_or_chatgpt;
     use super::set_version_header;
     use codex_client::Request;
     use codex_client::RequestCompression;
@@ -135,5 +161,31 @@ mod tests {
         let mut req = request("http://127.0.0.1:1234/v1/responses");
         set_upstream_version_header_for_openai_or_chatgpt(&mut req, "http://127.0.0.1:1234/v1");
         assert_eq!(req.headers.get("version"), None);
+    }
+
+    #[test]
+    fn appends_query_and_header_to_websocket_request_parts_for_chatgpt_backend() {
+        let mut url = url::Url::parse("wss://chatgpt.com/backend-api/codex/responses").unwrap();
+        let mut headers = HeaderMap::new();
+
+        append_upstream_client_version_to_url_for_openai_or_chatgpt(
+            &mut url,
+            "https://chatgpt.com/backend-api/codex",
+        );
+        set_upstream_version_header_map_for_openai_or_chatgpt(
+            &mut headers,
+            "https://chatgpt.com/backend-api/codex",
+        );
+
+        assert_eq!(
+            url.as_str(),
+            format!(
+                "wss://chatgpt.com/backend-api/codex/responses?client_version={UPSTREAM_CODEX_CLIENT_VERSION}"
+            )
+        );
+        assert_eq!(
+            headers.get("version").and_then(|value| value.to_str().ok()),
+            Some(UPSTREAM_CODEX_CLIENT_VERSION)
+        );
     }
 }

@@ -525,11 +525,9 @@ impl ThemePreviewOverlay {
                     }
                     tui.frame_requester().schedule_frame();
                 }
-                TuiEvent::Key(key) => {
-                    if save.stage == SaveStage::Editing {
-                        apply_text_edit(&mut save.name, &mut save.cursor, key);
-                        tui.frame_requester().schedule_frame();
-                    }
+                TuiEvent::Key(key) if save.stage == SaveStage::Editing => {
+                    apply_text_edit(&mut save.name, &mut save.cursor, key);
+                    tui.frame_requester().schedule_frame();
                 }
                 _ => {}
             }
@@ -571,15 +569,13 @@ impl ThemePreviewOverlay {
                     code: KeyCode::Char('d' | 'D'),
                     kind: KeyEventKind::Press,
                     ..
-                }) => {
-                    if is_optional_role_key(picker.key) {
-                        picker.derived = !picker.derived;
-                        if picker.derived {
-                            picker.inherit = false;
-                        }
-                        apply_live = true;
-                        tui.frame_requester().schedule_frame();
+                }) if is_optional_role_key(picker.key) => {
+                    picker.derived = !picker.derived;
+                    if picker.derived {
+                        picker.inherit = false;
                     }
+                    apply_live = true;
+                    tui.frame_requester().schedule_frame();
                 }
                 TuiEvent::Key(KeyEvent {
                     code: KeyCode::Up,
@@ -611,37 +607,33 @@ impl ThemePreviewOverlay {
                     code: KeyCode::Left,
                     kind: KeyEventKind::Press | KeyEventKind::Repeat,
                     ..
-                }) => {
-                    if !picker.inherit && !picker.derived {
-                        match picker.focus {
-                            ColorPickerFocus::R => picker.r = picker.r.saturating_sub(1),
-                            ColorPickerFocus::G => picker.g = picker.g.saturating_sub(1),
-                            ColorPickerFocus::B => picker.b = picker.b.saturating_sub(1),
-                            ColorPickerFocus::Hex => {}
-                        }
-                        Self::sync_picker_rgb_text_from_rgb(picker);
-                        Self::sync_picker_hex_from_rgb(picker);
-                        apply_live = true;
-                        tui.frame_requester().schedule_frame();
+                }) if !picker.inherit && !picker.derived => {
+                    match picker.focus {
+                        ColorPickerFocus::R => picker.r = picker.r.saturating_sub(1),
+                        ColorPickerFocus::G => picker.g = picker.g.saturating_sub(1),
+                        ColorPickerFocus::B => picker.b = picker.b.saturating_sub(1),
+                        ColorPickerFocus::Hex => {}
                     }
+                    Self::sync_picker_rgb_text_from_rgb(picker);
+                    Self::sync_picker_hex_from_rgb(picker);
+                    apply_live = true;
+                    tui.frame_requester().schedule_frame();
                 }
                 TuiEvent::Key(KeyEvent {
                     code: KeyCode::Right,
                     kind: KeyEventKind::Press | KeyEventKind::Repeat,
                     ..
-                }) => {
-                    if !picker.inherit && !picker.derived {
-                        match picker.focus {
-                            ColorPickerFocus::R => picker.r = picker.r.saturating_add(1),
-                            ColorPickerFocus::G => picker.g = picker.g.saturating_add(1),
-                            ColorPickerFocus::B => picker.b = picker.b.saturating_add(1),
-                            ColorPickerFocus::Hex => {}
-                        }
-                        Self::sync_picker_rgb_text_from_rgb(picker);
-                        Self::sync_picker_hex_from_rgb(picker);
-                        apply_live = true;
-                        tui.frame_requester().schedule_frame();
+                }) if !picker.inherit && !picker.derived => {
+                    match picker.focus {
+                        ColorPickerFocus::R => picker.r = picker.r.saturating_add(1),
+                        ColorPickerFocus::G => picker.g = picker.g.saturating_add(1),
+                        ColorPickerFocus::B => picker.b = picker.b.saturating_add(1),
+                        ColorPickerFocus::Hex => {}
                     }
+                    Self::sync_picker_rgb_text_from_rgb(picker);
+                    Self::sync_picker_hex_from_rgb(picker);
+                    apply_live = true;
+                    tui.frame_requester().schedule_frame();
                 }
                 TuiEvent::Key(key) => {
                     if picker.focus == ColorPickerFocus::Hex
@@ -2392,9 +2384,12 @@ mod tests {
             Arc::new(new_patch_event(apply_changes, &cwd, false, false));
         cells.push(apply_begin_cell);
 
-        let apply_end_cell: Arc<dyn HistoryCell> =
-            history_cell::new_approval_decision_cell(vec!["ls".into()], ReviewDecision::Approved)
-                .into();
+        let apply_end_cell: Arc<dyn HistoryCell> = history_cell::new_approval_decision_cell(
+            vec!["ls".into()],
+            ReviewDecision::Approved,
+            history_cell::ApprovalDecisionActor::User,
+        )
+        .into();
         cells.push(apply_end_cell);
 
         let mut exec_cell = crate::exec_cell::new_active_exec_command(

@@ -1,6 +1,10 @@
 @echo off
 setlocal EnableExtensions EnableDelayedExpansion
 
+if exist "%~f0.runfiles_manifest" set "RUNFILES_MANIFEST_FILE=%~f0.runfiles_manifest"
+if exist "%~dpn0.runfiles_manifest" set "RUNFILES_MANIFEST_FILE=%~dpn0.runfiles_manifest"
+if exist "%~f0.exe.runfiles_manifest" set "RUNFILES_MANIFEST_FILE=%~f0.exe.runfiles_manifest"
+
 call :resolve_runfile workspace_root_marker "__WORKSPACE_ROOT_MARKER__"
 if errorlevel 1 exit /b 1
 
@@ -23,18 +27,6 @@ if defined TEST_WORKSPACE set "workspace_logical_path=%TEST_WORKSPACE%/%logical_
 set "native_logical_path=%logical_path:/=\%"
 set "native_workspace_logical_path=%workspace_logical_path:/=\%"
 
-for %%R in ("%RUNFILES_DIR%" "%TEST_SRCDIR%") do (
-  set "runfiles_root=%%~R"
-  if defined runfiles_root (
-    if exist "!runfiles_root!\!native_logical_path!" (
-      endlocal & set "%~1=!runfiles_root!\!native_logical_path!" & exit /b 0
-    )
-    if exist "!runfiles_root!\!native_workspace_logical_path!" (
-      endlocal & set "%~1=!runfiles_root!\!native_workspace_logical_path!" & exit /b 0
-    )
-  )
-)
-
 set "manifest=%RUNFILES_MANIFEST_FILE%"
 if not defined manifest if exist "%~f0.runfiles_manifest" set "manifest=%~f0.runfiles_manifest"
 if not defined manifest if exist "%~dpn0.runfiles_manifest" set "manifest=%~dpn0.runfiles_manifest"
@@ -51,6 +43,18 @@ if defined manifest if exist "%manifest%" (
     )
     if "%%A"=="%workspace_logical_path%" (
       endlocal & set "%~1=%%B" & exit /b 0
+    )
+  )
+)
+
+for %%R in ("%RUNFILES_DIR%" "%TEST_SRCDIR%") do (
+  set "runfiles_root=%%~R"
+  if defined runfiles_root (
+    if exist "!runfiles_root!\!native_logical_path!" (
+      endlocal & set "%~1=!runfiles_root!\!native_logical_path!" & exit /b 0
+    )
+    if exist "!runfiles_root!\!native_workspace_logical_path!" (
+      endlocal & set "%~1=!runfiles_root!\!native_workspace_logical_path!" & exit /b 0
     )
   )
 )

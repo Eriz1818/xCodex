@@ -24,8 +24,8 @@ use crate::render::renderable::RenderableItem;
 use crate::tui::FrameRequester;
 pub(crate) use bottom_pane_view::BottomPaneView;
 pub(crate) use bottom_pane_view::BottomPaneViewKind;
-use codex_core::features::Features;
 use codex_core::skills::model::SkillMetadata;
+use codex_features::Features;
 use codex_file_search::FileMatch;
 use codex_protocol::request_user_input::RequestUserInputEvent;
 use crossterm::event::KeyCode;
@@ -111,9 +111,9 @@ pub(crate) enum CancellationEvent {
     NotHandled,
 }
 
+use crate::custom_prompts::CustomPrompt;
 pub(crate) use chat_composer::ChatComposer;
 pub(crate) use chat_composer::InputResult;
-use codex_protocol::custom_prompts::CustomPrompt;
 
 use crate::status_indicator_widget::StatusIndicatorWidget;
 pub(crate) use list_selection_view::SelectionAction;
@@ -493,12 +493,29 @@ impl BottomPane {
     /// Update the status indicator header (defaults to "Working") and details below it.
     ///
     /// Passing `None` clears any existing details. No-ops if the status indicator is not active.
-    pub(crate) fn update_status(&mut self, header: String, details: Option<String>) {
+    pub(crate) fn update_status(
+        &mut self,
+        header: String,
+        details: Option<String>,
+        _capitalization: crate::status_indicator_widget::StatusDetailsCapitalization,
+        _min_lines: u16,
+    ) {
         if let Some(status) = self.status.as_mut() {
             status.update_header(header);
             status.update_details(details);
             self.request_redraw();
         }
+    }
+
+    pub(crate) fn set_footer_status_options(
+        &mut self,
+        _show_model: bool,
+        show_branch: bool,
+        show_worktree: bool,
+    ) {
+        self.composer
+            .set_status_bar_git_options(show_branch, show_worktree);
+        self.request_redraw();
     }
 
     pub(crate) fn set_mcp_startup_banner(&mut self, message: Option<String>) {
@@ -1029,10 +1046,17 @@ mod tests {
 
     fn exec_request() -> ApprovalRequest {
         ApprovalRequest::Exec {
+            thread_id: codex_protocol::ThreadId::new(),
+            thread_label: None,
             id: "1".to_string(),
             command: vec!["echo".into(), "ok".into()],
             reason: None,
-            proposed_execpolicy_amendment: None,
+            available_decisions: vec![
+                codex_core::protocol::ReviewDecision::Approved,
+                codex_core::protocol::ReviewDecision::Abort,
+            ],
+            network_approval_context: None,
+            additional_permissions: None,
         }
     }
 
@@ -1275,6 +1299,8 @@ mod tests {
         pane.update_status(
             "Working".to_string(),
             Some("First detail line\nSecond detail line".to_string()),
+            crate::status_indicator_widget::StatusDetailsCapitalization::Preserve,
+            1,
         );
         pane.set_queued_user_messages(vec!["Queued follow-up question".to_string()]);
 

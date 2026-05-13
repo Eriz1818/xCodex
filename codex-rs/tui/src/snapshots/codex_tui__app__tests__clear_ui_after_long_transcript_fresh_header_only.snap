@@ -1,9 +1,10 @@
 ---
 source: tui/src/app.rs
+assertion_line: 9716
 expression: rendered
 ---
 ╭─────────────────────────────────────────────╮
-│ >_ OpenAI Codex (v<VERSION>)                │
+│ >_ xcodex (v<VERSION>)                      │
 │                                             │
 │ model:     gpt-test high   /model to change │
 │ directory: /tmp/project                     │

@@ -58,7 +58,7 @@ pub enum SlashCommand {
     Rollout,
     Ps,
     PsKill,
-    #[strum(serialize = "clean")]
+    #[strum(serialize = "stop", serialize = "clean")]
     Stop,
     #[strum(disabled)]
     Clean,
@@ -136,7 +136,10 @@ impl SlashCommand {
     /// Command string without the leading '/'. Provided for compatibility with
     /// existing code that expects a method named `command()`.
     pub fn command(self) -> &'static str {
-        self.into()
+        match self {
+            SlashCommand::Stop => "stop",
+            _ => self.into(),
+        }
     }
 
     /// Whether this command supports inline args (for example `/review ...`).
@@ -148,6 +151,8 @@ impl SlashCommand {
                 | SlashCommand::Plan
                 | SlashCommand::Theme
                 | SlashCommand::Worktree
+                | SlashCommand::Settings
+                | SlashCommand::Autocompact
                 | SlashCommand::Fast
                 | SlashCommand::Resume
                 | SlashCommand::SandboxReadRoot

@@ -52,6 +52,158 @@ async fn slash_compact_eagerly_queues_follow_up_before_turn_start() {
 }
 
 #[tokio::test]
+async fn slash_autocompact_with_args_controls_persistent_setting() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.auto_compact_enabled = false;
+
+    chat.dispatch_command_with_args(SlashCommand::Autocompact, "on".to_string(), Vec::new());
+
+    assert!(chat.auto_compact_enabled);
+    let events = std::iter::from_fn(|| rx.try_recv().ok()).collect::<Vec<_>>();
+    assert!(
+        events.iter().any(|event| matches!(
+            event,
+            AppEvent::CodexOp(Op::SetAutoCompact { enabled: true })
+        )),
+        "expected /autocompact on to persist enabled state"
+    );
+}
+
+#[tokio::test]
+async fn slash_autocompact_status_does_not_toggle() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.auto_compact_enabled = true;
+
+    chat.dispatch_command_with_args(SlashCommand::Autocompact, "status".to_string(), Vec::new());
+
+    assert!(chat.auto_compact_enabled);
+    let events = std::iter::from_fn(|| rx.try_recv().ok()).collect::<Vec<_>>();
+    assert!(
+        events
+            .iter()
+            .all(|event| !matches!(event, AppEvent::CodexOp(Op::SetAutoCompact { .. }))),
+        "status should report only, not persist a changed setting"
+    );
+    let rendered = events
+        .into_iter()
+        .filter_map(|event| match event {
+            AppEvent::InsertHistoryCell(cell) => {
+                Some(lines_to_single_string(&cell.display_lines(/*width*/ 80)))
+            }
+            _ => None,
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        rendered.contains("Auto-compact is currently enabled."),
+        "expected status message, got:\n{rendered}"
+    );
+}
+
+#[tokio::test]
+async fn slash_thoughts_with_args_controls_persistent_setting() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_hide_agent_reasoning(false);
+
+    submit_composer_text(&mut chat, "/thoughts off");
+
+    assert!(chat.hide_agent_reasoning());
+    let events = std::iter::from_fn(|| rx.try_recv().ok()).collect::<Vec<_>>();
+    assert!(
+        events
+            .iter()
+            .any(|event| matches!(event, AppEvent::UpdateHideAgentReasoning(true))),
+        "expected /thoughts off to update in-memory visibility"
+    );
+    assert!(
+        events
+            .iter()
+            .any(|event| matches!(event, AppEvent::PersistHideAgentReasoning(true))),
+        "expected /thoughts off to persist visibility"
+    );
+    let rendered = events
+        .into_iter()
+        .filter_map(|event| match event {
+            AppEvent::InsertHistoryCell(cell) => {
+                Some(lines_to_single_string(&cell.display_lines(/*width*/ 80)))
+            }
+            _ => None,
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        rendered.contains("Thoughts hidden."),
+        "expected thoughts hidden message, got:\n{rendered}"
+    );
+}
+
+#[tokio::test]
+async fn slash_thoughts_status_does_not_toggle() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_hide_agent_reasoning(true);
+
+    submit_composer_text(&mut chat, "/thoughts status");
+
+    assert!(chat.hide_agent_reasoning());
+    let events = std::iter::from_fn(|| rx.try_recv().ok()).collect::<Vec<_>>();
+    assert!(
+        events
+            .iter()
+            .all(|event| !matches!(event, AppEvent::UpdateHideAgentReasoning(_))),
+        "status should report only, not update visibility"
+    );
+    assert!(
+        events
+            .iter()
+            .all(|event| !matches!(event, AppEvent::PersistHideAgentReasoning(_))),
+        "status should report only, not persist visibility"
+    );
+    let rendered = events
+        .into_iter()
+        .filter_map(|event| match event {
+            AppEvent::InsertHistoryCell(cell) => {
+                Some(lines_to_single_string(&cell.display_lines(/*width*/ 80)))
+            }
+            _ => None,
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        rendered.contains("Thoughts are currently hidden."),
+        "expected thoughts status message, got:\n{rendered}"
+    );
+}
+
+#[tokio::test]
+async fn hidden_thoughts_do_not_render_reasoning_transcript() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_hide_agent_reasoning(true);
+
+    chat.handle_codex_event(Event {
+        id: "reasoning-delta".to_string(),
+        msg: EventMsg::AgentReasoningDelta(AgentReasoningDeltaEvent {
+            delta: "I will inspect the code.".to_string(),
+        }),
+    });
+    chat.handle_codex_event(Event {
+        id: "reasoning-final".to_string(),
+        msg: EventMsg::AgentReasoning(AgentReasoningEvent {
+            text: "I will inspect the code.".to_string(),
+        }),
+    });
+
+    let rendered = drain_insert_history(&mut rx)
+        .into_iter()
+        .map(|lines| lines_to_single_string(&lines))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        !rendered.contains("I will inspect the code."),
+        "hidden thoughts should not render reasoning transcript, got:\n{rendered}"
+    );
+}
+
+#[tokio::test]
 async fn ctrl_d_quits_without_prompt() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
 
@@ -311,6 +463,45 @@ async fn ctrl_alt_o_opens_xtreme_tools_panel() {
 }
 
 #[tokio::test]
+async fn slash_xtreme_opens_xtreme_tools_panel() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    chat.bottom_pane
+        .set_composer_text("/xtreme".to_string(), Vec::new(), Vec::new());
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+    assert!(chat.bottom_pane.has_active_view());
+}
+
+#[tokio::test]
+async fn slash_theme_opens_xcodex_theme_selector() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    chat.dispatch_command(SlashCommand::Theme);
+
+    assert_matches!(rx.try_recv(), Ok(AppEvent::OpenThemeSelector));
+}
+
+#[tokio::test]
+async fn slash_hooks_renders_help_without_redispatching() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    chat.dispatch_command(SlashCommand::Hooks);
+
+    let cells = drain_insert_history(&mut rx);
+    assert_eq!(cells.len(), 1, "expected one hooks help cell");
+    let rendered = lines_to_single_string(&cells[0]);
+    assert!(
+        rendered.contains("xcodex hooks init"),
+        "expected hooks help output, got {rendered:?}"
+    );
+    assert!(
+        rendered.contains("Automation hooks run external programs on lifecycle events"),
+        "expected xcodex hooks branding, got {rendered:?}"
+    );
+}
+
+#[tokio::test]
 async fn slash_copy_stores_clipboard_lease_and_preserves_it_on_failure() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.last_agent_markdown = Some("copy me".to_string());
@@ -481,6 +672,56 @@ async fn slash_stop_submits_background_terminal_cleanup() {
     assert!(
         rendered.contains("Stopping all background terminals."),
         "expected cleanup confirmation, got {rendered:?}"
+    );
+}
+
+#[tokio::test]
+async fn slash_ps_kill_reports_empty_background_terminal_list() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    chat.dispatch_command(SlashCommand::PsKill);
+
+    let cells = drain_insert_history(&mut rx);
+    assert_eq!(cells.len(), 1, "expected no-process info message");
+    let rendered = lines_to_single_string(&cells[0]);
+    assert!(
+        rendered.contains("No background terminals running."),
+        "expected no-process message, got {rendered:?}"
+    );
+}
+
+#[tokio::test]
+async fn slash_ps_kill_can_terminate_a_selected_background_terminal() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    begin_unified_exec_startup(&mut chat, "call-1", "process-1", "sleep 5");
+    let _ = drain_insert_history(&mut rx);
+
+    chat.dispatch_command(SlashCommand::PsKill);
+    chat.handle_key_event(KeyEvent::from(KeyCode::Down));
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+
+    let events = std::iter::from_fn(|| rx.try_recv().ok()).collect::<Vec<_>>();
+    assert!(
+        events.iter().any(|event| matches!(
+            event,
+            AppEvent::CodexOp(Op::TerminateUnifiedExecSession { process_id })
+                if process_id == "process-1"
+        )),
+        "expected per-process termination op, got {events:?}"
+    );
+    let rendered = events
+        .iter()
+        .filter_map(|event| match event {
+            AppEvent::InsertHistoryCell(cell) => {
+                Some(lines_to_single_string(&cell.display_lines(/*width*/ 80)))
+            }
+            _ => None,
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        rendered.contains("Terminating background terminal process-1"),
+        "expected per-process confirmation message, got {rendered:?}"
     );
 }
 

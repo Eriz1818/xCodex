@@ -27,6 +27,16 @@ fn cli_responses_fixture() -> std::path::PathBuf {
     find_resource!("tests/cli_responses_fixture.sse").expect("failed to resolve fixture path")
 }
 
+fn assert_output_success(output: &std::process::Output) {
+    assert!(
+        output.status.success(),
+        "status: {}\nstdout:\n{}\nstderr:\n{}",
+        output.status,
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+}
+
 /// Tests streaming the Responses API through the CLI using a mock server.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn responses_mode_stream_cli() {
@@ -65,7 +75,7 @@ async fn responses_mode_stream_cli() {
     println!("Status: {}", output.status);
     println!("Stdout:\n{}", String::from_utf8_lossy(&output.stdout));
     println!("Stderr:\n{}", String::from_utf8_lossy(&output.stderr));
-    assert!(output.status.success());
+    assert_output_success(&output);
     let stdout = String::from_utf8_lossy(&output.stdout);
     let hi_lines = stdout.lines().filter(|line| line.trim() == "hi").count();
     assert_eq!(hi_lines, 1, "Expected exactly one line with 'hi'");
@@ -124,7 +134,7 @@ async fn responses_mode_stream_cli_supports_openai_base_url_config_override() {
         .env("OPENAI_API_KEY", "dummy");
 
     let output = cmd.output().unwrap();
-    assert!(output.status.success());
+    assert_output_success(&output);
 
     let request = resp_mock.single_request();
     assert_eq!(request.path(), "/v1/responses");
@@ -183,7 +193,7 @@ async fn exec_cli_applies_model_instructions_file() {
     println!("Status: {}", output.status);
     println!("Stdout:\n{}", String::from_utf8_lossy(&output.stdout));
     println!("Stderr:\n{}", String::from_utf8_lossy(&output.stderr));
-    assert!(output.status.success());
+    assert_output_success(&output);
 
     // Inspect the captured request and verify our custom base instructions were
     // included in the `instructions` field.
@@ -231,6 +241,7 @@ async fn exec_cli_inproc_hook_logs_tool_call_finished() {
     );
 
     let home = TempDir::new().unwrap();
+    let repo_root = repo_root();
     let bin = codex_utils_cargo_bin::cargo_bin("codex").unwrap();
     let mut cmd = AssertCommand::new(bin);
     cmd.arg("exec")
@@ -242,14 +253,14 @@ async fn exec_cli_inproc_hook_logs_tool_call_finished() {
         .arg("-c")
         .arg("hooks.inproc_tool_call_summary=true")
         .arg("-C")
-        .arg(env!("CARGO_MANIFEST_DIR"))
+        .arg(&repo_root)
         .arg("hello?\n");
     cmd.env("CODEX_HOME", home.path())
         .env("OPENAI_API_KEY", "dummy")
         .env("OPENAI_BASE_URL", format!("{}/v1", server.uri()));
 
     let output = cmd.output().unwrap();
-    assert!(output.status.success());
+    assert_output_success(&output);
 
     let log_path = home.path().join("hooks-tool-calls.log");
     let contents = std::fs::read_to_string(&log_path)
@@ -291,6 +302,7 @@ async fn exec_cli_inproc_hook_event_log_jsonl_logs_tool_call_finished() {
     );
 
     let home = TempDir::new().unwrap();
+    let repo_root = repo_root();
     let bin = codex_utils_cargo_bin::cargo_bin("codex").unwrap();
     let mut cmd = AssertCommand::new(bin);
     cmd.arg("exec")
@@ -302,14 +314,14 @@ async fn exec_cli_inproc_hook_event_log_jsonl_logs_tool_call_finished() {
         .arg("-c")
         .arg("hooks.inproc=[\"event_log_jsonl\"]")
         .arg("-C")
-        .arg(env!("CARGO_MANIFEST_DIR"))
+        .arg(&repo_root)
         .arg("hello?\n");
     cmd.env("CODEX_HOME", home.path())
         .env("OPENAI_API_KEY", "dummy")
         .env("OPENAI_BASE_URL", format!("{}/v1", server.uri()));
 
     let output = cmd.output().unwrap();
-    assert!(output.status.success());
+    assert_output_success(&output);
 
     let log_path = home.path().join("hooks.jsonl");
     let contents = std::fs::read_to_string(&log_path)
@@ -353,6 +365,7 @@ async fn exec_cli_no_hooks_disables_inproc_hooks() {
     );
 
     let home = TempDir::new().unwrap();
+    let repo_root = repo_root();
     std::fs::write(
         home.path().join("config.toml"),
         "[hooks]\ninproc=[\"event_log_jsonl\"]\n",
@@ -369,14 +382,14 @@ async fn exec_cli_no_hooks_disables_inproc_hooks() {
         .arg("-c")
         .arg("model_provider=\"mock\"")
         .arg("-C")
-        .arg(env!("CARGO_MANIFEST_DIR"))
+        .arg(&repo_root)
         .arg("hello?\n");
     cmd.env("CODEX_HOME", home.path())
         .env("OPENAI_API_KEY", "dummy")
         .env("OPENAI_BASE_URL", format!("{}/v1", server.uri()));
 
     let output = cmd.output().unwrap();
-    assert!(output.status.success());
+    assert_output_success(&output);
 
     let log_path = home.path().join("hooks.jsonl");
     assert!(!log_path.exists());
@@ -413,6 +426,7 @@ async fn exec_cli_inproc_hook_list_logs_tool_call_finished() {
     );
 
     let home = TempDir::new().unwrap();
+    let repo_root = repo_root();
     let bin = codex_utils_cargo_bin::cargo_bin("codex").unwrap();
     let mut cmd = AssertCommand::new(bin);
     cmd.arg("exec")
@@ -424,14 +438,14 @@ async fn exec_cli_inproc_hook_list_logs_tool_call_finished() {
         .arg("-c")
         .arg("hooks.inproc=[\"tool_call_summary\"]")
         .arg("-C")
-        .arg(env!("CARGO_MANIFEST_DIR"))
+        .arg(&repo_root)
         .arg("hello?\n");
     cmd.env("CODEX_HOME", home.path())
         .env("OPENAI_API_KEY", "dummy")
         .env("OPENAI_BASE_URL", format!("{}/v1", server.uri()));
 
     let output = cmd.output().unwrap();
-    assert!(output.status.success());
+    assert_output_success(&output);
 
     let log_path = home.path().join("hooks-tool-calls.log");
     let contents = std::fs::read_to_string(&log_path)
@@ -473,6 +487,7 @@ async fn exec_cli_no_hooks_disables_inproc_hook_list() {
     );
 
     let home = TempDir::new().unwrap();
+    let repo_root = repo_root();
     let bin = codex_utils_cargo_bin::cargo_bin("codex").unwrap();
     let mut cmd = AssertCommand::new(bin);
     cmd.arg("exec")
@@ -485,14 +500,14 @@ async fn exec_cli_no_hooks_disables_inproc_hook_list() {
         .arg("-c")
         .arg("hooks.inproc=[\"tool_call_summary\"]")
         .arg("-C")
-        .arg(env!("CARGO_MANIFEST_DIR"))
+        .arg(&repo_root)
         .arg("hello?\n");
     cmd.env("CODEX_HOME", home.path())
         .env("OPENAI_API_KEY", "dummy")
         .env("OPENAI_BASE_URL", format!("{}/v1", server.uri()));
 
     let output = cmd.output().unwrap();
-    assert!(output.status.success());
+    assert_output_success(&output);
 
     let log_path = home.path().join("hooks-tool-calls.log");
     assert!(
@@ -554,7 +569,7 @@ async fn exec_cli_profile_applies_model_instructions_file() {
     println!("Status: {}", output.status);
     println!("Stdout:\n{}", String::from_utf8_lossy(&output.stdout));
     println!("Stderr:\n{}", String::from_utf8_lossy(&output.stderr));
-    assert!(output.status.success());
+    assert_output_success(&output);
 
     let request = resp_mock.single_request();
     let body = request.body_json();
@@ -597,7 +612,7 @@ async fn responses_api_stream_cli() {
         .env("CODEX_RS_SSE_FIXTURE", fixture);
 
     let output = cmd.output().unwrap();
-    assert!(output.status.success());
+    assert_output_success(&output);
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("fixture hello"));
 }

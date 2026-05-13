@@ -451,6 +451,7 @@ async fn auto_remote_compact_disabled_skips_follow_up_compaction() -> Result<()>
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
+            responsesapi_client_metadata: None,
         })
         .await?;
     wait_for_event(&codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
@@ -520,6 +521,7 @@ async fn auto_remote_compact_disabled_skips_pre_turn_compaction() -> Result<()> 
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
+            responsesapi_client_metadata: None,
         })
         .await?;
     wait_for_event(&codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
@@ -531,6 +533,7 @@ async fn auto_remote_compact_disabled_skips_pre_turn_compaction() -> Result<()> 
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
+            responsesapi_client_metadata: None,
         })
         .await?;
     wait_for_event(&codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;

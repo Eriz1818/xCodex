@@ -767,6 +767,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                 tokio::spawn(async move {
                     on_request_user_input_response(
                         event_turn_id,
+                        request_id,
                         pending_request_id,
                         rx,
                         conversation,
@@ -2338,7 +2339,8 @@ async fn on_exec_approval_response(
 }
 
 async fn on_request_user_input_response(
-    event_turn_id: String,
+    _event_turn_id: String,
+    request_id: String,
     pending_request_id: RequestId,
     receiver: oneshot::Receiver<ClientRequestResult>,
     conversation: Arc<CodexThread>,

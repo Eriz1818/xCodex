@@ -12,16 +12,12 @@ use crate::test_backend::VT100Backend;
 use crate::tui::FrameRequester;
 use assert_matches::assert_matches;
 use codex_common::approval_presets::builtin_approval_presets;
-use codex_core::CodexAuth;
+use codex_config::McpServerConfig;
+use codex_config::McpServerDisabledReason;
+use codex_config::McpServerTransportConfig;
 use codex_core::config::Config;
 use codex_core::config::ConfigBuilder;
 use codex_core::config::Constrained;
-use codex_core::config::types::McpServerConfig;
-use codex_core::config::types::McpServerDisabledReason;
-use codex_core::config::types::McpServerTransportConfig;
-#[cfg(target_os = "windows")]
-use codex_core::features::Feature;
-use codex_core::models_manager::manager::ModelsManager;
 use codex_core::protocol::AgentMessageDeltaEvent;
 use codex_core::protocol::AgentMessageEvent;
 use codex_core::protocol::AgentReasoningDeltaEvent;
@@ -64,6 +60,11 @@ use codex_core::protocol::ViewImageToolCallEvent;
 use codex_core::protocol::WarningEvent;
 #[cfg(target_os = "windows")]
 use codex_core::windows_sandbox::WindowsSandboxLevelExt;
+#[cfg(target_os = "windows")]
+use codex_features::Feature;
+use codex_login::CodexAuth;
+use codex_models_manager::collaboration_mode_presets::CollaborationModesConfig;
+use codex_models_manager::manager::ModelsManager;
 use codex_protocol::ThreadId;
 use codex_protocol::account::PlanType;
 use codex_protocol::config_types::ModeKind;
@@ -144,7 +145,9 @@ async fn resumed_initial_messages_render_history() {
         session_id: conversation_id,
         model: "test-model".to_string(),
         model_provider_id: "test-provider".to_string(),
+        service_tier: None,
         approval_policy: AskForApproval::Never,
+        approvals_reviewer: Default::default(),
         sandbox_policy: SandboxPolicy::new_read_only_policy(),
         cwd: PathBuf::from("/home/user/project"),
         reasoning_effort: Some(ReasoningEffortConfig::default()),
@@ -159,6 +162,8 @@ async fn resumed_initial_messages_render_history() {
             }),
             EventMsg::AgentMessage(AgentMessageEvent {
                 message: "assistant reply".to_string(),
+                phase: None,
+                memory_citation: None,
             }),
         ]),
         network_proxy: None,
@@ -441,7 +446,12 @@ async fn make_chatwidget_manual(
         },
         active_collaboration_mask: None,
         auth_manager: auth_manager.clone(),
-        models_manager: Arc::new(ModelsManager::new(codex_home, auth_manager)),
+        models_manager: Arc::new(ModelsManager::new(
+            codex_home,
+            auth_manager,
+            None,
+            CollaborationModesConfig::default(),
+        )),
         session_header: SessionHeader::new(resolved_model),
         initial_user_message: None,
         auto_compact_enabled: false,
@@ -680,6 +690,8 @@ async fn mcp_slash_command_requests_tool_list_when_servers_exist() {
         enabled_tools: None,
         disabled_tools: None,
         scopes: None,
+        oauth_resource: None,
+        tools: Default::default(),
         startup_mode: None,
     };
     chat.config.mcp_servers = Constrained::allow_any(std::collections::HashMap::from([(
@@ -881,6 +893,8 @@ async fn mcp_tools_output_renders_startup_status_and_retry_hints() {
         enabled_tools: None,
         disabled_tools: None,
         scopes: None,
+        oauth_resource: None,
+        tools: Default::default(),
         startup_mode: None,
     };
 
@@ -900,6 +914,8 @@ async fn mcp_tools_output_renders_startup_status_and_retry_hints() {
         enabled_tools: None,
         disabled_tools: None,
         scopes: None,
+        oauth_resource: None,
+        tools: Default::default(),
         startup_mode: None,
     };
 
@@ -919,6 +935,8 @@ async fn mcp_tools_output_renders_startup_status_and_retry_hints() {
         enabled_tools: None,
         disabled_tools: None,
         scopes: None,
+        oauth_resource: None,
+        tools: Default::default(),
         startup_mode: None,
     };
 
@@ -995,6 +1013,8 @@ async fn mcp_tools_output_renders_tools_resources_and_templates() {
         enabled_tools: None,
         disabled_tools: None,
         scopes: None,
+        oauth_resource: None,
+        tools: Default::default(),
         startup_mode: None,
     };
 
@@ -1123,6 +1143,8 @@ fn set_chatgpt_auth(chat: &mut ChatWidget) {
     chat.models_manager = Arc::new(ModelsManager::new(
         chat.config.codex_home.clone(),
         chat.auth_manager.clone(),
+        None,
+        CollaborationModesConfig::default(),
     ));
 }
 
@@ -1550,6 +1572,11 @@ async fn exec_approval_emits_proposed_command_and_decision_history() {
             "this is a test reason such as one that would be produced by the model".into(),
         ),
         proposed_execpolicy_amendment: None,
+        approval_id: None,
+        network_approval_context: None,
+        proposed_network_policy_amendments: None,
+        additional_permissions: None,
+        available_decisions: None,
         parsed_cmd: vec![],
     };
     chat.handle_codex_event(Event {
@@ -1596,6 +1623,11 @@ async fn exec_approval_decision_truncates_multiline_and_long_commands() {
             "this is a test reason such as one that would be produced by the model".into(),
         ),
         proposed_execpolicy_amendment: None,
+        approval_id: None,
+        network_approval_context: None,
+        proposed_network_policy_amendments: None,
+        additional_permissions: None,
+        available_decisions: None,
         parsed_cmd: vec![],
     };
     chat.handle_codex_event(Event {
@@ -1646,6 +1678,11 @@ async fn exec_approval_decision_truncates_multiline_and_long_commands() {
         cwd: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
         reason: None,
         proposed_execpolicy_amendment: None,
+        approval_id: None,
+        network_approval_context: None,
+        proposed_network_policy_amendments: None,
+        additional_permissions: None,
+        available_decisions: None,
         parsed_cmd: vec![],
     };
     chat.handle_codex_event(Event {
@@ -2068,6 +2105,7 @@ async fn final_message_separator_is_emitted_immediately_before_final_answer() {
         id: "turn-start".to_string(),
         msg: EventMsg::TurnStarted(TurnStartedEvent {
             turn_id: "turn-id".to_string(),
+            started_at: None,
             model_context_window: None,
             collaboration_mode_kind: ModeKind::Default,
         }),
@@ -2115,6 +2153,7 @@ async fn final_message_separator_is_emitted_immediately_before_final_answer() {
                     text: "hello".to_string(),
                 }],
                 phase: Some(MessagePhase::FinalAnswer),
+                memory_citation: None,
             }),
         }),
     });
@@ -2130,6 +2169,8 @@ async fn final_message_separator_is_emitted_immediately_before_final_answer() {
         id: "agent-final".to_string(),
         msg: EventMsg::AgentMessage(AgentMessageEvent {
             message: "hello".to_string(),
+            phase: None,
+            memory_citation: None,
         }),
     });
     let cells = drain_insert_history(&mut rx);
@@ -2154,6 +2195,8 @@ async fn final_message_separator_is_emitted_immediately_before_final_answer() {
         msg: EventMsg::TurnComplete(TurnCompleteEvent {
             turn_id: "turn-id".to_string(),
             last_agent_message: None,
+            completed_at: None,
+            duration_ms: None,
         }),
     });
 
@@ -2171,6 +2214,7 @@ async fn final_message_separator_is_emitted_without_phase_markers() {
         id: "turn-start".to_string(),
         msg: EventMsg::TurnStarted(TurnStartedEvent {
             turn_id: "turn-id".to_string(),
+            started_at: None,
             model_context_window: None,
             collaboration_mode_kind: ModeKind::Default,
         }),
@@ -2185,6 +2229,8 @@ async fn final_message_separator_is_emitted_without_phase_markers() {
         id: "agent-final-no-phase".to_string(),
         msg: EventMsg::AgentMessage(AgentMessageEvent {
             message: "done".to_string(),
+            phase: None,
+            memory_citation: None,
         }),
     });
 
@@ -2207,6 +2253,8 @@ async fn final_message_separator_is_emitted_without_phase_markers() {
         msg: EventMsg::TurnComplete(TurnCompleteEvent {
             turn_id: "turn-id".to_string(),
             last_agent_message: None,
+            completed_at: None,
+            duration_ms: None,
         }),
     });
 
@@ -2276,7 +2324,8 @@ async fn slash_init_skips_when_project_doc_exists() {
     let tempdir = tempdir().unwrap();
     let existing_path = tempdir.path().join(DEFAULT_PROJECT_DOC_FILENAME);
     std::fs::write(&existing_path, "existing instructions").unwrap();
-    chat.config.cwd = tempdir.path().to_path_buf();
+    chat.config.cwd =
+        AbsolutePathBuf::from_absolute_path(tempdir.path()).expect("absolute temp dir");
 
     chat.dispatch_command(SlashCommand::Init);
 
@@ -2640,7 +2689,7 @@ async fn view_image_tool_call_adds_history_cell() {
         id: "sub-image".into(),
         msg: EventMsg::ViewImageToolCall(ViewImageToolCallEvent {
             call_id: "call-image".into(),
-            path: image_path,
+            path: image_path.to_path_buf(),
         }),
     });
 
@@ -2666,6 +2715,8 @@ async fn interrupt_exec_marks_failed_snapshot() {
         msg: EventMsg::TurnAborted(codex_core::protocol::TurnAbortedEvent {
             turn_id: None,
             reason: TurnAbortReason::Interrupted,
+            completed_at: None,
+            duration_ms: None,
         }),
     });
 
@@ -2691,6 +2742,7 @@ async fn interrupted_turn_error_message_snapshot() {
         id: "task-1".into(),
         msg: EventMsg::TurnStarted(TurnStartedEvent {
             turn_id: "turn-id".to_string(),
+            started_at: None,
             model_context_window: None,
             collaboration_mode_kind: ModeKind::Default,
         }),
@@ -2702,6 +2754,8 @@ async fn interrupted_turn_error_message_snapshot() {
         msg: EventMsg::TurnAborted(codex_core::protocol::TurnAbortedEvent {
             turn_id: None,
             reason: TurnAbortReason::Interrupted,
+            completed_at: None,
+            duration_ms: None,
         }),
     });
 
@@ -2867,6 +2921,8 @@ async fn model_picker_hides_show_in_picker_false_models_from_cache() {
         show_in_picker,
         supported_in_api: true,
         input_modalities: default_input_modalities(),
+        additional_speed_tiers: Vec::new(),
+        availability_nux: None,
     };
 
     chat.open_model_popup_with_presets(vec![
@@ -3083,6 +3139,8 @@ async fn single_reasoning_option_skips_selection() {
         show_in_picker: true,
         supported_in_api: true,
         input_modalities: default_input_modalities(),
+        additional_speed_tiers: Vec::new(),
+        availability_nux: None,
     };
     chat.open_reasoning_popup(preset);
 
@@ -3206,6 +3264,7 @@ async fn user_shell_command_emits_separator_before_final_message() {
         id: "turn-start-user-shell".to_string(),
         msg: EventMsg::TurnStarted(TurnStartedEvent {
             turn_id: "turn-id".to_string(),
+            started_at: None,
             model_context_window: None,
             collaboration_mode_kind: ModeKind::Default,
         }),
@@ -3233,6 +3292,7 @@ async fn user_shell_command_emits_separator_before_final_message() {
                     text: "done".to_string(),
                 }],
                 phase: Some(MessagePhase::FinalAnswer),
+                memory_citation: None,
             }),
         }),
     });
@@ -3240,6 +3300,8 @@ async fn user_shell_command_emits_separator_before_final_message() {
         id: "agent-final-user-shell".to_string(),
         msg: EventMsg::AgentMessage(AgentMessageEvent {
             message: "done".to_string(),
+            phase: None,
+            memory_citation: None,
         }),
     });
 
@@ -3267,6 +3329,8 @@ async fn user_shell_command_emits_separator_before_final_message() {
         msg: EventMsg::TurnComplete(TurnCompleteEvent {
             turn_id: "turn-id".to_string(),
             last_agent_message: None,
+            completed_at: None,
+            duration_ms: None,
         }),
     });
     let cells = drain_insert_history(&mut rx);
@@ -3320,6 +3384,11 @@ async fn approval_modal_exec_snapshot() {
             "hello".into(),
             "world".into(),
         ])),
+        approval_id: None,
+        network_approval_context: None,
+        proposed_network_policy_amendments: None,
+        additional_permissions: None,
+        available_decisions: None,
         parsed_cmd: vec![],
     };
     chat.handle_codex_event(Event {
@@ -3371,6 +3440,11 @@ async fn approval_modal_exec_without_reason_snapshot() {
             "hello".into(),
             "world".into(),
         ])),
+        approval_id: None,
+        network_approval_context: None,
+        proposed_network_policy_amendments: None,
+        additional_permissions: None,
+        available_decisions: None,
         parsed_cmd: vec![],
     };
     chat.handle_codex_event(Event {
@@ -3408,6 +3482,11 @@ async fn approval_modal_exec_multiline_prefix_hides_execpolicy_option_snapshot()
         cwd: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
         reason: None,
         proposed_execpolicy_amendment: Some(ExecPolicyAmendment::new(command)),
+        approval_id: None,
+        network_approval_context: None,
+        proposed_network_policy_amendments: None,
+        additional_permissions: None,
+        available_decisions: None,
         parsed_cmd: vec![],
     };
     chat.handle_codex_event(Event {
@@ -3491,6 +3570,8 @@ async fn interrupt_restores_queued_messages_into_composer() {
         msg: EventMsg::TurnAborted(codex_core::protocol::TurnAbortedEvent {
             turn_id: None,
             reason: TurnAbortReason::Interrupted,
+            completed_at: None,
+            duration_ms: None,
         }),
     });
 
@@ -3530,6 +3611,8 @@ async fn interrupt_prepends_queued_messages_before_existing_composer_text() {
         msg: EventMsg::TurnAborted(codex_core::protocol::TurnAbortedEvent {
             turn_id: None,
             reason: TurnAbortReason::Interrupted,
+            completed_at: None,
+            duration_ms: None,
         }),
     });
 
@@ -3575,6 +3658,7 @@ async fn ui_snapshots_small_heights_task_running() {
         id: "task-1".into(),
         msg: EventMsg::TurnStarted(TurnStartedEvent {
             turn_id: "turn-id".to_string(),
+            started_at: None,
             model_context_window: None,
             collaboration_mode_kind: ModeKind::Default,
         }),
@@ -3608,6 +3692,7 @@ async fn status_widget_and_approval_modal_snapshot() {
         id: "task-1".into(),
         msg: EventMsg::TurnStarted(TurnStartedEvent {
             turn_id: "turn-id".to_string(),
+            started_at: None,
             model_context_window: None,
             collaboration_mode_kind: ModeKind::Default,
         }),
@@ -3633,6 +3718,11 @@ async fn status_widget_and_approval_modal_snapshot() {
             "echo".into(),
             "hello world".into(),
         ])),
+        approval_id: None,
+        network_approval_context: None,
+        proposed_network_policy_amendments: None,
+        additional_permissions: None,
+        available_decisions: None,
         parsed_cmd: vec![],
     };
     chat.handle_codex_event(Event {
@@ -3662,6 +3752,7 @@ async fn status_widget_active_snapshot() {
         id: "task-1".into(),
         msg: EventMsg::TurnStarted(TurnStartedEvent {
             turn_id: "turn-id".to_string(),
+            started_at: None,
             model_context_window: None,
             collaboration_mode_kind: ModeKind::Default,
         }),
@@ -3713,6 +3804,7 @@ async fn mcp_startup_complete_does_not_clear_running_task() {
         id: "task-1".into(),
         msg: EventMsg::TurnStarted(TurnStartedEvent {
             turn_id: "turn-id".to_string(),
+            started_at: None,
             model_context_window: None,
             collaboration_mode_kind: ModeKind::Default,
         }),
@@ -4225,6 +4317,7 @@ async fn plan_item_completed_renders_proposed_plan_cell() {
         id: "turn-start".into(),
         msg: EventMsg::TurnStarted(TurnStartedEvent {
             turn_id: "turn-id".to_string(),
+            started_at: None,
             model_context_window: None,
             collaboration_mode_kind: ModeKind::Plan,
         }),
@@ -4265,6 +4358,7 @@ async fn empty_plan_item_falls_back_to_plan_delta_buffer() {
         id: "turn-start".into(),
         msg: EventMsg::TurnStarted(TurnStartedEvent {
             turn_id: "turn-id".to_string(),
+            started_at: None,
             model_context_window: None,
             collaboration_mode_kind: ModeKind::Plan,
         }),
@@ -4312,6 +4406,7 @@ async fn plan_turn_complete_opens_next_step_prompt() {
         id: "turn-start".into(),
         msg: EventMsg::TurnStarted(TurnStartedEvent {
             turn_id: "turn-id".to_string(),
+            started_at: None,
             model_context_window: None,
             collaboration_mode_kind: ModeKind::Plan,
         }),
@@ -4336,6 +4431,8 @@ async fn plan_turn_complete_opens_next_step_prompt() {
         msg: EventMsg::TurnComplete(TurnCompleteEvent {
             turn_id: "turn-id".to_string(),
             last_agent_message: Some("done".to_string()),
+            completed_at: None,
+            duration_ms: None,
         }),
     });
 
@@ -4453,6 +4550,7 @@ async fn plan_next_step_prompt_cancel_emits_pause_event() {
         id: "turn-start".into(),
         msg: EventMsg::TurnStarted(TurnStartedEvent {
             turn_id: "turn-id".to_string(),
+            started_at: None,
             model_context_window: None,
             collaboration_mode_kind: ModeKind::Plan,
         }),
@@ -4475,6 +4573,8 @@ async fn plan_next_step_prompt_cancel_emits_pause_event() {
         msg: EventMsg::TurnComplete(TurnCompleteEvent {
             turn_id: "turn-id".to_string(),
             last_agent_message: Some("done".to_string()),
+            completed_at: None,
+            duration_ms: None,
         }),
     });
 
@@ -4499,6 +4599,7 @@ async fn plan_next_step_prompt_discuss_further_emits_reopen_event() {
         id: "turn-start".into(),
         msg: EventMsg::TurnStarted(TurnStartedEvent {
             turn_id: "turn-id".to_string(),
+            started_at: None,
             model_context_window: None,
             collaboration_mode_kind: ModeKind::Plan,
         }),
@@ -4521,6 +4622,8 @@ async fn plan_next_step_prompt_discuss_further_emits_reopen_event() {
         msg: EventMsg::TurnComplete(TurnCompleteEvent {
             turn_id: "turn-id".to_string(),
             last_agent_message: Some("done".to_string()),
+            completed_at: None,
+            duration_ms: None,
         }),
     });
 
@@ -4544,6 +4647,7 @@ async fn plan_next_step_prompt_do_something_else_emits_prompt_event() {
         id: "turn-start".into(),
         msg: EventMsg::TurnStarted(TurnStartedEvent {
             turn_id: "turn-id".to_string(),
+            started_at: None,
             model_context_window: None,
             collaboration_mode_kind: ModeKind::Plan,
         }),
@@ -4566,6 +4670,8 @@ async fn plan_next_step_prompt_do_something_else_emits_prompt_event() {
         msg: EventMsg::TurnComplete(TurnCompleteEvent {
             turn_id: "turn-id".to_string(),
             last_agent_message: Some("done".to_string()),
+            completed_at: None,
+            duration_ms: None,
         }),
     });
 
@@ -4591,6 +4697,7 @@ async fn plan_next_step_prompt_reopens_after_discuss_further_on_next_turn() {
         id: "turn-start".into(),
         msg: EventMsg::TurnStarted(TurnStartedEvent {
             turn_id: "turn-id".to_string(),
+            started_at: None,
             model_context_window: None,
             collaboration_mode_kind: ModeKind::Plan,
         }),
@@ -4600,6 +4707,8 @@ async fn plan_next_step_prompt_reopens_after_discuss_further_on_next_turn() {
         msg: EventMsg::TurnComplete(TurnCompleteEvent {
             turn_id: "turn-id".to_string(),
             last_agent_message: Some("follow-up".to_string()),
+            completed_at: None,
+            duration_ms: None,
         }),
     });
 
@@ -4722,7 +4831,7 @@ async fn plan_base_dir_inside_repo_shows_gitignore_guidance_once() {
         .expect("git init");
     assert!(status.success(), "git init should succeed");
 
-    chat.config.cwd = repo_path.clone();
+    chat.config.cwd = AbsolutePathBuf::from_absolute_path(&repo_path).expect("absolute repo path");
     let base_dir = repo_path.join("plans-state");
     let command = format!("/plan settings base-dir {}", base_dir.display());
 
@@ -4764,7 +4873,7 @@ async fn plan_mode_adr_lite_changes_default_base_dir_and_template() {
         .expect("git init");
     assert!(status.success(), "git init should succeed");
 
-    chat.config.cwd = repo_path.clone();
+    chat.config.cwd = AbsolutePathBuf::from_absolute_path(&repo_path).expect("absolute repo path");
     chat.submit_user_message(UserMessage::from("/plan settings mode adr-lite"));
     assert_matches!(op_rx.try_recv(), Err(TryRecvError::Empty));
     let mode_cells = drain_insert_history(&mut rx);
@@ -4815,7 +4924,7 @@ async fn plan_mode_custom_seed_default_initializes_template_and_uses_it() {
         .expect("git init");
     assert!(status.success(), "git init should succeed");
 
-    chat.config.cwd = repo_path;
+    chat.config.cwd = AbsolutePathBuf::from_absolute_path(repo_path).expect("absolute repo path");
     chat.submit_user_message(UserMessage::from("/plan settings mode custom default"));
     assert_matches!(op_rx.try_recv(), Err(TryRecvError::Empty));
     let mode_cells = drain_insert_history(&mut rx);
@@ -4918,6 +5027,7 @@ async fn stream_recovery_restores_previous_status_header() {
         id: "task".into(),
         msg: EventMsg::TurnStarted(TurnStartedEvent {
             turn_id: "turn-id".to_string(),
+            started_at: None,
             model_context_window: None,
             collaboration_mode_kind: ModeKind::Default,
         }),
@@ -4962,6 +5072,7 @@ async fn multiple_agent_messages_in_single_turn_emit_multiple_headers() {
         id: "s1".into(),
         msg: EventMsg::TurnStarted(TurnStartedEvent {
             turn_id: "turn-id".to_string(),
+            started_at: None,
             model_context_window: None,
             collaboration_mode_kind: ModeKind::Default,
         }),
@@ -4972,6 +5083,8 @@ async fn multiple_agent_messages_in_single_turn_emit_multiple_headers() {
         id: "s1".into(),
         msg: EventMsg::AgentMessage(AgentMessageEvent {
             message: "First message".into(),
+            phase: None,
+            memory_citation: None,
         }),
     });
 
@@ -4980,6 +5093,8 @@ async fn multiple_agent_messages_in_single_turn_emit_multiple_headers() {
         id: "s1".into(),
         msg: EventMsg::AgentMessage(AgentMessageEvent {
             message: "Second message".into(),
+            phase: None,
+            memory_citation: None,
         }),
     });
 
@@ -4989,6 +5104,8 @@ async fn multiple_agent_messages_in_single_turn_emit_multiple_headers() {
         msg: EventMsg::TurnComplete(TurnCompleteEvent {
             turn_id: "turn-id".to_string(),
             last_agent_message: None,
+            completed_at: None,
+            duration_ms: None,
         }),
     });
 
@@ -5025,6 +5142,8 @@ async fn final_reasoning_then_message_without_deltas_are_rendered() {
         id: "s1".into(),
         msg: EventMsg::AgentMessage(AgentMessageEvent {
             message: "Here is the result.".into(),
+            phase: None,
+            memory_citation: None,
         }),
     });
 
@@ -5085,6 +5204,8 @@ async fn deltas_then_same_final_message_are_rendered_snapshot() {
         id: "s1".into(),
         msg: EventMsg::AgentMessage(AgentMessageEvent {
             message: "Here is the result.".into(),
+            phase: None,
+            memory_citation: None,
         }),
     });
 
@@ -5106,7 +5227,11 @@ async fn chatwidget_exec_and_status_layout_vt100_snapshot() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
     chat.handle_codex_event(Event {
         id: "t1".into(),
-        msg: EventMsg::AgentMessage(AgentMessageEvent { message: "I’m going to search the repo for where “Change Approved” is rendered to update that view.".into() }),
+        msg: EventMsg::AgentMessage(AgentMessageEvent {
+            message: "I’m going to search the repo for where “Change Approved” is rendered to update that view.".into(),
+            phase: None,
+            memory_citation: None,
+        }),
     });
 
     let command = vec!["bash".into(), "-lc".into(), "rg \"Change Approved\"".into()];
@@ -5160,6 +5285,7 @@ async fn chatwidget_exec_and_status_layout_vt100_snapshot() {
         id: "t1".into(),
         msg: EventMsg::TurnStarted(TurnStartedEvent {
             turn_id: "turn-id".to_string(),
+            started_at: None,
             model_context_window: None,
             collaboration_mode_kind: ModeKind::Default,
         }),
@@ -5206,6 +5332,7 @@ async fn chatwidget_markdown_code_blocks_vt100_snapshot() {
         id: "t1".into(),
         msg: EventMsg::TurnStarted(TurnStartedEvent {
             turn_id: "turn-id".to_string(),
+            started_at: None,
             model_context_window: None,
             collaboration_mode_kind: ModeKind::Default,
         }),
@@ -5280,6 +5407,8 @@ printf 'fenced within fenced\n'
         msg: EventMsg::TurnComplete(TurnCompleteEvent {
             turn_id: "turn-id".to_string(),
             last_agent_message: None,
+            completed_at: None,
+            duration_ms: None,
         }),
     });
     for lines in drain_insert_history(&mut rx) {
@@ -5298,6 +5427,7 @@ async fn chatwidget_tall() {
         id: "t1".into(),
         msg: EventMsg::TurnStarted(TurnStartedEvent {
             turn_id: "turn-id".to_string(),
+            started_at: None,
             model_context_window: None,
             collaboration_mode_kind: ModeKind::Default,
         }),

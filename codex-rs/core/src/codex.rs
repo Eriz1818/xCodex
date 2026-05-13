@@ -35,7 +35,6 @@ use crate::realtime_conversation::handle_start as handle_realtime_conversation_s
 use crate::realtime_conversation::handle_text as handle_realtime_conversation_text;
 use crate::render_skills_section;
 use crate::rollout::find_thread_name_by_id;
-use crate::sandbox_tags::sandbox_tag;
 use crate::sensitive_paths::SensitivePathPolicy;
 use crate::session_prefix::format_subagent_notification_message;
 use crate::skills_load_input_from_config;
@@ -131,7 +130,6 @@ use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::protocol::TurnAbortReason;
 use codex_protocol::protocol::TurnContextItem;
 use codex_protocol::protocol::TurnContextNetworkItem;
-use codex_protocol::protocol::TurnStartedEvent;
 use codex_protocol::protocol::W3cTraceContext;
 use codex_protocol::request_permissions::PermissionGrantScope;
 use codex_protocol::request_permissions::RequestPermissionProfile;
@@ -615,7 +613,6 @@ impl Codex {
         // background and let the TUI update model lists later.
         {
             let models_manager = Arc::clone(&models_manager);
-            let config = Arc::clone(&config);
             tokio::spawn(async move {
                 tracing::info!(
                     target: "codex_core::startup_timeline",
@@ -963,6 +960,12 @@ impl TurnContext {
         self.model_info.context_window.map(|context_window| {
             context_window.saturating_mul(effective_context_window_percent) / 100
         })
+    }
+
+    pub(crate) fn effective_auto_compact_token_limit(&self) -> Option<i64> {
+        self.model_info
+            .auto_compact_token_limit()
+            .filter(|limit| *limit > 0)
     }
 
     pub(crate) fn apps_enabled(&self) -> bool {
@@ -4101,7 +4104,12 @@ impl Session {
             match active.as_mut() {
                 Some(at) => {
                     let mut ts = at.turn_state.lock().await;
-                    ts.remove_pending_user_input(id)
+                    ts.remove_pending_user_input(id).or_else(|| {
+                        at.tasks
+                            .contains_key(id)
+                            .then(|| ts.remove_only_pending_user_input())
+                            .flatten()
+                    })
                 }
                 None => None,
             }
@@ -4687,20 +4695,19 @@ impl Session {
                     {
                         state.low_context_warning_state.warned_autocompact_threshold = true;
 
-                        let auto_compact_limit = turn_context
-                            .config
-                            .model_auto_compact_token_limit
-                            .filter(|limit| *limit > 0)
-                            .unwrap_or_else(|| context_window.saturating_mul(9).saturating_div(10));
-                        let trigger_percent = TokenUsage {
-                            total_tokens: auto_compact_limit,
-                            ..TokenUsage::default()
-                        }
-                        .percent_of_context_window_remaining(context_window);
+                        turn_context.effective_auto_compact_token_limit().map(
+                            |auto_compact_limit| {
+                                let trigger_percent = TokenUsage {
+                                    total_tokens: auto_compact_limit,
+                                    ..TokenUsage::default()
+                                }
+                                .percent_of_context_window_remaining(context_window);
 
-                        Some(format!(
-                            "Low context: {percent_remaining}% left. Autocompact will trigger at <= {trigger_percent}%."
-                        ))
+                                format!(
+                                    "Low context: {percent_remaining}% left. Autocompact will trigger at <= {trigger_percent}%."
+                                )
+                            },
+                        )
                     } else if !state.auto_compact_enabled
                         && percent_remaining <= 10
                         && !state.low_context_warning_state.warned_manual_compact
@@ -5364,7 +5371,7 @@ impl Session {
             match startup_mode {
                 McpStartupMode::Eager => McpConnectionStartupMode::Eager,
                 McpStartupMode::Lazy => McpConnectionStartupMode::Lazy,
-                McpStartupMode::Manual => McpConnectionStartupMode::Eager,
+                McpStartupMode::Manual => McpConnectionStartupMode::Manual,
             },
         )
         .await;
@@ -7226,28 +7233,11 @@ pub(crate) async fn run_turn(
         return None;
     }
 
-    let model_info = turn_context.model_info.clone();
-    let context_window = turn_context.model_context_window();
-    let auto_compact_limit = model_info.auto_compact_token_limit().unwrap_or_else(|| {
-        turn_context
-            .config
-            .model_auto_compact_token_limit
-            .filter(|limit| *limit > 0)
-            .unwrap_or_else(|| {
-                context_window
-                    .map(|window| window.saturating_mul(9) / 10)
-                    .unwrap_or(i64::MAX)
-            })
-    });
+    let auto_compact_limit = turn_context
+        .effective_auto_compact_token_limit()
+        .unwrap_or(i64::MAX);
     let mut prewarmed_client_session = prewarmed_client_session;
 
-    let event = EventMsg::TurnStarted(TurnStartedEvent {
-        turn_id: turn_context.sub_id.clone(),
-        started_at: turn_context.turn_timing_state.started_at_unix_secs().await,
-        model_context_window: context_window,
-        collaboration_mode_kind: turn_context.collaboration_mode.mode,
-    });
-    sess.send_event(&turn_context, event).await;
     // TODO(ccunningham): Pre-turn compaction runs before context updates and the
     // new user message are recorded. Estimate pending incoming items (context
     // diffs/full reinjection + user input) and trigger compaction preemptively
@@ -7432,11 +7422,6 @@ pub(crate) async fn run_turn(
         .await;
     record_additional_contexts(&sess, &turn_context, additional_contexts).await;
     if !input.is_empty() {
-        let initial_input_for_turn: ResponseInputItem = ResponseInputItem::from(input.clone());
-        let response_item: ResponseItem = initial_input_for_turn.clone().into();
-        sess.record_user_prompt_and_emit_turn_item(turn_context.as_ref(), &input, response_item)
-            .await;
-
         // Track the previous-turn baseline from the regular user-turn path only so
         // standalone tasks (compact/shell/review/undo) cannot suppress future
         // model/realtime injections.
@@ -7784,8 +7769,7 @@ async fn run_pre_sampling_compact(
     .await?;
     let total_usage_tokens = sess.get_total_token_usage().await;
     let auto_compact_limit = turn_context
-        .model_info
-        .auto_compact_token_limit()
+        .effective_auto_compact_token_limit()
         .unwrap_or(i64::MAX);
     // Compact if the total usage tokens are greater than the auto compact limit
     if total_usage_tokens >= auto_compact_limit {
@@ -7829,8 +7813,7 @@ async fn maybe_run_previous_model_inline_compact(
         return Ok(false);
     };
     let new_auto_compact_limit = turn_context
-        .model_info
-        .auto_compact_token_limit()
+        .effective_auto_compact_token_limit()
         .unwrap_or(i64::MAX);
     let should_run = total_usage_tokens > new_auto_compact_limit
         && previous_model_turn_context.model_info.slug != turn_context.model_info.slug
@@ -9399,7 +9382,6 @@ async fn try_run_sampling_request(
                 should_emit_turn_diff = true;
 
                 tokio::task::yield_now().await;
-                needs_follow_up |= sess.has_pending_input().await;
                 break Ok(SamplingRequestResult {
                     needs_follow_up,
                     last_agent_message,
@@ -9511,6 +9493,7 @@ async fn try_run_sampling_request(
     }
 
     if let (Some(response_id), Some(token_usage)) = (response_id, response_token_usage) {
+        let hook_needs_follow_up = needs_follow_up || sess.has_pending_input().await;
         sess.user_hooks().model_response_completed(
             sess.conversation_id.to_string(),
             turn_context.sub_id.clone(),
@@ -9519,7 +9502,7 @@ async fn try_run_sampling_request(
             attempt,
             response_id,
             token_usage,
-            needs_follow_up,
+            hook_needs_follow_up,
         );
     }
 

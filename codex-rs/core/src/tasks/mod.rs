@@ -444,9 +444,6 @@ impl Session {
                 }
             }
         }
-        if should_clear_active_turn {
-            self.close_unified_exec_processes().await;
-        }
         let exclusion_summary = turn_context
             .exclusion_counters
             .lock()

@@ -9,7 +9,7 @@
 
 use clap::ArgAction;
 use clap::Parser;
-use codex_core::config::types::McpStartupMode;
+use codex_config::types::McpStartupMode;
 use serde::de::Error as SerdeError;
 use toml::Value;
 

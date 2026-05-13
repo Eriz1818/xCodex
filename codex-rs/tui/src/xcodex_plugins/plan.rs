@@ -2651,7 +2651,7 @@ impl PlanBaseDirEditorView {
                 image_paste_enabled: false,
             },
         );
-        composer.set_steer_enabled(true);
+        composer.set_xtreme_ui_enabled(true);
         composer.set_footer_hint_override(Some(Vec::new()));
         composer.set_show_context_right(false);
         composer.set_text_content(initial_value, Vec::new(), Vec::new());

@@ -580,16 +580,18 @@ fn walker_worker(
                     ignore::WalkState::Continue
                 };
             }
-            if is_dir {
-                return ignore::WalkState::Continue;
-            }
             let Some(full_path) = path.to_str() else {
                 return ignore::WalkState::Continue;
             };
-            if let Some((_, relative_path)) = get_file_path(path, &search_directories) {
+            if let Some((_, relative_path)) = get_file_path(path, &search_directories)
+                && !relative_path.is_empty()
+            {
                 injector.push(Arc::from(full_path), |_, cols| {
                     cols[0] = Utf32String::from(relative_path);
                 });
+            }
+            if is_dir {
+                return ignore::WalkState::Continue;
             }
             n += 1;
             if n >= CHECK_INTERVAL {
@@ -1126,6 +1128,7 @@ mod tests {
                 threads: NonZero::new(2).unwrap(),
                 compute_indices: false,
                 respect_gitignore: true,
+                ..Default::default()
             },
             /*cancel_flag*/ None,
         )
@@ -1194,6 +1197,7 @@ mod tests {
                 threads: NonZero::new(2).unwrap(),
                 compute_indices: false,
                 respect_gitignore: true,
+                ..Default::default()
             },
             /*cancel_flag*/ None,
         )
@@ -1214,6 +1218,7 @@ mod tests {
                 threads: NonZero::new(2).unwrap(),
                 compute_indices: false,
                 respect_gitignore: true,
+                ..Default::default()
             },
             /*cancel_flag*/ None,
         )
@@ -1258,6 +1263,7 @@ mod tests {
                 threads: NonZero::new(2).unwrap(),
                 compute_indices: false,
                 respect_gitignore: true,
+                ..Default::default()
             },
             /*cancel_flag*/ None,
         )
@@ -1278,6 +1284,7 @@ mod tests {
                 threads: NonZero::new(2).unwrap(),
                 compute_indices: false,
                 respect_gitignore: true,
+                ..Default::default()
             },
             /*cancel_flag*/ None,
         )
@@ -1298,6 +1305,7 @@ mod tests {
                 threads: NonZero::new(2).unwrap(),
                 compute_indices: false,
                 respect_gitignore: true,
+                ..Default::default()
             },
             /*cancel_flag*/ None,
         )

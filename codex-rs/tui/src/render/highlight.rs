@@ -26,6 +26,7 @@ use ratatui::style::Modifier;
 use ratatui::style::Style;
 use ratatui::text::Line;
 use ratatui::text::Span;
+use std::borrow::Cow;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::OnceLock;
@@ -584,7 +585,9 @@ mod xcodex_tree_sitter {
             if code.is_empty() {
                 vec![Line::from("")]
             } else {
-                code.lines().map(|l| Line::from(l.to_string())).collect()
+                code.split('\n')
+                    .map(|l| Line::from(l.to_string()))
+                    .collect()
             }
         }
 
@@ -795,11 +798,10 @@ mod xcodex_tree_sitter {
                 .join("\n")
         }
 
-        fn dimmed_tokens(lines: &[Line<'static>]) -> Vec<String> {
+        fn rendered_tokens(lines: &[Line<'static>]) -> Vec<String> {
             lines
                 .iter()
                 .flat_map(|l| l.spans.iter())
-                .filter(|sp| sp.style.add_modifier.contains(Modifier::DIM))
                 .map(|sp| sp.content.clone().into_owned())
                 .map(|token| token.trim().to_string())
                 .filter(|token| !token.is_empty())
@@ -807,25 +809,27 @@ mod xcodex_tree_sitter {
         }
 
         #[test]
-        fn dims_expected_bash_operators() {
+        fn highlights_expected_bash_operators() {
             let s = "echo foo && bar || baz | qux & (echo hi)";
             let lines = highlight_bash_to_lines(s);
             assert_eq!(reconstructed(&lines), s);
 
-            let dimmed = dimmed_tokens(&lines);
-            assert!(dimmed.contains(&"&&".to_string()));
-            assert!(dimmed.contains(&"|".to_string()));
-            assert!(!dimmed.contains(&"echo".to_string()));
+            let tokens = rendered_tokens(&lines);
+            assert!(tokens.contains(&"&&".to_string()));
+            assert!(tokens.contains(&"|".to_string()));
+            assert!(tokens.contains(&"echo".to_string()));
         }
 
         #[test]
-        fn dims_redirects_and_strings() {
+        fn highlights_redirects_and_strings() {
             let s = "echo \"hi\" > out.txt; echo 'ok'";
             let lines = highlight_bash_to_lines(s);
             assert_eq!(reconstructed(&lines), s);
 
-            let dimmed = dimmed_tokens(&lines);
-            assert!(dimmed.contains(&">".to_string()));
+            let tokens = rendered_tokens(&lines);
+            assert!(tokens.contains(&">".to_string()));
+            assert!(tokens.contains(&"\"hi\"".to_string()));
+            assert!(tokens.contains(&"'ok'".to_string()));
         }
 
         #[test]
@@ -1382,6 +1386,18 @@ pub(crate) fn exceeds_highlight_limits(total_bytes: usize, total_lines: usize) -
     total_bytes > MAX_HIGHLIGHT_BYTES || total_lines > MAX_HIGHLIGHT_LINES
 }
 
+fn code_exceeds_highlight_limits(code: &str) -> bool {
+    exceeds_highlight_limits(code.len(), code.lines().count())
+}
+
+fn strip_carriage_returns(input: &str) -> Cow<'_, str> {
+    if input.contains('\r') {
+        Cow::Owned(input.replace('\r', ""))
+    } else {
+        Cow::Borrowed(input)
+    }
+}
+
 // -- Core highlighting --------------------------------------------------------
 
 /// Core highlighter that accepts an explicit theme reference.
@@ -1403,7 +1419,7 @@ fn highlight_to_line_spans_with_theme(
     // Bail out early for oversized inputs to avoid excessive resource usage.
     // Count actual lines (not newline bytes) to avoid an off-by-one when
     // the input does not end with a newline.
-    if code.len() > MAX_HIGHLIGHT_BYTES || code.lines().count() > MAX_HIGHLIGHT_LINES {
+    if code_exceeds_highlight_limits(code) {
         return None;
     }
 
@@ -1427,6 +1443,9 @@ fn highlight_to_line_spans_with_theme(
             spans.push(Span::raw(String::new()));
         }
         lines.push(spans);
+    }
+    if code.ends_with('\n') {
+        lines.push(vec![Span::raw(String::new())]);
     }
 
     Some(lines)
@@ -1457,11 +1476,10 @@ fn upstream_highlight_code_to_lines(code: &str, lang: &str) -> Vec<Line<'static>
     if let Some(line_spans) = highlight_to_line_spans(code, lang) {
         line_spans.into_iter().map(Line::from).collect()
     } else {
-        // Fallback: plain text, one Line per source line.
-        // Use `lines()` instead of `split('\n')` to avoid a phantom trailing
-        // empty element when the input ends with '\n' (as pulldown-cmark emits).
-        let mut result: Vec<Line<'static>> =
-            code.lines().map(|l| Line::from(l.to_string())).collect();
+        let mut result: Vec<Line<'static>> = code
+            .split('\n')
+            .map(|l| Line::from(l.to_string()))
+            .collect();
         if result.is_empty() {
             result.push(Line::from(String::new()));
         }
@@ -1494,7 +1512,7 @@ fn plain_lines(code: &str) -> Vec<Line<'static>> {
     if code.is_empty() {
         vec![Line::from("")]
     } else {
-        code.lines()
+        code.split('\n')
             .map(|line| Line::from(line.to_string()))
             .collect()
     }
@@ -1506,11 +1524,17 @@ pub(crate) fn supports_highlighting(lang: &str) -> bool {
 }
 
 pub(crate) fn highlight_code_block_to_lines(lang: Option<&str>, code: &str) -> Vec<Line<'static>> {
+    let code = strip_carriage_returns(code);
+    let code = code.as_ref();
     let Some(lang) = lang.map(str::trim).filter(|lang| !lang.is_empty()) else {
         return plain_lines(code);
     };
 
     if !syntax_highlighting_enabled() {
+        return plain_lines(code);
+    }
+
+    if code_exceeds_highlight_limits(code) {
         return plain_lines(code);
     }
 
@@ -1522,7 +1546,13 @@ pub(crate) fn highlight_code_block_to_lines(lang: Option<&str>, code: &str) -> V
 }
 
 pub(crate) fn highlight_code_to_lines(code: &str, lang: &str) -> Vec<Line<'static>> {
+    let code = strip_carriage_returns(code);
+    let code = code.as_ref();
     if !syntax_highlighting_enabled() {
+        return plain_lines(code);
+    }
+
+    if code_exceeds_highlight_limits(code) {
         return plain_lines(code);
     }
 
@@ -1534,7 +1564,13 @@ pub(crate) fn highlight_code_to_lines(code: &str, lang: &str) -> Vec<Line<'stati
 }
 
 pub(crate) fn highlight_bash_to_lines(script: &str) -> Vec<Line<'static>> {
+    let script = strip_carriage_returns(script);
+    let script = script.as_ref();
     if !syntax_highlighting_enabled() {
+        return plain_lines(script);
+    }
+
+    if code_exceeds_highlight_limits(script) {
         return plain_lines(script);
     }
 
@@ -1542,7 +1578,13 @@ pub(crate) fn highlight_bash_to_lines(script: &str) -> Vec<Line<'static>> {
 }
 
 pub(crate) fn highlight_bash_with_heredoc_overrides(script: &str) -> Vec<Line<'static>> {
+    let script = strip_carriage_returns(script);
+    let script = script.as_ref();
     if !syntax_highlighting_enabled() {
+        return plain_lines(script);
+    }
+
+    if code_exceeds_highlight_limits(script) {
         return plain_lines(script);
     }
 
@@ -1553,7 +1595,13 @@ pub(crate) fn highlight_code_to_styled_spans(
     code: &str,
     lang: &str,
 ) -> Option<Vec<Vec<Span<'static>>>> {
+    let code = strip_carriage_returns(code);
+    let code = code.as_ref();
     if !syntax_highlighting_enabled() {
+        return None;
+    }
+
+    if code_exceeds_highlight_limits(code) {
         return None;
     }
 
@@ -1708,18 +1756,18 @@ mod tests {
     }
 
     #[test]
-    fn fallback_trailing_newline_no_phantom_line() {
-        // pulldown-cmark sends code block text ending with '\n'.
-        // The fallback path (unknown language) must not produce a phantom
-        // empty trailing line from that newline.
+    fn fallback_preserves_explicit_trailing_newline() {
+        // The highlighter fallback preserves the text it is given. Markdown
+        // rendering strips pulldown-cmark's parser-final newline before calling
+        // this path, so an explicit newline here is real content.
         let code = "hello world\n";
         let lines = highlight_code_to_lines(code, "xyzlang");
         assert_eq!(
             lines.len(),
-            1,
-            "trailing newline should not produce phantom blank line, got {lines:?}"
+            2,
+            "explicit trailing newline should produce a blank line, got {lines:?}"
         );
-        assert_eq!(reconstructed(&lines), "hello world");
+        assert_eq!(reconstructed(&lines), code);
     }
 
     #[test]

@@ -3,6 +3,7 @@ use crate::codex::Session;
 use crate::codex::TurnContext;
 use crate::config::Config;
 use crate::config::ConfigOverrides;
+use crate::config::ConfigToml;
 use crate::config::Constrained;
 use crate::config::ManagedFeatures;
 use crate::config::NetworkProxySpec;
@@ -15,7 +16,7 @@ use crate::config_loader::NetworkDomainPermissionsToml;
 use crate::config_loader::RequirementSource;
 use crate::config_loader::Sourced;
 use crate::test_support;
-use codex_config::config_toml::ConfigToml;
+use anyhow::anyhow;
 use codex_network_proxy::NetworkProxyConfig;
 use codex_protocol::ThreadId;
 use codex_protocol::approvals::NetworkApprovalProtocol;
@@ -1321,8 +1322,24 @@ async fn guardian_review_surfaces_responses_api_errors_in_rejection_reason() -> 
     Ok(())
 }
 
-#[tokio::test(flavor = "current_thread")]
-async fn guardian_parallel_reviews_fork_from_last_committed_trunk_history() -> anyhow::Result<()> {
+#[test]
+fn guardian_parallel_reviews_fork_from_last_committed_trunk_history() -> anyhow::Result<()> {
+    std::thread::Builder::new()
+        .name("guardian_parallel_reviews_fork_from_last_committed_trunk_history".to_string())
+        .stack_size(16 * 1024 * 1024)
+        .spawn(|| -> anyhow::Result<()> {
+            tokio::runtime::Builder::new_multi_thread()
+                .worker_threads(2)
+                .enable_all()
+                .build()?
+                .block_on(guardian_parallel_reviews_fork_from_last_committed_trunk_history_impl())
+        })?
+        .join()
+        .map_err(|panic| anyhow!("guardian parallel review test panicked: {panic:?}"))?
+}
+
+async fn guardian_parallel_reviews_fork_from_last_committed_trunk_history_impl()
+-> anyhow::Result<()> {
     let first_assessment = serde_json::json!({
         "risk_level": "low",
         "user_authorization": "high",

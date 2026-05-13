@@ -479,7 +479,7 @@ mod tests {
             interface: None,
             dependencies: Some(SkillDependencies { tools }),
             policy: None,
-            path: PathBuf::from("skill"),
+            path_to_skills_md: PathBuf::from("skill"),
             scope: SkillScope::User,
         }
     }
@@ -514,6 +514,7 @@ mod tests {
                 scopes: None,
                 oauth_resource: None,
                 tools: HashMap::new(),
+                startup_mode: None,
             },
         )]);
 
@@ -564,6 +565,7 @@ mod tests {
                 scopes: None,
                 oauth_resource: None,
                 tools: HashMap::new(),
+                startup_mode: None,
             },
         )]);
 

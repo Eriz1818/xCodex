@@ -2,7 +2,7 @@ use std::time::Duration;
 
 use anyhow::Result;
 use app_test_support::ChatGptAuthFixture;
-use app_test_support::DEFAULT_CLIENT_NAME;
+use app_test_support::MCP_CLIENT_NAME;
 use app_test_support::McpProcess;
 use app_test_support::start_analytics_events_server;
 use app_test_support::to_response;
@@ -211,7 +211,7 @@ async fn plugin_uninstall_tracks_analytics_event() -> Result<()> {
                     "has_skills": false,
                     "mcp_server_count": 0,
                     "connector_ids": [],
-                    "product_client_id": DEFAULT_CLIENT_NAME,
+                    "product_client_id": MCP_CLIENT_NAME,
                 }
             }]
         })

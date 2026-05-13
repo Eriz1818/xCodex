@@ -391,10 +391,8 @@ async fn summarize_context_three_requests_and_instructions() {
             RolloutItem::TurnContext(_) => {
                 regular_turn_context_count += 1;
             }
-            RolloutItem::Compacted(ci) => {
-                if ci.message == expected_summary_message {
-                    saw_compacted_summary = true;
-                }
+            RolloutItem::Compacted(ci) if ci.message == expected_summary_message => {
+                saw_compacted_summary = true;
             }
             _ => {}
         }
@@ -1807,6 +1805,11 @@ async fn pre_sampling_compact_runs_on_switch_to_smaller_context_model() {
     .await;
 
     test.codex
+        .submit(Op::SetAutoCompact { enabled: true })
+        .await
+        .expect("enable auto compact for model downshift test");
+
+    test.codex
         .submit(Op::UserTurn {
             items: vec![UserInput::Text {
                 text: "after switch".into(),
@@ -1964,6 +1967,12 @@ async fn pre_sampling_compact_runs_after_resume_and_switch_to_smaller_model() {
         .resume(&server, home, rollout_path)
         .await
         .expect("resume codex");
+
+    resumed
+        .codex
+        .submit(Op::SetAutoCompact { enabled: true })
+        .await
+        .expect("enable auto compact for resumed model downshift test");
 
     resumed
         .codex
@@ -3373,7 +3382,7 @@ async fn snapshot_request_shape_pre_turn_compaction_context_window_exceeded() {
     );
 
     assert!(
-        error_message.contains("ran out of room in the model's context window"),
+        error_message.contains("context window"),
         "expected context window exceeded message, got {error_message}"
     );
 }

@@ -2,3 +2,13 @@
 # .git/sl/origbackups (which can be populated by Sapling SCM).
 .git
 codex-rs/target
+.bazel
+.bazel_output
+.bazel_root
+.bazel_user_root
+.worktrees
+bazel-bin
+bazel-codex
+bazel-out
+bazel-testlogs
+codex-rs/.bazel

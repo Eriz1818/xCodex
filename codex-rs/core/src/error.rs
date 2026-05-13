@@ -777,11 +777,11 @@ pub fn get_error_message_ui(e: &CodexErr) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::exec::StreamOutput;
     use chrono::DateTime;
     use chrono::Duration as ChronoDuration;
     use chrono::TimeZone;
     use chrono::Utc;
+    use codex_protocol::exec_output::StreamOutput;
     use codex_protocol::protocol::RateLimitWindow;
     use pretty_assertions::assert_eq;
     use reqwest::Response;

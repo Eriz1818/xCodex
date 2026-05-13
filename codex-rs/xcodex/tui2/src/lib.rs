@@ -9,13 +9,10 @@ pub use app::AppExitInfo;
 pub use app::ExitReason;
 use codex_common::oss::ensure_oss_provider_ready;
 use codex_common::oss::get_default_model_for_oss_provider;
-use codex_core::AuthManager;
-use codex_core::CodexAuth;
 use codex_core::INTERACTIVE_SESSION_SOURCES;
 use codex_core::RolloutRecorder;
 use codex_core::ThreadSortKey;
 use codex_core::auth::AuthMode;
-use codex_core::auth::enforce_login_restrictions;
 use codex_core::config::Config;
 use codex_core::config::ConfigOverrides;
 use codex_core::config::find_codex_home;
@@ -23,11 +20,15 @@ use codex_core::config::load_config_as_toml_with_cli_overrides;
 use codex_core::config::resolve_oss_provider;
 use codex_core::find_thread_path_by_id_str;
 use codex_core::protocol::AskForApproval;
-use codex_core::terminal::Multiplexer;
 use codex_core::windows_sandbox::WindowsSandboxLevelExt;
+use codex_login::AuthConfig;
+use codex_login::AuthManager;
+use codex_login::CodexAuth;
+use codex_login::enforce_login_restrictions;
 use codex_protocol::config_types::AltScreenMode;
 use codex_protocol::config_types::SandboxMode;
 use codex_protocol::config_types::WindowsSandboxLevel;
+use codex_terminal_detection::Multiplexer;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use std::fs::OpenOptions;
 use std::path::PathBuf;
@@ -50,6 +51,7 @@ mod clipboard_paste;
 mod collab;
 mod collaboration_modes;
 mod color;
+mod custom_prompts;
 pub mod custom_terminal;
 mod diff_render;
 mod exec_cell;
@@ -213,7 +215,7 @@ pub async fn run_main(
     #[allow(clippy::print_stderr)]
     let config_toml = match load_config_as_toml_with_cli_overrides(
         &codex_home,
-        &config_cwd,
+        Some(&config_cwd),
         cli_kv_overrides.clone(),
     )
     .await
@@ -289,7 +291,12 @@ pub async fn run_main(
     }
 
     #[allow(clippy::print_stderr)]
-    if let Err(err) = enforce_login_restrictions(&config) {
+    if let Err(err) = enforce_login_restrictions(&AuthConfig {
+        codex_home: config.codex_home.clone(),
+        auth_credentials_store_mode: config.cli_auth_credentials_store_mode,
+        forced_login_method: config.forced_login_method,
+        forced_chatgpt_workspace_id: config.forced_chatgpt_workspace_id.clone(),
+    }) {
         eprintln!("{err}");
         std::process::exit(1);
     }
@@ -384,7 +391,7 @@ pub async fn run_main(
         .with(otel_logger_layer)
         .try_init();
 
-    let terminal_info = codex_core::terminal::terminal_info();
+    let terminal_info = codex_terminal_detection::terminal_info();
     tracing::info!(terminal = ?terminal_info, "Detected terminal info");
 
     run_ratatui_app(
@@ -543,9 +550,10 @@ async fn run_ratatui_app(
                 1,
                 None,
                 ThreadSortKey::UpdatedAt,
-                INTERACTIVE_SESSION_SOURCES,
+                &INTERACTIVE_SESSION_SOURCES,
                 Some(provider_filter.as_slice()),
                 &config.model_provider_id,
+                /*search_term*/ None,
             )
             .await
             {
@@ -591,7 +599,7 @@ async fn run_ratatui_app(
             1,
             None,
             ThreadSortKey::UpdatedAt,
-            INTERACTIVE_SESSION_SOURCES,
+            &INTERACTIVE_SESSION_SOURCES,
             Some(provider_filter.as_slice()),
             &config.model_provider_id,
             filter_cwd,
@@ -645,7 +653,7 @@ async fn run_ratatui_app(
             AltScreenMode::Never => false,
             AltScreenMode::Auto => {
                 // Auto-detect: disable in Zellij, enable elsewhere
-                let terminal_info = codex_core::terminal::terminal_info();
+                let terminal_info = codex_terminal_detection::terminal_info();
                 !matches!(terminal_info.multiplexer, Some(Multiplexer::Zellij { .. }))
             }
         }
@@ -851,8 +859,8 @@ fn should_show_login_screen(login_status: LoginStatus, config: &Config) -> bool 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use codex_config::config_toml::ProjectConfig;
     use codex_core::config::ConfigBuilder;
-    use codex_core::config::ProjectConfig;
     use serial_test::serial;
     use tempfile::TempDir;
 

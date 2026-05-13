@@ -10,7 +10,6 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 
 use crate::connectors;
-use crate::features::Feature;
 use crate::function_tool::FunctionCallError;
 use crate::mcp::CODEX_APPS_MCP_SERVER_NAME;
 use crate::mcp_connection_manager::ToolInfo;
@@ -21,6 +20,7 @@ use crate::tools::context::ToolProvenance;
 use crate::tools::handlers::parse_arguments;
 use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
+use codex_features::Feature;
 
 pub struct SearchToolBm25Handler;
 

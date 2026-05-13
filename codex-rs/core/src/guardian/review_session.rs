@@ -5,6 +5,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::anyhow;
+use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::config_types::Personality;
 use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
 use codex_protocol::models::DeveloperInstructions;
@@ -586,7 +587,7 @@ async fn run_review_on_session(
                     items: prompt_items.items,
                     cwd: params.parent_turn.cwd.to_path_buf(),
                     approval_policy: AskForApproval::Never,
-                    approvals_reviewer: None,
+                    approvals_reviewer: Some(ApprovalsReviewer::User),
                     sandbox_policy: SandboxPolicy::new_read_only_policy(),
                     model: params.model.clone(),
                     effort: params.reasoning_effort,
@@ -716,6 +717,7 @@ pub(crate) fn build_guardian_review_session_config(
     let mut guardian_config = parent_config.clone();
     guardian_config.model = Some(active_model.to_string());
     guardian_config.model_reasoning_effort = reasoning_effort;
+    guardian_config.approvals_reviewer = ApprovalsReviewer::User;
     guardian_config.developer_instructions = Some(
         parent_config
             .guardian_policy_config

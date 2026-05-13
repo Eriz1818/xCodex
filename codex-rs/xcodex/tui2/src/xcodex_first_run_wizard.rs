@@ -678,28 +678,20 @@ impl XcodexFirstRunWizardScreen {
         }
 
         match key_event.code {
-            KeyCode::Up | KeyCode::Char('k') => {
-                if self.mode == SetupMode::SelectiveImport {
-                    self.import_highlight = self.import_highlight.saturating_sub(1);
+            KeyCode::Up | KeyCode::Char('k') if self.mode == SetupMode::SelectiveImport => {
+                self.import_highlight = self.import_highlight.saturating_sub(1);
+            }
+            KeyCode::Down | KeyCode::Char('j') if self.mode == SetupMode::SelectiveImport => {
+                let max = self.import_items.len();
+                if max > 0 {
+                    self.import_highlight = (self.import_highlight + 1).min(max - 1);
                 }
             }
-            KeyCode::Down | KeyCode::Char('j') => {
-                if self.mode == SetupMode::SelectiveImport {
-                    let max = self.import_items.len();
-                    if max > 0 {
-                        self.import_highlight = (self.import_highlight + 1).min(max - 1);
-                    }
-                }
+            KeyCode::Char(' ') | KeyCode::Enter if self.mode == SetupMode::SelectiveImport => {
+                self.toggle_import_row();
             }
-            KeyCode::Char(' ') | KeyCode::Enter => {
-                if self.mode == SetupMode::SelectiveImport {
-                    self.toggle_import_row();
-                }
-            }
-            KeyCode::Char('a') | KeyCode::Char('A') => {
-                if self.mode == SetupMode::SelectiveImport {
-                    self.select_all_import_items();
-                }
+            KeyCode::Char('a') | KeyCode::Char('A') if self.mode == SetupMode::SelectiveImport => {
+                self.select_all_import_items();
             }
             KeyCode::Char('e') => self.start_edit_import_source_home(),
             KeyCode::Char('c') => self.enter_import_review(),
@@ -723,10 +715,8 @@ impl XcodexFirstRunWizardScreen {
             KeyCode::Backspace => {
                 self.import_source_home.pop();
             }
-            KeyCode::Char(c) => {
-                if !key_event.modifiers.contains(KeyModifiers::CONTROL) {
-                    self.import_source_home.push(c);
-                }
+            KeyCode::Char(c) if !key_event.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.import_source_home.push(c);
             }
             _ => {}
         }

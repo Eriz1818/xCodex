@@ -138,6 +138,7 @@ use ratatui::layout::Margin;
 use ratatui::layout::Rect;
 use ratatui::style::Modifier;
 use ratatui::style::Style;
+use ratatui::style::Styled;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
 use ratatui::text::Span;
@@ -183,7 +184,13 @@ use super::skill_popup::SkillPopup;
 use super::slash_commands;
 use super::slash_commands::BuiltinCommandFlags;
 use crate::bottom_pane::paste_burst::FlushResult;
+use crate::bottom_pane::prompt_args::PromptExpansionError;
+use crate::bottom_pane::prompt_args::expand_custom_prompt_submission;
+use crate::bottom_pane::prompt_args::expand_if_numeric_with_positional_args;
 use crate::bottom_pane::prompt_args::parse_slash_name;
+use crate::bottom_pane::prompt_args::prompt_argument_names;
+use crate::bottom_pane::prompt_args::prompt_command_with_arg_placeholders;
+use crate::bottom_pane::prompt_args::prompt_has_numeric_placeholders;
 use crate::render::Insets;
 use crate::render::RectExt;
 use crate::render::renderable::Renderable;
@@ -206,6 +213,8 @@ use crate::bottom_pane::textarea::TextArea;
 use crate::bottom_pane::textarea::TextAreaState;
 use crate::clipboard_paste::normalize_pasted_path;
 use crate::clipboard_paste::pasted_image_format;
+use crate::custom_prompts::CustomPrompt;
+use crate::custom_prompts::PROMPTS_CMD_PREFIX;
 use crate::history_cell;
 use crate::legacy_core::plugins::PluginCapabilitySummary;
 use crate::legacy_core::skills::model::SkillMetadata;
@@ -214,6 +223,7 @@ use crate::ui_consts::LIVE_PREFIX_COLS;
 use codex_chatgpt::connectors;
 use codex_chatgpt::connectors::AppInfo;
 use codex_file_search::FileMatch;
+use codex_utils_fuzzy_match::fuzzy_match;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::collections::HashSet;
@@ -261,6 +271,24 @@ pub enum InputResult {
 struct AttachedImage {
     placeholder: String,
     path: PathBuf,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PromptSelectionMode {
+    Completion,
+    Submit,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+enum PromptSelectionAction {
+    Insert {
+        text: String,
+        cursor: Option<usize>,
+    },
+    Submit {
+        text: String,
+        text_elements: Vec<TextElement>,
+    },
 }
 
 /// Feature flags for reusing the chat composer in other bottom-pane surfaces.
@@ -352,6 +380,7 @@ pub(crate) struct ChatComposer {
     status_bar_git_branch: Option<String>,
     status_bar_worktree: Option<String>,
     slash_completion_branches: Vec<String>,
+    custom_prompts: Vec<CustomPrompt>,
     show_footer_model: bool,
     show_status_bar_git_branch: bool,
     show_status_bar_worktree: bool,
@@ -498,6 +527,7 @@ impl ChatComposer {
             status_bar_git_branch: None,
             status_bar_worktree: None,
             slash_completion_branches: Vec::new(),
+            custom_prompts: Vec::new(),
             show_footer_model: false,
             show_status_bar_git_branch: false,
             show_status_bar_worktree: false,
@@ -1000,12 +1030,18 @@ impl ChatComposer {
         urls
     }
 
-    #[cfg(test)]
     pub(crate) fn show_footer_flash(&mut self, line: Line<'static>, duration: Duration) {
         let expires_at = Instant::now()
             .checked_add(duration)
             .unwrap_or_else(Instant::now);
         self.footer_flash = Some(FooterFlash { line, expires_at });
+    }
+
+    pub(crate) fn set_custom_prompts(&mut self, prompts: Vec<CustomPrompt>) {
+        self.custom_prompts = prompts.clone();
+        if let ActivePopup::Command(popup) = &mut self.active_popup {
+            popup.set_prompts(prompts);
+        }
     }
 
     pub(crate) fn footer_flash_visible(&self) -> bool {
@@ -1696,10 +1732,7 @@ impl ChatComposer {
                                 && !typed_rest.trim().is_empty()
                                 && let Some(root_cmd) = slash_commands::find_builtin_command(
                                     typed_name,
-                                    self.collaboration_modes_enabled,
-                                    self.connectors_enabled,
-                                    self.personality_command_enabled,
-                                    self.windows_degraded_sandbox_active,
+                                    self.builtin_command_flags(),
                                 )
                                 && root_cmd == SlashCommand::Plan
                             {
@@ -1716,10 +1749,7 @@ impl ChatComposer {
                                 if let Some((name, rest, _rest_offset)) = parse_slash_name(&text)
                                     && let Some(cmd) = slash_commands::find_builtin_command(
                                         name,
-                                        self.collaboration_modes_enabled,
-                                        false,
-                                        true,
-                                        self.windows_degraded_sandbox_active,
+                                        self.builtin_command_flags(),
                                     )
                                 {
                                     if rest.is_empty() {
@@ -1765,6 +1795,15 @@ impl ChatComposer {
                                             &text_elements,
                                         );
                                         self.textarea.set_text_clearing_elements("");
+                                        if self.is_task_running {
+                                            return (
+                                                InputResult::Queued {
+                                                    text,
+                                                    text_elements,
+                                                },
+                                                true,
+                                            );
+                                        }
                                         return (
                                             InputResult::Submitted {
                                                 text,
@@ -2595,25 +2634,69 @@ impl ChatComposer {
         {
             let treat_as_plain_text = input_starts_with_space || name.contains('/');
             if !treat_as_plain_text {
-                let is_builtin =
-                    slash_commands::find_builtin_command(name, self.builtin_command_flags())
-                        .is_some();
-                if !is_builtin {
-                    let message = format!(
-                        r#"Unrecognized command '/{name}'. Type "/" for a list of supported commands."#
-                    );
-                    self.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
-                        history_cell::new_info_event(message, /*hint*/ None),
-                    )));
-                    self.set_text_content_with_mention_bindings(
-                        original_input.clone(),
-                        original_text_elements,
-                        original_local_image_paths,
-                        original_mention_bindings,
-                    );
-                    self.pending_pastes.clone_from(&original_pending_pastes);
-                    self.textarea.set_cursor(original_input.len());
-                    return None;
+                if let Some(prompt_name) = name.strip_prefix(&format!("{PROMPTS_CMD_PREFIX}:"))
+                    && let Some(prompt) = self
+                        .custom_prompts
+                        .iter()
+                        .find(|prompt| prompt.name == prompt_name)
+                        .cloned()
+                {
+                    match expand_custom_prompt_submission(&prompt, &text, &text_elements) {
+                        Ok(Some(expanded)) => {
+                            text = expanded.text;
+                            text_elements = expanded.text_elements;
+                        }
+                        Ok(None) => {}
+                        Err(err) => {
+                            let message = match err {
+                                PromptExpansionError::InvalidArg { token } => {
+                                    format!(
+                                        "Invalid custom prompt argument '{token}': expected key=value"
+                                    )
+                                }
+                                PromptExpansionError::MissingRequiredArgs { args } => {
+                                    format!(
+                                        "Missing required args for /{PROMPTS_CMD_PREFIX}:{prompt_name}: {}",
+                                        args.join(", ")
+                                    )
+                                }
+                            };
+                            self.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
+                                history_cell::new_error_event(message),
+                            )));
+                            self.set_text_content_with_mention_bindings(
+                                original_input.clone(),
+                                original_text_elements,
+                                original_local_image_paths,
+                                original_mention_bindings,
+                            );
+                            self.pending_pastes.clone_from(&original_pending_pastes);
+                            self.textarea.set_cursor(original_input.len());
+                            return None;
+                        }
+                    }
+                } else {
+                    let is_builtin =
+                        slash_commands::find_builtin_command(name, self.builtin_command_flags())
+                            .is_some();
+                    let is_xcodex_plugin = crate::xcodex_plugins::is_plugin_slash_command(name);
+                    if !is_builtin && !is_xcodex_plugin {
+                        let message = format!(
+                            r#"Unrecognized command '/{name}'. Type "/" for a list of supported commands."#
+                        );
+                        self.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
+                            history_cell::new_info_event(message, /*hint*/ None),
+                        )));
+                        self.set_text_content_with_mention_bindings(
+                            original_input.clone(),
+                            original_text_elements,
+                            original_local_image_paths,
+                            original_mention_bindings,
+                        );
+                        self.pending_pastes.clone_from(&original_pending_pastes);
+                        self.textarea.set_cursor(original_input.len());
+                        return None;
+                    }
                 }
             }
         }
@@ -3953,7 +4036,7 @@ impl ChatComposer {
 
         let name = &first_line[name_start..name_end];
         let supports_popup = super::command_popup::slash_command_supports_popup(name);
-        if cursor > name_end && !first_line[name_end..].trim().is_empty() && !supports_popup {
+        if cursor > name_end && !supports_popup {
             return None;
         }
 
@@ -4929,6 +5012,14 @@ fn prompt_selection_action(
         }
         PromptSelectionMode::Submit => {
             if !named_args.is_empty() {
+                if let Ok(Some(expanded)) =
+                    expand_custom_prompt_submission(prompt, first_line, text_elements)
+                {
+                    return PromptSelectionAction::Submit {
+                        text: expanded.text,
+                        text_elements: expanded.text_elements,
+                    };
+                }
                 let (text, cursor) =
                     prompt_command_with_arg_placeholders(&prompt.name, &named_args);
                 return PromptSelectionAction::Insert {
@@ -7112,7 +7203,7 @@ mod tests {
             "Ask Codex to do anything".to_string(),
             /*disable_paste_burst*/ false,
         );
-        composer.set_steer_enabled(false);
+        composer.set_task_running(/*running*/ true);
         let input = "x".repeat(MAX_USER_INPUT_TEXT_CHARS + 1);
         composer.textarea.set_text_clearing_elements(&input);
 
@@ -9010,6 +9101,7 @@ mod tests {
             content: prompt_text.to_string(),
             description: None,
             argument_hint: None,
+            text_elements: Vec::new(),
         }]);
 
         type_chars_humanlike(
@@ -9049,6 +9141,7 @@ mod tests {
             content: "Review $USER changes on $BRANCH".to_string(),
             description: None,
             argument_hint: None,
+            text_elements: Vec::new(),
         }]);
 
         composer
@@ -9085,6 +9178,7 @@ mod tests {
             content: "Pair $USER with $BRANCH".to_string(),
             description: None,
             argument_hint: None,
+            text_elements: Vec::new(),
         }]);
 
         composer
@@ -9125,6 +9219,7 @@ mod tests {
             content: "Review $IMG".to_string(),
             description: None,
             argument_hint: None,
+            text_elements: Vec::new(),
         }]);
 
         composer
@@ -9181,6 +9276,7 @@ mod tests {
             content: "Review $IMG".to_string(),
             description: None,
             argument_hint: None,
+            text_elements: Vec::new(),
         }]);
 
         composer
@@ -9238,6 +9334,7 @@ mod tests {
             content: "Review changes".to_string(),
             description: None,
             argument_hint: None,
+            text_elements: Vec::new(),
         }]);
 
         composer
@@ -9288,6 +9385,7 @@ mod tests {
             content: "Please review the following code:\n\n$1".to_string(),
             description: None,
             argument_hint: None,
+            text_elements: Vec::new(),
         }]);
 
         // Type the slash command
@@ -9352,6 +9450,7 @@ mod tests {
             content: "Review $IMG\n\n$CODE".to_string(),
             description: None,
             argument_hint: None,
+            text_elements: Vec::new(),
         }]);
 
         composer
@@ -9388,7 +9487,6 @@ mod tests {
         }
     }
 
-    #[test]
     #[test]
     fn slash_path_input_submits_without_command_error() {
         use crossterm::event::KeyCode;
@@ -9479,6 +9577,7 @@ mod tests {
             content: "Review $USER changes".to_string(),
             description: None,
             argument_hint: None,
+            text_elements: Vec::new(),
         }]);
 
         composer
@@ -9529,6 +9628,7 @@ mod tests {
             content: "Review $USER changes on $BRANCH".to_string(),
             description: None,
             argument_hint: None,
+            text_elements: Vec::new(),
         }]);
 
         // Provide only one of the required args
@@ -9585,6 +9685,7 @@ mod tests {
             content: prompt_text.to_string(),
             description: None,
             argument_hint: None,
+            text_elements: Vec::new(),
         }]);
 
         // Type the slash command with two args and hit Enter to submit.
@@ -9624,6 +9725,7 @@ mod tests {
             content: "Hello".to_string(),
             description: None,
             argument_hint: None,
+            text_elements: Vec::new(),
         }]);
 
         composer.attach_image(PathBuf::from("/tmp/unused.png"));
@@ -9663,6 +9765,7 @@ mod tests {
             content: "Hello $1".to_string(),
             description: None,
             argument_hint: None,
+            text_elements: Vec::new(),
         }]);
 
         type_chars_humanlike(
@@ -9707,6 +9810,7 @@ mod tests {
             content: "Echo: $1".to_string(),
             description: None,
             argument_hint: None,
+            text_elements: Vec::new(),
         }]);
 
         composer
@@ -9740,7 +9844,7 @@ mod tests {
             "Ask Codex to do anything".to_string(),
             false,
         );
-        composer.set_steer_enabled(false);
+        composer.set_task_running(/*running*/ true);
 
         composer.set_custom_prompts(vec![CustomPrompt {
             name: "my-prompt".to_string(),
@@ -9748,6 +9852,7 @@ mod tests {
             content: "Hello $1".to_string(),
             description: None,
             argument_hint: None,
+            text_elements: Vec::new(),
         }]);
 
         composer
@@ -9756,8 +9861,7 @@ mod tests {
         composer.textarea.set_cursor(composer.textarea.text().len());
         composer.attach_image(PathBuf::from("/tmp/unused.png"));
 
-        let (result, _needs_redraw) =
-            composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        let (result, _needs_redraw) = composer.handle_submission(/*should_queue*/ true);
 
         assert!(matches!(
             result,
@@ -9780,6 +9884,7 @@ mod tests {
             content: prompt_text.to_string(),
             description: None,
             argument_hint: None,
+            text_elements: Vec::new(),
         };
 
         let action = prompt_selection_action(
@@ -9821,6 +9926,7 @@ mod tests {
             content: "Echo: $ARGUMENTS".to_string(),
             description: None,
             argument_hint: None,
+            text_elements: Vec::new(),
         }]);
 
         // Type positional args; should submit with numeric expansion, no errors.
@@ -9857,6 +9963,7 @@ mod tests {
             content: prompt_text.to_string(),
             description: None,
             argument_hint: None,
+            text_elements: Vec::new(),
         }]);
 
         type_chars_humanlike(
@@ -9894,6 +10001,7 @@ mod tests {
             content: prompt_text.to_string(),
             description: None,
             argument_hint: None,
+            text_elements: Vec::new(),
         }]);
 
         type_chars_humanlike(
@@ -9933,6 +10041,7 @@ mod tests {
             content: prompt_text.to_string(),
             description: None,
             argument_hint: None,
+            text_elements: Vec::new(),
         }]);
 
         type_chars_humanlike(
@@ -10176,6 +10285,7 @@ mod tests {
             content: "hello from prompt".to_string(),
             description: None,
             argument_hint: None,
+            text_elements: Vec::new(),
         }]);
 
         composer.set_text_content("/my".to_string(), Vec::new(), Vec::new());

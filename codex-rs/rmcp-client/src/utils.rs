@@ -1,5 +1,4 @@
 use anyhow::Result;
-use anyhow::anyhow;
 use reqwest::Client;
 use reqwest::ClientBuilder;
 use reqwest::header::HeaderMap;

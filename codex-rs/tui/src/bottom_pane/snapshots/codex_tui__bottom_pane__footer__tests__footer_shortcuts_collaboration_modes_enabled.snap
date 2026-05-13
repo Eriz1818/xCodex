@@ -1,11 +1,12 @@
 ---
 source: tui/src/bottom_pane/footer.rs
+assertion_line: 1316
 expression: terminal.backend()
 ---
 "  / for commands                             ! for shell commands               "
 "  ctrl + j for newline                       tab to queue message               "
 "  @ for file paths                           ctrl + v to paste images           "
 "  ctrl + g to edit in external editor        esc esc to edit previous message   "
-"  ctrl + r search history                    ctrl + ⌥ + o for ⚡Tools            "
+"  ctrl + r search history                    ctrl + ⌥ + o for ⚡Tools           " Hidden by multi-width symbols: [(63, " ")]
 "  ctrl + c to exit                           shift + tab to toggle plan mode    "
 "                                             ctrl + t to view transcript        "

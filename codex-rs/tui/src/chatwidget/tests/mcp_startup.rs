@@ -117,7 +117,10 @@ async fn app_server_mcp_startup_failure_renders_warning_history() {
         .iter()
         .map(|lines| lines_to_single_string(lines))
         .collect::<String>();
-    assert_eq!(summary_text, "⚠ MCP startup incomplete (failed: alpha)\n");
+    assert_eq!(
+        summary_text,
+        "⚠ MCP startup incomplete (failed: alpha). Press `r` or run `/mcp retry failed`\n  to retry. Run `/mcp` for details.\n"
+    );
     assert!(!chat.bottom_pane.is_task_running());
 
     let width: u16 = 120;
@@ -187,7 +190,9 @@ async fn app_server_mcp_startup_lag_settles_startup_and_ignores_late_updates() {
         .collect::<String>();
     assert!(summary_text.contains("MCP startup interrupted"));
     assert!(summary_text.contains("beta"));
-    assert!(summary_text.contains("MCP startup incomplete (failed: alpha)"));
+    assert!(summary_text.contains("MCP startup incomplete"));
+    assert!(summary_text.contains("failed: alpha"));
+    assert!(summary_text.contains("not initialized: beta"));
     assert!(!chat.bottom_pane.is_task_running());
 
     chat.handle_server_notification(
@@ -252,7 +257,10 @@ async fn app_server_mcp_startup_after_lag_can_settle_without_starting_updates() 
         .iter()
         .map(|lines| lines_to_single_string(lines))
         .collect::<String>();
-    assert_eq!(summary_text, "⚠ MCP startup incomplete (failed: alpha)\n");
+    assert_eq!(
+        summary_text,
+        "⚠ MCP startup incomplete (failed: alpha). Press `r` or run `/mcp retry failed`\n  to retry. Run `/mcp` for details.\n"
+    );
     assert!(!chat.bottom_pane.is_task_running());
 }
 
@@ -468,7 +476,10 @@ async fn app_server_mcp_startup_next_round_keeps_terminal_statuses_after_startin
         .iter()
         .map(|lines| lines_to_single_string(lines))
         .collect::<String>();
-    assert_eq!(summary_text, "⚠ MCP startup incomplete (failed: alpha)\n");
+    assert_eq!(
+        summary_text,
+        "⚠ MCP startup incomplete (failed: alpha). Press `r` or run `/mcp retry failed`\n  to retry. Run `/mcp` for details.\n"
+    );
     assert!(!chat.bottom_pane.is_task_running());
 }
 
@@ -477,7 +488,10 @@ async fn app_server_mcp_startup_next_round_with_empty_expected_servers_reactivat
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.show_welcome_banner = false;
     chat.set_mcp_startup_expected_servers(std::iter::empty::<String>());
-    chat.finish_mcp_startup(Vec::new(), Vec::new());
+    chat.handle_codex_event(Event {
+        id: "mcp-complete".into(),
+        msg: EventMsg::McpStartupComplete(McpStartupCompleteEvent::default()),
+    });
 
     chat.handle_server_notification(
         ServerNotification::McpServerStatusUpdated(McpServerStatusUpdatedNotification {
@@ -505,6 +519,40 @@ async fn app_server_mcp_startup_next_round_with_empty_expected_servers_reactivat
         .collect::<String>();
     assert!(summary_text.contains("MCP client for `runtime` failed to start: handshake failed"));
     assert!(summary_text.contains("MCP startup incomplete (failed: runtime)"));
+    assert!(!chat.bottom_pane.is_task_running());
+}
+
+#[tokio::test]
+async fn app_server_mcp_startup_lazy_single_server_ready_does_not_cancel_dormant_servers() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.show_welcome_banner = false;
+    chat.set_mcp_startup_expected_servers(std::iter::empty::<String>());
+
+    chat.handle_server_notification(
+        ServerNotification::McpServerStatusUpdated(McpServerStatusUpdatedNotification {
+            name: "serena".to_string(),
+            status: McpServerStartupState::Starting,
+            error: None,
+        }),
+        /*replay_kind*/ None,
+    );
+    assert!(drain_insert_history(&mut rx).is_empty());
+    assert!(chat.bottom_pane.is_task_running());
+
+    chat.handle_server_notification(
+        ServerNotification::McpServerStatusUpdated(McpServerStatusUpdatedNotification {
+            name: "serena".to_string(),
+            status: McpServerStartupState::Ready,
+            error: None,
+        }),
+        /*replay_kind*/ None,
+    );
+
+    let summary_text = drain_insert_history(&mut rx)
+        .iter()
+        .map(|lines| lines_to_single_string(lines))
+        .collect::<String>();
+    assert!(summary_text.is_empty());
     assert!(!chat.bottom_pane.is_task_running());
 }
 

@@ -87,6 +87,10 @@ pub(crate) fn plugin_slash_commands() -> &'static [PluginSlashCommand] {
     &PLUGIN_COMMANDS
 }
 
+pub(crate) fn is_plugin_slash_command(name: &str) -> bool {
+    PLUGIN_COMMANDS.iter().any(|command| command.name == name)
+}
+
 pub(crate) fn plugin_subcommand_roots() -> &'static [PluginSubcommandRoot] {
     PLUGIN_SUBCOMMAND_ROOTS
 }

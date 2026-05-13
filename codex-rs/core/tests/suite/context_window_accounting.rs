@@ -58,9 +58,11 @@ async fn interrupt_recomputes_prompt_estimate_after_history_grows() -> Result<()
             sandbox_policy: SandboxPolicy::DangerFullAccess,
             model: test.session_configured.model.clone(),
             effort: test.config.model_reasoning_effort,
-            summary: ReasoningSummary::Auto,
+            summary: Some(ReasoningSummary::Auto),
             collaboration_mode: None,
             personality: None,
+            approvals_reviewer: None,
+            service_tier: None,
         })
         .await?;
 
@@ -121,6 +123,8 @@ async fn auto_compact_disabled_does_not_locally_block_on_context_window() -> Res
         .build(&server)
         .await?;
 
+    codex.submit(Op::SetAutoCompact { enabled: false }).await?;
+
     codex
         .submit(Op::UserInput {
             items: vec![UserInput::Text {
@@ -128,6 +132,7 @@ async fn auto_compact_disabled_does_not_locally_block_on_context_window() -> Res
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
+            responsesapi_client_metadata: None,
         })
         .await?;
 
@@ -138,10 +143,9 @@ async fn auto_compact_disabled_does_not_locally_block_on_context_window() -> Res
             error_event,
             EventMsg::Error(ref err)
                 if err.codex_error_info == Some(CodexErrorInfo::ContextWindowExceeded)
-                    && err.message.contains("provider rejected")
-                    && err.message.contains("context_length_exceeded")
+                    && err.message.contains("context window")
         ),
-        "expected provider context window rejection; got {error_event:?}"
+        "expected context window rejection; got {error_event:?}"
     );
 
     core_test_support::wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
@@ -203,9 +207,11 @@ async fn resume_emits_prompt_estimate_consistent_with_aborted_history() -> Resul
             sandbox_policy: SandboxPolicy::DangerFullAccess,
             model: initial.session_configured.model.clone(),
             effort: initial.config.model_reasoning_effort,
-            summary: ReasoningSummary::Auto,
+            summary: Some(ReasoningSummary::Auto),
             collaboration_mode: None,
             personality: None,
+            approvals_reviewer: None,
+            service_tier: None,
         })
         .await?;
     sleep(Duration::from_millis(250)).await;

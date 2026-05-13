@@ -17,10 +17,10 @@ use crate::tooltips;
 use crate::update_action::UpdateAction;
 use crate::version::CODEX_CLI_VERSION;
 use crate::xtreme;
-use codex_common::format_env_display::format_env_display;
+use codex_common::format_env_display;
+use codex_config::McpServerTransportConfig;
 use codex_core::config;
 use codex_core::config::Config;
-use codex_core::config::types::McpServerTransportConfig;
 use codex_core::protocol::AskForApproval;
 use codex_core::protocol::McpAuthStatus;
 use codex_core::protocol::McpServerSnapshotState;
@@ -204,10 +204,20 @@ impl HistoryCell for XcodexTooltipsHistoryCell {
         let mut lines: Vec<Line<'static>> = Vec::new();
 
         if let Some(tip) = self.xcodex_tip.as_deref() {
-            append_markdown(&format!("**⚡Tips:** {tip}"), Some(wrap_width), &mut lines);
+            append_markdown(
+                &format!("**⚡Tips:** {tip}"),
+                Some(wrap_width),
+                None,
+                &mut lines,
+            );
         }
         if let Some(tip) = self.codex_tip.as_deref() {
-            append_markdown(&format!("**Tips:** {tip}"), Some(wrap_width), &mut lines);
+            append_markdown(
+                &format!("**Tips:** {tip}"),
+                Some(wrap_width),
+                None,
+                &mut lines,
+            );
         }
 
         prefix_lines(lines, indent.into(), indent.into())
@@ -236,6 +246,7 @@ impl HistoryCell for FallbackTooltipHistoryCell {
         append_markdown(
             &format!("**Tips:** {}", self.tip),
             Some(wrap_width),
+            None,
             &mut lines,
         );
 
@@ -1130,7 +1141,7 @@ pub(crate) fn new_session_info(
     let header = XcodexSessionHeaderHistoryCell::new(
         model.clone(),
         reasoning_effort,
-        config.cwd.clone(),
+        config.cwd.to_path_buf(),
         CODEX_CLI_VERSION,
         config.permissions.approval_policy.value(),
         config.permissions.sandbox_policy.get().clone(),
@@ -1182,7 +1193,7 @@ pub(crate) fn new_session_info_with_help_lines(
     let header = XcodexSessionHeaderHistoryCell::new(
         model.clone(),
         reasoning_effort,
-        config.cwd.clone(),
+        config.cwd.to_path_buf(),
         CODEX_CLI_VERSION,
         config.permissions.approval_policy.value(),
         config.permissions.sandbox_policy.get().clone(),
@@ -1328,7 +1339,8 @@ pub(crate) fn placeholder_session_header_cell(
                 model.to_string(),
                 placeholder_style,
                 None,
-                config.cwd.clone(),
+                /*show_fast_status*/ false,
+                config.cwd.to_path_buf(),
                 version,
             ),
         );
@@ -1338,7 +1350,7 @@ pub(crate) fn placeholder_session_header_cell(
         model.to_string(),
         placeholder_style,
         None,
-        config.cwd.clone(),
+        config.cwd.to_path_buf(),
         version,
         config.permissions.approval_policy.value(),
         config.permissions.sandbox_policy.get().clone(),

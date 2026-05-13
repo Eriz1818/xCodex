@@ -891,7 +891,7 @@ impl RequestUserInputOverlay {
         self.save_current_draft();
         let answers = self.collect_answers();
         self.app_event_tx.user_input_answer(
-            self.request.turn_id.clone(),
+            self.request.call_id.clone(),
             RequestUserInputResponse {
                 answers: answers.clone(),
             },
@@ -1305,7 +1305,6 @@ impl BottomPaneView for RequestUserInputOverlay {
                                 answer.options_state.selected_idx = Some(option_idx);
                             }
                             self.toggle_option_selection(option_idx);
-                            self.go_next_or_submit();
                         }
                     }
                     _ => {}

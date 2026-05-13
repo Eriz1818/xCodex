@@ -3,8 +3,6 @@ pub mod types;
 use crate::config::edit::ConfigEdit;
 use crate::config::edit::ConfigEditsBuilder;
 use crate::config::types::ExclusionConfig;
-use crate::config::types::NotificationMethod;
-use crate::config::types::Notifications;
 use crate::config::types::ScrollInputMode;
 use crate::config::types::Tui;
 use crate::config::types::UnattestedOutputPolicy;
@@ -124,7 +122,8 @@ pub mod edit;
 mod managed_features;
 mod network_proxy_spec;
 mod permissions;
-mod schema;
+#[doc(hidden)]
+pub mod schema;
 pub(crate) mod service;
 pub use codex_config::Constrained;
 pub use codex_config::ConstraintError;
@@ -469,7 +468,7 @@ pub struct Config {
 
     /// Ordered list of status line item identifiers for the TUI.
     ///
-    /// When unset, the TUI defaults to: `model-with-reasoning` and `current-dir`.
+    /// When unset, the TUI does not render a status line.
     pub tui_status_line: Option<Vec<String>>,
 
     /// Ordered list of terminal title item identifiers for the TUI.
@@ -3566,14 +3565,18 @@ mod tests {
     use crate::config::edit::ConfigEdit;
     use crate::config::edit::ConfigEditsBuilder;
     use crate::config::edit::apply_blocking;
-    use crate::config::types::FeedbackConfigToml;
-    use crate::config::types::HistoryPersistence;
-    use crate::config::types::McpServerTransportConfig;
     use crate::config::types::NotificationMethod;
     use crate::config::types::Notifications;
     use crate::config::types::XtremeMode;
     use crate::config_loader::RequirementSource;
-    use crate::features::Feature;
+    use codex_config::types::FeedbackConfigToml;
+    use codex_config::types::HistoryPersistence;
+    use codex_config::types::McpServerTransportConfig;
+    use codex_features::Feature;
+    use codex_features::FeaturesToml;
+    use codex_model_provider_info::LMSTUDIO_OSS_PROVIDER_ID;
+    use codex_model_provider_info::OLLAMA_OSS_PROVIDER_ID;
+    use codex_model_provider_info::WireApi;
 
     use super::*;
     use core_test_support::test_absolute_path;
@@ -3647,6 +3650,8 @@ mod tests {
             disabled_tools: None,
             startup_mode: None,
             scopes: None,
+            oauth_resource: None,
+            tools: HashMap::new(),
         }
     }
 
@@ -3667,6 +3672,8 @@ mod tests {
             disabled_tools: None,
             startup_mode: None,
             scopes: None,
+            oauth_resource: None,
+            tools: HashMap::new(),
         }
     }
 
@@ -3715,6 +3722,7 @@ persistence = "none"
         assert_eq!(
             tui,
             Tui {
+                notification_settings: TuiNotificationSettings::default(),
                 notifications: Notifications::Enabled(true),
                 notification_method: NotificationMethod::Auto,
                 animations: true,
@@ -3746,6 +3754,9 @@ persistence = "none"
                 experimental_mode: None,
                 alternate_screen: AltScreenMode::Auto,
                 status_line: None,
+                terminal_title: None,
+                theme: None,
+                model_availability_nux: ModelAvailabilityNuxConfig::default(),
             }
         );
     }
@@ -4249,7 +4260,7 @@ trust_level = "trusted"
         profiles.insert(
             "work".to_string(),
             ConfigProfile {
-                tools_web_search: Some(false),
+                web_search: Some(WebSearchMode::Disabled),
                 ..Default::default()
             },
         );
@@ -4398,7 +4409,7 @@ profile = "project"
         let mut entries = BTreeMap::new();
         entries.insert("apply_patch_freeform".to_string(), false);
         let cfg = ConfigToml {
-            features: Some(crate::features::FeaturesToml { entries }),
+            features: Some(FeaturesToml::from(entries)),
             ..Default::default()
         };
 
@@ -4446,7 +4457,7 @@ profile = "project"
             let mut entries = BTreeMap::new();
             entries.insert(feature_key.to_string(), true);
             let cfg = ConfigToml {
-                features: Some(crate::features::FeaturesToml { entries }),
+                features: Some(FeaturesToml::from(entries)),
                 ..Default::default()
             };
 
@@ -4456,10 +4467,7 @@ profile = "project"
                 codex_home.path().to_path_buf(),
             )?;
 
-            assert_eq!(
-                config.model_provider.wire_api,
-                crate::model_provider_info::WireApi::Responses
-            );
+            assert_eq!(config.model_provider.wire_api, WireApi::Responses);
         }
 
         Ok(())
@@ -4572,6 +4580,8 @@ profile = "project"
                 disabled_tools: None,
                 startup_mode: None,
                 scopes: None,
+                oauth_resource: None,
+                tools: HashMap::new(),
             },
         );
 
@@ -4730,6 +4740,8 @@ bearer_token = "secret"
                 disabled_tools: None,
                 startup_mode: None,
                 scopes: None,
+                oauth_resource: None,
+                tools: HashMap::new(),
             },
         )]);
 
@@ -4802,6 +4814,8 @@ ZIG_VAR = "3"
                 disabled_tools: None,
                 startup_mode: None,
                 scopes: None,
+                oauth_resource: None,
+                tools: HashMap::new(),
             },
         )]);
 
@@ -4854,6 +4868,8 @@ ZIG_VAR = "3"
                 disabled_tools: None,
                 startup_mode: None,
                 scopes: None,
+                oauth_resource: None,
+                tools: HashMap::new(),
             },
         )]);
 
@@ -4904,6 +4920,8 @@ ZIG_VAR = "3"
                 disabled_tools: None,
                 startup_mode: None,
                 scopes: None,
+                oauth_resource: None,
+                tools: HashMap::new(),
             },
         )]);
 
@@ -4970,6 +4988,8 @@ startup_timeout_sec = 2.0
                 disabled_tools: None,
                 startup_mode: None,
                 scopes: None,
+                oauth_resource: None,
+                tools: HashMap::new(),
             },
         )]);
         apply_blocking(
@@ -5048,6 +5068,8 @@ X-Auth = "DOCS_AUTH"
                 disabled_tools: None,
                 startup_mode: None,
                 scopes: None,
+                oauth_resource: None,
+                tools: HashMap::new(),
             },
         )]);
 
@@ -5079,6 +5101,8 @@ X-Auth = "DOCS_AUTH"
                 disabled_tools: None,
                 startup_mode: None,
                 scopes: None,
+                oauth_resource: None,
+                tools: HashMap::new(),
             },
         );
         apply_blocking(
@@ -5148,6 +5172,8 @@ url = "https://example.com/mcp"
                     disabled_tools: None,
                     startup_mode: None,
                     scopes: None,
+                    oauth_resource: None,
+                    tools: HashMap::new(),
                 },
             ),
             (
@@ -5169,6 +5195,8 @@ url = "https://example.com/mcp"
                     disabled_tools: None,
                     startup_mode: None,
                     scopes: None,
+                    oauth_resource: None,
+                    tools: HashMap::new(),
                 },
             ),
         ]);
@@ -5253,6 +5281,8 @@ url = "https://example.com/mcp"
                 disabled_tools: None,
                 startup_mode: None,
                 scopes: None,
+                oauth_resource: None,
+                tools: HashMap::new(),
             },
         )]);
 
@@ -5299,6 +5329,8 @@ url = "https://example.com/mcp"
                 disabled_tools: None,
                 scopes: None,
                 startup_mode: None,
+                oauth_resource: None,
+                tools: HashMap::new(),
             },
         )]);
 
@@ -5345,6 +5377,8 @@ url = "https://example.com/mcp"
                 disabled_tools: Some(vec!["blocked".to_string()]),
                 startup_mode: None,
                 scopes: None,
+                oauth_resource: None,
+                tools: HashMap::new(),
             },
         )]);
 
@@ -5646,20 +5680,22 @@ model_verbosity = "high"
             name: "OpenAI custom".to_string(),
             base_url: Some("https://api.openai.com/v1".to_string()),
             env_key: Some("OPENAI_API_KEY".to_string()),
-            wire_api: crate::WireApi::Responses,
+            wire_api: WireApi::Responses,
             env_key_instructions: None,
             experimental_bearer_token: None,
+            auth: None,
             query_params: None,
             http_headers: None,
             env_http_headers: None,
             request_max_retries: Some(4),
             stream_max_retries: Some(10),
             stream_idle_timeout_ms: Some(300_000),
+            websocket_connect_timeout_ms: None,
             requires_openai_auth: false,
             supports_websockets: false,
         };
         let model_provider_map = {
-            let mut model_provider_map = built_in_model_providers();
+            let mut model_provider_map = built_in_model_providers(/*openai_base_url*/ None);
             model_provider_map.insert("openai-custom".to_string(), openai_custom_provider.clone());
             model_provider_map
         };
@@ -5719,11 +5755,13 @@ model_verbosity = "high"
                     network: None,
                     shell_environment_policy: ShellEnvironmentPolicy::default(),
                     windows_sandbox_mode: None,
+                    ..o3_profile_config.permissions.clone()
                 },
                 enforce_residency: Constrained::allow_any(None),
                 did_user_set_custom_approval_policy_or_sandbox_mode: true,
                 user_instructions: None,
-                cwd: fixture.cwd(),
+                cwd: AbsolutePathBuf::try_from(fixture.cwd())
+                    .expect("fixture cwd should be absolute"),
                 worktrees_shared_dirs: Vec::new(),
                 worktrees_pinned_paths: Vec::new(),
                 cli_auth_credentials_store_mode: Default::default(),
@@ -5749,7 +5787,7 @@ model_verbosity = "high"
                 js_repl_node_path: None,
                 show_raw_agent_reasoning: false,
                 model_reasoning_effort: Some(ReasoningEffort::High),
-                model_reasoning_summary: ReasoningSummary::Detailed,
+                model_reasoning_summary: Some(ReasoningSummary::Detailed),
                 model_supports_reasoning_summaries: None,
                 model_verbosity: None,
                 personality: Some(Personality::Pragmatic),
@@ -5763,7 +5801,7 @@ model_verbosity = "high"
                 web_search_mode: Constrained::allow_any(WebSearchMode::Cached),
                 use_experimental_unified_exec_tool: !cfg!(windows),
                 ghost_snapshot: GhostSnapshotConfig::default(),
-                features: Features::with_defaults(),
+                features: Features::with_defaults().into(),
                 exclusion: ExclusionConfig::default(),
                 suppress_unstable_features_warning: false,
                 active_profile: Some("o3".to_string()),
@@ -5774,7 +5812,6 @@ model_verbosity = "high"
                 disable_paste_burst: false,
                 notify: None,
                 tui_notifications: Default::default(),
-                tui_notification_method: Default::default(),
                 animations: true,
                 show_tooltips: true,
                 xcodex: expected_xcodex_defaults(),
@@ -5803,6 +5840,7 @@ model_verbosity = "high"
                 tui_mouse_capture: true,
                 tui_status_line: None,
                 otel: OtelConfig::default(),
+                ..o3_profile_config.clone()
             },
             o3_profile_config
         );
@@ -5853,11 +5891,12 @@ model_verbosity = "high"
                 network: None,
                 shell_environment_policy: ShellEnvironmentPolicy::default(),
                 windows_sandbox_mode: None,
+                ..gpt3_profile_config.permissions.clone()
             },
             enforce_residency: Constrained::allow_any(None),
             did_user_set_custom_approval_policy_or_sandbox_mode: true,
             user_instructions: None,
-            cwd: fixture.cwd(),
+            cwd: AbsolutePathBuf::try_from(fixture.cwd()).expect("fixture cwd should be absolute"),
             worktrees_shared_dirs: Vec::new(),
             worktrees_pinned_paths: Vec::new(),
             cli_auth_credentials_store_mode: Default::default(),
@@ -5883,7 +5922,7 @@ model_verbosity = "high"
             js_repl_node_path: None,
             show_raw_agent_reasoning: false,
             model_reasoning_effort: None,
-            model_reasoning_summary: ReasoningSummary::default(),
+            model_reasoning_summary: None,
             model_supports_reasoning_summaries: None,
             model_verbosity: None,
             personality: Some(Personality::Pragmatic),
@@ -5897,7 +5936,7 @@ model_verbosity = "high"
             web_search_mode: Constrained::allow_any(WebSearchMode::Cached),
             use_experimental_unified_exec_tool: !cfg!(windows),
             ghost_snapshot: GhostSnapshotConfig::default(),
-            features: Features::with_defaults(),
+            features: Features::with_defaults().into(),
             exclusion: ExclusionConfig::default(),
             suppress_unstable_features_warning: false,
             active_profile: Some("gpt3".to_string()),
@@ -5908,7 +5947,6 @@ model_verbosity = "high"
             disable_paste_burst: false,
             notify: None,
             tui_notifications: Default::default(),
-            tui_notification_method: Default::default(),
             animations: true,
             show_tooltips: true,
             xcodex: expected_xcodex_defaults(),
@@ -5937,6 +5975,7 @@ model_verbosity = "high"
             tui_mouse_capture: true,
             tui_status_line: None,
             otel: OtelConfig::default(),
+            ..gpt3_profile_config.clone()
         };
 
         assert_eq!(expected_gpt3_profile_config, gpt3_profile_config);
@@ -5985,11 +6024,12 @@ model_verbosity = "high"
                 network: None,
                 shell_environment_policy: ShellEnvironmentPolicy::default(),
                 windows_sandbox_mode: None,
+                ..zdr_profile_config.permissions.clone()
             },
             enforce_residency: Constrained::allow_any(None),
             did_user_set_custom_approval_policy_or_sandbox_mode: true,
             user_instructions: None,
-            cwd: fixture.cwd(),
+            cwd: AbsolutePathBuf::try_from(fixture.cwd()).expect("fixture cwd should be absolute"),
             worktrees_shared_dirs: Vec::new(),
             worktrees_pinned_paths: Vec::new(),
             cli_auth_credentials_store_mode: Default::default(),
@@ -6015,7 +6055,7 @@ model_verbosity = "high"
             js_repl_node_path: None,
             show_raw_agent_reasoning: false,
             model_reasoning_effort: None,
-            model_reasoning_summary: ReasoningSummary::default(),
+            model_reasoning_summary: None,
             model_supports_reasoning_summaries: None,
             model_verbosity: None,
             personality: Some(Personality::Pragmatic),
@@ -6029,7 +6069,7 @@ model_verbosity = "high"
             web_search_mode: Constrained::allow_any(WebSearchMode::Cached),
             use_experimental_unified_exec_tool: !cfg!(windows),
             ghost_snapshot: GhostSnapshotConfig::default(),
-            features: Features::with_defaults(),
+            features: Features::with_defaults().into(),
             exclusion: ExclusionConfig::default(),
             suppress_unstable_features_warning: false,
             active_profile: Some("zdr".to_string()),
@@ -6040,7 +6080,6 @@ model_verbosity = "high"
             disable_paste_burst: false,
             notify: None,
             tui_notifications: Default::default(),
-            tui_notification_method: Default::default(),
             animations: true,
             show_tooltips: true,
             xcodex: expected_xcodex_defaults(),
@@ -6069,6 +6108,7 @@ model_verbosity = "high"
             tui_mouse_capture: true,
             tui_status_line: None,
             otel: OtelConfig::default(),
+            ..zdr_profile_config.clone()
         };
 
         assert_eq!(expected_zdr_profile_config, zdr_profile_config);
@@ -6103,11 +6143,12 @@ model_verbosity = "high"
                 network: None,
                 shell_environment_policy: ShellEnvironmentPolicy::default(),
                 windows_sandbox_mode: None,
+                ..gpt5_profile_config.permissions.clone()
             },
             enforce_residency: Constrained::allow_any(None),
             did_user_set_custom_approval_policy_or_sandbox_mode: true,
             user_instructions: None,
-            cwd: fixture.cwd(),
+            cwd: AbsolutePathBuf::try_from(fixture.cwd()).expect("fixture cwd should be absolute"),
             worktrees_shared_dirs: Vec::new(),
             worktrees_pinned_paths: Vec::new(),
             cli_auth_credentials_store_mode: Default::default(),
@@ -6133,7 +6174,7 @@ model_verbosity = "high"
             js_repl_node_path: None,
             show_raw_agent_reasoning: false,
             model_reasoning_effort: Some(ReasoningEffort::High),
-            model_reasoning_summary: ReasoningSummary::Detailed,
+            model_reasoning_summary: Some(ReasoningSummary::Detailed),
             model_supports_reasoning_summaries: None,
             model_verbosity: Some(Verbosity::High),
             personality: Some(Personality::Pragmatic),
@@ -6147,7 +6188,7 @@ model_verbosity = "high"
             web_search_mode: Constrained::allow_any(WebSearchMode::Cached),
             use_experimental_unified_exec_tool: !cfg!(windows),
             ghost_snapshot: GhostSnapshotConfig::default(),
-            features: Features::with_defaults(),
+            features: Features::with_defaults().into(),
             exclusion: ExclusionConfig::default(),
             suppress_unstable_features_warning: false,
             active_profile: Some("gpt5".to_string()),
@@ -6158,7 +6199,6 @@ model_verbosity = "high"
             disable_paste_burst: false,
             notify: None,
             tui_notifications: Default::default(),
-            tui_notification_method: Default::default(),
             animations: true,
             show_tooltips: true,
             xcodex: expected_xcodex_defaults(),
@@ -6187,6 +6227,7 @@ model_verbosity = "high"
             tui_mouse_capture: true,
             tui_status_line: None,
             otel: OtelConfig::default(),
+            ..gpt5_profile_config.clone()
         };
 
         assert_eq!(expected_gpt5_profile_config, gpt5_profile_config);
@@ -6227,6 +6268,7 @@ model_verbosity = "high"
             rules: None,
             enforce_residency: None,
             network: None,
+            ..Default::default()
         };
         let requirement_source = crate::config_loader::RequirementSource::Unknown;
         let requirement_source_for_error = requirement_source.clone();
@@ -6692,7 +6734,7 @@ base_dir = "/tmp/xcodex-plans"
             cfg.plan
                 .as_ref()
                 .and_then(|plan| plan.base_dir.as_ref())
-                .map(|path| path.to_path_buf()),
+                .map(codex_utils_absolute_path::AbsolutePathBuf::to_path_buf),
             Some(PathBuf::from("/tmp/xcodex-plans"))
         );
     }
@@ -6903,12 +6945,12 @@ sanitize_payloads = true
         let config = ConfigBuilder::default()
             .codex_home(codex_home.path().to_path_buf())
             .cloud_requirements(CloudRequirementsLoader::new(async {
-                Some(crate::config_loader::ConfigRequirementsToml {
+                Ok(Some(crate::config_loader::ConfigRequirementsToml {
                     allowed_sandbox_modes: Some(vec![
                         crate::config_loader::SandboxModeRequirement::ReadOnly,
                     ]),
                     ..Default::default()
-                })
+                }))
             }))
             .build()
             .await?;
@@ -6939,14 +6981,15 @@ sanitize_payloads = true
             rules: None,
             enforce_residency: None,
             network: None,
+            ..Default::default()
         };
 
         let config = ConfigBuilder::default()
             .codex_home(codex_home.path().to_path_buf())
             .fallback_cwd(Some(codex_home.path().to_path_buf()))
-            .cloud_requirements(CloudRequirementsLoader::new(
-                async move { Some(requirements) },
-            ))
+            .cloud_requirements(CloudRequirementsLoader::new(async move {
+                Ok(Some(requirements))
+            }))
             .build()
             .await?;
         assert_eq!(
@@ -6970,12 +7013,12 @@ sanitize_payloads = true
             .codex_home(codex_home.path().to_path_buf())
             .fallback_cwd(Some(codex_home.path().to_path_buf()))
             .cloud_requirements(CloudRequirementsLoader::new(async {
-                Some(crate::config_loader::ConfigRequirementsToml {
+                Ok(Some(crate::config_loader::ConfigRequirementsToml {
                     allowed_web_search_modes: Some(vec![
                         crate::config_loader::WebSearchModeRequirement::Cached,
                     ]),
                     ..Default::default()
-                })
+                }))
             }))
             .build()
             .await?;
@@ -7011,10 +7054,10 @@ trust_level = "untrusted"
             .codex_home(codex_home.path().to_path_buf())
             .fallback_cwd(Some(workspace.path().to_path_buf()))
             .cloud_requirements(CloudRequirementsLoader::new(async {
-                Some(crate::config_loader::ConfigRequirementsToml {
+                Ok(Some(crate::config_loader::ConfigRequirementsToml {
                     allowed_approval_policies: Some(vec![AskForApproval::OnRequest]),
                     ..Default::default()
-                })
+                }))
             }))
             .build()
             .await?;
@@ -7040,10 +7083,10 @@ trust_level = "untrusted"
             .codex_home(codex_home.path().to_path_buf())
             .fallback_cwd(Some(codex_home.path().to_path_buf()))
             .cloud_requirements(CloudRequirementsLoader::new(async {
-                Some(crate::config_loader::ConfigRequirementsToml {
+                Ok(Some(crate::config_loader::ConfigRequirementsToml {
                     allowed_approval_policies: Some(vec![AskForApproval::OnRequest]),
                     ..Default::default()
-                })
+                }))
             }))
             .build()
             .await?;

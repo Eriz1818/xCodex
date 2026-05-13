@@ -524,30 +524,34 @@ pub async fn apply_rollout_items(
         return;
     }
 
-    // TurnContext updates can move a session between worktrees. Refresh git
-    // metadata from the latest cwd so resume-picker branch/cwd columns stay in sync.
-    if !items
-        .iter()
-        .any(|item| matches!(item, RolloutItem::TurnContext(_)))
-    {
+    // TurnContext updates can move a session between worktrees. Refresh cwd and
+    // git metadata from the latest cwd so resume-picker branch/cwd columns stay
+    // in sync.
+    let Some(latest_turn_context_cwd) = items.iter().rev().find_map(|item| match item {
+        RolloutItem::TurnContext(turn_context) => Some(turn_context.cwd.as_path()),
+        _ => None,
+    }) else {
         return;
-    }
+    };
 
     let Ok(Some(mut metadata)) = ctx.get_thread(builder.id).await else {
         return;
     };
-    let git = collect_git_info(metadata.cwd.as_path()).await;
+    let next_cwd = normalize_cwd_for_state_db(latest_turn_context_cwd);
+    let git = collect_git_info(next_cwd.as_path()).await;
     let next_git_sha = git
         .as_ref()
         .and_then(|info| info.commit_hash.as_ref().map(|sha| sha.0.clone()));
     let next_git_branch = git.as_ref().and_then(|info| info.branch.clone());
     let next_git_origin_url = git.and_then(|info| info.repository_url);
-    if metadata.git_sha == next_git_sha
+    if metadata.cwd == next_cwd
+        && metadata.git_sha == next_git_sha
         && metadata.git_branch == next_git_branch
         && metadata.git_origin_url == next_git_origin_url
     {
         return;
     }
+    metadata.cwd = next_cwd;
     metadata.git_sha = next_git_sha;
     metadata.git_branch = next_git_branch;
     metadata.git_origin_url = next_git_origin_url;

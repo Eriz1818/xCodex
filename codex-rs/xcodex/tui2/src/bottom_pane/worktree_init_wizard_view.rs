@@ -722,11 +722,13 @@ impl WorktreeInitWizardView {
                 codex_core::protocol::Op::OverrideTurnContext {
                     cwd: Some(path.clone()),
                     approval_policy: None,
+                    approvals_reviewer: None,
                     sandbox_policy: None,
                     windows_sandbox_level: None,
                     model: None,
                     effort: None,
                     summary: None,
+                    service_tier: None,
                     collaboration_mode: None,
                     personality: None,
                 },

@@ -240,14 +240,14 @@ async fn responses_client_pins_client_version_for_chatgpt_backend() -> Result<()
     assert_eq!(requests.len(), 1);
     assert_eq!(
         requests[0].url,
-        "https://chatgpt.com/backend-api/codex/responses?client_version=0.98.0"
+        "https://chatgpt.com/backend-api/codex/responses?client_version=0.130.0"
     );
     assert_eq!(
         requests[0]
             .headers
             .get("version")
             .and_then(|value| value.to_str().ok()),
-        Some("0.98.0")
+        Some("0.130.0")
     );
     Ok(())
 }
@@ -271,14 +271,14 @@ async fn responses_client_pins_client_version_for_openai_backend() -> Result<()>
     assert_eq!(requests.len(), 1);
     assert_eq!(
         requests[0].url,
-        "https://api.openai.com/v1/responses?client_version=0.98.0"
+        "https://api.openai.com/v1/responses?client_version=0.130.0"
     );
     assert_eq!(
         requests[0]
             .headers
             .get("version")
             .and_then(|value| value.to_str().ok()),
-        Some("0.98.0")
+        Some("0.130.0")
     );
     Ok(())
 }

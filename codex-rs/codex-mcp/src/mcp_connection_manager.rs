@@ -676,6 +676,7 @@ impl AsyncManagedClient {
         elicitation_requests: ElicitationRequestManager,
         codex_apps_tools_cache_context: Option<CodexAppsToolsCacheContext>,
         tool_plugin_provenance: Arc<ToolPluginProvenance>,
+        startup_mode: McpConnectionStartupMode,
     ) -> Self {
         let tool_filter = ToolFilter::from_config(&config);
         let startup_snapshot = load_startup_cached_codex_apps_tools_snapshot(
@@ -721,7 +722,7 @@ impl AsyncManagedClient {
             outcome
         };
         let client = fut.boxed().shared();
-        if startup_snapshot.is_some() {
+        if startup_mode == McpConnectionStartupMode::Eager && startup_snapshot.is_some() {
             let startup_task = client.clone();
             tokio::spawn(async move {
                 let _ = startup_task.await;
@@ -747,58 +748,63 @@ impl AsyncManagedClient {
         None
     }
 
-    async fn listed_tools(&self) -> Option<Vec<ToolInfo>> {
-        let annotate_tools = |tools: Vec<ToolInfo>| {
-            let mut tools = tools;
-            for tool in &mut tools {
-                if tool.server_name == CODEX_APPS_MCP_SERVER_NAME {
-                    tool.tool = tool_with_model_visible_input_schema(&tool.tool);
-                }
-
-                let plugin_names = match tool.connector_id.as_deref() {
-                    Some(connector_id) => self
-                        .tool_plugin_provenance
-                        .plugin_display_names_for_connector_id(connector_id),
-                    None => self
-                        .tool_plugin_provenance
-                        .plugin_display_names_for_mcp_server_name(tool.server_name.as_str()),
-                };
-                tool.plugin_display_names = plugin_names.to_vec();
-
-                if plugin_names.is_empty() {
-                    continue;
-                }
-
-                let plugin_source_note = if plugin_names.len() == 1 {
-                    format!("This tool is part of plugin `{}`.", plugin_names[0])
-                } else {
-                    format!(
-                        "This tool is part of plugins {}.",
-                        plugin_names
-                            .iter()
-                            .map(|plugin_name| format!("`{plugin_name}`"))
-                            .collect::<Vec<_>>()
-                            .join(", ")
-                    )
-                };
-                let description = tool
-                    .tool
-                    .description
-                    .as_deref()
-                    .map(str::trim)
-                    .unwrap_or("");
-                let annotated_description = if description.is_empty() {
-                    plugin_source_note
-                } else if matches!(description.chars().last(), Some('.' | '!' | '?')) {
-                    format!("{description} {plugin_source_note}")
-                } else {
-                    format!("{description}. {plugin_source_note}")
-                };
-                tool.tool.description = Some(Cow::Owned(annotated_description));
+    fn annotate_tools(&self, mut tools: Vec<ToolInfo>) -> Vec<ToolInfo> {
+        for tool in &mut tools {
+            if tool.server_name == CODEX_APPS_MCP_SERVER_NAME {
+                tool.tool = tool_with_model_visible_input_schema(&tool.tool);
             }
-            tools
-        };
 
+            let plugin_names = match tool.connector_id.as_deref() {
+                Some(connector_id) => self
+                    .tool_plugin_provenance
+                    .plugin_display_names_for_connector_id(connector_id),
+                None => self
+                    .tool_plugin_provenance
+                    .plugin_display_names_for_mcp_server_name(tool.server_name.as_str()),
+            };
+            tool.plugin_display_names = plugin_names.to_vec();
+
+            if plugin_names.is_empty() {
+                continue;
+            }
+
+            let plugin_source_note = if plugin_names.len() == 1 {
+                format!("This tool is part of plugin `{}`.", plugin_names[0])
+            } else {
+                format!(
+                    "This tool is part of plugins {}.",
+                    plugin_names
+                        .iter()
+                        .map(|plugin_name| format!("`{plugin_name}`"))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                )
+            };
+            let description = tool
+                .tool
+                .description
+                .as_deref()
+                .map(str::trim)
+                .unwrap_or("");
+            let annotated_description = if description.is_empty() {
+                plugin_source_note
+            } else if matches!(description.chars().last(), Some('.' | '!' | '?')) {
+                format!("{description} {plugin_source_note}")
+            } else {
+                format!("{description}. {plugin_source_note}")
+            };
+            tool.tool.description = Some(Cow::Owned(annotated_description));
+        }
+        tools
+    }
+
+    fn startup_snapshot_tools(&self) -> Option<Vec<ToolInfo>> {
+        self.startup_snapshot
+            .clone()
+            .map(|tools| self.annotate_tools(tools))
+    }
+
+    async fn listed_tools(&self) -> Option<Vec<ToolInfo>> {
         // Keep cache payloads raw; plugin provenance is resolved per-session at read time.
         let tools = if let Some(startup_tools) = self.startup_snapshot_while_initializing() {
             Some(startup_tools)
@@ -808,7 +814,7 @@ impl AsyncManagedClient {
                 Err(_) => self.startup_snapshot.clone(),
             }
         };
-        tools.map(annotate_tools)
+        tools.map(|tools| self.annotate_tools(tools))
     }
 
     async fn notify_sandbox_state_change(&self, sandbox_state: &SandboxState) -> Result<()> {
@@ -982,6 +988,7 @@ impl McpConnectionManager {
                 elicitation_requests.clone(),
                 codex_apps_tools_cache_context,
                 Arc::clone(&tool_plugin_provenance),
+                startup_mode,
             );
             clients.insert(server_name.clone(), async_managed_client.clone());
             let tx_event = tx_event.clone();
@@ -1186,6 +1193,7 @@ impl McpConnectionManager {
                 self.elicitation_requests.clone(),
                 codex_apps_tools_cache_context,
                 Arc::new(self.tool_plugin_provenance.clone()),
+                McpConnectionStartupMode::Eager,
             );
             self.clients
                 .insert(server_name.clone(), async_managed_client.clone());
@@ -1438,20 +1446,42 @@ impl McpConnectionManager {
     #[instrument(level = "trace", skip_all)]
     pub async fn list_all_tools(&self) -> HashMap<String, ToolInfo> {
         let mut tools = Vec::new();
-        let mut ready_server_names = HashSet::new();
-        for managed_client in self.clients.values() {
-            let Some(server_tools) = managed_client.listed_tools().await else {
-                continue;
-            };
-            tools.extend(server_tools);
+        let mut covered_server_names = HashSet::new();
+
+        if matches!(
+            self.startup_mode,
+            McpConnectionStartupMode::Lazy | McpConnectionStartupMode::Manual
+        ) {
+            {
+                let ready_clients = self.ready_clients.lock().await;
+                for (server_name, managed_client) in ready_clients.iter() {
+                    tools.extend(managed_client.listed_tools());
+                    covered_server_names.insert(server_name.clone());
+                }
+            }
+
+            for (server_name, managed_client) in &self.clients {
+                if covered_server_names.contains(server_name) {
+                    continue;
+                }
+                if let Some(server_tools) = managed_client.startup_snapshot_tools() {
+                    tools.extend(server_tools);
+                    covered_server_names.insert(server_name.clone());
+                }
+            }
+        } else {
+            for (server_name, managed_client) in &self.clients {
+                let Some(server_tools) = managed_client.listed_tools().await else {
+                    continue;
+                };
+                tools.extend(server_tools);
+                covered_server_names.insert(server_name.clone());
+            }
         }
-        {
-            let ready_clients = self.ready_clients.lock().await;
-            ready_server_names.extend(ready_clients.keys().cloned());
-        }
+
         let manifest_cache = self.manifest_cache.lock().await;
         for (server_name, cached) in &manifest_cache.servers {
-            if ready_server_names.contains(server_name) {
+            if covered_server_names.contains(server_name) {
                 continue;
             }
             let Some(config) = self.server_configs.get(server_name) else {
@@ -1539,13 +1569,28 @@ impl McpConnectionManager {
     pub async fn list_all_resources(&self) -> HashMap<String, Vec<Resource>> {
         let mut join_set = JoinSet::new();
 
-        let clients_snapshot = &self.clients;
+        let clients_snapshot = if matches!(
+            self.startup_mode,
+            McpConnectionStartupMode::Lazy | McpConnectionStartupMode::Manual
+        ) {
+            self.ready_clients
+                .lock()
+                .await
+                .iter()
+                .map(|(server_name, managed_client)| (server_name.clone(), managed_client.clone()))
+                .collect::<Vec<_>>()
+        } else {
+            let mut clients = Vec::new();
+            for (server_name, async_managed_client) in &self.clients {
+                let Ok(managed_client) = async_managed_client.client().await else {
+                    continue;
+                };
+                clients.push((server_name.clone(), managed_client));
+            }
+            clients
+        };
 
-        for (server_name, async_managed_client) in clients_snapshot {
-            let server_name = server_name.clone();
-            let Ok(managed_client) = async_managed_client.client().await else {
-                continue;
-            };
+        for (server_name, managed_client) in clients_snapshot {
             let timeout = managed_client.tool_timeout;
             let client = managed_client.client.clone();
 
@@ -1605,13 +1650,28 @@ impl McpConnectionManager {
     pub async fn list_all_resource_templates(&self) -> HashMap<String, Vec<ResourceTemplate>> {
         let mut join_set = JoinSet::new();
 
-        let clients_snapshot = &self.clients;
+        let clients_snapshot = if matches!(
+            self.startup_mode,
+            McpConnectionStartupMode::Lazy | McpConnectionStartupMode::Manual
+        ) {
+            self.ready_clients
+                .lock()
+                .await
+                .iter()
+                .map(|(server_name, managed_client)| (server_name.clone(), managed_client.clone()))
+                .collect::<Vec<_>>()
+        } else {
+            let mut clients = Vec::new();
+            for (server_name, async_managed_client) in &self.clients {
+                let Ok(managed_client) = async_managed_client.client().await else {
+                    continue;
+                };
+                clients.push((server_name.clone(), managed_client));
+            }
+            clients
+        };
 
-        for (server_name, async_managed_client) in clients_snapshot {
-            let server_name_cloned = server_name.clone();
-            let Ok(managed_client) = async_managed_client.client().await else {
-                continue;
-            };
+        for (server_name_cloned, managed_client) in clients_snapshot {
             let client = managed_client.client.clone();
             let timeout = managed_client.tool_timeout;
 

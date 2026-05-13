@@ -1,9 +1,9 @@
 use super::*;
 use pretty_assertions::assert_eq;
 
-/// Receiving a TokenCount event without usage clears the context indicator.
+/// Receiving a TokenCount event without usage keeps the previous context indicator.
 #[tokio::test]
-async fn token_count_none_resets_context_indicator() {
+async fn token_count_none_does_not_reset_context_indicator() {
     let (mut chat, _rx, _ops) = make_chatwidget_manual(/*model_override*/ None).await;
 
     let context_window = 13_000;
@@ -16,7 +16,8 @@ async fn token_count_none_resets_context_indicator() {
             rate_limits: None,
         }),
     });
-    assert_eq!(chat.bottom_pane.context_window_percent(), Some(30));
+    let before = chat.bottom_pane.context_window_percent();
+    assert_eq!(before, Some(2));
 
     chat.handle_codex_event(Event {
         id: "token-cleared".into(),
@@ -25,7 +26,7 @@ async fn token_count_none_resets_context_indicator() {
             rate_limits: None,
         }),
     });
-    assert_eq!(chat.bottom_pane.context_window_percent(), None);
+    assert_eq!(chat.bottom_pane.context_window_percent(), before);
 }
 
 #[tokio::test]
@@ -46,6 +47,7 @@ async fn context_indicator_shows_used_tokens_when_window_unknown() {
         total_token_usage: token_usage.clone(),
         last_token_usage: token_usage,
         model_context_window: None,
+        full_model_context_window: None,
     };
 
     chat.handle_codex_event(Event {

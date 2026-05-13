@@ -1,23 +1,18 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+if [[ -f "$0.runfiles_manifest" ]]; then
+  export RUNFILES_MANIFEST_FILE="$0.runfiles_manifest"
+elif [[ -f "$0.exe.runfiles_manifest" ]]; then
+  export RUNFILES_MANIFEST_FILE="$0.exe.runfiles_manifest"
+fi
+
 resolve_runfile() {
   local logical_path="$1"
   local workspace_logical_path="${logical_path}"
   if [[ -n "${TEST_WORKSPACE:-}" ]]; then
     workspace_logical_path="${TEST_WORKSPACE}/${logical_path}"
   fi
-
-  for runfiles_root in "${RUNFILES_DIR:-}" "${TEST_SRCDIR:-}"; do
-    if [[ -n "${runfiles_root}" && -e "${runfiles_root}/${logical_path}" ]]; then
-      printf '%s\n' "${runfiles_root}/${logical_path}"
-      return 0
-    fi
-    if [[ -n "${runfiles_root}" && -e "${runfiles_root}/${workspace_logical_path}" ]]; then
-      printf '%s\n' "${runfiles_root}/${workspace_logical_path}"
-      return 0
-    fi
-  done
 
   local manifest="${RUNFILES_MANIFEST_FILE:-}"
   if [[ -z "${manifest}" ]]; then
@@ -39,6 +34,17 @@ resolve_runfile() {
       return 0
     fi
   fi
+
+  for runfiles_root in "${RUNFILES_DIR:-}" "${TEST_SRCDIR:-}"; do
+    if [[ -n "${runfiles_root}" && -e "${runfiles_root}/${logical_path}" ]]; then
+      printf '%s\n' "${runfiles_root}/${logical_path}"
+      return 0
+    fi
+    if [[ -n "${runfiles_root}" && -e "${runfiles_root}/${workspace_logical_path}" ]]; then
+      printf '%s\n' "${runfiles_root}/${workspace_logical_path}"
+      return 0
+    fi
+  done
 
   echo "failed to resolve runfile: $logical_path" >&2
   return 1

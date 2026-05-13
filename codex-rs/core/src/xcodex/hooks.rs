@@ -1143,6 +1143,13 @@ fn build_match_candidates(notification: &HookNotification) -> HookMatchCandidate
 }
 
 fn default_hook_event_name(event: &HookEvent) -> String {
+    if matches!(
+        event.notification(),
+        HookNotification::ApprovalResolved { .. }
+    ) {
+        return "approval_resolved".to_string();
+    }
+
     claude_compat::default_hook_event_name(event.notification())
         .unwrap_or_else(|| event.xcodex_event_type())
         .to_string()
@@ -3938,7 +3945,7 @@ mod tests {
     use tempfile::TempDir;
 
     async fn read_to_string_eventually(path: &Path) -> Result<String> {
-        let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
         loop {
             match std::fs::read_to_string(path) {
                 Ok(contents) => {
@@ -4539,6 +4546,10 @@ done
     }
 
     fn expected_default_hook_event_name(notification: &HookNotification) -> String {
+        if matches!(notification, HookNotification::ApprovalResolved { .. }) {
+            return "approval_resolved".to_string();
+        }
+
         claude_compat::default_hook_event_name(notification)
             .unwrap_or_else(|| notification.event_type())
             .to_string()

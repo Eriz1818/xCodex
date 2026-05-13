@@ -21,6 +21,7 @@ pub(crate) fn spawn_end(ev: CollabAgentSpawnEndEvent) -> PlainHistoryCell {
         new_thread_id,
         prompt,
         status,
+        ..
     } = ev;
     let new_agent = new_thread_id
         .map(|id| id.to_string())
@@ -44,6 +45,7 @@ pub(crate) fn interaction_end(ev: CollabAgentInteractionEndEvent) -> PlainHistor
         receiver_thread_id,
         prompt,
         status,
+        ..
     } = ev;
     let mut details = vec![
         detail_line("call", call_id),
@@ -62,6 +64,7 @@ pub(crate) fn waiting_begin(ev: CollabWaitingBeginEvent) -> PlainHistoryCell {
         call_id,
         sender_thread_id,
         receiver_thread_ids,
+        ..
     } = ev;
     let details = vec![
         detail_line("call", call_id),
@@ -76,6 +79,7 @@ pub(crate) fn waiting_end(ev: CollabWaitingEndEvent) -> PlainHistoryCell {
         call_id,
         sender_thread_id,
         statuses,
+        ..
     } = ev;
     let details = vec![
         detail_line("call", call_id),
@@ -91,6 +95,7 @@ pub(crate) fn close_end(ev: CollabCloseEndEvent) -> PlainHistoryCell {
         sender_thread_id,
         receiver_thread_id,
         status,
+        ..
     } = ev;
     let details = vec![
         detail_line("call", call_id),
@@ -106,6 +111,7 @@ pub(crate) fn resume_begin(ev: CollabResumeBeginEvent) -> PlainHistoryCell {
         call_id,
         sender_thread_id,
         receiver_thread_id,
+        ..
     } = ev;
     let details = vec![
         detail_line("call", call_id),
@@ -121,6 +127,7 @@ pub(crate) fn resume_end(ev: CollabResumeEndEvent) -> PlainHistoryCell {
         sender_thread_id,
         receiver_thread_id,
         status,
+        ..
     } = ev;
     let details = vec![
         detail_line("call", call_id),
@@ -156,6 +163,7 @@ fn status_text(status: &AgentStatus) -> &'static str {
         AgentStatus::Errored(_) => "errored",
         AgentStatus::Shutdown => "shutdown",
         AgentStatus::NotFound => "not_found",
+        AgentStatus::Interrupted => "interrupted",
     }
 }
 

@@ -38,9 +38,9 @@ use crate::wrapping::word_wrap_line;
 use crate::wrapping::word_wrap_lines;
 use crate::xtreme;
 use base64::Engine;
-use codex_common::format_env_display::format_env_display;
+use codex_common::format_env_display;
+use codex_config::McpServerTransportConfig;
 use codex_core::config::Config;
-use codex_core::config::types::McpServerTransportConfig;
 use codex_core::protocol::AskForApproval;
 use codex_core::protocol::FileChange;
 use codex_core::protocol::McpAuthStatus;
@@ -329,7 +329,7 @@ impl ReasoningSummaryCell {
 
         if header.is_empty() {
             let mut lines: Vec<Line<'static>> = Vec::new();
-            append_markdown(content, md_width, &mut lines);
+            append_markdown(content, md_width, None, &mut lines);
             let summary_style = Style::default().dim().italic();
             let summary_lines = lines
                 .into_iter()
@@ -357,7 +357,7 @@ impl ReasoningSummaryCell {
         }
 
         let mut header_lines: Vec<Line<'static>> = Vec::new();
-        append_markdown(header, md_width, &mut header_lines);
+        append_markdown(header, md_width, None, &mut header_lines);
         let header_style = Style::default().dim();
         let header_lines = header_lines
             .into_iter()
@@ -372,7 +372,7 @@ impl ReasoningSummaryCell {
             .collect::<Vec<_>>();
 
         let mut content_lines: Vec<Line<'static>> = Vec::new();
-        append_markdown(content, md_width, &mut content_lines);
+        append_markdown(content, md_width, None, &mut content_lines);
         let summary_style = Style::default().dim().italic();
         let content_lines = content_lines
             .into_iter()
@@ -797,6 +797,7 @@ fn exec_snippet(command: &[String]) -> String {
 pub fn new_approval_decision_cell(
     command: Vec<String>,
     decision: codex_core::protocol::ReviewDecision,
+    _actor: ApprovalDecisionActor,
 ) -> Box<dyn HistoryCell> {
     use codex_core::protocol::ReviewDecision::*;
 
@@ -864,6 +865,26 @@ pub fn new_approval_decision_cell(
                 ],
             )
         }
+        TimedOut => {
+            let snippet = Span::from(exec_snippet(&command)).dim();
+            (
+                "✗ ".red(),
+                vec![
+                    "Approval timed out for ".into(),
+                    "xcodex".bold(),
+                    " to run ".into(),
+                    snippet,
+                ],
+            )
+        }
+        NetworkPolicyAmendment { .. } => (
+            "✔ ".green(),
+            vec![
+                "You ".into(),
+                "approved".bold(),
+                " a network policy amendment".into(),
+            ],
+        ),
     };
 
     Box::new(PrefixedWrappedHistoryCell::new(
@@ -871,6 +892,11 @@ pub fn new_approval_decision_cell(
         symbol,
         "  ",
     ))
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum ApprovalDecisionActor {
+    User,
 }
 
 /// Cyan history cell line showing the current review status.
@@ -972,7 +998,7 @@ fn with_border_internal(
         let span_count = line.spans.len();
         let mut spans: Vec<Span<'static>> = Vec::with_capacity(span_count + 4);
         spans.push(Span::from("│ ").style(crate::theme::border_style()));
-        spans.extend(line.into_iter());
+        spans.extend(line);
         if used_width < content_width {
             spans.push(
                 Span::from(" ".repeat(content_width - used_width))
@@ -1023,6 +1049,7 @@ impl HistoryCell for TooltipHistoryCell {
         append_markdown(
             &format!("**Tips:** {}", self.tip),
             Some(wrap_width),
+            None,
             &mut lines,
         );
 
@@ -1059,10 +1086,20 @@ impl HistoryCell for XcodexTooltipsHistoryCell {
         let mut lines: Vec<Line<'static>> = Vec::new();
 
         if let Some(tip) = self.xcodex_tip.as_deref() {
-            append_markdown(&format!("**⚡Tips:** {tip}"), Some(wrap_width), &mut lines);
+            append_markdown(
+                &format!("**⚡Tips:** {tip}"),
+                Some(wrap_width),
+                None,
+                &mut lines,
+            );
         }
         if let Some(tip) = self.codex_tip.as_deref() {
-            append_markdown(&format!("**Tips:** {tip}"), Some(wrap_width), &mut lines);
+            append_markdown(
+                &format!("**Tips:** {tip}"),
+                Some(wrap_width),
+                None,
+                &mut lines,
+            );
         }
 
         prefix_lines(lines, indent.into(), indent.into())
@@ -1102,7 +1139,7 @@ pub(crate) fn new_session_info(
         model.clone(),
         Style::default(),
         reasoning_effort,
-        config.cwd.clone(),
+        config.cwd.to_path_buf(),
         CODEX_CLI_VERSION,
         config.permissions.approval_policy.value(),
         config.permissions.sandbox_policy.get().clone(),
@@ -1157,7 +1194,7 @@ pub(crate) fn new_session_info_with_help_lines(
         model.clone(),
         Style::default(),
         reasoning_effort,
-        config.cwd.clone(),
+        config.cwd.to_path_buf(),
         CODEX_CLI_VERSION,
         config.permissions.approval_policy.value(),
         config.permissions.sandbox_policy.get().clone(),
@@ -2218,7 +2255,7 @@ pub(crate) fn new_mcp_tools_output(
     }
 
     let mut servers: Vec<_> = config.mcp_servers.iter().collect();
-    servers.sort_by(|(a, _), (b, _)| a.cmp(b));
+    servers.sort_by_key(|(a, _)| *a);
 
     let mut retryable_servers: Vec<String> = Vec::new();
 
@@ -2349,7 +2386,7 @@ pub(crate) fn new_mcp_tools_output(
                     && !headers.is_empty()
                 {
                     let mut pairs: Vec<_> = headers.iter().collect();
-                    pairs.sort_by(|(a, _), (b, _)| a.cmp(b));
+                    pairs.sort_by_key(|(a, _)| *a);
                     let display = pairs
                         .into_iter()
                         .map(|(name, _)| format!("{name}=*****"))
@@ -2361,7 +2398,7 @@ pub(crate) fn new_mcp_tools_output(
                     && !headers.is_empty()
                 {
                     let mut pairs: Vec<_> = headers.iter().collect();
-                    pairs.sort_by(|(a, _), (b, _)| a.cmp(b));
+                    pairs.sort_by_key(|(a, _)| *a);
                     let display = pairs
                         .into_iter()
                         .map(|(name, var)| format!("{name}={var}"))
@@ -2483,7 +2520,7 @@ impl HistoryCell for ProposedPlanCell {
         let plan_style = proposed_plan_style();
         let wrap_width = width.saturating_sub(4).max(1) as usize;
         let mut body: Vec<Line<'static>> = Vec::new();
-        append_markdown(&self.plan_markdown, Some(wrap_width), &mut body);
+        append_markdown(&self.plan_markdown, Some(wrap_width), None, &mut body);
         if body.is_empty() {
             body.push(Line::from("(empty)".dim().italic()));
         }
@@ -2662,9 +2699,12 @@ pub(crate) fn new_reasoning_summary_block_with_visibility(
 
 pub(crate) fn new_reasoning_summary_block(
     full_reasoning_buffer: String,
-    transcript_only: bool,
+    _cwd: &std::path::Path,
 ) -> Box<dyn HistoryCell> {
-    new_reasoning_summary_block_with_visibility(full_reasoning_buffer, transcript_only)
+    new_reasoning_summary_block_with_visibility(
+        full_reasoning_buffer,
+        /*transcript_only*/ false,
+    )
 }
 
 #[derive(Debug)]
@@ -2804,10 +2844,10 @@ mod tests {
     use crate::exec_cell::CommandOutput;
     use crate::exec_cell::ExecCall;
     use crate::exec_cell::ExecCell;
+    use codex_config::McpServerConfig;
+    use codex_config::McpServerTransportConfig;
     use codex_core::config::Config;
     use codex_core::config::ConfigBuilder;
-    use codex_core::config::types::McpServerConfig;
-    use codex_core::config::types::McpServerTransportConfig;
     use codex_core::protocol::McpAuthStatus;
     use codex_core::protocol::McpStartupStatus;
     use codex_protocol::parse_command::ParsedCommand;
@@ -3003,6 +3043,8 @@ mod tests {
             enabled_tools: None,
             disabled_tools: None,
             scopes: None,
+            oauth_resource: None,
+            tools: Default::default(),
             startup_mode: None,
         };
         let mut servers = config.mcp_servers.get().clone();
@@ -3027,6 +3069,8 @@ mod tests {
             enabled_tools: None,
             disabled_tools: None,
             scopes: None,
+            oauth_resource: None,
+            tools: Default::default(),
             startup_mode: None,
         };
         servers.insert("http".to_string(), http_config);
@@ -3046,6 +3090,8 @@ mod tests {
             enabled_tools: None,
             disabled_tools: None,
             scopes: None,
+            oauth_resource: None,
+            tools: Default::default(),
             startup_mode: None,
         };
         servers.insert("cache".to_string(), cache_config);

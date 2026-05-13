@@ -356,27 +356,23 @@ mod tests {
         let home = temp_home("hooks-samples-plan-external")?;
         let plan = plan_install_samples(&home, HookSample::External, false)?;
 
-        assert_eq!(
+        assert!(
             plan.files
                 .iter()
-                .any(|entry| entry.path.ends_with("hooks/log_all_jsonl.py")),
-            true
+                .any(|entry| entry.path.ends_with("hooks/log_all_jsonl.py"))
         );
-        assert_eq!(
+        assert!(
             plan.files
                 .iter()
-                .any(|entry| entry.path.ends_with("hooks/tool_call_summary.py")),
-            true
+                .any(|entry| entry.path.ends_with("hooks/tool_call_summary.py"))
         );
-        assert_eq!(
-            plan.config_snippet.contains("approval_notify_macos_terminal_notifier.py"),
-            true
+        assert!(
+            plan.config_snippet.contains("approval_notify_macos_terminal_notifier.py")
         );
-        assert_eq!(
+        assert!(
             plan.notes
                 .iter()
-                .any(|note| note.contains("installed Python helper")),
-            true
+                .any(|note| note.contains("installed Python helper"))
         );
 
         fs::remove_dir_all(home)?;
@@ -388,17 +384,15 @@ mod tests {
         let home = temp_home("hooks-samples-plan-pyo3")?;
         let plan = plan_install_samples(&home, HookSample::Pyo3, false)?;
 
-        assert_eq!(
+        assert!(
             plan.files
                 .iter()
-                .any(|entry| entry.path.ends_with("hooks/pyo3_hook.py")),
-            true
+                .any(|entry| entry.path.ends_with("hooks/pyo3_hook.py"))
         );
-        assert_eq!(
+        assert!(
             plan.notes
                 .iter()
-                .any(|note| note.contains("xcodex hooks doctor pyo3")),
-            true
+                .any(|note| note.contains("xcodex hooks doctor pyo3"))
         );
 
         fs::remove_dir_all(home)?;
@@ -412,13 +406,13 @@ mod tests {
 
         let log_all = home.join("hooks/log_all_jsonl.py");
         let summary = home.join("hooks/tool_call_summary.py");
-        assert_eq!(log_all.exists(), true);
-        assert_eq!(summary.exists(), true);
+        assert!(log_all.exists());
+        assert!(summary.exists());
 
         let log_all_contents = fs::read_to_string(log_all)?;
         let summary_contents = fs::read_to_string(summary)?;
-        assert_eq!(log_all_contents.contains("xcodex_hooks"), true);
-        assert_eq!(summary_contents.contains("xcodex_hooks"), true);
+        assert!(log_all_contents.contains("xcodex_hooks"));
+        assert!(summary_contents.contains("xcodex_hooks"));
 
         fs::remove_dir_all(home)?;
         Ok(())

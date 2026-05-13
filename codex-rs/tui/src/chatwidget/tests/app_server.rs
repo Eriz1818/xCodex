@@ -106,7 +106,7 @@ async fn live_app_server_turn_completed_clears_working_status_after_answer_item(
         .bottom_pane
         .status_widget()
         .expect("status indicator should be visible");
-    assert_eq!(status.header(), "Working");
+    assert_eq!(status.header(), "Charging");
 
     chat.handle_server_notification(
         ServerNotification::ItemCompleted(ItemCompletedNotification {
@@ -148,7 +148,7 @@ async fn live_app_server_turn_completed_clears_working_status_after_answer_item(
 }
 
 #[tokio::test]
-async fn live_app_server_turn_started_sets_feedback_turn_id() {
+async fn live_app_server_feedback_is_saved_locally() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
 
     chat.handle_server_notification(
@@ -173,15 +173,12 @@ async fn live_app_server_turn_started_sets_feedback_turn_id() {
     );
     chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
 
-    assert_matches!(
-        rx.try_recv(),
-        Ok(AppEvent::SubmitFeedback {
-            category: crate::app_event::FeedbackCategory::Bug,
-            reason: None,
-            turn_id: Some(turn_id),
-            include_logs: false,
-        }) if turn_id == "turn-1"
-    );
+    let Ok(AppEvent::InsertHistoryCell(cell)) = rx.try_recv() else {
+        panic!("expected local feedback history cell");
+    };
+    let rendered = lines_to_single_string(&cell.display_lines(/*width*/ 120));
+    assert!(rendered.contains("• Feedback saved locally (no network upload, no logs)."));
+    assert!(rendered.contains("Attach these files when filing an issue in your fork."));
 }
 
 #[tokio::test]
@@ -560,7 +557,7 @@ async fn live_app_server_stream_recovery_restores_previous_status_header() {
         .bottom_pane
         .status_widget()
         .expect("status indicator should be visible");
-    assert_eq!(status.header(), "Working");
+    assert_eq!(status.header(), "Charging");
     assert_eq!(status.details(), None);
     assert!(chat.retry_status_header.is_none());
 }

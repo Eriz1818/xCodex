@@ -16,9 +16,12 @@ pub(crate) use account::StatusAccountDisplay;
 pub(crate) use card::SessionStats;
 pub(crate) use card::StatusHistoryHandle;
 pub(crate) use card::new_settings_card;
+pub(crate) use card::new_status_menu_summary_card_with_account_display;
+pub(crate) use card::new_status_menu_summary_card_with_account_display_many;
 pub(crate) use card::new_status_menu_summary_card_with_session_stats;
 #[cfg(test)]
 pub(crate) use card::new_status_output;
+#[cfg(test)]
 pub(crate) use card::new_status_output_with_rate_limits;
 pub(crate) use card::new_status_output_with_rate_limits_handle;
 pub(crate) use helpers::compose_agents_summary;

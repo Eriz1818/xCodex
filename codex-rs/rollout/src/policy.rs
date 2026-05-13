@@ -214,6 +214,8 @@ mod tests {
             call_id: "call-1".to_string(),
             sender_thread_id: ThreadId::default(),
             receiver_thread_id: ThreadId::default(),
+            receiver_agent_nickname: None,
+            receiver_agent_role: None,
         });
 
         assert_eq!(

@@ -38,6 +38,7 @@ use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::request_permissions::PermissionGrantScope;
 use codex_protocol::request_permissions::RequestPermissionProfile;
 use tracing::Span;
+use uuid::Uuid;
 
 use crate::RolloutRecorderParams;
 use crate::rollout::policy::EventPersistenceMode;
@@ -317,7 +318,15 @@ fn test_tool_runtime(session: Arc<Session>, turn_context: Arc<TurnContext>) -> T
         },
     ));
     let tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new()));
-    ToolCallRuntime::new(router, session, turn_context, tracker)
+    ToolCallRuntime::new(
+        router,
+        session,
+        turn_context,
+        tracker,
+        "test-thread".to_string(),
+        Uuid::new_v4(),
+        0,
+    )
 }
 
 fn make_connector(id: &str, name: &str) -> AppInfo {
@@ -449,6 +458,18 @@ fn numbered_mcp_tools(count: usize) -> HashMap<String, ToolInfo> {
                 ),
             )
         })
+        .collect()
+}
+
+fn filter_mcp_tools_by_name(
+    mcp_tools: HashMap<String, ToolInfo>,
+    selected_tool_names: &[String],
+) -> HashMap<String, ToolInfo> {
+    let selected_tool_names: HashSet<&str> =
+        selected_tool_names.iter().map(String::as_str).collect();
+    mcp_tools
+        .into_iter()
+        .filter(|(name, _)| selected_tool_names.contains(name.as_str()))
         .collect()
 }
 
@@ -991,7 +1012,7 @@ fn search_tool_selection_keeps_codex_apps_tools_without_mentions() {
         &explicitly_enabled_connectors,
         &HashMap::new(),
     );
-    let apps_mcp_tools = filter_codex_apps_mcp_tools_only(mcp_tools, &connectors);
+    let apps_mcp_tools = filter_codex_apps_mcp_tools(mcp_tools, &connectors);
     selected_mcp_tools.extend(apps_mcp_tools);
 
     let mut tool_names: Vec<String> = selected_mcp_tools.into_keys().collect();
@@ -1033,7 +1054,7 @@ fn apps_mentions_add_codex_apps_tools_to_search_selected_set() {
         &explicitly_enabled_connectors,
         &HashMap::new(),
     );
-    let apps_mcp_tools = filter_codex_apps_mcp_tools_only(mcp_tools, &connectors);
+    let apps_mcp_tools = filter_codex_apps_mcp_tools(mcp_tools, &connectors);
     selected_mcp_tools.extend(apps_mcp_tools);
 
     let mut tool_names: Vec<String> = selected_mcp_tools.into_keys().collect();
@@ -1207,7 +1228,7 @@ async fn record_initial_history_reconstructs_resumed_transcript() {
 async fn record_initial_history_resumed_hydrates_previous_turn_settings() {
     let (session, turn_context) = make_session_and_context().await;
     let previous_model = "previous-rollout-model";
-    let rollout_items = vec![RolloutItem::TurnContext(TurnContextItem {
+    let previous_context_item = TurnContextItem {
         turn_id: Some(turn_context.sub_id.clone()),
         trace_id: turn_context.trace_id.clone(),
         cwd: turn_context.cwd.to_path_buf(),
@@ -1226,7 +1247,38 @@ async fn record_initial_history_resumed_hydrates_previous_turn_settings() {
         developer_instructions: None,
         final_output_json_schema: None,
         truncation_policy: Some(turn_context.truncation_policy),
-    })];
+    };
+    let turn_id = previous_context_item
+        .turn_id
+        .clone()
+        .expect("turn context should have turn_id");
+    let rollout_items = vec![
+        RolloutItem::EventMsg(EventMsg::TurnStarted(
+            codex_protocol::protocol::TurnStartedEvent {
+                turn_id: turn_id.clone(),
+                started_at: None,
+                model_context_window: Some(128_000),
+                collaboration_mode_kind: ModeKind::Default,
+            },
+        )),
+        RolloutItem::EventMsg(EventMsg::UserMessage(
+            codex_protocol::protocol::UserMessageEvent {
+                message: "resumed seed".to_string(),
+                images: None,
+                local_images: Vec::new(),
+                text_elements: Vec::new(),
+            },
+        )),
+        RolloutItem::TurnContext(previous_context_item),
+        RolloutItem::EventMsg(EventMsg::TurnComplete(
+            codex_protocol::protocol::TurnCompleteEvent {
+                turn_id,
+                last_agent_message: None,
+                completed_at: None,
+                duration_ms: None,
+            },
+        )),
+    ];
 
     session
         .record_initial_history(InitialHistory::Resumed(ResumedHistory {
@@ -1273,12 +1325,17 @@ async fn resumed_history_seeds_initial_context_on_first_turn_only() {
     let history_before_seed = session.state.lock().await.clone_history();
     assert_eq!(expected, history_before_seed.raw_items());
 
-    session.seed_initial_context_if_needed(&turn_context).await;
-    expected.extend(session.build_initial_context(&turn_context).await);
+    let initial_context = session.build_initial_context(&turn_context).await;
+    session
+        .record_context_updates_and_set_reference_context_item(&turn_context)
+        .await;
+    expected.extend(initial_context);
     let history_after_seed = session.clone_history().await;
     assert_eq!(expected, history_after_seed.raw_items());
 
-    session.seed_initial_context_if_needed(&turn_context).await;
+    session
+        .record_context_updates_and_set_reference_context_item(&turn_context)
+        .await;
     let history_after_second_seed = session.clone_history().await;
     assert_eq!(expected, history_after_second_seed.raw_items());
 }
@@ -1337,6 +1394,7 @@ async fn record_initial_history_seeds_token_info_from_rollout() {
             total_tokens: 7,
         },
         model_context_window: Some(1_000),
+        full_model_context_window: None,
     };
     let info2 = TokenUsageInfo {
         total_token_usage: TokenUsage {
@@ -1354,6 +1412,7 @@ async fn record_initial_history_seeds_token_info_from_rollout() {
             total_tokens: 35,
         },
         model_context_window: Some(2_000),
+        full_model_context_window: None,
     };
 
     rollout_items.push(RolloutItem::EventMsg(EventMsg::TokenCount(
@@ -1408,16 +1467,23 @@ async fn recompute_token_usage_uses_session_base_instructions() {
         .record_into_history(std::slice::from_ref(&item), &turn_context)
         .await;
 
-    let history = session.clone_history().await;
-    let session_base_instructions = BaseInstructions {
-        text: override_instructions,
-    };
-    let expected_tokens = history
-        .estimate_token_count_with_base_instructions(&session_base_instructions)
-        .expect("estimate with session base instructions");
-    let model_estimated_tokens = history
-        .estimate_token_count(&turn_context)
-        .expect("estimate with model instructions");
+    let expected_tokens = session
+        .estimate_prompt_token_count(&turn_context, std::iter::empty())
+        .await;
+    let model_instructions = turn_context
+        .model_info
+        .get_model_instructions(turn_context.personality.or(turn_context.config.personality));
+    {
+        let mut state = session.state.lock().await;
+        state.session_configuration.base_instructions = model_instructions;
+    }
+    let model_estimated_tokens = session
+        .estimate_prompt_token_count(&turn_context, std::iter::empty())
+        .await;
+    {
+        let mut state = session.state.lock().await;
+        state.session_configuration.base_instructions = override_instructions;
+    }
     assert_ne!(expected_tokens, model_estimated_tokens);
 
     session.recompute_token_usage(&turn_context).await;
@@ -1443,6 +1509,7 @@ async fn recompute_token_usage_updates_model_context_window() {
             total_token_usage: TokenUsage::default(),
             last_token_usage: TokenUsage::default(),
             model_context_window: Some(258_400),
+            full_model_context_window: None,
         }));
     }
 
@@ -2182,6 +2249,8 @@ async fn set_rate_limits_retains_previous_credits() {
         codex_home: config.codex_home.clone(),
         thread_name: None,
         original_config_do_not_use: Arc::clone(&config),
+        exclusion_secret_allowlist: Vec::new(),
+        exclusion_secret_blocklist: Vec::new(),
         metrics_service_name: None,
         app_server_client_name: None,
         app_server_client_version: None,
@@ -2284,6 +2353,8 @@ async fn set_rate_limits_updates_plan_type_when_present() {
         codex_home: config.codex_home.clone(),
         thread_name: None,
         original_config_do_not_use: Arc::clone(&config),
+        exclusion_secret_allowlist: Vec::new(),
+        exclusion_secret_blocklist: Vec::new(),
         metrics_service_name: None,
         app_server_client_name: None,
         app_server_client_version: None,
@@ -2636,6 +2707,8 @@ pub(crate) async fn make_session_configuration_for_tests() -> SessionConfigurati
         codex_home: config.codex_home.clone(),
         thread_name: None,
         original_config_do_not_use: Arc::clone(&config),
+        exclusion_secret_allowlist: Vec::new(),
+        exclusion_secret_blocklist: Vec::new(),
         metrics_service_name: None,
         app_server_client_name: None,
         app_server_client_version: None,
@@ -2899,6 +2972,8 @@ async fn session_new_fails_when_zsh_fork_enabled_without_zsh_path() {
         codex_home: config.codex_home.clone(),
         thread_name: None,
         original_config_do_not_use: Arc::clone(&config),
+        exclusion_secret_allowlist: Vec::new(),
+        exclusion_secret_blocklist: Vec::new(),
         metrics_service_name: None,
         app_server_client_name: None,
         app_server_client_version: None,
@@ -3003,6 +3078,8 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         codex_home: config.codex_home.clone(),
         thread_name: None,
         original_config_do_not_use: Arc::clone(&config),
+        exclusion_secret_allowlist: Vec::new(),
+        exclusion_secret_blocklist: Vec::new(),
         metrics_service_name: None,
         app_server_client_name: None,
         app_server_client_version: None,
@@ -3045,6 +3122,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
             &config.permissions.sandbox_policy,
         ))),
         mcp_startup_cancellation_token: Mutex::new(CancellationToken::new()),
+        user_hooks: crate::xcodex::build_user_hooks(&config, tx_event.clone()),
         unified_exec_manager: UnifiedExecProcessManager::new(
             config.background_terminal_max_timeout,
         ),
@@ -3141,6 +3219,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         idle_pending_input: Mutex::new(Vec::new()),
         guardian_review_session: crate::guardian::GuardianReviewSessionManager::default(),
         services,
+        content_gateway_cache: crate::content_gateway::GatewayCache::new(),
         js_repl,
         next_internal_sub_id: AtomicU64::new(0),
     };
@@ -3848,6 +3927,8 @@ pub(crate) async fn make_session_and_context_with_dynamic_tools_and_rx(
         codex_home: config.codex_home.clone(),
         thread_name: None,
         original_config_do_not_use: Arc::clone(&config),
+        exclusion_secret_allowlist: Vec::new(),
+        exclusion_secret_blocklist: Vec::new(),
         metrics_service_name: None,
         app_server_client_name: None,
         app_server_client_version: None,
@@ -3890,6 +3971,7 @@ pub(crate) async fn make_session_and_context_with_dynamic_tools_and_rx(
             &config.permissions.sandbox_policy,
         ))),
         mcp_startup_cancellation_token: Mutex::new(CancellationToken::new()),
+        user_hooks: crate::xcodex::build_user_hooks(&config, tx_event.clone()),
         unified_exec_manager: UnifiedExecProcessManager::new(
             config.background_terminal_max_timeout,
         ),
@@ -3986,6 +4068,7 @@ pub(crate) async fn make_session_and_context_with_dynamic_tools_and_rx(
         idle_pending_input: Mutex::new(Vec::new()),
         guardian_review_session: crate::guardian::GuardianReviewSessionManager::default(),
         services,
+        content_gateway_cache: crate::content_gateway::GatewayCache::new(),
         js_repl,
         next_internal_sub_id: AtomicU64::new(0),
     });

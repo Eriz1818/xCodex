@@ -2408,8 +2408,8 @@ mod tests {
         // Should have commit hash
         assert!(git_info.commit_hash.is_some());
         let commit_hash = git_info.commit_hash.unwrap();
-        assert_eq!(commit_hash.len(), 40); // SHA-1 hash should be 40 characters
-        assert!(commit_hash.chars().all(|c| c.is_ascii_hexdigit()));
+        assert_eq!(commit_hash.0.len(), 40); // SHA-1 hash should be 40 characters
+        assert!(commit_hash.0.chars().all(|c| c.is_ascii_hexdigit()));
 
         // Should have branch (likely "main" or "master")
         assert!(git_info.branch.is_some());
@@ -2808,7 +2808,7 @@ mod tests {
     #[test]
     fn test_git_info_serialization() {
         let git_info = GitInfo {
-            commit_hash: Some("abc123def456".to_string()),
+            commit_hash: Some(GitSha("abc123def456".to_string())),
             branch: Some("main".to_string()),
             repository_url: Some("https://github.com/example/repo.git".to_string()),
         };

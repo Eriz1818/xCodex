@@ -19,14 +19,15 @@ use crate::render::highlight::highlight_bash_with_heredoc_overrides;
 use crate::render::highlight::syntax_highlighting_enabled;
 use crate::render::renderable::ColumnRenderable;
 use crate::render::renderable::Renderable;
-use codex_core::features::Feature;
-use codex_core::features::Features;
 use codex_core::protocol::ElicitationAction;
-use codex_core::protocol::ExecPolicyAmendment;
 use codex_core::protocol::FileChange;
+use codex_core::protocol::NetworkApprovalContext;
 use codex_core::protocol::Op;
 use codex_core::protocol::ReviewDecision;
+use codex_features::Features;
+use codex_protocol::ThreadId;
 use codex_protocol::mcp::RequestId;
+use codex_protocol::models::PermissionProfile;
 use codex_protocol::request_user_input::RequestUserInputAnswer;
 use codex_protocol::request_user_input::RequestUserInputQuestionOption;
 use codex_protocol::request_user_input::RequestUserInputResponse;
@@ -46,10 +47,14 @@ use ratatui::widgets::Wrap;
 #[derive(Clone, Debug)]
 pub(crate) enum ApprovalRequest {
     Exec {
+        thread_id: ThreadId,
+        thread_label: Option<String>,
         id: String,
         command: Vec<String>,
         reason: Option<String>,
-        proposed_execpolicy_amendment: Option<ExecPolicyAmendment>,
+        available_decisions: Vec<ReviewDecision>,
+        network_approval_context: Option<NetworkApprovalContext>,
+        additional_permissions: Option<PermissionProfile>,
     },
     ApplyPatch {
         id: String,
@@ -124,10 +129,10 @@ impl ApprovalOverlay {
     ) -> (Vec<ApprovalOption>, SelectionViewParams) {
         let (options, title) = match &variant {
             ApprovalVariant::Exec {
-                proposed_execpolicy_amendment,
+                available_decisions,
                 ..
             } => (
-                exec_options(proposed_execpolicy_amendment.clone(), features),
+                exec_options(available_decisions, features),
                 "Would you like to run the following command?".to_string(),
             ),
             ApprovalVariant::ApplyPatch { .. } => (
@@ -232,7 +237,11 @@ impl ApprovalOverlay {
     }
 
     fn handle_exec_decision(&self, id: &str, command: &[String], decision: ReviewDecision) {
-        let cell = history_cell::new_approval_decision_cell(command.to_vec(), decision.clone());
+        let cell = history_cell::new_approval_decision_cell(
+            command.to_vec(),
+            decision.clone(),
+            history_cell::ApprovalDecisionActor::User,
+        );
         self.app_event_tx.send(AppEvent::InsertHistoryCell(cell));
         self.app_event_tx.send(AppEvent::CodexOp(Op::ExecApproval {
             id: id.to_string(),
@@ -259,6 +268,8 @@ impl ApprovalOverlay {
                 server_name: server_name.to_string(),
                 request_id: request_id.clone(),
                 decision,
+                content: None,
+                meta: None,
             }));
     }
 
@@ -427,7 +438,8 @@ impl From<ApprovalRequest> for ApprovalRequestState {
                 id,
                 command,
                 reason,
-                proposed_execpolicy_amendment,
+                available_decisions,
+                ..
             } => {
                 fn plain_lines(command: &str) -> Vec<Line<'static>> {
                     if command.is_empty() {
@@ -459,7 +471,7 @@ impl From<ApprovalRequest> for ApprovalRequestState {
                     variant: ApprovalVariant::Exec {
                         id,
                         command,
-                        proposed_execpolicy_amendment,
+                        available_decisions,
                     },
                     header: Box::new(Paragraph::new(header).wrap(Wrap { trim: false })),
                 }
@@ -540,7 +552,7 @@ enum ApprovalVariant {
     Exec {
         id: String,
         command: Vec<String>,
-        proposed_execpolicy_amendment: Option<ExecPolicyAmendment>,
+        available_decisions: Vec<ReviewDecision>,
     },
     ApplyPatch {
         id: String,
@@ -580,46 +592,56 @@ impl ApprovalOption {
 }
 
 fn exec_options(
-    proposed_execpolicy_amendment: Option<ExecPolicyAmendment>,
-    features: &Features,
+    available_decisions: &[ReviewDecision],
+    _features: &Features,
 ) -> Vec<ApprovalOption> {
-    vec![ApprovalOption {
-        label: "Yes, proceed".to_string(),
-        decision: ApprovalDecision::Review(ReviewDecision::Approved),
-        display_shortcut: None,
-        additional_shortcuts: vec![key_hint::plain(KeyCode::Char('y'))],
-    }]
-    .into_iter()
-    .chain(
-        proposed_execpolicy_amendment
-            .filter(|_| features.enabled(Feature::RequestRule))
-            .and_then(|prefix| {
-                let rendered_prefix = strip_bash_lc_and_escape(prefix.command());
+    let mut options = Vec::new();
+    for decision in available_decisions {
+        match decision {
+            ReviewDecision::Approved => options.push(ApprovalOption {
+                label: "Yes, proceed".to_string(),
+                decision: ApprovalDecision::Review(ReviewDecision::Approved),
+                display_shortcut: None,
+                additional_shortcuts: vec![key_hint::plain(KeyCode::Char('y'))],
+            }),
+            ReviewDecision::ApprovedExecpolicyAmendment {
+                proposed_execpolicy_amendment,
+            } => {
+                let rendered_prefix =
+                    strip_bash_lc_and_escape(proposed_execpolicy_amendment.command());
                 if rendered_prefix.contains('\n') || rendered_prefix.contains('\r') {
-                    return None;
+                    continue;
                 }
-
-                Some(ApprovalOption {
+                options.push(ApprovalOption {
                     label: format!(
                         "Yes, and don't ask again for commands that start with `{rendered_prefix}`"
                     ),
                     decision: ApprovalDecision::Review(
                         ReviewDecision::ApprovedExecpolicyAmendment {
-                            proposed_execpolicy_amendment: prefix,
+                            proposed_execpolicy_amendment: proposed_execpolicy_amendment.clone(),
                         },
                     ),
                     display_shortcut: None,
                     additional_shortcuts: vec![key_hint::plain(KeyCode::Char('p'))],
-                })
+                });
+            }
+            ReviewDecision::ApprovedForSession => options.push(ApprovalOption {
+                label: "Yes, don't ask again this session".to_string(),
+                decision: ApprovalDecision::Review(ReviewDecision::ApprovedForSession),
+                display_shortcut: None,
+                additional_shortcuts: Vec::new(),
             }),
-    )
-    .chain([ApprovalOption {
+            ReviewDecision::Abort | ReviewDecision::Denied => {}
+            ReviewDecision::NetworkPolicyAmendment { .. } | ReviewDecision::TimedOut => {}
+        }
+    }
+    options.push(ApprovalOption {
         label: "No, and tell xcodex what to do differently".to_string(),
         decision: ApprovalDecision::Review(ReviewDecision::Abort),
         display_shortcut: Some(key_hint::plain(KeyCode::Esc)),
         additional_shortcuts: vec![key_hint::plain(KeyCode::Char('n'))],
-    }])
-    .collect()
+    });
+    options
 }
 
 fn patch_options() -> Vec<ApprovalOption> {
@@ -685,7 +707,7 @@ mod tests {
     use super::*;
     use crate::app_event::AppEvent;
     use crate::style::user_message_style;
-    use codex_core::features::Feature;
+    use codex_core::protocol::ExecPolicyAmendment;
     use codex_core::themes::ThemeCatalog;
     use codex_core::themes::ThemeColor;
     use pretty_assertions::assert_eq;
@@ -727,10 +749,14 @@ mod tests {
 
     fn make_exec_request() -> ApprovalRequest {
         ApprovalRequest::Exec {
+            thread_id: ThreadId::new(),
+            thread_label: None,
             id: "test".to_string(),
             command: vec!["echo".to_string(), "hi".to_string()],
             reason: Some("reason".to_string()),
-            proposed_execpolicy_amendment: None,
+            available_decisions: vec![ReviewDecision::Approved, ReviewDecision::Abort],
+            network_approval_context: None,
+            additional_permissions: None,
         }
     }
 
@@ -769,12 +795,22 @@ mod tests {
         let tx = AppEventSender::new(tx);
         let mut view = ApprovalOverlay::new(
             ApprovalRequest::Exec {
+                thread_id: ThreadId::new(),
+                thread_label: None,
                 id: "test".to_string(),
                 command: vec!["echo".to_string()],
                 reason: None,
-                proposed_execpolicy_amendment: Some(ExecPolicyAmendment::new(vec![
-                    "echo".to_string(),
-                ])),
+                available_decisions: vec![
+                    ReviewDecision::Approved,
+                    ReviewDecision::ApprovedExecpolicyAmendment {
+                        proposed_execpolicy_amendment: ExecPolicyAmendment::new(vec![
+                            "echo".to_string(),
+                        ]),
+                    },
+                    ReviewDecision::Abort,
+                ],
+                network_approval_context: None,
+                additional_permissions: None,
             },
             tx,
             Features::with_defaults(),
@@ -802,24 +838,22 @@ mod tests {
     }
 
     #[test]
-    fn exec_prefix_option_hidden_when_execpolicy_disabled() {
+    fn exec_prefix_option_absent_when_decision_is_not_available() {
         let (tx, mut rx) = unbounded_channel::<AppEvent>();
         let tx = AppEventSender::new(tx);
         let mut view = ApprovalOverlay::new(
             ApprovalRequest::Exec {
+                thread_id: ThreadId::new(),
+                thread_label: None,
                 id: "test".to_string(),
                 command: vec!["echo".to_string()],
                 reason: None,
-                proposed_execpolicy_amendment: Some(ExecPolicyAmendment::new(vec![
-                    "echo".to_string(),
-                ])),
+                available_decisions: vec![ReviewDecision::Approved, ReviewDecision::Abort],
+                network_approval_context: None,
+                additional_permissions: None,
             },
             tx,
-            {
-                let mut features = Features::with_defaults();
-                features.disable(Feature::RequestRule);
-                features
-            },
+            Features::with_defaults(),
         );
         assert_eq!(view.options.len(), 2);
         view.handle_key_event(KeyEvent::new(KeyCode::Char('p'), KeyModifiers::NONE));
@@ -889,10 +923,14 @@ mod tests {
         let tx = AppEventSender::new(tx);
         let command = vec!["echo".into(), "hello".into(), "world".into()];
         let exec_request = ApprovalRequest::Exec {
+            thread_id: ThreadId::new(),
+            thread_label: None,
             id: "test".into(),
             command,
             reason: None,
-            proposed_execpolicy_amendment: None,
+            available_decisions: vec![ReviewDecision::Approved, ReviewDecision::Abort],
+            network_approval_context: None,
+            additional_permissions: None,
         };
 
         let view = ApprovalOverlay::new(exec_request, tx, Features::with_defaults());
@@ -921,7 +959,11 @@ mod tests {
             "-lc".into(),
             "git add tui/src/render/mod.rs tui/src/render/renderable.rs".into(),
         ];
-        let cell = history_cell::new_approval_decision_cell(command, ReviewDecision::Approved);
+        let cell = history_cell::new_approval_decision_cell(
+            command,
+            ReviewDecision::Approved,
+            history_cell::ApprovalDecisionActor::User,
+        );
         let lines = cell.display_lines(28);
         let rendered: Vec<String> = lines
             .iter()

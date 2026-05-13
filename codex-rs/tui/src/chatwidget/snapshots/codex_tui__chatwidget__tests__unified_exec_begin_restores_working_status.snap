@@ -1,11 +1,12 @@
 ---
 source: tui/src/chatwidget/tests/exec_flow.rs
+assertion_line: 289
 expression: normalized_backend_snapshot(terminal.backend())
 ---
 "                                                                                "
-"• Charging (0s • esc to interrupt) · 1 background terminal running · /ps to view"
+"• Charging (0s • esc to interrupt) · 1 background terminal running · /ps to vie…"
 "                                                                                "
 "                                                                                "
 "› Ask xcodex to do anything                                                     "
 "                                                                                "
-"  gpt-5.3-codex default · /tmp/project                                          "
+"  ? for shortcuts · gpt-5.3-codex                            100% context left  "

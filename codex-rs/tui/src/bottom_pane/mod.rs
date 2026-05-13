@@ -20,6 +20,7 @@ use crate::app_event_sender::AppEventSender;
 use crate::bottom_pane::pending_input_preview::PendingInputPreview;
 use crate::bottom_pane::pending_thread_approvals::PendingThreadApprovals;
 use crate::bottom_pane::unified_exec_footer::UnifiedExecFooter;
+use crate::custom_prompts::CustomPrompt;
 use crate::key_hint::KeyBinding;
 use crate::legacy_core::plugins::PluginCapabilitySummary;
 use crate::legacy_core::skills::model::SkillMetadata;
@@ -162,7 +163,6 @@ pub(crate) enum CancellationEvent {
     NotHandled,
 }
 
-use crate::bottom_pane::prompt_args::parse_slash_name;
 pub(crate) use chat_composer::ChatComposer;
 pub(crate) use chat_composer::ChatComposerConfig;
 pub(crate) use chat_composer::InputResult;

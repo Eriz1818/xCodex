@@ -1,9 +1,10 @@
 ---
-source: tui/src/chatwidget/tests.rs
-expression: terminal.backend()
+source: tui/src/chatwidget/tests/status_and_layout.rs
+assertion_line: 1145
+expression: normalized_backend_snapshot(terminal.backend())
 ---
 "                                                                                "
 "                                                                                "
-"› Ask Codex to do anything                                                      "
+"› Ask xcodex to do anything                                                     "
 "                                                                                "
 "  gpt-5.3-codex high · Roadmap cleanup                                          "

@@ -34,7 +34,7 @@ async fn test_session_and_turn() -> (Arc<Session>, Arc<TurnContext>) {
 
 #[tokio::test]
 async fn exec_command_emits_end_event_when_session_fails_to_start() {
-    let (session, turn, mut rx) = make_session_and_context_with_rx().await;
+    let (session, turn, rx) = make_session_and_context_with_rx().await;
 
     let call_id = "call".to_string();
     let process_id = session
@@ -89,17 +89,13 @@ async fn exec_command_emits_end_event_when_session_fails_to_start() {
         };
 
         match event.msg {
-            EventMsg::ExecCommandBegin(ev) => {
-                if ev.call_id == "call" {
-                    begin_process_id = ev.process_id;
-                }
+            EventMsg::ExecCommandBegin(ev) if ev.call_id == "call" => {
+                begin_process_id = ev.process_id;
             }
-            EventMsg::ExecCommandEnd(ev) => {
-                if ev.call_id == "call" {
-                    end_process_id = ev.process_id;
-                    end_exit_code = Some(ev.exit_code);
-                    break;
-                }
+            EventMsg::ExecCommandEnd(ev) if ev.call_id == "call" => {
+                end_process_id = ev.process_id;
+                end_exit_code = Some(ev.exit_code);
+                break;
             }
             _ => {}
         }

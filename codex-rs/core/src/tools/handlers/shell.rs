@@ -1,5 +1,4 @@
 use codex_protocol::ThreadId;
-use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::models::ShellCommandToolCallParams;
 use codex_protocol::models::ShellToolCallParams;
 use serde_json::Value as JsonValue;

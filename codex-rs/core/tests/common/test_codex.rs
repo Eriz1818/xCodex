@@ -630,6 +630,18 @@ impl TestCodexBuilder {
         }
         ensure_test_model_catalog(&mut config)?;
 
+        if config
+            .model_auto_compact_token_limit
+            .is_some_and(|limit| limit > 0)
+        {
+            codex_core::prefs::store_blocking(
+                home.path(),
+                &codex_core::prefs::UserPrefs {
+                    auto_compact_enabled: true,
+                },
+            )?;
+        }
+
         if config.include_apply_patch_tool {
             config.features.enable(Feature::ApplyPatchFreeform)?;
         } else {

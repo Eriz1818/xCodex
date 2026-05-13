@@ -1,5 +1,6 @@
 ---
 source: tui/src/bottom_pane/approval_overlay.rs
+assertion_line: 1688
 expression: "normalize_snapshot_paths(render_overlay_lines(&view, 120))"
 ---
 
@@ -12,6 +13,6 @@ expression: "normalize_snapshot_paths(render_overlay_lines(&view, 120))"
   $ cat /tmp/readme.txt
 
 › 1. Yes, proceed (y)
-  2. No, and tell Codex what to do differently (esc)
+  2. No, and tell xcodex what to do differently (esc)
 
-  Press enter to confirm or esc to cancel
+  Press enter to confirm, esc to cancel, or ctrl + y to copy command

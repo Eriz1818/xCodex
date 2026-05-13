@@ -453,7 +453,7 @@ pub(crate) async fn run_hooks_command(
                         .map_err(|e| anyhow::anyhow!(e))?;
                     let config_toml = load_config_as_toml_with_cli_overrides(
                         &codex_home,
-                        &config_cwd,
+                        Some(&config_cwd),
                         cli_overrides,
                     )
                     .await?;
@@ -486,7 +486,7 @@ pub(crate) async fn run_hooks_command(
                         .map_err(|e| anyhow::anyhow!(e))?;
                     let config_toml = load_config_as_toml_with_cli_overrides(
                         &codex_home,
-                        &config_cwd,
+                        Some(&config_cwd),
                         cli_overrides,
                     )
                     .await?;
@@ -545,9 +545,12 @@ pub(crate) async fn run_hooks_command(
             let cli_overrides = root_config_overrides
                 .parse_overrides()
                 .map_err(|e| anyhow::anyhow!(e))?;
-            let config_toml =
-                load_config_as_toml_with_cli_overrides(&codex_home, &config_cwd, cli_overrides)
-                    .await?;
+            let config_toml = load_config_as_toml_with_cli_overrides(
+                &codex_home,
+                Some(&config_cwd),
+                cli_overrides,
+            )
+            .await?;
             print_hooks_list(&codex_home, &config_toml.hooks, args.all);
         }
         HooksSubcommand::Paths(_args) => {
@@ -556,9 +559,12 @@ pub(crate) async fn run_hooks_command(
             let cli_overrides = root_config_overrides
                 .parse_overrides()
                 .map_err(|e| anyhow::anyhow!(e))?;
-            let config_toml =
-                load_config_as_toml_with_cli_overrides(&codex_home, &config_cwd, cli_overrides)
-                    .await?;
+            let config_toml = load_config_as_toml_with_cli_overrides(
+                &codex_home,
+                Some(&config_cwd),
+                cli_overrides,
+            )
+            .await?;
             print_hooks_paths(&codex_home, &config_toml.hooks);
         }
         HooksSubcommand::Test(cmd) => {
@@ -567,9 +573,12 @@ pub(crate) async fn run_hooks_command(
             let cli_overrides = root_config_overrides
                 .parse_overrides()
                 .map_err(|e| anyhow::anyhow!(e))?;
-            let config_toml =
-                load_config_as_toml_with_cli_overrides(&codex_home, &resolved_cwd, cli_overrides)
-                    .await?;
+            let config_toml = load_config_as_toml_with_cli_overrides(
+                &codex_home,
+                Some(&resolved_cwd),
+                cli_overrides,
+            )
+            .await?;
 
             let Some(sub) = cmd.sub else {
                 println!("Usage: xcodex hooks test <external|python-host|pyo3|all>");
@@ -894,7 +903,8 @@ pub(crate) async fn run_plan_command(
         .parse_overrides()
         .map_err(|err| anyhow::anyhow!(err))?;
     let config_toml =
-        load_config_as_toml_with_cli_overrides(&codex_home, &config_cwd, cli_overrides).await?;
+        load_config_as_toml_with_cli_overrides(&codex_home, Some(&config_cwd), cli_overrides)
+            .await?;
     let mode = plan_mode(&codex_home, &config_toml);
     let custom_template = plan_custom_template_path(&codex_home, &config_toml);
     let custom_seed_mode = plan_custom_seed_mode(&codex_home, &config_toml);

@@ -1,0 +1,16 @@
+diff --git a/src/lib.rs b/src/lib.rs
+index 71394d4..3530a4a 100644
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -95,7 +95,10 @@ use std::fs;
+ use std::path::{Path, PathBuf};
+
+ pub fn path(suffix: &str) -> PathBuf {
+-    let p = Path::new(env!("OUT_DIR")).join(suffix);
++    let out_dir = std::env::var_os("OUT_DIR")
++        .map(PathBuf::from)
++        .unwrap_or_else(|| PathBuf::from(env!("OUT_DIR")));
++    let p = out_dir.join(suffix);
+     let _ = fs::create_dir(&p);
+     p
+ }

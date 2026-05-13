@@ -23,8 +23,6 @@ use codex_app_server_client::InProcessServerEvent;
 use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::ConfigWarningNotification;
 use codex_app_server_protocol::JSONRPCErrorError;
-use codex_app_server_protocol::McpServerElicitationAction;
-use codex_app_server_protocol::McpServerElicitationRequestResponse;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ReviewStartParams;
 use codex_app_server_protocol::ReviewStartResponse;
@@ -1507,7 +1505,7 @@ async fn handle_server_request(
                 &method,
                 xcodex_non_interactive::unsupported_exec_mode_conversation_request(
                     "apply_patch approval",
-                    &params.conversation_id,
+                    &params.conversation_id.to_string(),
                 ),
             )
             .await
@@ -1519,7 +1517,7 @@ async fn handle_server_request(
                 &method,
                 xcodex_non_interactive::unsupported_exec_mode_conversation_request(
                     "exec command approval",
-                    &params.conversation_id,
+                    &params.conversation_id.to_string(),
                 ),
             )
             .await

@@ -565,7 +565,7 @@ async fn replayed_retryable_app_server_error_keeps_turn_running() {
         .bottom_pane
         .status_widget()
         .expect("status indicator should be visible");
-    assert_eq!(status.header(), "Working");
+    assert_eq!(status.header(), "Charging");
     assert_eq!(status.details(), None);
 }
 
@@ -766,7 +766,7 @@ async fn thread_snapshot_replayed_turn_started_marks_task_running() {
         .bottom_pane
         .status_widget()
         .expect("status indicator should be visible");
-    assert_eq!(status.header(), "Working");
+    assert_eq!(status.header(), "Charging");
 }
 
 #[tokio::test]
@@ -792,7 +792,7 @@ async fn replayed_in_progress_turn_marks_task_running() {
         .bottom_pane
         .status_widget()
         .expect("status indicator should be visible");
-    assert_eq!(status.header(), "Working");
+    assert_eq!(status.header(), "Charging");
 }
 
 #[tokio::test]
@@ -852,7 +852,7 @@ async fn thread_snapshot_replayed_stream_recovery_restores_previous_status_heade
         .bottom_pane
         .status_widget()
         .expect("status indicator should be visible");
-    assert_eq!(status.header(), "Working");
+    assert_eq!(status.header(), "Charging");
     assert_eq!(status.details(), None);
     assert!(chat.retry_status_header.is_none());
 }
@@ -949,7 +949,7 @@ async fn stream_recovery_restores_previous_status_header() {
         .bottom_pane
         .status_widget()
         .expect("status indicator should be visible");
-    assert_eq!(status.header(), "Working");
+    assert_eq!(status.header(), "Charging");
     assert_eq!(status.details(), None);
     assert!(chat.retry_status_header.is_none());
 }

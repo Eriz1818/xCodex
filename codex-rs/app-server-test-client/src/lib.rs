@@ -99,6 +99,7 @@ const NOTIFICATIONS_TO_OPT_OUT: &[&str] = &[
 const APP_SERVER_GRACEFUL_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
 const APP_SERVER_GRACEFUL_SHUTDOWN_POLL_INTERVAL: Duration = Duration::from_millis(100);
 const DEFAULT_ANALYTICS_ENABLED: bool = true;
+pub const DEFAULT_CLIENT_NAME: &str = "codex-toy-app-server";
 const OTEL_SERVICE_NAME: &str = "codex-app-server-test-client";
 const TRACE_DISABLED_MESSAGE: &str =
     "Not enabled - enable tracing in $CODEX_HOME/config.toml to get a trace URL!";
@@ -1547,7 +1548,7 @@ impl CodexClient {
             request_id: request_id.clone(),
             params: InitializeParams {
                 client_info: ClientInfo {
-                    name: "codex-toy-app-server".to_string(),
+                    name: DEFAULT_CLIENT_NAME.to_string(),
                     title: Some("Codex Toy App Server".to_string()),
                     version: env!("CARGO_PKG_VERSION").to_string(),
                 },
@@ -2125,6 +2126,7 @@ impl TestClientTracing {
     async fn initialize(config_overrides: &[String]) -> Result<Self> {
         let cli_kv_overrides = CliConfigOverrides {
             raw_overrides: config_overrides.to_vec(),
+            mcp_startup_mode: None,
         }
         .parse_overrides()
         .map_err(|e| anyhow::anyhow!("error parsing -c overrides: {e}"))?;

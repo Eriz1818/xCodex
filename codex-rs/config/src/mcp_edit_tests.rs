@@ -26,6 +26,7 @@ async fn replace_mcp_servers_serializes_per_tool_approval_overrides() -> anyhow:
             required: false,
             disabled_reason: None,
             startup_timeout_sec: None,
+            startup_mode: None,
             tool_timeout_sec: None,
             enabled_tools: None,
             disabled_tools: None,

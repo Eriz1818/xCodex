@@ -30,7 +30,7 @@ use super::textarea::TextAreaState;
 /// a local report for troubleshooting.
 pub(crate) struct FeedbackNoteView {
     category: FeedbackCategory,
-    snapshot: codex_feedback::CodexLogSnapshot,
+    snapshot: codex_feedback::FeedbackSnapshot,
     rollout_path: Option<PathBuf>,
     app_event_tx: AppEventSender,
     include_logs: bool,
@@ -44,7 +44,7 @@ pub(crate) struct FeedbackNoteView {
 impl FeedbackNoteView {
     pub(crate) fn new(
         category: FeedbackCategory,
-        snapshot: codex_feedback::CodexLogSnapshot,
+        snapshot: codex_feedback::FeedbackSnapshot,
         rollout_path: Option<PathBuf>,
         app_event_tx: AppEventSender,
         include_logs: bool,

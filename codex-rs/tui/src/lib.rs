@@ -109,6 +109,7 @@ mod clipboard_copy;
 mod clipboard_paste;
 mod collaboration_modes;
 mod color;
+mod custom_prompts;
 pub(crate) mod custom_terminal;
 pub use custom_terminal::Terminal;
 mod cwd_prompt;
@@ -356,7 +357,7 @@ async fn connect_remote_app_server(
         websocket_url,
         auth_token,
         client_name: "codex-tui".to_string(),
-        client_version: env!("CARGO_PKG_VERSION").to_string(),
+        client_version: codex_models_manager::client_version_to_whole(),
         experimental_api: true,
         opt_out_notification_methods: Vec::new(),
         channel_capacity: DEFAULT_IN_PROCESS_CHANNEL_CAPACITY,
@@ -464,7 +465,7 @@ where
         session_source: codex_protocol::protocol::SessionSource::Cli,
         enable_codex_api_key_env: false,
         client_name: "codex-tui".to_string(),
-        client_version: env!("CARGO_PKG_VERSION").to_string(),
+        client_version: codex_models_manager::client_version_to_whole(),
         experimental_api: true,
         opt_out_notification_methods: Vec::new(),
         channel_capacity: DEFAULT_IN_PROCESS_CHANNEL_CAPACITY,
@@ -793,13 +794,27 @@ pub async fn run_main(
         }
     };
 
-    if let Err(err) = crate::legacy_core::personality_migration::maybe_migrate_personality(
-        &codex_home,
-        &config_toml,
-    )
-    .await
-    {
-        tracing::warn!(error = %err, "failed to run personality migration");
+    let personality_config_toml = toml::Value::try_from(&config_toml)
+        .map_err(|err| err.to_string())
+        .and_then(|value| {
+            value
+                .try_into::<codex_config::config_toml::ConfigToml>()
+                .map_err(|err| err.to_string())
+        });
+    match personality_config_toml {
+        Ok(personality_config_toml) => {
+            if let Err(err) = crate::legacy_core::personality_migration::maybe_migrate_personality(
+                &codex_home,
+                &personality_config_toml,
+            )
+            .await
+            {
+                tracing::warn!(error = %err, "failed to run personality migration");
+            }
+        }
+        Err(err) => {
+            tracing::warn!(error = %err, "failed to prepare config for personality migration");
+        }
     }
 
     let chatgpt_base_url = config_toml

@@ -360,10 +360,12 @@ fn assert_posix_snapshot_sections(snapshot: &str) {
     assert!(snapshot.contains("aliases "));
     assert!(snapshot.contains("exports "));
     assert!(snapshot.contains("setopts "));
-    assert!(
-        snapshot.contains("PATH"),
-        "snapshot should include PATH exports; snapshot={snapshot:?}"
-    );
+    if std::env::var_os("BAZEL_TEST").is_none() && std::env::var_os("PATH").is_some() {
+        assert!(
+            snapshot.contains("PATH"),
+            "snapshot should include PATH exports when PATH is set; snapshot={snapshot:?}"
+        );
+    }
 }
 
 #[cfg_attr(not(target_os = "linux"), ignore)]

@@ -219,6 +219,7 @@ mod tests {
     use image::GenericImageView;
     use image::ImageBuffer;
     use image::Rgba;
+    use tempfile::NamedTempFile;
 
     fn image_bytes(image: &ImageBuffer<Rgba<u8>, Vec<u8>>, format: ImageFormat) -> Vec<u8> {
         let mut encoded = Cursor::new(Vec::new());
@@ -261,7 +262,11 @@ mod tests {
 
         let original_bytes = std::fs::read(temp_file.path()).expect("read written image");
 
-        let encoded = load_and_resize_to_fit(temp_file.path()).expect("process image");
+        let file_bytes =
+            read_file_bytes(temp_file.path(), temp_file.path()).expect("read file bytes");
+        let encoded =
+            load_for_prompt_bytes(temp_file.path(), file_bytes, PromptImageMode::ResizeToFit)
+                .expect("process image");
 
         assert_eq!(encoded.width, 64);
         assert_eq!(encoded.height, 32);

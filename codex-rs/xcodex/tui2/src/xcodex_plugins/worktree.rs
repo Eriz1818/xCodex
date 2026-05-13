@@ -834,11 +834,13 @@ pub(crate) fn spawn_worktree_init_command(
         tx.send(AppEvent::CodexOp(Op::OverrideTurnContext {
             cwd: Some(path.clone()),
             approval_policy: None,
+            approvals_reviewer: None,
             sandbox_policy: None,
             windows_sandbox_level: None,
             model: None,
             effort: None,
             summary: None,
+            service_tier: None,
             collaboration_mode: None,
             personality: None,
         }));
@@ -1025,11 +1027,13 @@ pub(crate) fn open_worktree_picker(chat: &mut ChatWidget) {
                     tx.send(AppEvent::CodexOp(Op::OverrideTurnContext {
                         cwd: Some(path.clone()),
                         approval_policy: None,
+                        approvals_reviewer: None,
                         sandbox_policy: None,
                         windows_sandbox_level: None,
                         model: None,
                         effort: None,
                         summary: None,
+                        service_tier: None,
                         collaboration_mode: None,
                         personality: None,
                     }));

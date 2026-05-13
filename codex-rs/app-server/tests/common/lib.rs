@@ -41,6 +41,8 @@ pub use rollout::create_fake_rollout_with_text_elements;
 pub use rollout::rollout_path;
 use serde::de::DeserializeOwned;
 
+pub const DEFAULT_CLIENT_NAME: &str = "codex-toy-app-server";
+
 pub fn to_response<T: DeserializeOwned>(response: JSONRPCResponse) -> anyhow::Result<T> {
     let value = serde_json::to_value(response.result)?;
     let codex_response = serde_json::from_value(value)?;

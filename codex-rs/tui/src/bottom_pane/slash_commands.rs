@@ -24,6 +24,10 @@ pub(crate) struct BuiltinCommandFlags {
 
 /// Return the built-ins that should be visible/usable for the current input.
 pub(crate) fn builtins_for_input(flags: BuiltinCommandFlags) -> Vec<(&'static str, SlashCommand)> {
+    // `/settings` is the xcodex composer settings menu. Upstream also uses this flag for
+    // realtime audio-device selection, but that must not gate xcodex settings visibility.
+    let _audio_device_selection_enabled = flags.audio_device_selection_enabled;
+
     built_in_slash_commands()
         .into_iter()
         .filter(|(_, cmd)| flags.allow_elevate_sandbox || *cmd != SlashCommand::ElevateSandbox)
@@ -36,7 +40,6 @@ pub(crate) fn builtins_for_input(flags: BuiltinCommandFlags) -> Vec<(&'static st
         .filter(|(_, cmd)| flags.fast_command_enabled || *cmd != SlashCommand::Fast)
         .filter(|(_, cmd)| flags.personality_command_enabled || *cmd != SlashCommand::Personality)
         .filter(|(_, cmd)| flags.realtime_conversation_enabled || *cmd != SlashCommand::Realtime)
-        .filter(|(_, cmd)| flags.audio_device_selection_enabled || *cmd != SlashCommand::Settings)
         .collect()
 }
 
@@ -119,17 +122,23 @@ mod tests {
     }
 
     #[test]
-    fn settings_command_is_hidden_when_realtime_is_disabled() {
+    fn settings_command_stays_visible_when_realtime_is_disabled() {
         let mut flags = all_enabled_flags();
         flags.realtime_conversation_enabled = false;
         flags.audio_device_selection_enabled = false;
-        assert_eq!(find_builtin_command("settings", flags), None);
+        assert_eq!(
+            find_builtin_command("settings", flags),
+            Some(SlashCommand::Settings)
+        );
     }
 
     #[test]
-    fn settings_command_is_hidden_when_audio_device_selection_is_disabled() {
+    fn settings_command_stays_visible_when_audio_device_selection_is_disabled() {
         let mut flags = all_enabled_flags();
         flags.audio_device_selection_enabled = false;
-        assert_eq!(find_builtin_command("settings", flags), None);
+        assert_eq!(
+            find_builtin_command("settings", flags),
+            Some(SlashCommand::Settings)
+        );
     }
 }

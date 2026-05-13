@@ -4,6 +4,17 @@
 
 In the legacy TUI (`tui`), `/settings` opens a bottom-pane tabbed menu (replacing the composer temporarily).
 
+## ⚡Tools
+
+Open ⚡Tools with:
+
+```text
+/xtreme
+Ctrl+Alt+O
+```
+
+`Ctrl+O` is reserved for copying the last agent response as Markdown. ⚡Tools contains quick actions and persistent toggles, including Xtreme mode and verbose tool output.
+
 ## Status bar items
 
 `xcodex` can optionally show additional items in the footer row, behind toggles.

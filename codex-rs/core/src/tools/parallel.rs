@@ -201,7 +201,7 @@ impl ToolCallRuntime {
                         "status": "completed",
                         "success": false,
                         "output_bytes": message.len(),
-                        "output_preview": preview.clone(),
+                        "output_preview": preview,
                     }));
                     hook_session.user_hooks().tool_call_finished(
                         thread_id,
@@ -391,7 +391,8 @@ mod tests {
         };
 
         let (success, output_bytes, preview) = summarize_mcp_tool_output(&result, 512);
-        let expected_content = FunctionCallOutputPayload::from(&result)
+        let expected_content = result
+            .into_function_call_output_payload()
             .body
             .to_text()
             .expect("MCP output should render as text");
@@ -414,7 +415,8 @@ mod tests {
         };
 
         let (_success, output_bytes, preview) = summarize_mcp_tool_output(&result, 512);
-        let expected_content = FunctionCallOutputPayload::from(&result)
+        let expected_content = result
+            .into_function_call_output_payload()
             .body
             .to_text()
             .expect("MCP output should render as text");

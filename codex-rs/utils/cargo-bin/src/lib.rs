@@ -35,7 +35,6 @@ pub enum CargoBinError {
 /// In `cargo test`, `CARGO_BIN_EXE_*` env vars are absolute.
 /// In `bazel test`, `CARGO_BIN_EXE_*` env vars are rlocationpaths, intended to be consumed by `rlocation`.
 /// This helper allows callers to transparently support both.
-#[allow(deprecated)]
 pub fn cargo_bin(name: &str) -> Result<PathBuf, CargoBinError> {
     let env_keys = cargo_bin_env_keys(name);
     for key in &env_keys {
@@ -43,29 +42,40 @@ pub fn cargo_bin(name: &str) -> Result<PathBuf, CargoBinError> {
             return resolve_bin_from_env(key, value);
         }
     }
-    match assert_cmd::Command::cargo_bin(name) {
-        Ok(cmd) => {
-            let mut path = PathBuf::from(cmd.get_program());
-            if !path.is_absolute() {
-                path = std::env::current_dir()
-                    .map_err(|source| CargoBinError::CurrentDir { source })?
-                    .join(path);
-            }
-            if path.exists() {
-                Ok(path)
-            } else {
-                Err(CargoBinError::ResolvedPathDoesNotExist {
-                    key: "assert_cmd::Command::cargo_bin".to_owned(),
-                    path,
-                })
-            }
-        }
-        Err(err) => Err(CargoBinError::NotFound {
-            name: name.to_owned(),
-            env_keys,
-            fallback: format!("assert_cmd fallback failed: {err}"),
-        }),
+    if let Some(path) = find_binary_next_to_current_test(name)? {
+        return Ok(path);
     }
+
+    Err(CargoBinError::NotFound {
+        name: name.to_owned(),
+        env_keys,
+        fallback: "no CARGO_BIN_EXE env var was set".to_string(),
+    })
+}
+
+fn find_binary_next_to_current_test(name: &str) -> Result<Option<PathBuf>, CargoBinError> {
+    let current_exe =
+        std::env::current_exe().map_err(|source| CargoBinError::CurrentExe { source })?;
+    let Some(current_exe_dir) = current_exe.parent() else {
+        return Ok(None);
+    };
+    let mut candidate_dirs = vec![current_exe_dir.to_path_buf()];
+    if current_exe_dir
+        .file_name()
+        .is_some_and(|name| name == "deps")
+        && let Some(target_dir) = current_exe_dir.parent()
+    {
+        candidate_dirs.push(target_dir.to_path_buf());
+    }
+
+    for dir in candidate_dirs {
+        let candidate = dir.join(format!("{name}{}", std::env::consts::EXE_SUFFIX));
+        if candidate.is_file() {
+            return Ok(Some(candidate));
+        }
+    }
+
+    Ok(None)
 }
 
 fn cargo_bin_env_keys(name: &str) -> Vec<String> {

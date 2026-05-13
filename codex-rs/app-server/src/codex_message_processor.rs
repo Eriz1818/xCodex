@@ -213,6 +213,8 @@ use codex_core::config_loader::CloudRequirementsLoadErrorCode;
 use codex_core::config_loader::CloudRequirementsLoader;
 use codex_core::config_loader::LoaderOverrides;
 use codex_core::config_loader::load_config_layers_state;
+use codex_core::error::CodexErr;
+use codex_core::error::Result as CodexResult;
 use codex_core::exec::ExecCapturePolicy;
 use codex_core::exec::ExecExpiration;
 use codex_core::exec::ExecParams;
@@ -258,6 +260,7 @@ use codex_login::default_client::set_default_client_residency_requirement;
 use codex_login::login_with_api_key;
 use codex_login::request_device_code;
 use codex_login::run_login_server;
+use codex_mcp::McpConnectionStartupMode;
 use codex_mcp::McpServerStatusSnapshot;
 use codex_mcp::McpSnapshotDetail;
 use codex_mcp::collect_mcp_server_status_snapshot_with_detail;
@@ -272,8 +275,6 @@ use codex_protocol::config_types::Personality;
 use codex_protocol::config_types::TrustLevel;
 use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::dynamic_tools::DynamicToolSpec as CoreDynamicToolSpec;
-use codex_protocol::error::CodexErr;
-use codex_protocol::error::Result as CodexResult;
 use codex_protocol::items::TurnItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::AgentStatus;
@@ -438,10 +439,16 @@ pub(crate) struct CodexMessageProcessor {
     thread_watch_manager: ThreadWatchManager,
     command_exec_manager: CommandExecManager,
     pending_fuzzy_searches: Arc<Mutex<HashMap<String, Arc<AtomicBool>>>>,
-    fuzzy_search_sessions: Arc<Mutex<HashMap<String, FuzzyFileSearchSession>>>,
+    fuzzy_search_sessions: Arc<Mutex<HashMap<FuzzySearchSessionKey, FuzzyFileSearchSession>>>,
     background_tasks: TaskTracker,
     feedback: CodexFeedback,
     log_db: Option<LogDbLayer>,
+}
+
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+struct FuzzySearchSessionKey {
+    connection_id: ConnectionId,
+    session_id: String,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -3748,6 +3755,10 @@ impl CodexMessageProcessor {
         self.command_exec_manager
             .connection_closed(connection_id)
             .await;
+        self.fuzzy_search_sessions
+            .lock()
+            .await
+            .retain(|key, _| key.connection_id != connection_id);
         let thread_ids_with_no_subscribers = self
             .thread_state_manager
             .remove_connection(connection_id)
@@ -5248,12 +5259,18 @@ impl CodexMessageProcessor {
             McpServerStatusDetail::Full => McpSnapshotDetail::Full,
             McpServerStatusDetail::ToolsAndAuthOnly => McpSnapshotDetail::ToolsAndAuthOnly,
         };
+        let startup_mode = match config.mcp_servers_startup_mode {
+            codex_config::types::McpStartupMode::Eager => McpConnectionStartupMode::Eager,
+            codex_config::types::McpStartupMode::Lazy => McpConnectionStartupMode::Lazy,
+            codex_config::types::McpStartupMode::Manual => McpConnectionStartupMode::Manual,
+        };
 
         let snapshot = collect_mcp_server_status_snapshot_with_detail(
             &mcp_config,
             auth.as_ref(),
             request_id.request_id.to_string(),
             detail,
+            startup_mode,
         )
         .await;
 
@@ -6647,6 +6664,13 @@ impl CodexMessageProcessor {
         app_server_client_name: Option<String>,
         app_server_client_version: Option<String>,
     ) {
+        tracing::info!(
+            request_id = ?request_id,
+            thread_id = %params.thread_id,
+            input_count = params.input.len(),
+            model = params.model.as_deref().unwrap_or("<thread-default>"),
+            "app-server received turn/start"
+        );
         if let Err(error) = Self::validate_v2_input_limit(&params.input) {
             self.outgoing.send_error(request_id, error).await;
             return;
@@ -6696,6 +6720,11 @@ impl CodexMessageProcessor {
 
         // If any overrides are provided, update the session turn context first.
         if has_any_overrides {
+            tracing::info!(
+                request_id = ?request_id,
+                thread_id = %params.thread_id,
+                "app-server submitting turn context override"
+            );
             let _ = self
                 .submit_core_op(
                     &request_id,
@@ -6717,9 +6746,19 @@ impl CodexMessageProcessor {
                     },
                 )
                 .await;
+            tracing::info!(
+                request_id = ?request_id,
+                thread_id = %params.thread_id,
+                "app-server turn context override returned"
+            );
         }
 
         // Start the turn by submitting the user input. Return its submission id as turn_id.
+        tracing::info!(
+            request_id = ?request_id,
+            thread_id = %params.thread_id,
+            "app-server submitting user input"
+        );
         let turn_id = self
             .submit_core_op(
                 &request_id,
@@ -6734,6 +6773,12 @@ impl CodexMessageProcessor {
 
         match turn_id {
             Ok(turn_id) => {
+                tracing::info!(
+                    request_id = ?request_id,
+                    thread_id = %params.thread_id,
+                    %turn_id,
+                    "app-server user input submitted"
+                );
                 self.outgoing
                     .record_request_turn_id(&request_id, &turn_id)
                     .await;
@@ -6751,6 +6796,12 @@ impl CodexMessageProcessor {
                 self.outgoing.send_response(request_id, response).await;
             }
             Err(err) => {
+                tracing::error!(
+                    request_id = ?request_id,
+                    thread_id = %params.thread_id,
+                    error = %err,
+                    "app-server failed to submit user input"
+                );
                 let error = JSONRPCErrorError {
                     code: INTERNAL_ERROR_CODE,
                     message: format!("failed to start turn: {err}"),
@@ -7679,7 +7730,13 @@ impl CodexMessageProcessor {
         match session {
             Ok(session) => {
                 let mut sessions = self.fuzzy_search_sessions.lock().await;
-                sessions.insert(session_id, session);
+                sessions.insert(
+                    FuzzySearchSessionKey {
+                        connection_id: request_id.connection_id,
+                        session_id,
+                    },
+                    session,
+                );
                 self.outgoing
                     .send_response(request_id, FuzzyFileSearchSessionStartResponse {})
                     .await;
@@ -7703,7 +7760,10 @@ impl CodexMessageProcessor {
         let FuzzyFileSearchSessionUpdateParams { session_id, query } = params;
         let found = {
             let sessions = self.fuzzy_search_sessions.lock().await;
-            if let Some(session) = sessions.get(&session_id) {
+            if let Some(session) = sessions.get(&FuzzySearchSessionKey {
+                connection_id: request_id.connection_id,
+                session_id: session_id.clone(),
+            }) {
                 session.update_query(query);
                 true
             } else {
@@ -7733,7 +7793,10 @@ impl CodexMessageProcessor {
         let FuzzyFileSearchSessionStopParams { session_id } = params;
         {
             let mut sessions = self.fuzzy_search_sessions.lock().await;
-            sessions.remove(&session_id);
+            sessions.remove(&FuzzySearchSessionKey {
+                connection_id: request_id.connection_id,
+                session_id,
+            });
         }
 
         self.outgoing
@@ -10021,5 +10084,55 @@ mod tests {
         );
         assert!(!manager.has_subscribers(thread_id).await);
         Ok(())
+    }
+
+    #[test]
+    fn fuzzy_search_session_keys_are_scoped_per_connection() {
+        let mut sessions = HashMap::new();
+        sessions.insert(
+            FuzzySearchSessionKey {
+                connection_id: ConnectionId(1),
+                session_id: "session-1".to_string(),
+            },
+            1usize,
+        );
+        sessions.insert(
+            FuzzySearchSessionKey {
+                connection_id: ConnectionId(2),
+                session_id: "session-1".to_string(),
+            },
+            2usize,
+        );
+
+        assert_eq!(sessions.len(), 2);
+    }
+
+    #[test]
+    fn fuzzy_search_session_cleanup_removes_only_closed_connection_entries() {
+        let mut sessions = HashMap::new();
+        sessions.insert(
+            FuzzySearchSessionKey {
+                connection_id: ConnectionId(1),
+                session_id: "session-a".to_string(),
+            },
+            1usize,
+        );
+        sessions.insert(
+            FuzzySearchSessionKey {
+                connection_id: ConnectionId(2),
+                session_id: "session-a".to_string(),
+            },
+            2usize,
+        );
+
+        sessions.retain(|key, _| key.connection_id != ConnectionId(1));
+
+        assert_eq!(
+            sessions.keys().cloned().collect::<HashSet<_>>(),
+            HashSet::from([FuzzySearchSessionKey {
+                connection_id: ConnectionId(2),
+                session_id: "session-a".to_string(),
+            }])
+        );
     }
 }

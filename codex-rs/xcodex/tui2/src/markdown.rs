@@ -2,6 +2,7 @@ use ratatui::text::Line;
 pub(crate) fn append_markdown(
     markdown_source: &str,
     width: Option<usize>,
+    _cwd: Option<&std::path::Path>,
     lines: &mut Vec<Line<'static>>,
 ) {
     let rendered = crate::markdown_render::render_markdown_text_with_width(markdown_source, width);
@@ -30,7 +31,7 @@ mod tests {
     fn citations_render_as_plain_text() {
         let src = "Before 【F:/x.rs†L1】\nAfter 【F:/x.rs†L3】\n";
         let mut out = Vec::new();
-        append_markdown(src, None, &mut out);
+        append_markdown(src, None, None, &mut out);
         let rendered = lines_to_strings(&out);
         assert_eq!(
             rendered,
@@ -46,7 +47,7 @@ mod tests {
         // Basic sanity: indented code with surrounding blank lines should produce the indented line.
         let src = "Before\n\n    code 1\n\nAfter\n";
         let mut out = Vec::new();
-        append_markdown(src, None, &mut out);
+        append_markdown(src, None, None, &mut out);
         let lines = lines_to_strings(&out);
         assert_eq!(lines, vec!["Before", "", "    code 1", "", "After"]);
     }
@@ -55,7 +56,7 @@ mod tests {
     fn append_markdown_preserves_full_text_line() {
         let src = "Hi! How can I help with codex-rs today? Want me to explore the repo, run tests, or work on a specific change?\n";
         let mut out = Vec::new();
-        append_markdown(src, None, &mut out);
+        append_markdown(src, None, None, &mut out);
         assert_eq!(
             out.len(),
             1,
@@ -76,7 +77,7 @@ mod tests {
     #[test]
     fn append_markdown_matches_tui_markdown_for_ordered_item() {
         let mut out = Vec::new();
-        append_markdown("1. Tight item\n", None, &mut out);
+        append_markdown("1. Tight item\n", None, None, &mut out);
         let lines = lines_to_strings(&out);
         assert_eq!(lines, vec!["1. Tight item".to_string()]);
     }
@@ -85,7 +86,7 @@ mod tests {
     fn append_markdown_keeps_ordered_list_line_unsplit_in_context() {
         let src = "Loose vs. tight list items:\n1. Tight item\n";
         let mut out = Vec::new();
-        append_markdown(src, None, &mut out);
+        append_markdown(src, None, None, &mut out);
 
         let lines = lines_to_strings(&out);
 

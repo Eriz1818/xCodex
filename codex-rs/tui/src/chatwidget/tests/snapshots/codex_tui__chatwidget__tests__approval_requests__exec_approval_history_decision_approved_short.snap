@@ -1,5 +1,6 @@
 ---
-source: tui/src/chatwidget/tests.rs
+source: tui/src/chatwidget/tests/approval_requests.rs
+assertion_line: 48
 expression: lines_to_single_string(&decision)
 ---
-✔ You approved codex to run echo hello world this time
+✔ You approved xcodex to run echo hello world this time

@@ -1123,7 +1123,12 @@ mod tests {
         view.handle_key_event(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
         view.handle_key_event(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
         view.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
-        assert_snapshot!("status_menu_settings_tab", render_lines(&view, 60));
+        let rendered = render_lines(&view, 60)
+            .lines()
+            .map(str::trim_end)
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert_snapshot!("status_menu_settings_tab", rendered);
     }
 
     #[test]

@@ -1304,7 +1304,15 @@ impl McpServerElicitationOverlay {
                 state.selected_idx = Some(0);
             }
             state.ensure_visible(rows.len(), area.height as usize);
-            render_rows(area, buf, &rows, &state, rows.len().max(1), "No options");
+            render_rows(
+                area,
+                buf,
+                &rows,
+                &state,
+                rows.len().max(1),
+                ratatui::style::Style::default(),
+                "No options",
+            );
             return;
         }
         if self.current_field_is_secret() {

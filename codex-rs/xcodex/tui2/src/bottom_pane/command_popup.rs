@@ -11,6 +11,8 @@ use super::slash_subcommands::SubcommandMatch;
 use super::slash_subcommands::build_subcommand_matches;
 use super::slash_subcommands::slash_command_supports_subcommands as subcommands_supported;
 use super::slash_subcommands::subcommand_list_hint;
+use crate::custom_prompts::CustomPrompt;
+use crate::custom_prompts::PROMPTS_CMD_PREFIX;
 use crate::render::Insets;
 use crate::render::RectExt;
 use crate::slash_command::SlashCommand;
@@ -18,8 +20,6 @@ use crate::slash_command::built_in_slash_commands;
 use crate::xcodex_plugins::PluginSlashCommand;
 use crate::xcodex_plugins::plugin_slash_commands;
 use codex_common::fuzzy_match::fuzzy_match;
-use codex_protocol::custom_prompts::CustomPrompt;
-use codex_protocol::custom_prompts::PROMPTS_CMD_PREFIX;
 use std::collections::HashSet;
 
 pub(crate) const DEFAULT_SLASH_POPUP_ROWS: usize = 8;
@@ -694,6 +694,7 @@ mod tests {
                 content: "hello from foo".to_string(),
                 description: None,
                 argument_hint: None,
+                text_elements: Vec::new(),
             },
             CustomPrompt {
                 name: "bar".to_string(),
@@ -701,6 +702,7 @@ mod tests {
                 content: "hello from bar".to_string(),
                 description: None,
                 argument_hint: None,
+                text_elements: Vec::new(),
             },
         ];
         let popup = CommandPopup::new(prompts, false, DEFAULT_SLASH_POPUP_ROWS);
@@ -726,6 +728,7 @@ mod tests {
                 content: "should be ignored".to_string(),
                 description: None,
                 argument_hint: None,
+                text_elements: Vec::new(),
             }],
             false,
             DEFAULT_SLASH_POPUP_ROWS,
@@ -750,6 +753,7 @@ mod tests {
                 content: "body".to_string(),
                 description: Some("Create feature branch, commit and open draft PR.".to_string()),
                 argument_hint: None,
+                text_elements: Vec::new(),
             }],
             false,
             DEFAULT_SLASH_POPUP_ROWS,
@@ -780,6 +784,7 @@ mod tests {
                 content: "body".to_string(),
                 description: None,
                 argument_hint: None,
+                text_elements: Vec::new(),
             }],
             false,
             DEFAULT_SLASH_POPUP_ROWS,
@@ -798,6 +803,7 @@ mod tests {
                 content: "hello from prompt".to_string(),
                 description: None,
                 argument_hint: None,
+                text_elements: Vec::new(),
             }],
             false,
             DEFAULT_SLASH_POPUP_ROWS,

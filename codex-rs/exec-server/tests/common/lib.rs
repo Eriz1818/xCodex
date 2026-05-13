@@ -118,7 +118,7 @@ where
         sandbox_policy: SandboxPolicy::new_read_only_policy(),
         codex_linux_sandbox_exe,
         sandbox_cwd: sandbox_cwd.as_ref().to_path_buf(),
-        use_linux_sandbox_bwrap: false,
+        use_legacy_landlock: false,
     };
     send_sandbox_state_update(sandbox_state, service).await
 }
@@ -147,7 +147,7 @@ where
         },
         codex_linux_sandbox_exe,
         sandbox_cwd: writable_folder.as_ref().to_path_buf(),
-        use_linux_sandbox_bwrap: false,
+        use_legacy_landlock: false,
     };
     send_sandbox_state_update(sandbox_state, service).await
 }

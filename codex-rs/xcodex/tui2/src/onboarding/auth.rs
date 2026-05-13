@@ -1,10 +1,10 @@
 #![allow(clippy::unwrap_used)]
 
-use codex_core::AuthManager;
 use codex_core::auth::AuthCredentialsStoreMode;
 use codex_core::auth::CLIENT_ID;
 use codex_core::auth::login_with_api_key;
 use codex_core::auth::read_openai_api_key_from_env;
+use codex_login::AuthManager;
 use codex_login::DeviceCode;
 use codex_login::ServerOptions;
 use codex_login::ShutdownHandle;

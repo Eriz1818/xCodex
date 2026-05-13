@@ -36,11 +36,18 @@ codex-common = { workspace = true, features = [
     "elapsed",
     "sandbox_summary",
 ] }
+codex-config = { workspace = true }
 codex-core = { workspace = true }
 codex-feedback = { workspace = true }
 codex-file-search = { workspace = true }
+codex-features = { workspace = true }
 codex-login = { workspace = true }
+codex-model-provider-info = { workspace = true }
+codex-models-manager = { workspace = true }
 codex-protocol = { workspace = true }
+codex-terminal-detection = { workspace = true }
+codex-utils-path = { workspace = true }
+codex-exec-server = { workspace = true }
 codex-utils-absolute-path = { workspace = true }
 codex-tui = { workspace = true }
 color-eyre = { workspace = true }

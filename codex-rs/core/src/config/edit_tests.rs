@@ -4,6 +4,7 @@ use codex_config::types::McpServerToolConfig;
 use codex_config::types::McpServerTransportConfig;
 use codex_protocol::openai_models::ReasoningEffort;
 use pretty_assertions::assert_eq;
+use std::collections::HashMap;
 #[cfg(unix)]
 use std::os::unix::fs::symlink;
 use tempfile::tempdir;
@@ -585,6 +586,7 @@ fn blocking_replace_mcp_servers_round_trips() {
             scopes: None,
             oauth_resource: None,
             tools: HashMap::new(),
+            startup_mode: None,
         },
     );
 
@@ -611,6 +613,7 @@ fn blocking_replace_mcp_servers_round_trips() {
             scopes: None,
             oauth_resource: Some("https://resource.example.com".to_string()),
             tools: HashMap::new(),
+            startup_mode: None,
         },
     );
 
@@ -678,6 +681,7 @@ fn blocking_replace_mcp_servers_serializes_tool_approval_overrides() {
                     approval_mode: Some(AppToolApproval::Approve),
                 },
             )]),
+            startup_mode: None,
         },
     );
 
@@ -733,6 +737,7 @@ foo = { command = "cmd" }
             scopes: None,
             oauth_resource: None,
             tools: HashMap::new(),
+            startup_mode: None,
         },
     );
 
@@ -784,6 +789,7 @@ foo = { command = "cmd" } # keep me
             scopes: None,
             oauth_resource: None,
             tools: HashMap::new(),
+            startup_mode: None,
         },
     );
 
@@ -834,6 +840,7 @@ foo = { command = "cmd", args = ["--flag"] } # keep me
             scopes: None,
             oauth_resource: None,
             tools: HashMap::new(),
+            startup_mode: None,
         },
     );
 
@@ -885,6 +892,7 @@ foo = { command = "cmd" }
             scopes: None,
             oauth_resource: None,
             tools: HashMap::new(),
+            startup_mode: None,
         },
     );
 

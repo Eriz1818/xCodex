@@ -207,11 +207,20 @@ impl FsWatchManager {
     }
 
     pub(crate) async fn connection_closed(&self, connection_id: ConnectionId) {
-        let mut state = self.state.lock().await;
-        state
-            .entries
-            .extract_if(|key, _| key.connection_id == connection_id)
-            .count();
+        let entries = {
+            let mut state = self.state.lock().await;
+            state
+                .entries
+                .extract_if(|key, _| key.connection_id == connection_id)
+                .map(|(_, entry)| entry)
+                .collect::<Vec<_>>()
+        };
+
+        for entry in entries {
+            let (done_tx, done_rx) = oneshot::channel();
+            let _ = entry.terminate_tx.send(done_tx);
+            let _ = done_rx.await;
+        }
     }
 }
 

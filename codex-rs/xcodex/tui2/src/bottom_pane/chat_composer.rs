@@ -102,6 +102,8 @@ use crate::bottom_pane::prompt_args::parse_slash_name;
 use crate::bottom_pane::prompt_args::prompt_argument_names;
 use crate::bottom_pane::prompt_args::prompt_command_with_arg_placeholders;
 use crate::bottom_pane::prompt_args::prompt_has_numeric_placeholders;
+use crate::custom_prompts::CustomPrompt;
+use crate::custom_prompts::PROMPTS_CMD_PREFIX;
 use crate::render::Insets;
 use crate::render::RectExt;
 use crate::render::renderable::Renderable;
@@ -109,8 +111,6 @@ use crate::slash_command::SlashCommand;
 use crate::slash_command::built_in_slash_commands;
 use crate::style::user_message_style;
 use codex_common::fuzzy_match::fuzzy_match;
-use codex_protocol::custom_prompts::CustomPrompt;
-use codex_protocol::custom_prompts::PROMPTS_CMD_PREFIX;
 use codex_protocol::models::local_image_label_text;
 
 use crate::app_event::AppEvent;
@@ -4475,6 +4475,7 @@ mod tests {
             content: prompt_text.to_string(),
             description: None,
             argument_hint: None,
+            text_elements: Vec::new(),
         }]);
 
         type_chars_humanlike(
@@ -4511,6 +4512,7 @@ mod tests {
             content: "Review $USER changes on $BRANCH".to_string(),
             description: None,
             argument_hint: None,
+            text_elements: Vec::new(),
         }]);
 
         composer
@@ -4546,6 +4548,7 @@ mod tests {
             content: "Pair $USER with $BRANCH".to_string(),
             description: None,
             argument_hint: None,
+            text_elements: Vec::new(),
         }]);
 
         composer
@@ -4588,6 +4591,7 @@ mod tests {
             content: "Please review the following code:\n\n$1".to_string(),
             description: None,
             argument_hint: None,
+            text_elements: Vec::new(),
         }]);
 
         // Type the slash command
@@ -4719,6 +4723,7 @@ mod tests {
             content: "Review $USER changes".to_string(),
             description: None,
             argument_hint: None,
+            text_elements: Vec::new(),
         }]);
 
         composer
@@ -4769,6 +4774,7 @@ mod tests {
             content: "Review $USER changes on $BRANCH".to_string(),
             description: None,
             argument_hint: None,
+            text_elements: Vec::new(),
         }]);
 
         // Provide only one of the required args
@@ -4823,6 +4829,7 @@ mod tests {
             content: prompt_text.to_string(),
             description: None,
             argument_hint: None,
+            text_elements: Vec::new(),
         }]);
 
         // Type the slash command with two args and hit Enter to submit.
@@ -4861,6 +4868,7 @@ mod tests {
             content: "Echo: $ARGUMENTS".to_string(),
             description: None,
             argument_hint: None,
+            text_elements: Vec::new(),
         }]);
 
         // Type positional args; should submit with numeric expansion, no errors.
@@ -4892,6 +4900,7 @@ mod tests {
             content: prompt_text.to_string(),
             description: None,
             argument_hint: None,
+            text_elements: Vec::new(),
         }]);
 
         type_chars_humanlike(
@@ -4929,6 +4938,7 @@ mod tests {
             content: prompt_text.to_string(),
             description: None,
             argument_hint: None,
+            text_elements: Vec::new(),
         }]);
 
         type_chars_humanlike(
@@ -4967,6 +4977,7 @@ mod tests {
             content: prompt_text.to_string(),
             description: None,
             argument_hint: None,
+            text_elements: Vec::new(),
         }]);
 
         type_chars_humanlike(
@@ -5170,6 +5181,7 @@ mod tests {
             content: "hello from prompt".to_string(),
             description: None,
             argument_hint: None,
+            text_elements: Vec::new(),
         }]);
 
         composer.set_text_content("/my".to_string());

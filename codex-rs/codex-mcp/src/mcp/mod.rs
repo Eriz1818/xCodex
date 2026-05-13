@@ -397,8 +397,14 @@ pub async fn collect_mcp_server_status_snapshot(
     auth: Option<&CodexAuth>,
     submit_id: String,
 ) -> McpServerStatusSnapshot {
-    collect_mcp_server_status_snapshot_with_detail(config, auth, submit_id, McpSnapshotDetail::Full)
-        .await
+    collect_mcp_server_status_snapshot_with_detail(
+        config,
+        auth,
+        submit_id,
+        McpSnapshotDetail::Full,
+        McpConnectionStartupMode::Eager,
+    )
+    .await
 }
 
 pub async fn collect_mcp_server_status_snapshot_with_detail(
@@ -406,6 +412,7 @@ pub async fn collect_mcp_server_status_snapshot_with_detail(
     auth: Option<&CodexAuth>,
     submit_id: String,
     detail: McpSnapshotDetail,
+    startup_mode: McpConnectionStartupMode,
 ) -> McpServerStatusSnapshot {
     let mcp_servers = effective_mcp_servers(config, auth);
     let tool_plugin_provenance = tool_plugin_provenance(config);
@@ -442,7 +449,7 @@ pub async fn collect_mcp_server_status_snapshot_with_detail(
         config.codex_home.clone(),
         codex_apps_tools_cache_key(auth),
         tool_plugin_provenance,
-        McpConnectionStartupMode::Eager,
+        startup_mode,
     )
     .await;
 

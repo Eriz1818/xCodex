@@ -29,12 +29,7 @@ use tracing_subscriber::layer::Context;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::registry::LookupSpan;
 use tracing_subscriber::util::SubscriberInitExt;
-use wiremock::Mock;
 use wiremock::MockServer;
-use wiremock::ResponseTemplate;
-use wiremock::matchers::header_regex;
-use wiremock::matchers::method;
-use wiremock::matchers::path;
 
 #[path = "model_info_overrides_tests.rs"]
 mod model_info_overrides_tests;
@@ -434,19 +429,13 @@ async fn refresh_available_models_uses_provider_auth_token() {
         /*priority*/ 0,
     )];
 
-    Mock::given(method("GET"))
-        .and(path("/models"))
-        .and(header_regex("Authorization", "Bearer provider-token"))
-        .respond_with(
-            ResponseTemplate::new(200)
-                .insert_header("content-type", "application/json")
-                .set_body_json(ModelsResponse {
-                    models: remote_models.clone(),
-                }),
-        )
-        .expect(1)
-        .mount(&server)
-        .await;
+    let models_mock = mount_models_once(
+        &server,
+        ModelsResponse {
+            models: remote_models.clone(),
+        },
+    )
+    .await;
 
     let codex_home = tempdir().expect("temp dir");
     let auth_manager = AuthManager::from_auth_for_testing(CodexAuth::from_api_key("unused"));
@@ -465,6 +454,13 @@ async fn refresh_available_models_uses_provider_auth_token() {
         .await
         .expect("refresh succeeds");
 
+    let requests = models_mock.requests();
+    assert_eq!(requests.len(), 1, "expected a single /models request");
+    let auth_header = requests[0]
+        .headers
+        .get("authorization")
+        .and_then(|value| value.to_str().ok());
+    assert_eq!(auth_header, Some("Bearer provider-token"));
     assert_models_contain(&manager.get_remote_models().await, &remote_models);
 }
 
@@ -907,7 +903,7 @@ fn manager_models_client_version_uses_upstream_for_default_chatgpt_endpoint() {
     );
 
     assert_eq!(
-        "0.98.0".to_string(),
+        "0.130.0".to_string(),
         manager.models_client_version(manager.auth_manager.auth_mode())
     );
 }

@@ -697,10 +697,7 @@ fn styles_for(
         bg: Option<ratatui::style::Color>,
         fallback: Style,
     ) -> Style {
-        if fg.is_none() && bg.is_none() {
-            return fallback;
-        }
-        let mut style = Style::default();
+        let mut style = fallback;
         if let Some(fg) = fg {
             style = style.fg(fg);
         }

@@ -31,6 +31,7 @@ use codex_app_server_protocol::ThreadItem;
 use codex_app_server_protocol::Turn;
 #[cfg(test)]
 use codex_app_server_protocol::TurnStatus;
+use codex_config::types::McpStartupMode;
 use codex_protocol::ThreadId;
 #[cfg(test)]
 use codex_protocol::config_types::ModeKind;
@@ -109,14 +110,18 @@ use std::time::Duration;
 
 impl App {
     fn refresh_mcp_startup_expected_servers_from_config(&mut self) {
-        let enabled_config_mcp_servers: Vec<String> = self
-            .chat_widget
-            .config_ref()
-            .mcp_servers
-            .get()
-            .iter()
-            .filter_map(|(name, server)| server.enabled.then_some(name.clone()))
-            .collect();
+        let enabled_config_mcp_servers: Vec<String> =
+            match self.chat_widget.config_ref().mcp_servers_startup_mode {
+                McpStartupMode::Eager => self
+                    .chat_widget
+                    .config_ref()
+                    .mcp_servers
+                    .get()
+                    .iter()
+                    .filter_map(|(name, server)| server.enabled.then_some(name.clone()))
+                    .collect(),
+                McpStartupMode::Lazy | McpStartupMode::Manual => Vec::new(),
+            };
         self.chat_widget
             .set_mcp_startup_expected_servers(enabled_config_mcp_servers);
     }
@@ -470,6 +475,7 @@ fn server_notification_thread_events(
                             notification.token_usage.last,
                         ),
                         model_context_window: notification.token_usage.model_context_window,
+                        full_model_context_window: notification.token_usage.model_context_window,
                     }),
                     rate_limits: None,
                 }),

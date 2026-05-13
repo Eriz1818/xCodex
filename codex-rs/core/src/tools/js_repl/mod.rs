@@ -396,13 +396,7 @@ impl JsReplManager {
             .insert(exec_id.to_string(), ExecToolCalls::default());
     }
 
-    async fn clear_exec_tool_calls(&self, exec_id: &str) {
-        if let Some(state) = self.exec_tool_calls.lock().await.remove(exec_id) {
-            state.cancel.cancel();
-            state.notify.notify_waiters();
-        }
-    }
-
+    #[cfg(test)]
     async fn wait_for_exec_tool_calls(&self, exec_id: &str) {
         loop {
             let notified = {
@@ -416,6 +410,13 @@ impl JsReplManager {
                 Some(notified) => notified.await,
                 None => return,
             }
+        }
+    }
+
+    async fn clear_exec_tool_calls(&self, exec_id: &str) {
+        if let Some(state) = self.exec_tool_calls.lock().await.remove(exec_id) {
+            state.cancel.cancel();
+            state.notify.notify_waiters();
         }
     }
 
@@ -961,7 +962,6 @@ impl JsReplManager {
                     self.clear_top_level_exec_if_matches(&req_id).await;
                 }
                 exec_contexts.lock().await.remove(&req_id);
-                self.wait_for_exec_tool_calls(&req_id).await;
                 self.clear_exec_tool_calls(&req_id).await;
                 let snapshot = Self::kernel_debug_snapshot(&child, &recent_stderr).await;
                 let message = if is_kernel_status_exited(&snapshot.status) {
@@ -978,7 +978,7 @@ impl JsReplManager {
             }
             Err(_) => {
                 self.reset_kernel().await;
-                self.wait_for_exec_tool_calls(&req_id).await;
+                self.clear_exec_tool_calls(&req_id).await;
                 self.exec_tool_calls.lock().await.clear();
                 self.clear_top_level_exec_if_matches(&req_id).await;
                 return Err(FunctionCallError::RespondToModel(

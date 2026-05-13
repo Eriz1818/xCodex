@@ -45,14 +45,10 @@ use crate::tui::scrolling::ScrollUpdate;
 use crate::tui::scrolling::TranscriptScroll;
 use crate::update_action::UpdateAction;
 use codex_ansi_escape::ansi_escape_line;
-use codex_core::AuthManager;
 use codex_core::ThreadManager;
 use codex_core::config::Config;
 use codex_core::config::edit::ConfigEdit;
 use codex_core::config::edit::ConfigEditsBuilder;
-#[cfg(target_os = "windows")]
-use codex_core::features::Feature;
-use codex_core::models_manager::manager::RefreshStrategy;
 use codex_core::protocol::DeprecationNoticeEvent;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::FinalOutput;
@@ -61,9 +57,14 @@ use codex_core::protocol::Op;
 use codex_core::protocol::SessionSource;
 use codex_core::protocol::SkillErrorInfo;
 use codex_core::protocol::TokenUsage;
-use codex_core::terminal::terminal_info;
 #[cfg(target_os = "windows")]
 use codex_core::windows_sandbox::WindowsSandboxLevelExt;
+use codex_exec_server::EnvironmentManager;
+#[cfg(target_os = "windows")]
+use codex_features::Feature;
+use codex_login::AuthManager;
+use codex_models_manager::collaboration_mode_presets::CollaborationModesConfig;
+use codex_models_manager::manager::RefreshStrategy;
 use codex_models_manager::model_presets::HIDE_GPT_5_1_CODEX_MAX_MIGRATION_PROMPT_CONFIG;
 use codex_models_manager::model_presets::HIDE_GPT5_1_MIGRATION_PROMPT_CONFIG;
 use codex_protocol::ThreadId;
@@ -72,6 +73,7 @@ use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::openai_models::ModelUpgrade;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
+use codex_terminal_detection::terminal_info;
 use color_eyre::eyre::Result;
 use color_eyre::eyre::WrapErr;
 use crossterm::event::KeyCode;
@@ -474,9 +476,12 @@ impl App {
         emit_deprecation_notice(&app_event_tx, ollama_chat_support_notice);
 
         let thread_manager = Arc::new(ThreadManager::new(
-            config.codex_home.clone(),
+            &config,
             auth_manager.clone(),
             SessionSource::Cli,
+            CollaborationModesConfig::default(),
+            Arc::new(EnvironmentManager::from_env()),
+            /*analytics_events_client*/ None,
         ));
         let mut model = thread_manager
             .get_models_manager()
@@ -526,7 +531,12 @@ impl App {
             }
             SessionSelection::Resume(path) => {
                 let resumed = thread_manager
-                    .resume_thread_from_rollout(config.clone(), path.clone(), auth_manager.clone())
+                    .resume_thread_from_rollout(
+                        config.clone(),
+                        path.clone(),
+                        auth_manager.clone(),
+                        /*parent_trace*/ None,
+                    )
                     .await
                     .wrap_err_with(|| {
                         let path_display = path.display();
@@ -551,7 +561,13 @@ impl App {
             }
             SessionSelection::Fork(path) => {
                 let forked = thread_manager
-                    .fork_thread(usize::MAX, config.clone(), path.clone(), false)
+                    .fork_thread(
+                        usize::MAX,
+                        config.clone(),
+                        path.clone(),
+                        /*persist_extended_history*/ false,
+                        /*parent_trace*/ None,
+                    )
                     .await
                     .wrap_err_with(|| {
                         let path_display = path.display();
@@ -577,7 +593,7 @@ impl App {
         chat_widget.maybe_prompt_windows_sandbox_enable();
 
         let file_search = FileSearchManager::new(
-            config.cwd.clone(),
+            config.cwd.to_path_buf(),
             config.exclusion.files.clone(),
             app_event_tx.clone(),
         );
@@ -1837,6 +1853,7 @@ impl App {
                                 self.config.clone(),
                                 path.clone(),
                                 self.auth_manager.clone(),
+                                /*parent_trace*/ None,
                             )
                             .await
                         {
@@ -1905,7 +1922,13 @@ impl App {
                 if let Some(path) = self.chat_widget.rollout_path() {
                     match self
                         .server
-                        .fork_thread(usize::MAX, self.config.clone(), path.clone(), false)
+                        .fork_thread(
+                            usize::MAX,
+                            self.config.clone(),
+                            path.clone(),
+                            /*persist_extended_history*/ false,
+                            /*parent_trace*/ None,
+                        )
                         .await
                     {
                         Ok(forked) => {
@@ -2248,7 +2271,11 @@ impl App {
             }
             AppEvent::WorktreeSwitched(cwd) => {
                 let previous_cwd = self.config.cwd.clone();
-                self.config.cwd = cwd.clone();
+                if let Ok(abs_cwd) =
+                    codex_utils_absolute_path::AbsolutePathBuf::from_absolute_path(&cwd)
+                {
+                    self.config.cwd = abs_cwd;
+                }
                 self.chat_widget.set_session_cwd(cwd);
                 tui.frame_requester().schedule_frame();
 
@@ -2554,11 +2581,13 @@ impl App {
                                     Op::OverrideTurnContext {
                                         cwd: None,
                                         approval_policy: Some(preset.approval),
+                                        approvals_reviewer: None,
                                         sandbox_policy: Some(preset.sandbox.clone()),
                                         windows_sandbox_level: None,
                                         model: None,
                                         effort: None,
                                         summary: None,
+                                        service_tier: None,
                                         collaboration_mode: None,
                                         personality: None,
                                     },
@@ -3595,20 +3624,16 @@ impl App {
                 modifiers: crossterm::event::KeyModifiers::ALT,
                 kind: KeyEventKind::Press,
                 ..
-            } => {
-                if self.toggle_exec_cell_expansion_at_selection() {
-                    tui.frame_requester().schedule_frame();
-                }
+            } if self.toggle_exec_cell_expansion_at_selection() => {
+                tui.frame_requester().schedule_frame();
             }
             KeyEvent {
                 code: KeyCode::Char('c' | 'C'),
                 modifiers: crossterm::event::KeyModifiers::ALT,
                 kind: KeyEventKind::Press,
                 ..
-            } => {
-                if self.copy_exec_cell_full_at_cursor() {
-                    tui.frame_requester().schedule_frame();
-                }
+            } if self.copy_exec_cell_full_at_cursor() => {
+                tui.frame_requester().schedule_frame();
             }
             // Esc primes/advances backtracking only in normal (not working) mode
             // with the composer focused and empty. In any other state, forward
@@ -3706,14 +3731,12 @@ impl App {
                 code: KeyCode::Home,
                 kind: KeyEventKind::Press | KeyEventKind::Repeat,
                 ..
-            } => {
-                if !self.transcript_cells.is_empty() {
-                    self.transcript_scroll = TranscriptScroll::Scrolled {
-                        cell_index: 0,
-                        line_in_cell: 0,
-                    };
-                    tui.frame_requester().schedule_frame();
-                }
+            } if !self.transcript_cells.is_empty() => {
+                self.transcript_scroll = TranscriptScroll::Scrolled {
+                    cell_index: 0,
+                    line_in_cell: 0,
+                };
+                tui.frame_requester().schedule_frame();
             }
             KeyEvent {
                 code: KeyCode::End,
@@ -3806,7 +3829,6 @@ mod tests {
     use crate::history_cell::new_session_info;
     use crate::transcript_copy_ui::CopySelectionShortcut;
     use crate::tui::scrolling::TranscriptLineMeta;
-    use codex_core::CodexAuth;
     use codex_core::config::ConfigBuilder;
     use codex_core::protocol::AskForApproval;
     use codex_core::protocol::Event;
@@ -3816,6 +3838,7 @@ mod tests {
     use codex_core::test_support::all_model_presets as all_model_presets_for_tests;
     use codex_core::test_support::auth_manager_from_auth;
     use codex_core::test_support::thread_manager_with_models_provider;
+    use codex_login::CodexAuth;
     use codex_protocol::ThreadId;
     use insta::assert_snapshot;
     use pretty_assertions::assert_eq;
@@ -3835,7 +3858,7 @@ mod tests {
         ));
         let auth_manager = auth_manager_from_auth(CodexAuth::from_api_key("Test API Key"));
         let file_search = FileSearchManager::new(
-            config.cwd.clone(),
+            config.cwd.to_path_buf(),
             config.exclusion.files.clone(),
             app_event_tx.clone(),
         );
@@ -3894,7 +3917,7 @@ mod tests {
         ));
         let auth_manager = auth_manager_from_auth(CodexAuth::from_api_key("Test API Key"));
         let file_search = FileSearchManager::new(
-            config.cwd.clone(),
+            config.cwd.to_path_buf(),
             config.exclusion.files.clone(),
             app_event_tx.clone(),
         );
@@ -4150,7 +4173,9 @@ mod tests {
                 session_id: ThreadId::new(),
                 model: "gpt-test".to_string(),
                 model_provider_id: "test-provider".to_string(),
+                service_tier: None,
                 approval_policy: AskForApproval::Never,
+                approvals_reviewer: Default::default(),
                 sandbox_policy: SandboxPolicy::new_read_only_policy(),
                 cwd: PathBuf::from("/home/user/project"),
                 reasoning_effort: None,
@@ -4194,7 +4219,9 @@ mod tests {
                 session_id: base_id,
                 model: "gpt-test".to_string(),
                 model_provider_id: "test-provider".to_string(),
+                service_tier: None,
                 approval_policy: AskForApproval::Never,
+                approvals_reviewer: Default::default(),
                 sandbox_policy: SandboxPolicy::new_read_only_policy(),
                 cwd: PathBuf::from("/home/user/project"),
                 reasoning_effort: None,
@@ -4485,7 +4512,9 @@ mod tests {
             session_id: conversation_id,
             model: "gpt-test".to_string(),
             model_provider_id: "test-provider".to_string(),
+            service_tier: None,
             approval_policy: AskForApproval::Never,
+            approvals_reviewer: Default::default(),
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
             cwd: PathBuf::from("/home/user/project"),
             reasoning_effort: None,

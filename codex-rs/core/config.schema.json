@@ -627,6 +627,160 @@
       },
       "type": "object"
     },
+    "ExclusionConfig": {
+      "properties": {
+        "content_hashing": {
+          "default": true,
+          "description": "Cache content gateway decisions by hashing content (fingerprint cache).",
+          "type": "boolean"
+        },
+        "enabled": {
+          "default": true,
+          "description": "When `false`, ignore files are not loaded and the content gateway is disabled.",
+          "type": "boolean"
+        },
+        "files": {
+          "default": [
+            ".aiexclude",
+            ".xcodexignore"
+          ],
+          "description": "Repo-root ignore filenames to load (gitignore-style) for exclusion controls.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "layer_hook_sanitization": {
+          "description": "Layer 5: sanitize hook payload strings before dispatch. Defaults to `true` when unset.",
+          "type": "boolean"
+        },
+        "layer_output_sanitization": {
+          "description": "Layer 2: sanitize tool outputs (MCP/shell/custom tool outputs) before they reach the model. Defaults to `paranoid_mode` when unset.",
+          "type": "boolean"
+        },
+        "layer_request_interceptor": {
+          "description": "Layer 4: scan the full prompt payload right before the model request. Defaults to `paranoid_mode` when unset.",
+          "type": "boolean"
+        },
+        "layer_send_firewall": {
+          "description": "Layer 3: enforce the provenance-based send firewall (deny-send for excluded filesystem paths). Defaults to `true` when unset.",
+          "type": "boolean"
+        },
+        "log_redactions": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/LogRedactionsMode"
+            }
+          ],
+          "default": "off",
+          "description": "Redaction log output policy."
+        },
+        "log_redactions_max_bytes": {
+          "default": 52428800,
+          "description": "Maximum size (in bytes) for a single redaction log file before rotation.",
+          "format": "uint64",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "log_redactions_max_files": {
+          "default": 2,
+          "description": "Maximum number of redaction log files to keep (including the active file).",
+          "format": "uint",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "on_match": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/ExclusionOnMatch"
+            }
+          ],
+          "default": "redact"
+        },
+        "paranoid_mode": {
+          "default": false,
+          "description": "Convenience toggle: enable all 4 layers (L1-L4) when true.",
+          "type": "boolean"
+        },
+        "path_matching": {
+          "default": true,
+          "description": "Deterministic path-based matching using ignore files (e.g., for discovery and deny-send).",
+          "type": "boolean"
+        },
+        "preflight_shell_paths": {
+          "default": true,
+          "description": "When `true`, block shell tool calls that reference excluded paths before executing.",
+          "type": "boolean"
+        },
+        "prompt_on_blocked": {
+          "default": false,
+          "description": "When true, prompt to allow excluded paths or payloads instead of blocking immediately.",
+          "type": "boolean"
+        },
+        "prompt_reveal_secret_matches": {
+          "default": false,
+          "description": "When `true`, exclusion approval prompts show full matched values for secret-pattern matches by default.\n\nThis may display secrets on-screen. You can still toggle Reveal/Hide within the prompt.",
+          "type": "boolean"
+        },
+        "secret_patterns": {
+          "default": true,
+          "description": "Secret-pattern scanning in text (defense-in-depth redaction).",
+          "type": "boolean"
+        },
+        "secret_patterns_allowlist": {
+          "default": [],
+          "description": "Optional secret patterns to add on top of built-ins.\n\nSemantics v2: patterns that are allowed to pass through (skip redaction/blocking).",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "secret_patterns_blocklist": {
+          "default": [],
+          "description": "Semantics v2: additional secret patterns to scan, on top of built-ins.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "secret_patterns_builtin": {
+          "default": true,
+          "description": "When true, include built-in secret regexes alongside any allowlist patterns.",
+          "type": "boolean"
+        },
+        "secret_patterns_semantics_version": {
+          "default": 2,
+          "description": "Secret-pattern semantics migration version.\n\nv1 (legacy): allowlist = additional scan patterns, blocklist = suppressions. v2 (current): allowlist = suppressions, blocklist = additional scan patterns.",
+          "format": "uint8",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "show_summary_banner": {
+          "default": true,
+          "description": "When `false`, clients should not render an ephemeral \"filtered\" banner/toast for this turn.",
+          "type": "boolean"
+        },
+        "show_summary_history": {
+          "default": true,
+          "description": "When `false`, clients should not add the exclusion summary to transcript/history.",
+          "type": "boolean"
+        },
+        "substring_matching": {
+          "default": true,
+          "description": "Substring/path-like matching in text (e.g., redact ignored path mentions).",
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
+    "ExclusionOnMatch": {
+      "enum": [
+        "warn",
+        "block",
+        "redact"
+      ],
+      "type": "string"
+    },
     "FeatureToml_for_MultiAgentV2ConfigToml": {
       "anyOf": [
         {
@@ -773,47 +927,416 @@
         }
       ]
     },
-    "MarketplaceConfig": {
+    "HookEventFiltersConfig": {
+      "additionalProperties": {
+        "items": {
+          "$ref": "#/definitions/HookEventMatcherConfig"
+        },
+        "type": "array"
+      },
+      "type": "object"
+    },
+    "HookEventMatcherConfig": {
       "additionalProperties": false,
       "properties": {
-        "last_updated": {
+        "matcher": {
           "default": null,
-          "description": "Last time Codex successfully added or refreshed this marketplace.",
+          "description": "Matcher expression using Claude semantics (`*`, exact, or regex).",
           "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "HookHostConfig": {
+      "additionalProperties": false,
+      "properties": {
+        "command": {
+          "default": [],
+          "description": "Command to start the host process.\n\nExample:\n\n```toml [hooks.host] enabled = true command = [\"python3\", \"-u\", \"$CODEX_HOME/hooks/host/python/host.py\"] ```",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
         },
-        "ref": {
-          "default": null,
-          "description": "Git ref to check out when `source_type` is `git`.",
-          "type": "string"
+        "enabled": {
+          "default": false,
+          "description": "Enable the hook host.\n\nDisabled by default. When enabled, `command` must be non-empty.",
+          "type": "boolean"
         },
-        "source": {
-          "default": null,
-          "description": "Source location used when the marketplace was added.",
-          "type": "string"
-        },
-        "source_type": {
+        "filters": {
           "allOf": [
             {
-              "$ref": "#/definitions/MarketplaceSourceType"
+              "$ref": "#/definitions/HookEventFiltersConfig"
+            }
+          ],
+          "default": {},
+          "description": "Optional matcher filters to restrict which events are delivered to the hook host.\n\nWhen unset/empty, all events are delivered."
+        },
+        "sandbox_mode": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/SandboxMode"
             }
           ],
           "default": null,
-          "description": "Source kind used to install this marketplace."
+          "description": "Optional sandbox override for the host process.\n\nWhen unset, the host inherits the session sandbox policy."
         },
-        "sparse_paths": {
+        "timeout_sec": {
           "default": null,
-          "description": "Sparse checkout paths used when `source_type` is `git`.",
+          "description": "Optional timeout for writing a single hook event to the host stdin (seconds).\n\nWhen unset, writes are best-effort and may block until the host is killed.",
+          "format": "uint64",
+          "minimum": 0.0,
+          "type": "integer"
+        }
+      },
+      "type": "object"
+    },
+    "HookPayloadFormat": {
+      "enum": [
+        "xcodex",
+        "claude"
+      ],
+      "type": "string"
+    },
+    "HooksCommandConfig": {
+      "additionalProperties": {
+        "items": {
+          "$ref": "#/definitions/HooksCommandMatcherConfig"
+        },
+        "type": "array"
+      },
+      "properties": {
+        "default_timeout_sec": {
+          "default": 30,
+          "description": "Default timeout applied to command hooks when `timeout_sec` is unset (seconds).",
+          "format": "uint64",
+          "minimum": 0.0,
+          "type": "integer"
+        }
+      },
+      "type": "object"
+    },
+    "HooksCommandHookConfig": {
+      "additionalProperties": false,
+      "properties": {
+        "argv": {
+          "default": null,
+          "description": "Execute a command via argv.",
           "items": {
             "type": "string"
+          },
+          "type": "array"
+        },
+        "command": {
+          "default": null,
+          "description": "Execute a command string via a shell wrapper (`bash -lc ...` / `cmd.exe /C ...`).",
+          "type": "string"
+        },
+        "payload": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/HookPayloadFormat"
+            }
+          ],
+          "default": "xcodex",
+          "description": "Payload format to send on stdin.\n\nDeprecated: payloads are always emitted as a Claude-first superset with snake_case keys."
+        },
+        "timeout_sec": {
+          "default": null,
+          "description": "Optional timeout for this hook (seconds). When unset, uses `hooks.command.default_timeout_sec`.",
+          "format": "uint64",
+          "minimum": 0.0,
+          "type": "integer"
+        }
+      },
+      "type": "object"
+    },
+    "HooksCommandMatcherConfig": {
+      "additionalProperties": false,
+      "properties": {
+        "hooks": {
+          "default": [],
+          "description": "Hooks to execute when this matcher matches.",
+          "items": {
+            "$ref": "#/definitions/HooksCommandHookConfig"
+          },
+          "type": "array"
+        },
+        "matcher": {
+          "default": null,
+          "description": "Matcher expression using Claude semantics (`*`, exact, or regex).",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "HooksConfig": {
+      "additionalProperties": false,
+      "description": "Hook configuration loaded from `config.toml`.",
+      "properties": {
+        "agent_turn_complete": {
+          "default": [],
+          "description": "Hooks invoked after each completed turn.",
+          "items": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "type": "array"
+        },
+        "approval_requested": {
+          "default": [],
+          "description": "Hooks invoked when Codex requests an approval (exec/apply_patch/MCP elicitation).",
+          "items": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "type": "array"
+        },
+        "approval_resolved": {
+          "default": [],
+          "description": "Hooks invoked when an approval request is resolved.",
+          "items": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "type": "array"
+        },
+        "command": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/HooksCommandConfig"
+            }
+          ],
+          "default": {
+            "default_timeout_sec": 30
+          },
+          "description": "Command hooks with matcher + per-hook options.\n\nThis is a higher-level (Claude-style) config surface that complements the legacy per-event argv arrays above."
+        },
+        "enable_unsafe_inproc": {
+          "default": false,
+          "description": "Gate user-provided in-process hooks (for example, experimental PyO3 hooks) behind an explicit acknowledgement.\n\nFirst-party in-process hooks remain configurable without this flag.",
+          "type": "boolean"
+        },
+        "host": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/HookHostConfig"
+            }
+          ],
+          "default": {
+            "command": [],
+            "enabled": false,
+            "filters": {},
+            "sandbox_mode": null,
+            "timeout_sec": null
+          },
+          "description": "Long-lived external hook host (optional).\n\nThis is a separate provider from the per-event external hooks configured above. When enabled, Codex spawns a single process and streams hook events to it over stdin as newline-delimited JSON (JSONL)."
+        },
+        "inproc": {
+          "default": [],
+          "description": "Enable built-in in-process (Rust) hooks by name.\n\nThis is additive with `hooks.inproc_tool_call_summary` for backward compatibility.\n\nExample:\n\n```toml [hooks] inproc = [\"tool_call_summary\"] ```",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "inproc_tool_call_summary": {
+          "default": false,
+          "description": "Enable the in-process (Rust) hook that appends compact `tool_call_finished` summaries to `CODEX_HOME/hooks-tool-calls.log`.",
+          "type": "boolean"
+        },
+        "keep_last_n_payloads": {
+          "default": 50,
+          "description": "Keep only the most recent N payload/log files (global) under CODEX_HOME.",
+          "format": "uint",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "max_stdin_payload_bytes": {
+          "default": 16384,
+          "description": "Maximum payload size (in bytes) to send directly via stdin.\n\nWhen the serialized payload exceeds this threshold, Codex writes it to a file under CODEX_HOME and writes a small JSON envelope to stdin that includes `payload_path`.",
+          "format": "uint",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "model_request_started": {
+          "default": [],
+          "description": "Hooks invoked immediately before issuing a model request.",
+          "items": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "type": "array"
+        },
+        "model_response_completed": {
+          "default": [],
+          "description": "Hooks invoked after a model response has completed.",
+          "items": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "type": "array"
+        },
+        "notification": {
+          "default": [],
+          "description": "Hooks invoked when Codex emits a notification.",
+          "items": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "type": "array"
+        },
+        "pre_compact": {
+          "default": [],
+          "description": "Hooks invoked before Codex performs a compact operation.",
+          "items": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "type": "array"
+        },
+        "pyo3": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/HooksPyo3Config"
+            }
+          ],
+          "default": {
+            "batch_size": null,
+            "callable": null,
+            "filters": {},
+            "script_path": null,
+            "timeout_sec": null
+          },
+          "description": "Experimental PyO3 hook configuration."
+        },
+        "session_end": {
+          "default": [],
+          "description": "Hooks invoked when a session is ending (best-effort during shutdown).",
+          "items": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "type": "array"
+        },
+        "session_start": {
+          "default": [],
+          "description": "Hooks invoked when a session has started (after `SessionConfigured` is emitted).",
+          "items": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "type": "array"
+        },
+        "subagent_stop": {
+          "default": [],
+          "description": "Hooks invoked when a subagent task completes.",
+          "items": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "type": "array"
+        },
+        "tool_call_finished": {
+          "default": [],
+          "description": "Hooks invoked when a tool call has finished (success/failure/aborted).",
+          "items": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "type": "array"
+        },
+        "tool_call_started": {
+          "default": [],
+          "description": "Hooks invoked when a tool call begins execution.",
+          "items": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "type": "array"
+        },
+        "user_prompt_submit": {
+          "default": [],
+          "description": "Hooks invoked when the user submits a prompt/input.",
+          "items": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
           },
           "type": "array"
         }
       },
       "type": "object"
     },
-    "MarketplaceSourceType": {
+    "HooksPyo3Config": {
+      "additionalProperties": false,
+      "properties": {
+        "batch_size": {
+          "default": null,
+          "description": "Optional batch size to reduce Rust→Python calls for high-volume events.\n\nWhen set to N>1 and the script defines `on_events(events: list[dict]) -> None`, Codex will call `on_events` with batches of up to N events (preserving order). If the script does not define `on_events`, Codex falls back to per-event `callable`.",
+          "format": "uint",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "callable": {
+          "default": null,
+          "description": "Name of the callable in the module to invoke for each hook event.\n\nSignature: `callable(event: dict) -> None`",
+          "type": "string"
+        },
+        "filters": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/HookEventFiltersConfig"
+            }
+          ],
+          "default": {},
+          "description": "Optional matcher filters to restrict which events are delivered to PyO3.\n\nWhen unset/empty, all events are delivered."
+        },
+        "script_path": {
+          "default": null,
+          "description": "Path to a Python file containing the hook implementation.\n\nThe module must define the configured callable (default: `on_event`).",
+          "type": "string"
+        },
+        "timeout_sec": {
+          "default": null,
+          "description": "Optional timeout for a single PyO3 hook invocation (seconds).\n\nWhen unset, Codex uses the default in-process hook timeout.",
+          "format": "uint64",
+          "minimum": 0.0,
+          "type": "integer"
+        }
+      },
+      "type": "object"
+    },
+    "LogRedactionsMode": {
       "enum": [
-        "git"
+        "off",
+        "summary",
+        "raw"
       ],
       "type": "string"
     },
@@ -893,6 +1416,14 @@
         }
       },
       "type": "object"
+    },
+    "ModeKind": {
+      "description": "Initial collaboration mode to use when the TUI starts.",
+      "enum": [
+        "plan",
+        "default"
+      ],
+      "type": "string"
     },
     "ModelAvailabilityNuxConfig": {
       "additionalProperties": {
@@ -1195,7 +1726,28 @@
       ],
       "type": "string"
     },
+    "NotificationMethod2": {
+      "enum": [
+        "auto",
+        "osc9",
+        "bel"
+      ],
+      "type": "string"
+    },
     "Notifications": {
+      "anyOf": [
+        {
+          "type": "boolean"
+        },
+        {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      ]
+    },
+    "Notifications2": {
       "anyOf": [
         {
           "type": "boolean"
@@ -1417,15 +1969,101 @@
       ],
       "type": "string"
     },
-    "PluginConfig": {
+    "PlanContextMismatchAction": {
+      "description": "How plan-context mismatches should be handled when tracking is enabled.",
+      "enum": [
+        "warn",
+        "block"
+      ],
+      "type": "string"
+    },
+    "PlanNamingStrategy": {
+      "description": "How autogenerated plan filenames should be formed.",
+      "enum": [
+        "funny",
+        "date-title"
+      ],
+      "type": "string"
+    },
+    "PlanSettings": {
       "additionalProperties": false,
+      "description": "Durable plan-file settings.",
       "properties": {
-        "enabled": {
-          "default": true,
+        "base_dir": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/AbsolutePathBuf"
+            }
+          ],
+          "description": "Base directory for durable plan files.\n\nDefaults to `$CODEX_HOME/plans` when unset."
+        },
+        "custom_seed_mode": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/PlanTemplateSeedMode"
+            }
+          ],
+          "description": "Template seed mode for creating a custom template from built-in defaults.\n\nSupported values: `default`, `adr-lite`."
+        },
+        "custom_template": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/AbsolutePathBuf"
+            }
+          ],
+          "description": "Custom template path used when `mode = \"custom\"`.\n\nDefaults to `$CODEX_HOME/plans/custom/template.md` when unset."
+        },
+        "mismatch_action": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/PlanContextMismatchAction"
+            }
+          ],
+          "description": "Action to take when tracked context mismatches runtime context.\n\nSupported values: `warn`, `block`."
+        },
+        "mode": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/PlanWorkflowMode"
+            }
+          ],
+          "description": "Default workflow mode for `/plan`.\n\nSupported values: `default`, `adr-lite`, `custom`."
+        },
+        "naming_strategy": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/PlanNamingStrategy"
+            }
+          ],
+          "description": "Strategy used for autogenerated plan filenames when path is omitted.\n\nSupported values: `funny`, `date-title`."
+        },
+        "track_branch": {
+          "description": "Whether to track `Branch:` metadata and enforce/workflow-check it against runtime context.",
+          "type": "boolean"
+        },
+        "track_worktree": {
+          "description": "Whether to track `Worktree:` metadata and enforce/workflow-check it against runtime context.",
           "type": "boolean"
         }
       },
       "type": "object"
+    },
+    "PlanTemplateSeedMode": {
+      "description": "Seed mode used when creating/bootstrapping a custom plan template.",
+      "enum": [
+        "default",
+        "adr-lite"
+      ],
+      "type": "string"
+    },
+    "PlanWorkflowMode": {
+      "description": "Durable plan workflow mode.",
+      "enum": [
+        "default",
+        "adr-lite",
+        "custom"
+      ],
+      "type": "string"
     },
     "ProjectConfig": {
       "additionalProperties": false,
@@ -1702,6 +2340,32 @@
       },
       "type": "object"
     },
+    "ScrollInputMode": {
+      "description": "How TUI2 should interpret mouse scroll events.\n\nTerminals generally encode both mouse wheels and trackpads as the same \"scroll up/down\" mouse button events, without a magnitude. This setting controls whether Codex uses a heuristic to infer wheel vs trackpad per stream, or forces a specific behavior.",
+      "oneOf": [
+        {
+          "description": "Infer wheel vs trackpad behavior per scroll stream.",
+          "enum": [
+            "auto"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "Always treat scroll events as mouse-wheel input (fixed lines per tick).",
+          "enum": [
+            "wheel"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "Always treat scroll events as trackpad input (fractional accumulation).",
+          "enum": [
+            "trackpad"
+          ],
+          "type": "string"
+        }
+      ]
+    },
     "ServiceTier": {
       "enum": [
         "fast",
@@ -1809,6 +2473,46 @@
       },
       "type": "object"
     },
+    "ThemeMode": {
+      "enum": [
+        "auto",
+        "light",
+        "dark"
+      ],
+      "type": "string"
+    },
+    "Themes": {
+      "additionalProperties": false,
+      "description": "Global theme configuration for xcodex.\n\nThemes are stored as YAML files under `dir` (defaults to `$CODEX_HOME/themes`).",
+      "properties": {
+        "dark": {
+          "description": "Theme name used when in dark mode (or when `theme_mode = \"dark\"`).",
+          "type": "string"
+        },
+        "dir": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/AbsolutePathBuf"
+            }
+          ],
+          "description": "Directory containing user theme YAML files (`*.yml` / `*.yaml`).\n\nDefaults to `$CODEX_HOME/themes`."
+        },
+        "light": {
+          "description": "Theme name used when in light mode (or when `theme_mode = \"light\"`).",
+          "type": "string"
+        },
+        "theme_mode": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/ThemeMode"
+            }
+          ],
+          "default": "auto",
+          "description": "Select whether to use the light or dark theme explicitly, or auto-select.\n\n`auto` is resolved by the frontend (TUI) based on the current terminal background."
+        }
+      },
+      "type": "object"
+    },
     "ToolSuggestConfig": {
       "additionalProperties": false,
       "properties": {
@@ -1890,6 +2594,25 @@
           "description": "Enable animations (welcome screen, shimmer effects, spinners). Defaults to `true`.",
           "type": "boolean"
         },
+        "confirm_exit_with_running_hooks": {
+          "default": true,
+          "description": "When true, the TUI asks for confirmation before exiting if external hooks are still running. Defaults to `true`.",
+          "type": "boolean"
+        },
+        "experimental_mode": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/ModeKind"
+            }
+          ],
+          "default": null,
+          "description": "Start the TUI in the specified collaboration mode (plan/execute/etc.). Defaults to unset."
+        },
+        "minimal_composer": {
+          "default": false,
+          "description": "When true, render the active composer with only top/bottom borders.\n\nDefaults to `false`.",
+          "type": "boolean"
+        },
         "model_availability_nux": {
           "allOf": [
             {
@@ -1898,6 +2621,11 @@
           ],
           "default": {},
           "description": "Startup tooltip availability NUX state persisted by the TUI."
+        },
+        "mouse_capture": {
+          "default": true,
+          "description": "Enable application mouse capture in TUI2.\n\nWhen enabled, TUI2 receives mouse scroll and click events directly. When disabled, terminals can use native mouse selection/copy, but TUI2 will not receive mouse wheel/trackpad events.\n\nDefaults to `true`.",
+          "type": "boolean"
         },
         "notification_condition": {
           "allOf": [
@@ -1911,7 +2639,7 @@
         "notification_method": {
           "allOf": [
             {
-              "$ref": "#/definitions/NotificationMethod"
+              "$ref": "#/definitions/NotificationMethod2"
             }
           ],
           "default": "auto",
@@ -1920,20 +2648,108 @@
         "notifications": {
           "allOf": [
             {
-              "$ref": "#/definitions/Notifications"
+              "$ref": "#/definitions/Notifications2"
             }
           ],
           "default": true,
           "description": "Enable desktop notifications from the TUI. Defaults to `true`."
+        },
+        "ramps_build": {
+          "default": true,
+          "description": "Xcodex-only: enable the Build ramp for per-turn rotation.\n\nDefaults to `true`.",
+          "type": "boolean"
+        },
+        "ramps_devops": {
+          "default": true,
+          "description": "Xcodex-only: enable the DevOps ramp for per-turn rotation.\n\nDefaults to `true`.",
+          "type": "boolean"
+        },
+        "ramps_rotate": {
+          "default": true,
+          "description": "Xcodex-only: rotate between multiple \"ramp\" status label flows across turns.\n\nWhen disabled, xcodex falls back to the baseline Hardware ramp: `Charging → Spooling → Overclocking → Stabilizing → Overclocked in …`.\n\nDefaults to `true`.",
+          "type": "boolean"
+        },
+        "scroll_events_per_tick": {
+          "description": "Override the *wheel* event density used to normalize TUI2 scrolling.\n\nTerminals generally deliver both mouse wheels and trackpads as discrete `scroll up/down` mouse events with direction but no magnitude. Unfortunately, the *number* of raw events per physical wheel notch varies by terminal (commonly 1, 3, or 9+). TUI2 uses this value to normalize that raw event density into consistent \"wheel tick\" behavior.\n\nWheel math (conceptually):\n\n- A single event contributes `1 / scroll_events_per_tick` tick-equivalents. - Wheel-like streams then scale that by `scroll_wheel_lines` so one physical notch scrolls a fixed number of lines.\n\nTrackpad math is intentionally *not* fully tied to this value: in trackpad-like mode, TUI2 uses `min(scroll_events_per_tick, 3)` as the divisor so terminals with dense wheel ticks (e.g. 9 events per notch) do not make trackpads feel artificially slow.\n\nDefaults are derived per terminal from [`crate::terminal::TerminalInfo`] when TUI2 starts. See `codex-rs/xcodex/tui2/docs/scroll_input_model.md` for the probe data and rationale.",
+          "format": "uint16",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "scroll_invert": {
+          "default": false,
+          "description": "Invert mouse scroll direction in TUI2.",
+          "type": "boolean"
+        },
+        "scroll_mode": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/ScrollInputMode"
+            }
+          ],
+          "default": "auto",
+          "description": "Select how TUI2 interprets mouse scroll input.\n\n- `auto` (default): infer wheel vs trackpad per scroll stream. - `wheel`: always use wheel behavior (fixed lines per wheel notch). - `trackpad`: always use trackpad behavior (fractional accumulation; wheel may feel slow)."
+        },
+        "scroll_trackpad_accel_events": {
+          "description": "Trackpad acceleration: approximate number of events required to gain +1x speed in TUI2.\n\nThis keeps small swipes precise while allowing large/faster swipes to cover more content. Defaults are chosen to address terminals where trackpad event density is comparatively low.\n\nConcretely, TUI2 computes an acceleration multiplier for trackpad-like streams:\n\n- `multiplier = clamp(1 + abs(events) / scroll_trackpad_accel_events, 1..scroll_trackpad_accel_max)`\n\nThe multiplier is applied to the stream’s computed line delta (including any carried fractional remainder).",
+          "format": "uint16",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "scroll_trackpad_accel_max": {
+          "description": "Trackpad acceleration: maximum multiplier applied to trackpad-like streams.\n\nSet to 1 to effectively disable trackpad acceleration.\n\nSee [`Tui::scroll_trackpad_accel_events`] for the exact multiplier formula.",
+          "format": "uint16",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "scroll_trackpad_lines": {
+          "description": "Override baseline trackpad scroll sensitivity in TUI2.\n\nTrackpads do not have discrete notches, but terminals still emit discrete `scroll up/down` events. In trackpad-like mode, TUI2 accumulates fractional scroll and only applies whole lines to the viewport.\n\nTrackpad per-event contribution is:\n\n- `scroll_trackpad_lines / min(scroll_events_per_tick, 3)`\n\n(plus optional bounded acceleration; see `scroll_trackpad_accel_*`). The `min(..., 3)` divisor is deliberate: `scroll_events_per_tick` is calibrated from *wheel* behavior and can be much larger than trackpad event density, which would otherwise make trackpads feel too slow in dense-wheel terminals.\n\nDefaults to 1, meaning one tick-equivalent maps to one transcript line.",
+          "format": "uint16",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "scroll_wheel_like_max_duration_ms": {
+          "default": null,
+          "description": "Override the wheel-like end-of-stream threshold (ms) for TUI2 auto scroll mode.",
+          "format": "uint64",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "scroll_wheel_lines": {
+          "description": "Override how many transcript lines one physical *wheel notch* should scroll in TUI2.\n\nThis is the \"classic feel\" knob. Defaults to 3.\n\nWheel-like per-event contribution is `scroll_wheel_lines / scroll_events_per_tick`. For example, in a terminal that emits 9 events per notch, the default `3 / 9` yields 1/3 of a line per event and totals 3 lines once the full notch burst arrives.\n\nSee `codex-rs/xcodex/tui2/docs/scroll_input_model.md` for details on the stream model and the wheel/trackpad heuristic.",
+          "format": "uint16",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "scroll_wheel_tick_detect_max_ms": {
+          "default": null,
+          "description": "Override the wheel tick detection threshold (ms) for TUI2 auto scroll mode.",
+          "format": "uint64",
+          "minimum": 0.0,
+          "type": "integer"
         },
         "show_tooltips": {
           "default": true,
           "description": "Show startup tooltips in the TUI welcome screen. Defaults to `true`.",
           "type": "boolean"
         },
+        "status_bar_show_git_branch": {
+          "default": false,
+          "description": "Show the current git branch in the bottom status bar. Defaults to `false`.",
+          "type": "boolean"
+        },
+        "status_bar_show_model": {
+          "default": false,
+          "description": "Show the current model name in the footer row next to the shortcuts hint. Defaults to `false`.",
+          "type": "boolean"
+        },
+        "status_bar_show_worktree": {
+          "default": false,
+          "description": "Show the active git worktree root (repo root) in the bottom status bar. Defaults to `false`.",
+          "type": "boolean"
+        },
         "status_line": {
           "default": null,
-          "description": "Ordered list of status line item identifiers.\n\nWhen set, the TUI renders the selected items as the status line. When unset, the TUI defaults to: `model-with-reasoning` and `current-dir`.",
+          "description": "Ordered list of status line item identifiers.\n\nWhen set, the TUI renders the selected items as the status line.",
           "items": {
             "type": "string"
           },
@@ -1941,7 +2757,7 @@
         },
         "terminal_title": {
           "default": null,
-          "description": "Ordered list of terminal title item identifiers.\n\nWhen set, the TUI renders the selected items into the terminal window/tab title. When unset, the TUI defaults to: `spinner` and `project`.",
+          "description": "Ordered list of terminal title item identifiers.\n\nWhen set, the TUI renders the selected items into the terminal window/tab title.",
           "items": {
             "type": "string"
           },
@@ -1949,11 +2765,54 @@
         },
         "theme": {
           "default": null,
-          "description": "Syntax highlighting theme name (kebab-case).\n\nWhen set, overrides automatic light/dark theme detection. Use `/theme` in the TUI or see `$CODEX_HOME/themes` for custom themes.",
+          "description": "Syntax highlighting theme name (kebab-case).",
           "type": "string"
+        },
+        "transcript_diff_highlight": {
+          "default": false,
+          "description": "When true, render diffs in the transcript with red/green background highlights, while keeping diff text in the normal transcript foreground color.\n\nWhen false (default), additions render as green text and deletions as red text (no background highlight).",
+          "type": "boolean"
+        },
+        "transcript_side_by_side": {
+          "default": true,
+          "description": "When true, render transcript diffs in side-by-side columns.\n\nDefaults to `true`.",
+          "type": "boolean"
+        },
+        "transcript_syntax_highlight": {
+          "default": true,
+          "description": "When true, render fenced code blocks with syntax highlighting (when supported).\n\nDefaults to `true`.",
+          "type": "boolean"
+        },
+        "transcript_user_prompt_highlight": {
+          "default": false,
+          "description": "When true, highlight previous user prompts in the transcript so they're easier to spot while scrolling.\n\nDefaults to `false`.",
+          "type": "boolean"
+        },
+        "verbose_tool_output": {
+          "default": false,
+          "description": "When true, show verbose tool output in the transcript (including large file reads).\n\nDefaults to `false` (quiet by default).",
+          "type": "boolean"
+        },
+        "xtreme_mode": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/XtremeMode"
+            }
+          ],
+          "default": "on",
+          "description": "Xcodex-only: enable \"xtreme mode\" styling in the TUI.\n\n- `on`: always enable xtreme styling (default) - `off`: disable xtreme styling - `auto`: enable xtreme styling when invoked as `xcodex`"
         }
       },
       "type": "object"
+    },
+    "UnattestedOutputPolicy": {
+      "enum": [
+        "allow",
+        "warn",
+        "confirm",
+        "block"
+      ],
+      "type": "string"
     },
     "UriBasedFileOpener": {
       "oneOf": [
@@ -2067,6 +2926,60 @@
           "type": "string"
         }
       ]
+    },
+    "Worktrees": {
+      "additionalProperties": false,
+      "description": "Collection of settings that affect git worktree behavior.",
+      "properties": {
+        "auto_link_shared_dirs": {
+          "default": false,
+          "description": "When true, xcodex may automatically ensure shared dirs are linked when switching worktrees. Defaults to `false` (opt-in).",
+          "type": "boolean"
+        },
+        "pinned_paths": {
+          "default": [],
+          "description": "Optional list of repo-relative paths/prefixes that should resolve to a stable workspace root for structured file tools (e.g. apply_patch/read_file/list_dir/grep_files), even while switching worktrees.\n\nThis does not affect shell behavior; for shell ergonomics, use [`Worktrees::shared_dirs`] and `/worktree link-shared`.\n\nDefaults to empty (opt-in).",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "shared_dirs": {
+          "default": [],
+          "description": "Optional list of repo-relative directories to share across worktrees.\n\nWhen enabled by higher-level features (e.g. `/worktree link-shared`), these directories can be linked to a stable workspace root (symlink on macOS/Linux; junction on Windows) so untracked files under them are not stranded inside disposable worktrees.\n\nDefaults to empty (opt-in).",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
+    "XtremeMode": {
+      "description": "How the TUI should render xcodex \"xtreme mode\" styling.",
+      "oneOf": [
+        {
+          "description": "Enable xtreme styling when invoked as `xcodex`.",
+          "enum": [
+            "auto"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "Always enable xtreme styling.",
+          "enum": [
+            "on"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "Disable xtreme styling (prefer upstream-like visuals).",
+          "enum": [
+            "off"
+          ],
+          "type": "string"
+        }
+      ]
     }
   },
   "description": "Base config deserialized from ~/.codex/config.toml.",
@@ -2080,7 +2993,7 @@
       "description": "Agent-related settings (thread limits, etc.)."
     },
     "allow_login_shell": {
-      "description": "Whether the model may request a login shell for shell-based tools. Default to `true`\n\nIf `true`, the model may request a login shell (`login = true`), and omitting `login` defaults to using a login shell. If `false`, the model can never use a login shell: `login = true` requests are rejected, and omitting `login` defaults to a non-login shell.",
+      "description": "Whether the model may request a login shell for shell-based tools.",
       "type": "boolean"
     },
     "analytics": {
@@ -2105,7 +3018,7 @@
           "$ref": "#/definitions/ApprovalsReviewer"
         }
       ],
-      "description": "Configures who approval requests are routed to for review once they have been escalated. This does not disable separate safety checks such as ARC."
+      "description": "Configures who approval requests are routed to for review once they have been escalated."
     },
     "apps": {
       "allOf": [
@@ -2126,7 +3039,7 @@
       "description": "Machine-local realtime audio device preferences used by realtime voice."
     },
     "background_terminal_max_timeout": {
-      "description": "Maximum poll window for background terminal output (`write_stdin`), in milliseconds. Default: `300000` (5 minutes).",
+      "description": "Maximum poll window for background terminal output (`write_stdin`), in milliseconds.",
       "format": "uint64",
       "minimum": 0.0,
       "type": "integer"
@@ -2149,7 +3062,7 @@
       "description": "Preferred backend for storing CLI auth credentials. file (default): Use a file in the Codex home directory. keyring: Use an OS-specific keyring service. auto: Use the keyring if available, otherwise use a file."
     },
     "commit_attribution": {
-      "description": "Optional commit attribution text for commit message co-author trailers.\n\nSet to an empty string to disable automatic commit attribution.",
+      "description": "Optional commit attribution text for commit message co-author trailers.",
       "type": "string"
     },
     "compact_prompt": {
@@ -2169,27 +3082,36 @@
       "description": "When true, disables burst-paste detection for typed input entirely. All characters are inserted as they are received, and no buffering or placeholder replacement will occur for fast keypress bursts.",
       "type": "boolean"
     },
+    "exclusion": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/ExclusionConfig"
+        }
+      ],
+      "default": null,
+      "description": "Sensitive-path exclusion configuration (ignore files + outbound gateway)."
+    },
     "experimental_compact_prompt_file": {
       "$ref": "#/definitions/AbsolutePathBuf"
     },
     "experimental_realtime_start_instructions": {
-      "description": "Experimental / do not use. Replaces the built-in realtime start instructions inserted into developer messages when realtime becomes active.",
+      "description": "Experimental / do not use. Replaces built-in realtime start instructions.",
       "type": "string"
     },
     "experimental_realtime_ws_backend_prompt": {
-      "description": "Experimental / do not use. Overrides only the realtime conversation websocket transport instructions (the `Op::RealtimeConversation` `/ws` session.update instructions) without changing normal prompts.",
+      "description": "Experimental / do not use. Overrides realtime websocket transport instructions.",
       "type": "string"
     },
     "experimental_realtime_ws_base_url": {
-      "description": "Experimental / do not use. Overrides only the realtime conversation websocket transport base URL (the `Op::RealtimeConversation` `/v1/realtime` connection) without changing normal provider HTTP requests.",
+      "description": "Experimental / do not use. Overrides only the realtime conversation websocket base URL.",
       "type": "string"
     },
     "experimental_realtime_ws_model": {
-      "description": "Experimental / do not use. Selects the realtime websocket model/snapshot used for the `Op::RealtimeConversation` connection.",
+      "description": "Experimental / do not use. Selects the realtime websocket model/snapshot.",
       "type": "string"
     },
     "experimental_realtime_ws_startup_context": {
-      "description": "Experimental / do not use. Replaces the synthesized realtime startup context appended to websocket session instructions. An empty string disables startup context injection entirely.",
+      "description": "Experimental / do not use. Replaces synthesized realtime startup context.",
       "type": "string"
     },
     "experimental_use_freeform_apply_patch": {
@@ -2453,6 +3375,51 @@
       "default": null,
       "description": "Settings that govern if and what will be written to `~/.codex/history.jsonl`."
     },
+    "hooks": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/HooksConfig"
+        }
+      ],
+      "default": {
+        "agent_turn_complete": [],
+        "approval_requested": [],
+        "approval_resolved": [],
+        "command": {
+          "default_timeout_sec": 30
+        },
+        "enable_unsafe_inproc": false,
+        "host": {
+          "command": [],
+          "enabled": false,
+          "filters": {},
+          "sandbox_mode": null,
+          "timeout_sec": null
+        },
+        "inproc": [],
+        "inproc_tool_call_summary": false,
+        "keep_last_n_payloads": 50,
+        "max_stdin_payload_bytes": 16384,
+        "model_request_started": [],
+        "model_response_completed": [],
+        "notification": [],
+        "pre_compact": [],
+        "pyo3": {
+          "batch_size": null,
+          "callable": null,
+          "filters": {},
+          "script_path": null,
+          "timeout_sec": null
+        },
+        "session_end": [],
+        "session_start": [],
+        "subagent_stop": [],
+        "tool_call_finished": [],
+        "tool_call_started": [],
+        "user_prompt_submit": []
+      },
+      "description": "Optional external hook commands to spawn on specific lifecycle events."
+    },
     "include_apps_instructions": {
       "description": "Whether to inject the `<apps_instructions>` developer block.",
       "type": "boolean"
@@ -2492,14 +3459,6 @@
       ],
       "description": "Directory where Codex writes log files, for example `codex-tui.log`. Defaults to `$CODEX_HOME/log`."
     },
-    "marketplaces": {
-      "additionalProperties": {
-        "$ref": "#/definitions/MarketplaceConfig"
-      },
-      "default": {},
-      "description": "User-level marketplace entries keyed by marketplace name.",
-      "type": "object"
-    },
     "mcp_oauth_callback_port": {
       "description": "Optional fixed port for the local HTTP callback server used during MCP OAuth login. When unset, Codex will bind to an ephemeral port chosen by the OS.",
       "format": "uint16",
@@ -2507,7 +3466,7 @@
       "type": "integer"
     },
     "mcp_oauth_callback_url": {
-      "description": "Optional redirect URI to use during MCP OAuth login. When set, this URI is used in the OAuth authorization request instead of the local listener address. The local callback listener still binds to 127.0.0.1 (using `mcp_oauth_callback_port` when provided).",
+      "description": "Optional redirect URI to use during MCP OAuth login.",
       "type": "string"
     },
     "mcp_oauth_credentials_store": {
@@ -2523,8 +3482,15 @@
       "additionalProperties": {
         "$ref": "#/definitions/RawMcpServerConfig"
       },
-      "default": {},
+      "default": {
+        "startup_mode": null
+      },
       "description": "Definition for MCP servers that Codex can reach out to for tool calls.",
+      "properties": {
+        "startup_mode": {
+          "$ref": "#/definitions/McpStartupMode"
+        }
+      },
       "type": "object"
     },
     "memories": {
@@ -2550,7 +3516,7 @@
           "$ref": "#/definitions/AbsolutePathBuf"
         }
       ],
-      "description": "Optional path to a JSON model catalog (applied on startup only). Per-thread `config` overrides are accepted but do not reapply this (no-ops)."
+      "description": "Optional path to a JSON model catalog (applied on startup only)."
     },
     "model_context_window": {
       "description": "Size of the context window for the model, in tokens.",
@@ -2574,7 +3540,7 @@
         "$ref": "#/definitions/ModelProviderInfo"
       },
       "default": {},
-      "description": "User-defined provider entries that extend the built-in list. Built-in IDs cannot be overridden.",
+      "description": "User-defined provider entries that extend/override the built-in list.",
       "type": "object"
     },
     "model_reasoning_effort": {
@@ -2601,11 +3567,11 @@
           "$ref": "#/definitions/Notice"
         }
       ],
-      "description": "Collection of in-product notices (different from notifications) See [`crate::types::Notice`] for more details"
+      "description": "Collection of in-product notices (different from notifications) See [`crate::config::types::Notices`] for more details"
     },
     "notify": {
       "default": null,
-      "description": "Optional external command to spawn for end-user notifications.",
+      "description": "Deprecated (xcodex): legacy external command to spawn for notifications.",
       "items": {
         "type": "string"
       },
@@ -2644,16 +3610,16 @@
       ],
       "description": "Optionally specify a personality for the model"
     },
+    "plan": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/PlanSettings"
+        }
+      ],
+      "description": "Settings for durable plan files (`/plan` workflow)."
+    },
     "plan_mode_reasoning_effort": {
       "$ref": "#/definitions/ReasoningEffort"
-    },
-    "plugins": {
-      "additionalProperties": {
-        "$ref": "#/definitions/PluginConfig"
-      },
-      "default": {},
-      "description": "User-level plugin config entries keyed by plugin name.",
-      "type": "object"
     },
     "profile": {
       "description": "Profile to use from the `profiles` map.",
@@ -2701,7 +3667,7 @@
         }
       ],
       "default": null,
-      "description": "Experimental / do not use. Realtime websocket session selection. `version` controls v1/v2 and `type` controls conversational/transcription."
+      "description": "Experimental / do not use. Realtime websocket session selection."
     },
     "review_model": {
       "description": "Review model override used by the `/review` feature.",
@@ -2770,6 +3736,14 @@
       "description": "Suppress warnings about unstable (under development) features.",
       "type": "boolean"
     },
+    "themes": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/Themes"
+        }
+      ],
+      "description": "Global theme configuration for xcodex."
+    },
     "tool_output_token_limit": {
       "description": "Token budget applied when storing tool/function outputs in the context manager.",
       "format": "uint",
@@ -2800,6 +3774,14 @@
       ],
       "description": "Collection of settings that are specific to the TUI."
     },
+    "unattested_output_policy": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/UnattestedOutputPolicy"
+        }
+      ],
+      "description": "Policy for whether to send unattested tool output (e.g. MCP output) to the model."
+    },
     "web_search": {
       "allOf": [
         {
@@ -2820,6 +3802,14 @@
     "windows_wsl_setup_acknowledged": {
       "description": "Tracks whether the Windows onboarding screen has been acknowledged.",
       "type": "boolean"
+    },
+    "worktrees": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/Worktrees"
+        }
+      ],
+      "description": "Settings that affect worktree behavior."
     },
     "zsh_path": {
       "allOf": [

@@ -35,12 +35,18 @@ WINDOWS_RUSTC_LINK_FLAGS = select({
 
 # libwebrtc uses Objective-C categories from native archives. Any Bazel-linked
 # macOS binary/test that can pull it in must keep category symbols alive.
+# V8 and WebRTC both vendor Abseil in their static archives; suppress duplicate
+# C++ symbols so Bazel can link binaries that keep both feature sets enabled.
 MACOS_WEBRTC_RUSTC_LINK_FLAGS = select({
     "@platforms//os:macos": [
         "-C",
         "link-arg=-ObjC",
         "-C",
         "link-arg=-lc++",
+        "-C",
+        "link-arg=-fuse-ld=/usr/bin/ld",
+        "-C",
+        "link-arg=-Wl,-multiply_defined,suppress",
     ],
     "//conditions:default": [],
 })
@@ -143,6 +149,7 @@ def codex_rust_crate(
         integration_test_timeout = None,
         test_data_extra = [],
         test_tags = [],
+        unit_test_env = {},
         unit_test_timeout = None,
         extra_binaries = []):
     """Defines a Rust crate with library, binaries, and tests wired for Bazel + Cargo parity.
@@ -178,6 +185,7 @@ def codex_rust_crate(
         test_data_extra: Extra runtime data for tests.
         test_tags: Tags applied to unit + integration test targets.
             Typically used to disable the sandbox, but see https://bazel.build/reference/be/common-definitions#common.tags
+        unit_test_env: Extra environment variables for the unit-test launcher.
         unit_test_timeout: Optional Bazel timeout for the unit-test target
             generated from `src/**/*.rs`.
         extra_binaries: Additional binary labels to surface as test data and
@@ -278,7 +286,8 @@ def codex_rust_crate(
 
         workspace_root_test(
             name = name + "-unit-tests",
-            env = test_env,
+            data = test_data_extra,
+            env = test_env | unit_test_env,
             test_bin = ":" + unit_test_binary,
             workspace_root_marker = "//codex-rs/utils/cargo-bin:repo_root.marker",
             tags = test_tags,

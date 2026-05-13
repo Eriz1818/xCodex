@@ -149,9 +149,10 @@ async fn run_session_picker(
                 PAGE_SIZE,
                 request.cursor.as_ref(),
                 ThreadSortKey::CreatedAt,
-                INTERACTIVE_SESSION_SOURCES,
+                &INTERACTIVE_SESSION_SOURCES,
                 Some(provider_filter.as_slice()),
                 request.default_provider.as_str(),
+                /*search_term*/ None,
             )
             .await;
             let _ = tx.send(BackgroundEvent::PageLoaded {
@@ -439,8 +440,8 @@ impl PickerState {
                     self.request_frame();
                 }
             }
-            KeyCode::PageDown => {
-                if !self.filtered_rows.is_empty() {
+            KeyCode::PageDown
+                if !self.filtered_rows.is_empty() => {
                     let step = self.view_rows.unwrap_or(10).max(1);
                     let max_index = self.filtered_rows.len().saturating_sub(1);
                     self.selected = (self.selected + step).min(max_index);
@@ -448,7 +449,6 @@ impl PickerState {
                     self.maybe_load_more_for_scroll();
                     self.request_frame();
                 }
-            }
             KeyCode::Tab => {
                 self.toggle_show_all();
             }
@@ -457,18 +457,17 @@ impl PickerState {
                 new_query.pop();
                 self.set_query(new_query);
             }
-            KeyCode::Char(c) => {
+            KeyCode::Char(c)
                 // basic text input for search
                 if !key
                     .modifiers
                     .contains(crossterm::event::KeyModifiers::CONTROL)
                     && !key.modifiers.contains(crossterm::event::KeyModifiers::ALT)
-                {
+                => {
                     let mut new_query = self.query.clone();
                     new_query.push(c);
                     self.set_query(new_query);
                 }
-            }
             _ => {}
         }
         Ok(None)
@@ -1293,6 +1292,8 @@ mod tests {
             git_sha: None,
             git_origin_url: None,
             source: None,
+            agent_nickname: None,
+            agent_role: None,
             model_provider: None,
             cli_version: None,
             created_at: Some(ts.to_string()),
@@ -1391,6 +1392,8 @@ mod tests {
             git_sha: None,
             git_origin_url: None,
             source: None,
+            agent_nickname: None,
+            agent_role: None,
             model_provider: None,
             cli_version: None,
             created_at: Some("2025-01-01T00:00:00Z".into()),
@@ -1586,9 +1589,10 @@ mod tests {
             PAGE_SIZE,
             None,
             ThreadSortKey::CreatedAt,
-            INTERACTIVE_SESSION_SOURCES,
+            &INTERACTIVE_SESSION_SOURCES,
             Some(&[String::from("openai")]),
             "openai",
+            /*search_term*/ None,
         )
         .await
         .expect("list conversations");

@@ -32,7 +32,7 @@ pub(crate) fn bolt_span(xtreme_ui_enabled: bool) -> Span<'static> {
 fn approval_score(approval: AskForApproval) -> u8 {
     match approval {
         AskForApproval::UnlessTrusted => 1,
-        AskForApproval::OnRequest => 2,
+        AskForApproval::OnRequest | AskForApproval::Granular(_) => 2,
         AskForApproval::OnFailure | AskForApproval::Never => 3,
     }
 }

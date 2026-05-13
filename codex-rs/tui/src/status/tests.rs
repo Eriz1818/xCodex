@@ -190,7 +190,7 @@ async fn status_snapshot_includes_reasoning_details() {
 }
 
 #[tokio::test]
-async fn status_permissions_non_default_workspace_write_is_custom() {
+async fn status_permissions_non_default_workspace_write_are_split_rows() {
     let temp_home = TempDir::new().expect("temp home");
     let mut config = test_config(&temp_home).await;
     config.model = Some("gpt-5.1-codex-max".to_string());
@@ -213,7 +213,7 @@ async fn status_permissions_non_default_workspace_write_is_custom() {
         .expect("set sandbox policy");
     config.cwd = PathBuf::from("/workspace/tests").abs();
 
-    let account_display = test_status_account_display();
+    let account_display = Some(StatusAccountDisplay::ApiKey);
     let usage = TokenUsage::default();
     let captured_at = chrono::Local
         .with_ymd_and_hms(2024, 1, 2, 3, 4, 5)
@@ -237,21 +237,23 @@ async fn status_permissions_non_default_workspace_write_is_custom() {
         /*reasoning_effort_override*/ None,
     );
     let rendered_lines = render_lines(&composite.display_lines(/*width*/ 80));
-    let permissions_line = rendered_lines
+    let approval_text = rendered_lines
         .iter()
-        .find(|line| line.contains("Permissions:"))
-        .expect("permissions line");
-    let permissions_text = permissions_line
-        .split("Permissions:")
-        .nth(1)
+        .find(|line| line.contains("Approval:"))
+        .and_then(|line| line.split("Approval:").nth(1))
+        .map(str::trim)
+        .map(|text| text.trim_end_matches('│'))
+        .map(str::trim);
+    let sandbox_text = rendered_lines
+        .iter()
+        .find(|line| line.contains("Sandbox:"))
+        .and_then(|line| line.split("Sandbox:").nth(1))
         .map(str::trim)
         .map(|text| text.trim_end_matches('│'))
         .map(str::trim);
 
-    assert_eq!(
-        permissions_text,
-        Some("Custom (workspace-write with network access, on-request)")
-    );
+    assert_eq!(approval_text, Some("on-request"));
+    assert_eq!(sandbox_text, Some("workspace-write with network access"));
 }
 
 #[tokio::test]
@@ -315,10 +317,10 @@ async fn status_menu_summary_snapshot_includes_limit_bars() {
     config.model = Some("gpt-5.1-codex-max".to_string());
     config.model_provider_id = "openai".to_string();
     config.model_reasoning_effort = Some(ReasoningEffort::High);
-    config.model_reasoning_summary = ReasoningSummary::Auto;
-    config.cwd = PathBuf::from("/workspace/tests");
+    config.model_reasoning_summary = Some(ReasoningSummary::Auto);
+    config.cwd = PathBuf::from("/workspace/tests").abs();
 
-    let auth_manager = test_auth_manager(&config);
+    let account_display = test_status_account_display();
     let usage = TokenUsage {
         input_tokens: 1_200,
         cached_input_tokens: 200,
@@ -354,7 +356,7 @@ async fn status_menu_summary_snapshot_includes_limit_bars() {
 
     let cell = new_status_menu_summary_card(
         &config,
-        &auth_manager,
+        account_display.as_ref(),
         Some(&token_info),
         &usage,
         &None,
@@ -1245,11 +1247,19 @@ async fn status_context_window_uses_last_usage() {
 #[tokio::test]
 async fn status_snapshot_includes_session_stats_when_available() {
     let temp_home = TempDir::new().expect("temp home");
+    let temp_project = TempDir::new().expect("temp project");
+    std::fs::write(
+        temp_project.path().join("AGENTS.md"),
+        "test project instructions",
+    )
+    .expect("write AGENTS.md");
+
     let mut config = test_config(&temp_home).await;
     config.model = Some("gpt-5.1-codex-max".to_string());
     config.model_provider_id = "openai".to_string();
+    config.cwd = temp_project.path().to_path_buf().abs();
 
-    let auth_manager = test_auth_manager(&config);
+    let account_display = Some(StatusAccountDisplay::ApiKey);
     let usage = TokenUsage {
         input_tokens: 1_200,
         cached_input_tokens: 200,
@@ -1277,7 +1287,7 @@ async fn status_snapshot_includes_session_stats_when_available() {
 
     let composite = new_status_output_with_session_stats(
         &config,
-        &auth_manager,
+        account_display.as_ref(),
         Some(&token_info),
         &usage,
         &None,

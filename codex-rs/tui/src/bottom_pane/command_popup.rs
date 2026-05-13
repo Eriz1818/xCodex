@@ -12,13 +12,13 @@ use super::slash_commands;
 use super::slash_subcommands::build_subcommand_matches;
 use super::slash_subcommands::slash_command_supports_subcommands as subcommands_supported;
 use super::slash_subcommands::subcommand_list_hint;
+use crate::custom_prompts::CustomPrompt;
+use crate::custom_prompts::PROMPTS_CMD_PREFIX;
 use crate::render::Insets;
 use crate::render::RectExt;
 use crate::slash_command::SlashCommand;
 use crate::xcodex_plugins::PluginSlashCommand;
 use crate::xcodex_plugins::command_popup as xcodex_command_popup;
-use codex_protocol::custom_prompts::CustomPrompt;
-use codex_protocol::custom_prompts::PROMPTS_CMD_PREFIX;
 
 pub(crate) const DEFAULT_SLASH_POPUP_ROWS: usize = MAX_POPUP_ROWS;
 
@@ -105,12 +105,18 @@ impl CommandPopup {
         flags: CommandPopupFlags,
         max_rows: usize,
     ) -> Self {
-        let builtins = slash_commands::builtins_for_input(
-            flags.collaboration_modes_enabled,
-            flags.connectors_enabled,
-            flags.personality_command_enabled,
-            flags.windows_degraded_sandbox_active,
-        );
+        let builtins: Vec<(&'static str, SlashCommand)> =
+            slash_commands::builtins_for_input(flags.into())
+                .into_iter()
+                .filter(|(_, cmd)| {
+                    !matches!(
+                        cmd,
+                        SlashCommand::DebugConfig
+                            | SlashCommand::MemoryDrop
+                            | SlashCommand::MemoryUpdate
+                    )
+                })
+                .collect();
         let plugin_commands: Vec<PluginSlashCommand> =
             xcodex_command_popup::popup_plugin_commands();
         // Exclude prompts that collide with builtin or plugin command names.
@@ -337,6 +343,7 @@ impl CommandPopup {
         // Support both search styles:
         // - Typing "name" should surface "/prompts:name" results.
         // - Typing "prompts:name" should also work.
+        let prompt_prefix_len = PROMPTS_CMD_PREFIX.len() + 1;
         for (idx, p) in self.prompts.iter().enumerate() {
             let display = format!("{PROMPTS_CMD_PREFIX}:{}", p.name);
             push_match(
@@ -602,6 +609,7 @@ mod tests {
                 content: "hello from foo".to_string(),
                 description: None,
                 argument_hint: None,
+                text_elements: Vec::new(),
             },
             CustomPrompt {
                 name: "bar".to_string(),
@@ -609,6 +617,7 @@ mod tests {
                 content: "hello from bar".to_string(),
                 description: None,
                 argument_hint: None,
+                text_elements: Vec::new(),
             },
         ];
 
@@ -640,6 +649,7 @@ mod tests {
                 content: "should be ignored".to_string(),
                 description: None,
                 argument_hint: None,
+                text_elements: Vec::new(),
             }],
             CommandPopupFlags::default(),
             DEFAULT_SLASH_POPUP_ROWS,
@@ -664,6 +674,7 @@ mod tests {
                 content: "body".to_string(),
                 description: Some("Create feature branch, commit and open draft PR.".to_string()),
                 argument_hint: None,
+                text_elements: Vec::new(),
             }],
             CommandPopupFlags::default(),
             DEFAULT_SLASH_POPUP_ROWS,
@@ -685,6 +696,7 @@ mod tests {
                 content: "body".to_string(),
                 description: None,
                 argument_hint: None,
+                text_elements: Vec::new(),
             }],
             CommandPopupFlags::default(),
             DEFAULT_SLASH_POPUP_ROWS,
@@ -902,7 +914,7 @@ mod tests {
     }
 
     #[test]
-    fn settings_command_hidden_when_audio_device_selection_is_disabled() {
+    fn settings_command_visible_when_audio_device_selection_is_disabled() {
         let mut popup = CommandPopup::new(
             Vec::new(),
             CommandPopupFlags {
@@ -917,7 +929,7 @@ mod tests {
             },
             DEFAULT_SLASH_POPUP_ROWS,
         );
-        popup.on_composer_text_change("/aud".to_string());
+        popup.on_composer_text_change("/sett".to_string());
 
         let cmds: Vec<&str> = popup
             .filtered_items()
@@ -929,8 +941,8 @@ mod tests {
             .collect();
 
         assert!(
-            !cmds.contains(&"settings"),
-            "expected '/settings' to be hidden when audio device selection is disabled, got {cmds:?}"
+            cmds.contains(&"settings"),
+            "expected '/settings' to remain visible for xcodex settings, got {cmds:?}"
         );
     }
 

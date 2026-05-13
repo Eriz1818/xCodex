@@ -126,7 +126,7 @@ pub(crate) fn test_style_guard() -> MutexGuard<'static, ()> {
     THEME_TEST_LOCK
         .get_or_init(|| Mutex::new(()))
         .lock()
-        .unwrap_or_else(|err| err.into_inner())
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
 #[cfg(test)]
@@ -723,10 +723,7 @@ fn styles_for(
     }
 
     fn style_from_roles(fg: Option<Color>, bg: Option<Color>, fallback: Style) -> Style {
-        if fg.is_none() && bg.is_none() {
-            return fallback;
-        }
-        let mut style = Style::default();
+        let mut style = fallback;
         if let Some(fg) = fg {
             style = style.fg(fg);
         }

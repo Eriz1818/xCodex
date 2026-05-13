@@ -1561,6 +1561,56 @@ mod tests {
     use insta::assert_snapshot;
     use pretty_assertions::assert_eq;
     use ratatui::layout::Rect;
+    use std::path::PathBuf;
+
+    const XCODEX_WIZARD_SNAPSHOT_RUNFILES: [&str; 2] = [
+        "_main/codex-rs/xcodex/snapshots/codex_tui__xcodex_first_run_wizard__tests__xcodex_first_run_wizard_choose.snap",
+        "codex-rs/xcodex/snapshots/codex_tui__xcodex_first_run_wizard__tests__xcodex_first_run_wizard_choose.snap",
+    ];
+
+    fn xcodex_wizard_snapshot_path() -> PathBuf {
+        if let Some(manifest_path) = std::env::var_os("RUNFILES_MANIFEST_FILE")
+            && let Ok(manifest) = std::fs::read_to_string(manifest_path)
+        {
+            for key in XCODEX_WIZARD_SNAPSHOT_RUNFILES {
+                if let Some(parent) = manifest.lines().find_map(|line| {
+                    let (logical, physical) = line.split_once(' ')?;
+                    (logical == key).then(|| {
+                        PathBuf::from(physical)
+                            .parent()
+                            .expect("snapshot runfile has parent")
+                            .to_path_buf()
+                    })
+                }) {
+                    return parent;
+                }
+            }
+        }
+
+        for runfiles_root in ["RUNFILES_DIR", "TEST_SRCDIR"].into_iter().filter_map(std::env::var_os)
+        {
+            let runfiles_root = PathBuf::from(runfiles_root);
+            for key in XCODEX_WIZARD_SNAPSHOT_RUNFILES {
+                let snapshot = runfiles_root.join(key);
+                if let Some(parent) = snapshot.parent()
+                    && snapshot.exists()
+                {
+                    return parent.to_path_buf();
+                }
+            }
+        }
+
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../xcodex/snapshots")
+    }
+
+    macro_rules! assert_xcodex_wizard_snapshot {
+        ($name:literal, $value:expr) => {
+            let snapshot_path = xcodex_wizard_snapshot_path();
+            insta::with_settings!({ snapshot_path => snapshot_path }, {
+                assert_snapshot!($name, $value);
+            });
+        };
+    }
 
     fn render_snapshot(screen: &XcodexFirstRunWizardScreen) -> String {
         let width: u16 = 80;
@@ -1584,7 +1634,7 @@ mod tests {
             Path::new("XC_HOME_DOES_NOT_EXIST"),
             false,
         );
-        assert_snapshot!("xcodex_first_run_wizard_choose", render_snapshot(&screen));
+        assert_xcodex_wizard_snapshot!("xcodex_first_run_wizard_choose", render_snapshot(&screen));
     }
 
     #[test]
@@ -1596,7 +1646,7 @@ mod tests {
         );
         screen.step = Step::Review;
         screen.plan = Some(build_start_fresh_plan(Path::new("XC_HOME_DOES_NOT_EXIST")));
-        assert_snapshot!("xcodex_first_run_wizard_review", render_snapshot(&screen));
+        assert_xcodex_wizard_snapshot!("xcodex_first_run_wizard_review", render_snapshot(&screen));
     }
 
     #[test]
@@ -1619,7 +1669,7 @@ mod tests {
 
         let snapshot =
             render_snapshot(&screen).replace(screen.import_source_home.trim(), "CODEX_HOME");
-        assert_snapshot!("xcodex_first_run_wizard_import_selective", snapshot);
+        assert_xcodex_wizard_snapshot!("xcodex_first_run_wizard_import_selective", snapshot);
     }
 
     #[test]

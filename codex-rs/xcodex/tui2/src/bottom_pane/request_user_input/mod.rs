@@ -690,10 +690,8 @@ impl BottomPaneView for RequestUserInputOverlay {
                         self.commit_current_question();
                         self.go_next_or_submit();
                     }
-                    KeyCode::Tab => {
-                        if self.has_selected_options() {
-                            self.focus = Focus::Notes;
-                        }
+                    KeyCode::Tab if self.has_selected_options() => {
+                        self.focus = Focus::Notes;
                     }
                     KeyCode::Char(ch) => {
                         if let Some(option_idx) = self.option_index_for_digit(ch) {

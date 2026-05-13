@@ -18,6 +18,10 @@ impl ChatWidget {
         self.bottom_pane.record_pending_slash_command_history();
     }
 
+    pub(crate) fn dispatch_slash_command(&mut self, cmd: SlashCommand) {
+        self.dispatch_command(cmd);
+    }
+
     /// Dispatch an inline slash command and record its staged local-history entry.
     ///
     /// Inline command arguments may later be prepared through the normal submission pipeline, but
@@ -50,6 +54,48 @@ impl ChatWidget {
                 /*hint*/ None,
             );
             false
+        }
+    }
+
+    pub(super) fn handle_autocompact_command(&mut self, args: &str) {
+        let args: Vec<&str> = args.split_whitespace().collect();
+        let next = match args.as_slice() {
+            [] => Some(!self.auto_compact_enabled),
+            [arg] => match arg.to_ascii_lowercase().as_str() {
+                "on" | "enable" | "true" => Some(true),
+                "off" | "disable" | "false" => Some(false),
+                "toggle" => Some(!self.auto_compact_enabled),
+                "status" | "show" => None,
+                _ => {
+                    self.add_info_message(
+                        "Usage: /autocompact [on|off|toggle|status]".to_string(),
+                        None,
+                    );
+                    return;
+                }
+            },
+            _ => {
+                self.add_info_message(
+                    "Usage: /autocompact [on|off|toggle|status]".to_string(),
+                    None,
+                );
+                return;
+            }
+        };
+
+        if let Some(enabled) = next {
+            self.auto_compact_enabled = enabled;
+            let status = if enabled { "enabled" } else { "disabled" };
+            self.add_info_message(format!("Auto-compact {status}."), None);
+            self.app_event_tx
+                .send(AppEvent::CodexOp(Op::SetAutoCompact { enabled }));
+        } else {
+            let status = if self.auto_compact_enabled {
+                "enabled"
+            } else {
+                "disabled"
+            };
+            self.add_info_message(format!("Auto-compact is currently {status}."), None);
         }
     }
 
@@ -110,6 +156,12 @@ impl ChatWidget {
                 }
                 self.app_event_tx.compact();
             }
+            SlashCommand::Autocompact => {
+                self.handle_autocompact_command("");
+            }
+            SlashCommand::Help => {
+                xcodex_plugins::try_handle_slash_command(self, "help", "");
+            }
             SlashCommand::Review => {
                 self.open_review_popup();
             }
@@ -140,16 +192,13 @@ impl ChatWidget {
                 }
             }
             SlashCommand::Settings => {
-                if !self.realtime_audio_device_selection_enabled() {
-                    return;
-                }
-                self.open_realtime_audio_popup();
+                self.open_status_menu_view(crate::bottom_pane::StatusMenuTab::Settings);
             }
             SlashCommand::Personality => {
                 self.open_personality_popup();
             }
             SlashCommand::Plan => {
-                self.apply_plan_slash_command();
+                xcodex_plugins::plan::handle_plan_command(self, "");
             }
             SlashCommand::Collab => {
                 if !self.collaboration_modes_enabled() {
@@ -270,19 +319,10 @@ impl ChatWidget {
                 self.open_skills_menu();
             }
             SlashCommand::Status => {
-                if self.should_prefetch_rate_limits() {
-                    let request_id = self.next_status_refresh_request_id;
-                    self.next_status_refresh_request_id =
-                        self.next_status_refresh_request_id.wrapping_add(1);
-                    self.add_status_output(/*refreshing_rate_limits*/ true, Some(request_id));
-                    self.app_event_tx.send(AppEvent::RefreshRateLimits {
-                        origin: RateLimitRefreshOrigin::StatusCommand { request_id },
-                    });
-                } else {
-                    self.add_status_output(
-                        /*refreshing_rate_limits*/ false, /*request_id*/ None,
-                    );
-                }
+                self.open_status_menu_view(crate::bottom_pane::StatusMenuTab::Status);
+            }
+            SlashCommand::StatusMenu => {
+                self.open_status_menu_view(crate::bottom_pane::StatusMenuTab::Status);
             }
             SlashCommand::DebugConfig => {
                 self.add_debug_config_output();
@@ -294,12 +334,27 @@ impl ChatWidget {
                 self.open_status_line_setup();
             }
             SlashCommand::Theme => {
-                self.open_theme_picker();
+                xcodex_plugins::handle_theme_command(self, "");
+            }
+            SlashCommand::Worktree => {
+                xcodex_plugins::worktree::handle_root_command(self);
+            }
+            SlashCommand::Exclusions => {
+                xcodex_plugins::exclusions::handle_exclusions_command(self, "");
+            }
+            SlashCommand::Hooks => {
+                xcodex_plugins::hooks::add_hooks_output(self);
             }
             SlashCommand::Ps => {
                 self.add_ps_output();
             }
+            SlashCommand::PsKill => {
+                self.open_kill_popup();
+            }
             SlashCommand::Stop => {
+                self.clean_background_terminals();
+            }
+            SlashCommand::Clean => {
                 self.clean_background_terminals();
             }
             SlashCommand::MemoryDrop => {
@@ -427,6 +482,12 @@ impl ChatWidget {
                     }
                 }
             }
+            SlashCommand::Settings if !trimmed.is_empty() => {
+                xcodex_plugins::settings::handle_settings_command(self, trimmed);
+            }
+            SlashCommand::Autocompact => {
+                self.handle_autocompact_command(trimmed);
+            }
             SlashCommand::Rename if !trimmed.is_empty() => {
                 self.session_telemetry
                     .counter("codex.thread.rename", /*inc*/ 1, &[]);
@@ -444,35 +505,11 @@ impl ChatWidget {
                 self.app_event_tx.set_thread_name(name);
                 self.bottom_pane.drain_pending_submission_state();
             }
-            SlashCommand::Plan if !trimmed.is_empty() => {
-                if !self.apply_plan_slash_command() {
-                    return;
-                }
-                let Some((prepared_args, prepared_elements)) = self
-                    .bottom_pane
-                    .prepare_inline_args_submission(/*record_history*/ false)
-                else {
-                    return;
-                };
-                let local_images = self
-                    .bottom_pane
-                    .take_recent_submission_images_with_placeholders();
-                let remote_image_urls = self.take_remote_image_urls();
-                let user_message = UserMessage {
-                    text: prepared_args,
-                    local_images,
-                    remote_image_urls,
-                    text_elements: prepared_elements,
-                    mention_bindings: self.bottom_pane.take_recent_submission_mention_bindings(),
-                };
-                if self.is_session_configured() {
-                    self.reasoning_buffer.clear();
-                    self.full_reasoning_buffer.clear();
-                    self.set_status_header(String::from("Working"));
-                    self.submit_user_message(user_message);
-                } else {
-                    self.queue_user_message(user_message);
-                }
+            SlashCommand::Plan => {
+                xcodex_plugins::plan::handle_plan_command(self, trimmed);
+            }
+            SlashCommand::Theme => {
+                xcodex_plugins::handle_theme_command(self, trimmed);
             }
             SlashCommand::Review if !trimmed.is_empty() => {
                 let Some((prepared_args, _prepared_elements)) = self

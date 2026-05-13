@@ -3,15 +3,19 @@ use super::command_popup::CommandPopup;
 use super::command_popup::CommandPopupFlags;
 use super::command_popup::DEFAULT_SLASH_POPUP_ROWS;
 use super::slash_subcommands::subcommand_list_hint;
+use crate::custom_prompts::CustomPrompt;
 use crate::slash_command::SlashCommand;
-use codex_protocol::custom_prompts::CustomPrompt;
 use pretty_assertions::assert_eq;
 
 fn popup_flags() -> CommandPopupFlags {
     CommandPopupFlags {
         collaboration_modes_enabled: false,
         connectors_enabled: false,
+        plugins_command_enabled: false,
+        fast_command_enabled: false,
         personality_command_enabled: true,
+        realtime_conversation_enabled: false,
+        audio_device_selection_enabled: false,
         windows_degraded_sandbox_active: false,
     }
 }
@@ -39,6 +43,24 @@ fn filter_includes_thoughts_plugin_command() {
 }
 
 #[test]
+fn filter_includes_xtreme_plugin_command() {
+    let mut popup = popup_with_prompts(Vec::new());
+    popup.on_composer_text_change("/xtr".to_string());
+
+    let matches = popup.filtered_items();
+    let has_xtreme = matches.iter().any(|item| match item {
+        CommandItem::BuiltinText { name, .. } => *name == "xtreme",
+        CommandItem::Builtin(_) => false,
+        CommandItem::ArgValue { .. } => false,
+        CommandItem::UserPrompt(_) => false,
+    });
+    assert!(
+        has_xtreme,
+        "expected '/xtreme' to appear among filtered commands"
+    );
+}
+
+#[test]
 fn prompt_is_suggested_when_filter_matches_prompt_name() {
     let mut popup = popup_with_prompts(vec![CustomPrompt {
         name: "my-prompt".to_string(),
@@ -46,6 +68,7 @@ fn prompt_is_suggested_when_filter_matches_prompt_name() {
         content: "hello from prompt".to_string(),
         description: None,
         argument_hint: None,
+        text_elements: Vec::new(),
     }]);
     popup.on_composer_text_change("/my".to_string());
     let items = popup.filtered_items();
@@ -101,6 +124,29 @@ fn settings_subcommands_are_suggested_under_settings() {
     assert!(
         subcommands.contains(&"settings status-bar") && subcommands.contains(&"settings worktrees"),
         "expected /settings to suggest subcommands, got {subcommands:?}"
+    );
+}
+
+#[test]
+fn settings_command_is_suggested_by_prefix() {
+    let mut popup = popup_with_prompts(Vec::new());
+    popup.on_composer_text_change("/s".to_string());
+
+    let commands: Vec<&str> = popup
+        .filtered_items()
+        .into_iter()
+        .filter_map(|item| match item {
+            CommandItem::Builtin(cmd) => Some(cmd.command()),
+            _ => None,
+        })
+        .collect();
+
+    assert!(
+        commands.contains(&"settings")
+            && commands.contains(&"status")
+            && commands.contains(&"skills")
+            && commands.contains(&"stop"),
+        "expected /s to suggest all visible s-prefixed commands, got {commands:?}"
     );
 }
 
@@ -285,6 +331,7 @@ fn subcommand_context_hides_other_root_suggestions() {
         content: "hello".to_string(),
         description: None,
         argument_hint: None,
+        text_elements: Vec::new(),
     }];
 
     let mut popup = popup_with_prompts(prompts);

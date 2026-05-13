@@ -93,6 +93,7 @@ async fn hooks_agent_turn_complete_invoked() -> Result<()> {
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
+            responsesapi_client_metadata: None,
         })
         .await?;
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
@@ -154,6 +155,7 @@ async fn hooks_approval_requested_invoked_for_exec() -> Result<()> {
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
+            responsesapi_client_metadata: None,
         })
         .await?;
 
@@ -229,6 +231,7 @@ async fn hooks_approval_resolved_invoked_for_exec_approved() -> Result<()> {
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
+            responsesapi_client_metadata: None,
         })
         .await?;
 
@@ -308,6 +311,7 @@ async fn hooks_approval_resolved_invoked_for_exec_declined() -> Result<()> {
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
+            responsesapi_client_metadata: None,
         })
         .await?;
 
@@ -401,6 +405,7 @@ async fn hooks_model_request_started_invoked() -> Result<()> {
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
+            responsesapi_client_metadata: None,
         })
         .await?;
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
@@ -448,6 +453,7 @@ async fn hooks_model_response_completed_invoked() -> Result<()> {
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
+            responsesapi_client_metadata: None,
         })
         .await?;
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
@@ -522,6 +528,7 @@ async fn hooks_tool_call_started_and_finished_invoked() -> Result<()> {
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
+            responsesapi_client_metadata: None,
         })
         .await?;
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
@@ -635,6 +642,7 @@ async fn hooks_tool_call_finished_emits_hook_process_events() -> Result<()> {
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
+            responsesapi_client_metadata: None,
         })
         .await?;
 

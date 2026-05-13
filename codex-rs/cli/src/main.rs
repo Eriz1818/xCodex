@@ -59,10 +59,11 @@ use codex_core::config::edit::ConfigEditsBuilder;
 use codex_core::config::find_codex_home;
 use codex_core::config::load_config_as_toml_with_cli_overrides;
 use codex_core::config::should_run_xcodex_first_run_wizard;
-use codex_core::features::Feature;
-use codex_core::features::FeatureOverrides;
-use codex_core::features::Features;
 use codex_features::FEATURES;
+use codex_features::Feature;
+use codex_features::FeatureConfigSource;
+use codex_features::FeatureOverrides;
+use codex_features::Features;
 use codex_features::Stage;
 use codex_features::is_known_feature_key;
 use codex_protocol::protocol::AskForApproval;
@@ -749,7 +750,7 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
                         codex_home.display()
                     );
                 }
-                codex_exec::run_main(exec_cli, codex_linux_sandbox_exe).await?;
+                codex_exec::run_main(exec_cli, arg0_paths.clone()).await?;
                 return Ok(());
             }
 
@@ -1571,10 +1572,27 @@ async fn is_tui2_enabled(cli: &TuiCli) -> std::io::Result<bool> {
         None => AbsolutePathBuf::current_dir()?,
     };
     let config_toml =
-        load_config_as_toml_with_cli_overrides(&codex_home, &config_cwd, cli_kv_overrides).await?;
+        load_config_as_toml_with_cli_overrides(&codex_home, Some(&config_cwd), cli_kv_overrides)
+            .await?;
     let config_profile = config_toml.get_config_profile(cli.config_profile.clone())?;
     let overrides = FeatureOverrides::default();
-    let features = Features::from_config(&config_toml, &config_profile, overrides);
+    let features = Features::from_sources(
+        FeatureConfigSource {
+            features: config_toml.features.as_ref(),
+            include_apply_patch_tool: None,
+            experimental_use_freeform_apply_patch: config_toml
+                .experimental_use_freeform_apply_patch,
+            experimental_use_unified_exec_tool: config_toml.experimental_use_unified_exec_tool,
+        },
+        FeatureConfigSource {
+            features: config_profile.features.as_ref(),
+            include_apply_patch_tool: config_profile.include_apply_patch_tool,
+            experimental_use_freeform_apply_patch: config_profile
+                .experimental_use_freeform_apply_patch,
+            experimental_use_unified_exec_tool: config_profile.experimental_use_unified_exec_tool,
+        },
+        overrides,
+    );
     Ok(features.enabled(Feature::Tui2))
 }
 

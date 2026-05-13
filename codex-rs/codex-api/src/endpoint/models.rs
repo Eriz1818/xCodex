@@ -218,7 +218,7 @@ mod tests {
         );
 
         let _ = client
-            .list_models("0.98.0", HeaderMap::new())
+            .list_models("0.130.0", HeaderMap::new())
             .await
             .expect("request should succeed");
 
@@ -230,7 +230,7 @@ mod tests {
             .and_then(|request| request.headers.get("version"))
             .and_then(|value| value.to_str().ok())
             .map(ToString::to_string);
-        assert_eq!(version_header, Some("0.98.0".to_string()));
+        assert_eq!(version_header, Some("0.130.0".to_string()));
     }
 
     #[tokio::test]

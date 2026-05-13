@@ -1,5 +1,6 @@
 ---
-source: tui/src/chatwidget/tests.rs
+source: tui/src/chatwidget/tests/history_replay.rs
+assertion_line: 916
 expression: header
 ---
-› Ask Codex to do anything
+› Ask xcodex to do anything

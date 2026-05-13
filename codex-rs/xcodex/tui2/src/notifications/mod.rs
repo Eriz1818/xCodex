@@ -4,7 +4,7 @@ mod windows_toast;
 use std::env;
 use std::io;
 
-use codex_core::env::is_wsl;
+use codex_utils_path::is_wsl;
 use osc9::Osc9Backend;
 use windows_toast::WindowsToastBackend;
 

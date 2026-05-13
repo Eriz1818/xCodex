@@ -3004,6 +3004,27 @@ mod tests {
         );
     }
 
+    fn has_split_syntax_content(lines: &[RtLine<'static>], token: &str) -> bool {
+        lines.iter().any(|line| {
+            let content = line
+                .spans
+                .iter()
+                .map(|span| span.content.as_ref())
+                .collect::<String>();
+            if !content.contains(token) {
+                return false;
+            }
+
+            let content_spans = line
+                .spans
+                .iter()
+                .skip(2)
+                .filter(|span| !span.content.is_empty())
+                .count();
+            content_spans > 1
+        })
+    }
+
     #[test]
     fn add_diff_uses_path_extension_for_highlighting() {
         let mut changes: HashMap<PathBuf, FileChange> = HashMap::new();
@@ -3021,14 +3042,9 @@ mod tests {
             false,
             false,
         );
-        let has_rgb = lines.iter().any(|line| {
-            line.spans
-                .iter()
-                .any(|s| matches!(s.style.fg, Some(ratatui::style::Color::Rgb(..))))
-        });
         assert!(
-            has_rgb,
-            "add diff for .rs file should produce syntax-highlighted (RGB) spans"
+            has_split_syntax_content(&lines, "pub fn"),
+            "add diff for .rs file should produce split syntax-highlighted spans"
         );
     }
 
@@ -3049,14 +3065,9 @@ mod tests {
             false,
             false,
         );
-        let has_rgb = lines.iter().any(|line| {
-            line.spans
-                .iter()
-                .any(|s| matches!(s.style.fg, Some(ratatui::style::Color::Rgb(..))))
-        });
         assert!(
-            has_rgb,
-            "delete diff for .py file should produce syntax-highlighted (RGB) spans"
+            has_split_syntax_content(&lines, "def scale"),
+            "delete diff for .py file should produce split syntax-highlighted spans"
         );
     }
 
@@ -3280,14 +3291,9 @@ mod tests {
             false,
             false,
         );
-        let has_rgb = lines.iter().any(|line| {
-            line.spans
-                .iter()
-                .any(|s| matches!(s.style.fg, Some(ratatui::style::Color::Rgb(..))))
-        });
         assert!(
-            has_rgb,
-            "rename from .xyzzy to .rs should produce syntax-highlighted (RGB) spans"
+            has_split_syntax_content(&lines, "println"),
+            "rename from .xyzzy to .rs should produce split syntax-highlighted spans"
         );
     }
 

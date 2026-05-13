@@ -5174,9 +5174,11 @@ mod tests {
             total_tokens: 10,
         });
 
-        let info =
-            TokenUsageInfo::new_or_append(&initial, &last, /*model_context_window*/ None)
-                .expect("new_or_append should return info");
+        let info = TokenUsageInfo::new_or_append(
+            &initial, &last, /*model_context_window*/ None,
+            /*full_model_context_window*/ None,
+        )
+        .expect("new_or_append should return info");
 
         assert_eq!(info.model_context_window, Some(258_400));
     }

@@ -23,7 +23,7 @@ When filing issues, include repro steps and attach the files printed by `/feedba
 - **Context Control**: Keep context under control with `/compact` and `/autocompact` (see the [Context control guide](docs/xcodex/compact.md)).
 - **Agent Thoughts**: Hide/show agent thoughts in the TUI with `/thoughts` (see the [Thoughts guide](docs/xcodex/thoughts.md)).
 - **Git Worktrees**: Switch a session between git worktrees with `/worktree` and manage shared dirs (see the [Worktrees guide](docs/xcodex/worktrees.md)).
-- **⚡Tools**: Open ⚡Tools with `Ctrl+O` (or `/xtreme`) and customize the status bar with `/settings` (see the [Settings guide](docs/xcodex/settings.md)).
+- **⚡Tools**: Open ⚡Tools with `Ctrl+Alt+O` (or `/xtreme`) and customize the status bar with `/settings` (see the [Settings guide](docs/xcodex/settings.md)). `Ctrl+O` copies the last agent response as Markdown.
 - **UI Theme**: Customize the UI theme with `/theme` and `$CODEX_HOME/themes` (including themed syntax highlighting for code) (see the [Theme guide](docs/xcodex/themes.md) and [theme config reference](docs/config.md#themes)).
 - **Transcript Rendering**: Toggle transcript rendering features like diff highlighting, highlighting past prompts, and syntax highlighting for fenced code blocks (see the [Settings guide](docs/xcodex/settings.md)).
 - **Hooks**: Automate xcodex with **three levels of hooks**: external (spawn), Python Host “py-box” (persistent), and in-proc PyO3 (advanced) (start with the [Hooks guide](docs/xcodex/hooks.md)).

@@ -4,6 +4,8 @@ use codex_api::TextControls;
 use codex_api::create_text_param_for_request;
 use codex_protocol::config_types::ServiceTier;
 use codex_protocol::models::FunctionCallOutputPayload;
+use codex_tools::FreeformTool;
+use codex_tools::FreeformToolFormat;
 use pretty_assertions::assert_eq;
 
 use super::*;
@@ -208,10 +210,10 @@ fn estimate_token_count_includes_tool_specs() {
     let prompt_without = Prompt::default();
 
     let prompt_with = Prompt {
-        tools: vec![ToolSpec::Freeform(tools::FreeformTool {
+        tools: vec![ToolSpec::Freeform(FreeformTool {
             name: "example_tool".to_string(),
             description: "Example tool with a large definition".to_string(),
-            format: tools::FreeformToolFormat {
+            format: FreeformToolFormat {
                 r#type: "grammar".to_string(),
                 syntax: "lark".to_string(),
                 definition: "x".repeat(4096),

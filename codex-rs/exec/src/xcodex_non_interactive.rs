@@ -14,6 +14,8 @@ pub(crate) fn xcodex_auto_op_for_event(event: &EventMsg) -> Option<Op> {
             server_name: ev.server_name.clone(),
             request_id: ev.id.clone(),
             decision: ElicitationAction::Cancel,
+            content: None,
+            meta: None,
         }),
         EventMsg::ExecApprovalRequest(ev) => Some(Op::ExecApproval {
             id: ev.call_id.clone(),
@@ -74,7 +76,11 @@ mod tests {
             "type": "elicitation_request",
             "server_name": "mcp-test",
             "id": "req-1",
-            "message": "Need approval?",
+            "request": {
+                "mode": "form",
+                "message": "Need approval?",
+                "requested_schema": {},
+            },
         }))
         .expect("event should deserialize");
         let op = xcodex_auto_op_for_event(&event).expect("op should be generated");

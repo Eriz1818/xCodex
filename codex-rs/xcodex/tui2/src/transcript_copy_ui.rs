@@ -25,8 +25,8 @@
 //! Clipboard text reconstruction (preserving indentation, joining soft-wrapped
 //! prose, and emitting Markdown source markers) lives in `transcript_copy`.
 
-use codex_core::terminal::TerminalName;
-use codex_core::terminal::terminal_info;
+use codex_terminal_detection::TerminalName;
+use codex_terminal_detection::terminal_info;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyModifiers;
 use ratatui::buffer::Buffer;

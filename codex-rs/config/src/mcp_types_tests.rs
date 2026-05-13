@@ -269,6 +269,7 @@ fn deserialize_ignores_unknown_server_fields() {
             required: false,
             disabled_reason: None,
             startup_timeout_sec: None,
+            startup_mode: None,
             tool_timeout_sec: None,
             enabled_tools: None,
             disabled_tools: None,

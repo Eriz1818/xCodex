@@ -18,8 +18,8 @@
 //! See `codex-rs/xcodex/tui2/docs/scroll_input_model.md` for the data-derived constants and analysis.
 
 use codex_core::config::types::ScrollInputMode;
-use codex_core::terminal::TerminalInfo;
-use codex_core::terminal::TerminalName;
+use codex_terminal_detection::TerminalInfo;
+use codex_terminal_detection::TerminalName;
 use std::time::Duration;
 use std::time::Instant;
 

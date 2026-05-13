@@ -1,11 +1,15 @@
 ---
 source: tui/src/chatwidget/tests/mcp_startup.rs
+assertion_line: 145
 expression: normalize_snapshot_paths(term.backend().vt100().screen().contents())
 ---
+
+
 ⚠ MCP client for `alpha` failed to start: handshake failed
-⚠ MCP startup incomplete (failed: alpha)
+⚠ MCP startup incomplete (failed: alpha). Press `r` or run `/mcp retry failed`
+  to retry. Run `/mcp` for details.
 
 
-› Ask Codex to do anything
+› Ask xcodex to do anything
 
-  gpt-5.3-codex default · /tmp/project
+  ? for shortcuts · gpt-5.3-codex                                                                    100% context left

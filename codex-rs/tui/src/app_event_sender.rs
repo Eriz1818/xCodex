@@ -29,8 +29,13 @@ impl AppEventSender {
     pub(crate) fn send(&self, event: AppEvent) {
         // Record inbound events for high-fidelity session replay.
         // Avoid double-logging Ops; those are logged at the point of submission.
-        if !matches!(event, AppEvent::CodexOp(_)) {
-            session_log::log_inbound_app_event(&event);
+        match &event {
+            AppEvent::CodexOp(op) => {
+                tracing::info!(codex_op = op.kind(), "app-event sender queueing codex op");
+            }
+            _ => {
+                session_log::log_inbound_app_event(&event);
+            }
         }
         if let Err(e) = self.app_event_tx.send(event) {
             tracing::error!("failed to send event: {e}");

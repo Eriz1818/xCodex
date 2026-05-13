@@ -42,7 +42,7 @@ use super::rate_limits::format_status_limit_summary;
 use super::rate_limits::render_status_limit_progress_bar;
 use crate::wrapping::RtOptions;
 use crate::wrapping::word_wrap_lines;
-use codex_core::AuthManager;
+use codex_login::AuthManager;
 use unicode_width::UnicodeWidthStr;
 
 #[derive(Debug, Clone)]
@@ -500,7 +500,7 @@ impl StatusHistoryCell {
             ui_frontend: "tui2".to_string(),
             model_name,
             model_details,
-            directory: config.cwd.clone(),
+            directory: config.cwd.to_path_buf(),
             codex_home: config.codex_home.clone(),
             approval_policy,
             sandbox_policy,

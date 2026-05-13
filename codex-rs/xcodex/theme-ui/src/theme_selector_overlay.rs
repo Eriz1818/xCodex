@@ -581,10 +581,16 @@ impl ThemeSelectorOverlay {
             initial_messages: None,
             network_proxy: None,
             rollout_path: Some(PathBuf::from("/tmp/theme-preview.jsonl")),
+            approvals_reviewer: codex_protocol::config_types::ApprovalsReviewer::User,
+            service_tier: None,
         };
 
         let mut preview_config = self.config.clone();
-        preview_config.cwd = PathBuf::from("~/Dev/Pyfun/skynet/xcodex");
+        if let Ok(cwd) = codex_utils_absolute_path::AbsolutePathBuf::try_from(
+            PathBuf::from("/tmp/theme-preview/xcodex").as_path(),
+        ) {
+            preview_config.cwd = cwd;
+        }
 
         let mut session_help_lines: Vec<Line<'static>> = vec![
             "  To get started, describe a task or try one of these commands:"
@@ -744,6 +750,7 @@ impl ThemeSelectorOverlay {
                     "cargo test -p codex-tui".to_string(),
                 ],
                 codex_core::protocol::ReviewDecision::Approved,
+                crate::history_cell::ApprovalDecisionActor::User,
             );
             lines.extend(approval_decision.display_lines(area.width));
             lines.push(Line::from(""));
@@ -849,7 +856,7 @@ impl ThemeSelectorOverlay {
 
         let thought = crate::history_cell::new_reasoning_summary_block(
             "**Popcorn-powered planning**\n\nI’ll render this `preview` with real cells so the theme does the styling.\nIf it looks odd, I blame the popcorn, not the `palette`.".to_string(),
-            false,
+            preview_config.cwd.as_path(),
         );
         lines.extend(thought.display_lines(area.width));
 
@@ -858,6 +865,8 @@ impl ThemeSelectorOverlay {
         // (4) Approval required (render the real approval overlay into transcript).
         let approval = crate::bottom_pane::ApprovalOverlay::new(
             crate::bottom_pane::ApprovalRequest::Exec {
+                thread_id: codex_protocol::ThreadId::new(),
+                thread_label: None,
                 id: "preview-install".to_string(),
                 command: vec![
                     "bash".to_string(),
@@ -866,10 +875,12 @@ impl ThemeSelectorOverlay {
                         .to_string(),
                 ],
                 reason: None,
-                proposed_execpolicy_amendment: None,
+                available_decisions: Vec::new(),
+                network_approval_context: None,
+                additional_permissions: None,
             },
             self.app_event_tx.clone(),
-            codex_core::features::Features::with_defaults(),
+            codex_features::Features::with_defaults(),
         );
         let width = area.width.max(1);
         let height = approval.desired_height(width);
@@ -923,6 +934,7 @@ impl ThemeSelectorOverlay {
                     There’s exactly one “typing area” cameo at the bottom—no duplicate keyboard gremlins rehearsing `mid-transcript`.\n\
                     Everything above it is just the story: one prompt, one `brainwave`, one button-press, and one smug little summary.",
                     None,
+                    Some(preview_config.cwd.as_path()),
                     &mut rendered,
                 );
                 rendered
@@ -948,9 +960,14 @@ impl ThemeSelectorOverlay {
             bottom_pane.set_slash_popup_max_rows(3);
             bottom_pane.insert_str("/mo");
             bottom_pane.ensure_status_indicator();
-            bottom_pane.update_status("Working".to_string(), Some("Theme preview".to_string()));
+            bottom_pane.update_status(
+                "Working".to_string(),
+                Some("Theme preview".to_string()),
+                crate::status_indicator_widget::StatusDetailsCapitalization::Preserve,
+                1,
+            );
             bottom_pane.set_context_window(Some(100), Some(0));
-            bottom_pane.set_status_bar_git_options(true, true);
+            bottom_pane.set_footer_status_options(false, true, true);
             bottom_pane.set_status_bar_git_context(
                 Some("feat/skynet-themes".to_string()),
                 Some("~/Dev/Pyfun/skynet/xcodex".to_string()),
@@ -977,9 +994,14 @@ impl ThemeSelectorOverlay {
             });
             footer_pane.set_slash_popup_max_rows(3);
             footer_pane.ensure_status_indicator();
-            footer_pane.update_status("Working".to_string(), Some("Theme preview".to_string()));
+            footer_pane.update_status(
+                "Working".to_string(),
+                Some("Theme preview".to_string()),
+                crate::status_indicator_widget::StatusDetailsCapitalization::Preserve,
+                1,
+            );
             footer_pane.set_context_window(Some(100), Some(0));
-            footer_pane.set_status_bar_git_options(true, true);
+            footer_pane.set_footer_status_options(false, true, true);
             footer_pane.set_status_bar_git_context(
                 Some("feat/themes".to_string()),
                 Some("~/Dev/Pyfun/skynet/xcodex".to_string()),
@@ -1783,7 +1805,7 @@ mod theme_preview_tests {
         let (tx_raw, _rx) = unbounded_channel();
         let mut overlay = ThemeSelectorOverlay::new(
             AppEventSender::new(tx_raw),
-            config.clone(),
+            config,
             None,
         );
         overlay.frame_requester = Some(crate::tui::FrameRequester::test_dummy());

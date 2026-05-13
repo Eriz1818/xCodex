@@ -1,23 +1,24 @@
 ---
 source: tui/src/bottom_pane/status_menu_view.rs
-expression: "render_lines(&view, 60)"
+assertion_line: 1131
+expression: rendered
 ---
-                                                            
-  [ Status ]  [ Settings ]  [ ⚡ Tools ]  (bottom-pane)      
-                                                            
-  Settings                                                  
-  Toggles apply immediately and persist.                    
-                                                            
-    [x] Status bar: git branch                              
-  › [x] Status bar: worktree path                           
-    [ ] Footer: model name                                 
-    [x] Transcript: syntax highlight                        
-    [ ] Transcript: diff highlight                          
-    [x] Transcript: side-by-side diff                       
-    [ ] Transcript: highlight past prompts                  
-    [ ] Composer: minimal borders                           
-    Worktrees…                                              
-                                                            
-  Tip: Tab to ⚡ Tools.                                      
-                                                            
+
+  [ Status ]  [ Settings ]  [ ⚡ Tools ]  (bottom-pane)
+
+  Settings
+  Toggles apply immediately and persist.
+
+    [x] Status bar: git branch
+  › [x] Status bar: worktree path
+    [ ] Footer: model name
+    [x] Transcript: syntax highlight
+    [ ] Transcript: diff highlight
+    [x] Transcript: side-by-side diff
+    [ ] Transcript: highlight past prompts
+    [ ] Composer: minimal borders
+    Worktrees…
+
+  Tip: Tab to ⚡ Tools.
+
   Tab: switch tab  ↑/↓: select/scroll  Enter: toggle/run  Es

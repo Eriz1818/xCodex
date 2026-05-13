@@ -1,20 +1,21 @@
 ---
 source: tui/src/status/tests.rs
+assertion_line: 984
 expression: sanitized
 ---
 /status
 
 ╭──────────────────────────────────────────────────────────────────────────────╮
-│  ⚡xtreme-Codex (v0.4.0)                                                      │
+│  ⚡xtreme-Codex (v0.4.0)                                                     │
 │                                                                              │
 │ Visit https://chatgpt.com/codex/settings/usage for up-to-date                │
 │ information on rate limits and credits                                       │
 │                                                                              │
 │  UI:               tui                                                       │
-│  Power:            ⚡⚡⚡                                                       │
+│  Power:            ⚡⚡⚡                                                    │
 │  Model:            gpt-5.1-codex-max (reasoning none, summaries auto)        │
 │  Directory: [[workspace]]                                                    │
-│  CODEX_HOME: [[codex_home]]                                                  │
+│  CODEX_HOME: [[codex_home]]                                                    │
 │  Approval:         on-request                                                │
 │  Sandbox:          read-only                                                 │
 │  Agents.md:        <none>                                                    │

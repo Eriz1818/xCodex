@@ -3,6 +3,8 @@ use crate::auth::add_auth_headers_to_header_map;
 use crate::common::ResponseEvent;
 use crate::common::ResponseStream;
 use crate::common::ResponsesWsRequest;
+use crate::endpoint::client_version::append_upstream_client_version_to_url_for_openai_or_chatgpt;
+use crate::endpoint::client_version::set_upstream_version_header_map_for_openai_or_chatgpt;
 use crate::error::ApiError;
 use crate::provider::Provider;
 use crate::rate_limits::parse_rate_limit_event;
@@ -303,13 +305,21 @@ impl<A: AuthProvider> ResponsesWebsocketClient<A> {
         turn_state: Option<Arc<OnceLock<String>>>,
         telemetry: Option<Arc<dyn WebsocketTelemetry>>,
     ) -> Result<ResponsesWebsocketConnection, ApiError> {
-        let ws_url = self
+        let mut ws_url = self
             .provider
             .websocket_url_for_path("responses")
             .map_err(|err| ApiError::Stream(format!("failed to build websocket URL: {err}")))?;
+        append_upstream_client_version_to_url_for_openai_or_chatgpt(
+            &mut ws_url,
+            &self.provider.base_url,
+        );
 
         let mut headers =
             merge_request_headers(&self.provider.headers, extra_headers, default_headers);
+        set_upstream_version_header_map_for_openai_or_chatgpt(
+            &mut headers,
+            &self.provider.base_url,
+        );
         add_auth_headers_to_header_map(&self.auth, &mut headers);
 
         let (stream, server_reasoning_included, models_etag, server_model) =

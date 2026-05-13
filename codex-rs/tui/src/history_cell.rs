@@ -44,14 +44,14 @@ use crate::version::CODEX_CLI_VERSION;
 use crate::wrapping::RtOptions;
 use crate::wrapping::adaptive_wrap_line;
 use crate::wrapping::adaptive_wrap_lines;
+use crate::wrapping::word_wrap_line;
+use crate::wrapping::word_wrap_lines;
 use base64::Engine;
 use codex_app_server_protocol::McpServerStatus;
 use codex_app_server_protocol::McpServerStatusDetail;
 use codex_config::types::McpServerTransportConfig;
-use codex_core::config::Config;
 use codex_core::protocol::McpServerSnapshotState;
 use codex_core::protocol::McpStartupStatus;
-use codex_core::web_search::web_search_detail;
 #[cfg(test)]
 use codex_mcp::qualified_mcp_tool_name_prefix;
 use codex_otel::RuntimeMetricsSummary;
@@ -966,7 +966,7 @@ pub fn new_approval_decision_cell(
                 vec![
                     actor.subject().into(),
                     "persisted".bold(),
-                    " Codex network access to ".into(),
+                    format!(" {agent_name} network access to ").into(),
                     Span::from(network_policy_amendment.host).dim(),
                 ],
             ),
@@ -975,7 +975,7 @@ pub fn new_approval_decision_cell(
                 vec![
                     actor.subject().into(),
                     "denied".bold(),
-                    " codex network access to ".into(),
+                    format!(" {agent_name} network access to ").into(),
                     Span::from(network_policy_amendment.host).dim(),
                     " and saved that rule".into(),
                 ],
@@ -987,13 +987,13 @@ pub fn new_approval_decision_cell(
                 ApprovalDecisionActor::User => vec![
                     actor.subject().into(),
                     "did not approve".bold(),
-                    " codex to run ".into(),
+                    format!(" {agent_name} to run ").into(),
                     snippet,
                 ],
                 ApprovalDecisionActor::Guardian => vec![
                     "Request ".into(),
                     "denied".bold(),
-                    " for codex to run ".into(),
+                    format!(" for {agent_name} to run ").into(),
                     snippet,
                 ],
             };
@@ -1051,7 +1051,7 @@ pub fn new_guardian_denied_patch_request(files: Vec<String>) -> Box<dyn HistoryC
     let mut summary = vec![
         "Request ".into(),
         "denied".bold(),
-        " for codex to apply ".into(),
+        " for xcodex to apply ".into(),
     ];
     if files.len() == 1 {
         summary.push("a patch touching ".into());
@@ -1478,7 +1478,7 @@ impl HistoryCell for SessionHeaderHistoryCell {
 
         let title_spans: Vec<Span<'static>> = vec![
             ">_ ".dim(),
-            "OpenAI Codex".bold(),
+            "xcodex".bold(),
             " ".dim(),
             Span::from(format!("(v{})", self.version)).dim(),
         ];
@@ -3304,6 +3304,38 @@ mod tests {
     }
 
     #[test]
+    fn user_prompt_highlight_flag_applies_highlight_style() {
+        struct ThemeReset;
+
+        impl Drop for ThemeReset {
+            fn drop(&mut self) {
+                crate::theme::preview_definition(
+                    &codex_core::themes::ThemeCatalog::built_in_default(),
+                );
+            }
+        }
+
+        let _guard = crate::theme::test_style_guard();
+        let _reset = ThemeReset;
+        let mut theme = codex_core::themes::ThemeCatalog::built_in_default();
+        theme.roles.composer_bg = Some(codex_core::themes::ThemeColor::new("#003355"));
+        crate::theme::preview_definition(&theme);
+
+        let normal = new_user_prompt_preview("hello".to_string(), false).display_lines(80);
+        let highlighted = new_user_prompt_preview("hello".to_string(), true).display_lines(80);
+
+        assert_eq!(
+            normal[1].style,
+            crate::xcodex_plugins::history_cell::user_prompt_style(false)
+        );
+        assert_eq!(
+            highlighted[1].style,
+            crate::xcodex_plugins::history_cell::user_prompt_style(true)
+        );
+        assert_ne!(normal[1].style, highlighted[1].style);
+    }
+
+    #[test]
     fn user_history_cell_image_placeholder_uses_accent() {
         let message = "[Image #1]".to_string();
         let element = TextElement::new((0..message.len()).into(), None);
@@ -3666,6 +3698,8 @@ mod tests {
             enabled_tools: None,
             disabled_tools: None,
             scopes: None,
+            oauth_resource: None,
+            tools: HashMap::new(),
             startup_mode: None,
         };
         servers.insert("cache".to_string(), cache_config);
@@ -3781,6 +3815,7 @@ mod tests {
             HashMap::new(),
             HashMap::new(),
             &auth_statuses,
+            McpStartupRenderInfo::default(),
         );
         let rendered = render_lines(&cell.display_lines(/*width*/ 120)).join("\n");
 
@@ -4774,6 +4809,7 @@ mod tests {
     fn user_history_cell_renders_remote_image_urls() {
         let cell = UserHistoryCell {
             message: "describe these".to_string(),
+            highlight: false,
             text_elements: Vec::new(),
             local_image_paths: Vec::new(),
             remote_image_urls: vec!["https://example.com/example.png".to_string()],
@@ -4790,6 +4826,7 @@ mod tests {
     fn user_history_cell_summarizes_inline_data_urls() {
         let cell = UserHistoryCell {
             message: "describe inline image".to_string(),
+            highlight: false,
             text_elements: Vec::new(),
             local_image_paths: Vec::new(),
             remote_image_urls: vec!["data:image/png;base64,aGVsbG8=".to_string()],
@@ -4805,6 +4842,7 @@ mod tests {
     fn user_history_cell_numbers_multiple_remote_images() {
         let cell = UserHistoryCell {
             message: "describe both".to_string(),
+            highlight: false,
             text_elements: Vec::new(),
             local_image_paths: Vec::new(),
             remote_image_urls: vec![
@@ -4824,6 +4862,7 @@ mod tests {
     fn user_history_cell_height_matches_rendered_lines_with_remote_images() {
         let cell = UserHistoryCell {
             message: "line one\nline two".to_string(),
+            highlight: false,
             text_elements: Vec::new(),
             local_image_paths: Vec::new(),
             remote_image_urls: vec![
@@ -4846,6 +4885,7 @@ mod tests {
     fn user_history_cell_trims_trailing_blank_message_lines() {
         let cell = UserHistoryCell {
             message: "line one\n\n   \n\t \n".to_string(),
+            highlight: false,
             text_elements: Vec::new(),
             local_image_paths: Vec::new(),
             remote_image_urls: vec!["https://example.com/one.png".to_string()],
@@ -4866,6 +4906,7 @@ mod tests {
         let message = "tokenized\n\n\n".to_string();
         let cell = UserHistoryCell {
             message,
+            highlight: false,
             text_elements: vec![TextElement::new(
                 (0..8).into(),
                 Some("tokenized".to_string()),
@@ -4889,6 +4930,7 @@ mod tests {
         let url = "https://example.test/api/v1/projects/alpha-team/releases/2026-02-17/builds/1234567890/artifacts/reports/performance/summary/detail/with/a/very/long/path/that/keeps/going/for/testing/purposes-only-and-does/not/need/to/resolve/index.html?session_id=abc123def456ghi789jkl012mno345pqr678stu901vwx234yz";
         let cell: Box<dyn HistoryCell> = Box::new(UserHistoryCell {
             message: url.to_string(),
+            highlight: false,
             text_elements: Vec::new(),
             local_image_paths: Vec::new(),
             remote_image_urls: Vec::new(),

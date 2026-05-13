@@ -48,6 +48,11 @@ codex_rust_crate(
         "//:AGENTS.md",
     ],
     test_tags = ["no-sandbox"],
+    unit_test_env = {
+        # The guardian approval-review test exercises a deep async review path
+        # that passes under Cargo but can exceed Bazel's default test-thread stack.
+        "RUST_MIN_STACK": "16777216",
+    },
     unit_test_timeout = "long",
     extra_binaries = [
         "//codex-rs/linux-sandbox:codex-linux-sandbox",

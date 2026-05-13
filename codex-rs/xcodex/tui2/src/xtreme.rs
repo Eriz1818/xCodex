@@ -33,7 +33,7 @@ fn approval_score(approval: AskForApproval) -> u8 {
     match approval {
         AskForApproval::UnlessTrusted => 1,
         AskForApproval::OnRequest => 2,
-        AskForApproval::OnFailure | AskForApproval::Never => 3,
+        AskForApproval::OnFailure | AskForApproval::Never | AskForApproval::Granular(_) => 3,
     }
 }
 

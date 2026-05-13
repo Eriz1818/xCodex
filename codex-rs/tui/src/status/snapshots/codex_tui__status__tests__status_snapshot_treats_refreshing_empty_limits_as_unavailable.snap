@@ -1,21 +1,28 @@
 ---
 source: tui/src/status/tests.rs
+assertion_line: 1041
 expression: sanitized
 ---
 /status
 
-╭───────────────────────────────────────────────────────────────────────╮
-│  >_ OpenAI Codex (v0.0.0)                                             │
-│                                                                       │
-│ Visit https://chatgpt.com/codex/settings/usage for up-to-date         │
-│ information on rate limits and credits                                │
-│                                                                       │
-│  Model:            gpt-5.1-codex-max (reasoning none, summaries auto) │
-│  Directory: [[workspace]]                                             │
-│  Permissions:      Custom (read-only, on-request)                     │
-│  Agents.md:        <none>                                             │
-│                                                                       │
-│  Token usage:      750 total  (500 input + 250 output)                │
-│  Context window:   100% left (750 used / 272K)                        │
-│  Limits:           not available for this account                     │
-╰───────────────────────────────────────────────────────────────────────╯
+╭──────────────────────────────────────────────────────────────────────────────╮
+│  ⚡xtreme-Codex (v0.4.0)                                                     │
+│                                                                              │
+│ Visit https://chatgpt.com/codex/settings/usage for up-to-date                │
+│ information on rate limits and credits                                       │
+│                                                                              │
+│  UI:               tui                                                       │
+│  Power:            ⚡⚡⚡                                                    │
+│  Model:            gpt-5.1-codex-max (reasoning none, summaries auto)        │
+│  Directory: [[workspace]]                                                    │
+│  CODEX_HOME: [[codex_home]]                                                    │
+│  Approval:         on-request                                                │
+│  Sandbox:          read-only                                                 │
+│  Agents.md:        <none>                                                    │
+│  Auto-compact:     disabled                                                  │
+│  Thoughts:         hidden                                                    │
+│                                                                              │
+│  Token usage:      750 total  (500 input + 250 output)                       │
+│  Context window:   [████████████████████] 100% left (750 used / 272K, budget │
+│  Limits:           not available for this account                            │
+╰──────────────────────────────────────────────────────────────────────────────╯

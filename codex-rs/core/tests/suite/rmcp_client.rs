@@ -12,7 +12,6 @@ use std::time::UNIX_EPOCH;
 use codex_config::types::McpServerConfig;
 use codex_config::types::McpServerTransportConfig;
 use codex_core::config::types::UnattestedOutputPolicy;
-use codex_core::features::Feature;
 use codex_login::CodexAuth;
 use codex_models_manager::manager::RefreshStrategy;
 
@@ -289,6 +288,8 @@ async fn mcp_unattested_output_confirm_denied_blocks_output() -> anyhow::Result<
                     disabled_tools: None,
                     scopes: None,
                     startup_mode: None,
+                    oauth_resource: None,
+                    tools: HashMap::new(),
                 },
             );
             config
@@ -314,9 +315,11 @@ async fn mcp_unattested_output_confirm_denied_blocks_output() -> anyhow::Result<
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
             model: session_model,
             effort: None,
-            summary: ReasoningSummary::Auto,
+            summary: Some(ReasoningSummary::Auto),
             collaboration_mode: None,
             personality: None,
+            approvals_reviewer: None,
+            service_tier: None,
         })
         .await?;
 
@@ -417,6 +420,8 @@ async fn mcp_unattested_output_confirm_approved_passes_output() -> anyhow::Resul
                     disabled_tools: None,
                     scopes: None,
                     startup_mode: None,
+                    oauth_resource: None,
+                    tools: HashMap::new(),
                 },
             );
             config
@@ -442,9 +447,11 @@ async fn mcp_unattested_output_confirm_approved_passes_output() -> anyhow::Resul
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
             model: session_model,
             effort: None,
-            summary: ReasoningSummary::Auto,
+            summary: Some(ReasoningSummary::Auto),
             collaboration_mode: None,
             personality: None,
+            approvals_reviewer: None,
+            service_tier: None,
         })
         .await?;
 
@@ -482,7 +489,8 @@ async fn mcp_unattested_output_confirm_approved_passes_output() -> anyhow::Resul
         .function_call_output_content_and_success(call_id)
         .expect("function_call_output present for rmcp call");
     let output = content.expect("function_call_output content should be present");
-    let parsed: Value = serde_json::from_str(&output)?;
+    let wrapped_payload = split_wall_time_wrapped_output(&output);
+    let parsed: Value = serde_json::from_str(wrapped_payload)?;
     assert_eq!(parsed["echo"], json!("ECHOING: ping"));
     if let Some(success) = success {
         assert!(success, "approved MCP output should be successful");
@@ -524,7 +532,7 @@ async fn lazy_startup_starts_on_tool_call() -> anyhow::Result<()> {
 
     let fixture = test_codex()
         .with_config(move |config| {
-            config.mcp_servers_startup_mode = codex_core::config::types::McpStartupMode::Lazy;
+            config.mcp_servers_startup_mode = codex_config::types::McpStartupMode::Lazy;
             let mut servers = config.mcp_servers.get().clone();
             servers.insert(
                 server_name.to_string(),
@@ -545,6 +553,8 @@ async fn lazy_startup_starts_on_tool_call() -> anyhow::Result<()> {
                     disabled_tools: None,
                     startup_mode: None,
                     scopes: None,
+                    oauth_resource: None,
+                    tools: HashMap::new(),
                 },
             );
             config
@@ -569,9 +579,11 @@ async fn lazy_startup_starts_on_tool_call() -> anyhow::Result<()> {
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
             model: session_model,
             effort: None,
-            summary: ReasoningSummary::Auto,
+            summary: Some(ReasoningSummary::Auto),
             collaboration_mode: None,
             personality: None,
+            approvals_reviewer: None,
+            service_tier: None,
         })
         .await?;
 

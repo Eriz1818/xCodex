@@ -11,16 +11,12 @@ pub enum UpdateAction {
 
 const XCODEX_NPM_ARGS: [&str; 3] = ["install", "-g", "@Eriz1818/xcodex"];
 
-impl From<UpdateAction> for codex_tui::update_action::UpdateAction {
+impl From<UpdateAction> for codex_tui::UpdateAction {
     fn from(action: UpdateAction) -> Self {
         match action {
-            UpdateAction::NpmGlobalLatest => {
-                codex_tui::update_action::UpdateAction::NpmGlobalLatest
-            }
-            UpdateAction::BunGlobalLatest => {
-                codex_tui::update_action::UpdateAction::BunGlobalLatest
-            }
-            UpdateAction::BrewUpgrade => codex_tui::update_action::UpdateAction::BrewUpgrade,
+            UpdateAction::NpmGlobalLatest => codex_tui::UpdateAction::NpmGlobalLatest,
+            UpdateAction::BunGlobalLatest => codex_tui::UpdateAction::BunGlobalLatest,
+            UpdateAction::BrewUpgrade => codex_tui::UpdateAction::BrewUpgrade,
         }
     }
 }

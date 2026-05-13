@@ -116,6 +116,8 @@ use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::openai_models::ModelUpgrade;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::protocol::AskForApproval;
+use codex_protocol::protocol::Event;
+use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::FinalOutput;
 use codex_protocol::protocol::GetHistoryEntryResponseEvent;
 use codex_protocol::protocol::ListSkillsResponseEvent;
@@ -1020,6 +1022,7 @@ pub(crate) struct App {
     primary_session_configured: Option<ThreadSessionState>,
     pending_primary_events: VecDeque<ThreadBufferedEvent>,
     pending_app_server_requests: PendingAppServerRequests,
+    suppress_shutdown_complete: bool,
 }
 
 #[derive(Default)]
@@ -1812,6 +1815,8 @@ impl App {
                         .await
                         .unwrap_or_else(|| self.config.cwd.to_path_buf()),
                     changes: HashMap::new(),
+                    diff_highlight: self.config.tui_transcript_diff_highlight,
+                    side_by_side: self.config.tui_transcript_side_by_side,
                 }),
             ),
             ServerRequest::McpServerElicitationRequest { request_id, params } => {
@@ -1860,6 +1865,11 @@ impl App {
         app_server: &mut AppServerSession,
         op: AppCommand,
     ) -> Result<()> {
+        tracing::info!(
+            codex_op = op.kind(),
+            active_thread_id = ?self.active_thread_id,
+            "submitting active thread op"
+        );
         let Some(thread_id) = self.active_thread_id else {
             self.chat_widget
                 .add_error_message("No active thread is available.".to_string());
@@ -2026,39 +2036,22 @@ impl App {
 
     fn submit_feedback(
         &mut self,
-        app_server: &AppServerSession,
+        _app_server: &AppServerSession,
         category: FeedbackCategory,
-        reason: Option<String>,
-        turn_id: Option<String>,
+        _reason: Option<String>,
+        _turn_id: Option<String>,
         include_logs: bool,
     ) {
-        let request_handle = app_server.request_handle();
         let app_event_tx = self.app_event_tx.clone();
         let origin_thread_id = self.chat_widget.thread_id();
-        let rollout_path = if include_logs {
-            self.chat_widget.rollout_path()
-        } else {
-            None
-        };
-        let params = build_feedback_upload_params(
+        app_event_tx.send(AppEvent::FeedbackSubmitted {
             origin_thread_id,
-            rollout_path,
             category,
-            reason,
-            turn_id,
             include_logs,
-        );
-        tokio::spawn(async move {
-            let result = fetch_feedback_upload(request_handle, params)
-                .await
-                .map(|response| response.thread_id)
-                .map_err(|err| err.to_string());
-            app_event_tx.send(AppEvent::FeedbackSubmitted {
-                origin_thread_id,
-                category,
-                include_logs,
-                result,
-            });
+            result: Err(
+                "feedback upload is disabled in xcodex; feedback is saved through the local feedback form"
+                    .to_string(),
+            ),
         });
     }
 
@@ -2076,7 +2069,7 @@ impl App {
             Err(err) => self
                 .chat_widget
                 .add_to_history(history_cell::new_error_event(format!(
-                    "Failed to upload feedback: {err}"
+                    "Failed to save feedback: {err}"
                 ))),
         }
     }
@@ -2257,6 +2250,11 @@ impl App {
         thread_id: ThreadId,
         op: &AppCommand,
     ) -> Result<bool> {
+        tracing::info!(
+            codex_op = op.kind(),
+            %thread_id,
+            "trying app-server codex op submission"
+        );
         match op.view() {
             AppCommandView::Interrupt => {
                 let Some(turn_id) = self.active_turn_id_for_thread(thread_id).await else {
@@ -2345,6 +2343,12 @@ impl App {
                     }
                 }
                 if should_start_turn {
+                    tracing::info!(
+                        %thread_id,
+                        item_count = items.len(),
+                        model,
+                        "starting app-server user turn"
+                    );
                     app_server
                         .turn_start(
                             thread_id,
@@ -2363,6 +2367,7 @@ impl App {
                             final_output_json_schema.clone(),
                         )
                         .await?;
+                    tracing::info!(%thread_id, "app-server user turn start returned");
                 }
                 Ok(true)
             }
@@ -3739,7 +3744,7 @@ impl App {
                         let target_label = target_session.display_label();
                         format!("Failed to resume session from {target_label}")
                     })?;
-                let resumed_model = resumed.session_configured.model.clone();
+                let resumed_model = resumed.session.model.clone();
                 let init = crate::chatwidget::ChatWidgetInit {
                     config: config.clone(),
                     frame_requester: tui.frame_requester(),
@@ -3796,7 +3801,7 @@ impl App {
                     is_first_run,
                     status_account_display: status_account_display.clone(),
                     initial_plan_type,
-                    model: Some(forked.session_configured.model.clone()),
+                    model: Some(forked.session.model.clone()),
                     startup_tooltip_override: None,
                     status_line_invalid_items_warned: status_line_invalid_items_warned.clone(),
                     terminal_title_invalid_items_warned: terminal_title_invalid_items_warned
@@ -3811,7 +3816,7 @@ impl App {
             .maybe_prompt_windows_sandbox_enable(should_prompt_windows_sandbox_nux_at_startup);
 
         let file_search = FileSearchManager::new(
-            config.cwd.clone(),
+            config.cwd.to_path_buf(),
             config.exclusion.files.clone(),
             app_event_tx.clone(),
         );
@@ -3861,6 +3866,7 @@ impl App {
             primary_session_configured: None,
             pending_primary_events: VecDeque::new(),
             pending_app_server_requests: PendingAppServerRequests::default(),
+            suppress_shutdown_complete: false,
         };
         if let Some(started) = initial_started_thread {
             app.enqueue_primary_thread_session(started.session, started.turns)
@@ -4180,7 +4186,7 @@ impl App {
                     self.config.tui_notifications.condition,
                 );
                 self.file_search = FileSearchManager::new(
-                    self.config.cwd.clone(),
+                    self.config.cwd.to_path_buf(),
                     self.config.exclusion.files.clone(),
                     self.app_event_tx.clone(),
                 );
@@ -4452,6 +4458,7 @@ impl App {
                 return Ok(AppRunControl::Exit(ExitReason::Fatal(message)));
             }
             AppEvent::CodexOp(op) => {
+                tracing::debug!(codex_op = op.kind(), "app received codex op");
                 self.submit_active_thread_op(app_server, op.into()).await?;
             }
             AppEvent::SubmitThreadOp { thread_id, op } => {
@@ -6107,7 +6114,6 @@ impl App {
             let errors = errors_for_cwd(&cwd, response);
             emit_skill_load_warnings(&self.app_event_tx, &errors);
         }
-        self.handle_backtrack_event(&event.msg);
         self.chat_widget.handle_codex_event(event);
         let turn_proposed_plan_text = self
             .chat_widget
@@ -9638,6 +9644,7 @@ guardian_approval = true
         let user_cell = |text: &str| -> Arc<dyn HistoryCell> {
             Arc::new(UserHistoryCell {
                 message: text.to_string(),
+                highlight: false,
                 text_elements: Vec::new(),
                 local_image_paths: Vec::new(),
                 remote_image_urls: Vec::new(),
@@ -9773,7 +9780,7 @@ guardian_approval = true
         let (chat_widget, app_event_tx, _rx, _op_rx) = make_chatwidget_manual_with_sender().await;
         let config = chat_widget.config_ref().clone();
         let file_search = FileSearchManager::new(
-            config.cwd.clone(),
+            config.cwd.to_path_buf(),
             config.exclusion.files.clone(),
             app_event_tx.clone(),
         );
@@ -9821,6 +9828,7 @@ guardian_approval = true
             primary_session_configured: None,
             pending_primary_events: VecDeque::new(),
             pending_app_server_requests: PendingAppServerRequests::default(),
+            suppress_shutdown_complete: false,
         }
     }
 
@@ -9832,7 +9840,7 @@ guardian_approval = true
         let (chat_widget, app_event_tx, rx, op_rx) = make_chatwidget_manual_with_sender().await;
         let config = chat_widget.config_ref().clone();
         let file_search = FileSearchManager::new(
-            config.cwd.clone(),
+            config.cwd.to_path_buf(),
             config.exclusion.files.clone(),
             app_event_tx.clone(),
         );
@@ -9883,6 +9891,7 @@ guardian_approval = true
                 primary_session_configured: None,
                 pending_primary_events: VecDeque::new(),
                 pending_app_server_requests: PendingAppServerRequests::default(),
+                suppress_shutdown_complete: false,
             },
             rx,
             op_rx,
@@ -10248,7 +10257,7 @@ guardian_approval = true
         };
         assert_eq!(
             lines_to_single_string(&cell.display_lines(/*width*/ 120)),
-            "■ Failed to upload feedback: boom"
+            "■ Failed to save feedback: boom"
         );
     }
 
@@ -10314,8 +10323,9 @@ guardian_approval = true
             }
         }
         assert!(rendered_cells.iter().any(|cell| {
-            cell.contains("• Feedback uploaded. Please open an issue using the following URL:")
+            cell.contains("• Feedback saved locally (no network upload).")
                 && cell.contains("uploaded-thread")
+                && cell.contains("Attach these files when filing an issue in your fork.")
         }));
     }
 
@@ -11064,6 +11074,7 @@ guardian_approval = true
 
         app.transcript_cells = vec![Arc::new(UserHistoryCell {
             message: "original".to_string(),
+            highlight: false,
             text_elements: Vec::new(),
             local_image_paths: Vec::new(),
             remote_image_urls: Vec::new(),
@@ -11122,6 +11133,7 @@ guardian_approval = true
         let data_image_url = "data:image/png;base64,abc123".to_string();
         app.transcript_cells = vec![Arc::new(UserHistoryCell {
             message: "please inspect this".to_string(),
+            highlight: false,
             text_elements: Vec::new(),
             local_image_paths: Vec::new(),
             remote_image_urls: vec![data_image_url.clone()],
@@ -11613,6 +11625,7 @@ guardian_approval = true
             .apply_external_edit("draft prompt".to_string());
         app.transcript_cells = vec![Arc::new(UserHistoryCell {
             message: "old message".to_string(),
+            highlight: false,
             text_elements: Vec::new(),
             local_image_paths: Vec::new(),
             remote_image_urls: Vec::new(),

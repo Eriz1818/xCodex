@@ -177,14 +177,14 @@ mod tests {
             .expect("request should be captured");
         assert_eq!(
             request.url,
-            "https://chatgpt.com/backend-api/codex/responses/compact?client_version=0.98.0"
+            "https://chatgpt.com/backend-api/codex/responses/compact?client_version=0.130.0"
         );
         assert_eq!(
             request
                 .headers
                 .get("version")
                 .and_then(|value| value.to_str().ok()),
-            Some("0.98.0")
+            Some("0.130.0")
         );
         assert_eq!(request.method, http::Method::POST);
         assert_eq!(request.compression, RequestCompression::None);

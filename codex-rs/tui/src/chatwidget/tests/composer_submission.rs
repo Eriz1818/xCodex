@@ -1,6 +1,76 @@
 use super::*;
 use pretty_assertions::assert_eq;
 
+fn configure_chat_for_submission(
+    chat: &mut ChatWidget,
+    rx: &mut tokio::sync::mpsc::UnboundedReceiver<AppEvent>,
+) {
+    let conversation_id = ThreadId::new();
+    let rollout_file = NamedTempFile::new().unwrap();
+    let configured = codex_protocol::protocol::SessionConfiguredEvent {
+        session_id: conversation_id,
+        forked_from_id: None,
+        thread_name: None,
+        model: "test-model".to_string(),
+        model_provider_id: "test-provider".to_string(),
+        service_tier: None,
+        approval_policy: AskForApproval::Never,
+        approvals_reviewer: ApprovalsReviewer::User,
+        sandbox_policy: SandboxPolicy::new_read_only_policy(),
+        cwd: PathBuf::from("/home/user/project"),
+        reasoning_effort: Some(ReasoningEffortConfig::default()),
+        history_log_id: 0,
+        history_entry_count: 0,
+        initial_messages: None,
+        network_proxy: None,
+        rollout_path: Some(rollout_file.path().to_path_buf()),
+    };
+    chat.handle_codex_event(Event {
+        id: "initial".into(),
+        msg: EventMsg::SessionConfigured(configured),
+    });
+    drain_insert_history(rx);
+}
+
+#[tokio::test]
+async fn app_event_submission_starts_turn_and_emits_user_turn() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.codex_op_target = CodexOpTarget::AppEvent;
+    configure_chat_for_submission(&mut chat, &mut rx);
+
+    chat.bottom_pane
+        .set_composer_text("hello from app event".to_string(), Vec::new(), Vec::new());
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+    assert!(chat.agent_turn_running);
+    assert!(chat.bottom_pane.is_task_running());
+
+    let mut submitted_items = None;
+    let mut rendered_user_prompts = 0;
+    while let Ok(event) = rx.try_recv() {
+        match event {
+            AppEvent::CodexOp(Op::UserTurn { items, .. }) => {
+                submitted_items = Some(items);
+            }
+            AppEvent::InsertHistoryCell(cell)
+                if cell.as_any().downcast_ref::<UserHistoryCell>().is_some() =>
+            {
+                rendered_user_prompts += 1;
+            }
+            _ => {}
+        }
+    }
+
+    assert_eq!(
+        submitted_items,
+        Some(vec![UserInput::Text {
+            text: "hello from app event".to_string(),
+            text_elements: Vec::new(),
+        }])
+    );
+    assert_eq!(rendered_user_prompts, 1);
+}
+
 #[tokio::test]
 async fn submission_preserves_text_elements_and_local_images() {
     let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
@@ -797,7 +867,7 @@ async fn restore_thread_input_state_syncs_sleep_inhibitor_state() {
         pending_steers: VecDeque::new(),
         rejected_steers_queue: VecDeque::new(),
         queued_user_messages: VecDeque::new(),
-        current_collaboration_mode: chat.current_collaboration_mode.clone(),
+        current_collaboration_mode: chat.current_collaboration_mode().clone(),
         active_collaboration_mask: chat.active_collaboration_mask.clone(),
         task_running: true,
         agent_turn_running: true,

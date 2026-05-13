@@ -14,6 +14,8 @@ pub use config::ModelsManagerConfig;
 use std::ffi::OsStr;
 use std::path::Path;
 
+const UPSTREAM_CODEX_CLIENT_VERSION: &str = "0.130.0";
+
 /// Load the bundled model catalog shipped with `codex-models-manager`.
 pub fn bundled_models_response()
 -> std::result::Result<codex_protocol::openai_models::ModelsResponse, serde_json::Error> {
@@ -27,7 +29,7 @@ pub fn client_version_to_whole() -> String {
 
 /// Returns the client version sent to the models endpoint.
 ///
-/// We intentionally pin `client_version` to upstream Codex (`0.98.0`) when
+/// We intentionally pin `client_version` to upstream Codex when
 /// querying ChatGPT/OpenAI model catalogs so backend model visibility matches
 /// Codex behavior.
 pub fn models_client_version(base_url: &str) -> String {
@@ -36,7 +38,7 @@ pub fn models_client_version(base_url: &str) -> String {
 
 fn client_version_to_whole_impl(is_xcodex_invocation: bool) -> String {
     if is_xcodex_invocation {
-        return "0.98.0".to_string();
+        return UPSTREAM_CODEX_CLIENT_VERSION.to_string();
     }
 
     package_version_to_whole()
@@ -44,7 +46,7 @@ fn client_version_to_whole_impl(is_xcodex_invocation: bool) -> String {
 
 fn models_client_version_impl(base_url: &str, is_xcodex_invocation: bool) -> String {
     if is_xcodex_invocation || is_openai_or_chatgpt_models_endpoint(base_url) {
-        return "0.98.0".to_string();
+        return UPSTREAM_CODEX_CLIENT_VERSION.to_string();
     }
 
     package_version_to_whole()
@@ -102,13 +104,17 @@ fn is_xcodex_invocation() -> bool {
 
 #[cfg(test)]
 mod tests {
+    use super::UPSTREAM_CODEX_CLIENT_VERSION;
     use super::client_version_to_whole_impl;
     use super::models_client_version_impl;
     use pretty_assertions::assert_eq;
 
     #[test]
     fn client_version_to_whole_uses_upstream_version_for_xcodex_invocation() {
-        assert_eq!("0.98.0".to_string(), client_version_to_whole_impl(true));
+        assert_eq!(
+            UPSTREAM_CODEX_CLIENT_VERSION.to_string(),
+            client_version_to_whole_impl(true)
+        );
     }
 
     #[test]
@@ -126,7 +132,7 @@ mod tests {
     #[test]
     fn models_client_version_uses_upstream_version_for_chatgpt_backend() {
         assert_eq!(
-            "0.98.0".to_string(),
+            UPSTREAM_CODEX_CLIENT_VERSION.to_string(),
             models_client_version_impl("https://chatgpt.com/backend-api/codex", false)
         );
     }
@@ -134,7 +140,7 @@ mod tests {
     #[test]
     fn models_client_version_uses_upstream_version_for_openai_backend() {
         assert_eq!(
-            "0.98.0".to_string(),
+            UPSTREAM_CODEX_CLIENT_VERSION.to_string(),
             models_client_version_impl("https://api.openai.com/v1", false)
         );
     }

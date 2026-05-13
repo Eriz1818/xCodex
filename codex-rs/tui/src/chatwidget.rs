@@ -137,56 +137,43 @@ use codex_protocol::models::local_image_label_text;
 use codex_protocol::parse_command::ParsedCommand;
 use codex_protocol::plan_tool::PlanItemArg as UpdatePlanItemArg;
 use codex_protocol::plan_tool::StepStatus as UpdatePlanItemStatus;
-#[cfg(test)]
 use codex_protocol::protocol::AgentMessageDeltaEvent;
-#[cfg(test)]
 use codex_protocol::protocol::AgentMessageEvent;
-#[cfg(test)]
 use codex_protocol::protocol::AgentReasoningDeltaEvent;
-#[cfg(test)]
 use codex_protocol::protocol::AgentReasoningEvent;
-#[cfg(test)]
 use codex_protocol::protocol::AgentReasoningRawContentDeltaEvent;
-#[cfg(test)]
 use codex_protocol::protocol::AgentReasoningRawContentEvent;
 use codex_protocol::protocol::AgentStatus;
 use codex_protocol::protocol::ApplyPatchApprovalRequestEvent;
-#[cfg(test)]
 use codex_protocol::protocol::BackgroundEventEvent;
-#[cfg(test)]
 use codex_protocol::protocol::CodexErrorInfo as CoreCodexErrorInfo;
 use codex_protocol::protocol::CollabAgentRef;
-#[cfg(test)]
 use codex_protocol::protocol::CollabAgentSpawnBeginEvent;
 use codex_protocol::protocol::CollabAgentStatusEntry;
 use codex_protocol::protocol::CreditsSnapshot;
 use codex_protocol::protocol::DeprecationNoticeEvent;
-#[cfg(test)]
 use codex_protocol::protocol::ErrorEvent;
-#[cfg(test)]
 use codex_protocol::protocol::Event;
-#[cfg(test)]
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::ExecApprovalRequestEvent;
 use codex_protocol::protocol::ExecCommandBeginEvent;
 use codex_protocol::protocol::ExecCommandEndEvent;
 use codex_protocol::protocol::ExecCommandOutputDeltaEvent;
 use codex_protocol::protocol::ExecCommandSource;
-#[cfg(test)]
 use codex_protocol::protocol::ExitedReviewModeEvent;
 use codex_protocol::protocol::GuardianAssessmentAction;
 use codex_protocol::protocol::GuardianAssessmentDecisionSource;
 use codex_protocol::protocol::GuardianAssessmentEvent;
 use codex_protocol::protocol::GuardianAssessmentStatus;
+use codex_protocol::protocol::HookProcessBeginEvent;
+use codex_protocol::protocol::HookProcessEndEvent;
 use codex_protocol::protocol::ImageGenerationBeginEvent;
 use codex_protocol::protocol::ImageGenerationEndEvent;
 use codex_protocol::protocol::ListSkillsResponseEvent;
-#[cfg(test)]
 use codex_protocol::protocol::McpListToolsResponseEvent;
-#[cfg(test)]
 use codex_protocol::protocol::McpStartupCompleteEvent;
+use codex_protocol::protocol::McpStartupFailure;
 use codex_protocol::protocol::McpStartupStatus;
-#[cfg(test)]
 use codex_protocol::protocol::McpStartupUpdateEvent;
 use codex_protocol::protocol::McpToolCallBeginEvent;
 use codex_protocol::protocol::McpToolCallEndEvent;
@@ -196,23 +183,17 @@ use codex_protocol::protocol::RateLimitSnapshot;
 use codex_protocol::protocol::ReviewRequest;
 use codex_protocol::protocol::ReviewTarget;
 use codex_protocol::protocol::SkillMetadata as ProtocolSkillMetadata;
-#[cfg(test)]
 use codex_protocol::protocol::StreamErrorEvent;
 use codex_protocol::protocol::TerminalInteractionEvent;
 use codex_protocol::protocol::TokenUsage;
 use codex_protocol::protocol::TokenUsageInfo;
 use codex_protocol::protocol::TurnAbortReason;
-#[cfg(test)]
 use codex_protocol::protocol::TurnCompleteEvent;
-#[cfg(test)]
 use codex_protocol::protocol::TurnDiffEvent;
-#[cfg(test)]
 use codex_protocol::protocol::UndoCompletedEvent;
-#[cfg(test)]
 use codex_protocol::protocol::UndoStartedEvent;
 use codex_protocol::protocol::UserMessageEvent;
 use codex_protocol::protocol::ViewImageToolCallEvent;
-#[cfg(test)]
 use codex_protocol::protocol::WarningEvent;
 use codex_protocol::protocol::WebSearchBeginEvent;
 use codex_protocol::protocol::WebSearchEndEvent;
@@ -248,7 +229,6 @@ use tracing::debug;
 use tracing::warn;
 
 const DEFAULT_MODEL_DISPLAY_NAME: &str = "loading";
-#[cfg(test)]
 const PLAN_IMPLEMENTATION_TITLE: &str = "Plan ready: choose next step";
 const PLAN_IMPLEMENTATION_OTHER: &str = "Do something else...";
 #[cfg(test)]
@@ -301,7 +281,6 @@ fn queued_message_edit_binding_for_terminal(terminal_info: TerminalInfo) -> KeyB
 use crate::app_event::AppEvent;
 use crate::app_event::ConnectorsSnapshot;
 use crate::app_event::ExitMode;
-use crate::app_event::RateLimitRefreshOrigin;
 #[cfg(target_os = "windows")]
 use crate::app_event::WindowsSandboxEnableMode;
 use crate::app_event_sender::AppEventSender;
@@ -336,7 +315,6 @@ use crate::exec_command::split_command_string;
 use crate::exec_command::strip_bash_lc_and_escape;
 use crate::get_git_diff::get_git_diff;
 use crate::history_cell;
-#[cfg(test)]
 use crate::history_cell::AgentMessageCell;
 use crate::history_cell::HistoryCell;
 use crate::history_cell::HookCell;
@@ -345,7 +323,6 @@ use crate::history_cell::PlainHistoryCell;
 use crate::history_cell::WebSearchCell;
 use crate::key_hint;
 use crate::key_hint::KeyBinding;
-#[cfg(test)]
 use crate::markdown::append_markdown;
 use crate::render::Insets;
 use crate::render::renderable::ColumnRenderable;
@@ -405,7 +382,6 @@ use unicode_segmentation::UnicodeSegmentation;
 const USER_SHELL_COMMAND_HELP_TITLE: &str = "Prefix a command with ! to run it locally";
 const USER_SHELL_COMMAND_HELP_HINT: &str = "Example: !ls";
 const DEFAULT_OPENAI_BASE_URL: &str = "https://api.openai.com/v1";
-const DEFAULT_STATUS_LINE_ITEMS: [&str; 2] = ["model-with-reasoning", "current-dir"];
 // Track information about an in-flight exec command.
 struct RunningCommand {
     command: Vec<String>,
@@ -644,7 +620,6 @@ enum RateLimitErrorKind {
     Generic,
 }
 
-#[cfg(test)]
 fn core_rate_limit_error_kind(info: &CoreCodexErrorInfo) -> Option<RateLimitErrorKind> {
     match info {
         CoreCodexErrorInfo::ServerOverloaded => Some(RateLimitErrorKind::ServerOverloaded),
@@ -1718,6 +1693,7 @@ fn token_usage_info_from_app_server(token_usage: ThreadTokenUsage) -> TokenUsage
             reasoning_output_tokens: token_usage.last.reasoning_output_tokens,
         },
         model_context_window: token_usage.model_context_window,
+        full_model_context_window: None,
     }
 }
 
@@ -1831,7 +1807,7 @@ impl ChatWidget {
             self.set_status_header(header);
         } else if self.bottom_pane.is_task_running() {
             self.terminal_title_status_kind = TerminalTitleStatusKind::Working;
-            self.set_status_header(String::from("Working"));
+            self.set_status_header(self.running_status_header());
         }
     }
 
@@ -1951,6 +1927,18 @@ impl ChatWidget {
             StatusDetailsCapitalization::CapitalizeFirst,
             STATUS_DETAILS_DEFAULT_MAX_LINES,
         );
+    }
+
+    fn running_status_header(&self) -> String {
+        self.ramp_status
+            .header_if_active(self.bottom_pane.is_task_running())
+            .unwrap_or_else(|| {
+                if crate::xtreme::xtreme_ui_enabled(&self.config) {
+                    "Charging".to_string()
+                } else {
+                    "Working".to_string()
+                }
+            })
     }
 
     /// Sets the currently rendered footer status-line value.
@@ -2447,6 +2435,13 @@ impl ChatWidget {
         // For reasoning deltas, do not stream to history. Accumulate the
         // current reasoning block and extract the first bold element
         // (between **/**) as the chunk header. Show this header as status.
+        if self.config.hide_agent_reasoning {
+            self.reasoning_buffer.clear();
+            self.full_reasoning_buffer.clear();
+            self.request_redraw();
+            return;
+        }
+
         self.reasoning_buffer.push_str(&delta);
 
         if self.unified_exec_wait_streak.is_some() {
@@ -2455,9 +2450,7 @@ impl ChatWidget {
             return;
         }
 
-        if !self.config.hide_agent_reasoning
-            && let Some(header) = extract_first_bold(&self.reasoning_buffer)
-        {
+        if let Some(header) = extract_first_bold(&self.reasoning_buffer) {
             // Update the shimmer header to the extracted reasoning chunk header.
             self.terminal_title_status_kind = TerminalTitleStatusKind::Thinking;
             if let Some(header) = xcodex_plugins::ramps::apply_status_header(
@@ -2476,7 +2469,7 @@ impl ChatWidget {
     fn on_agent_reasoning_final(&mut self) {
         // At the end of a reasoning block, record transcript-only content.
         self.full_reasoning_buffer.push_str(&self.reasoning_buffer);
-        if !self.full_reasoning_buffer.is_empty() {
+        if !self.config.hide_agent_reasoning && !self.full_reasoning_buffer.is_empty() {
             let cell = history_cell::new_reasoning_summary_block(
                 self.full_reasoning_buffer.clone(),
                 self.config.cwd.as_path(),
@@ -2680,6 +2673,9 @@ impl ChatWidget {
     fn open_plan_implementation_prompt(&mut self) {
         let default_mask = collaboration_modes::default_mode_mask(self.model_catalog.as_ref());
         crate::xcodex_plugins::plan::open_post_plan_prompt(self, default_mask);
+        self.notify(Notification::PlanModePrompt {
+            title: PLAN_IMPLEMENTATION_TITLE.to_string(),
+        });
     }
 
     pub(crate) fn reopen_plan_prompt_after_turn(&mut self) {
@@ -2723,7 +2719,6 @@ impl ChatWidget {
         true
     }
 
-    #[cfg(test)]
     fn handle_steer_rejected_error(&mut self, codex_error_info: &CoreCodexErrorInfo) -> bool {
         matches!(
             codex_error_info,
@@ -2811,16 +2806,21 @@ impl ChatWidget {
     }
 
     fn clear_context_estimate_details_if_visible(&mut self) {
-        if self.context_estimate_details_visible && self.current_status_header == "Working" {
+        if self.context_estimate_details_visible && self.current_status.header == "Working" {
             self.context_estimate_details_visible = false;
             self.last_context_estimate_details_update = None;
             self.last_context_estimate_details_percent = None;
-            self.set_status(self.current_status_header.clone(), None);
+            self.set_status(
+                self.current_status.header.clone(),
+                None,
+                StatusDetailsCapitalization::Preserve,
+                self.current_status.details_max_lines,
+            );
         }
     }
 
     fn maybe_update_context_estimate_details(&mut self, info: &TokenUsageInfo) {
-        if self.current_status_header != "Working" {
+        if self.current_status.header != "Working" {
             return;
         }
 
@@ -2851,7 +2851,12 @@ impl ChatWidget {
         };
 
         self.context_estimate_details_visible = true;
-        self.set_status(self.current_status_header.clone(), Some(details));
+        self.set_status(
+            self.current_status.header.clone(),
+            Some(details),
+            StatusDetailsCapitalization::Preserve,
+            self.current_status.details_max_lines,
+        );
     }
 
     fn looks_like_prompt_estimate(info: &TokenUsageInfo) -> bool {
@@ -2862,7 +2867,6 @@ impl ChatWidget {
             && last.reasoning_output_tokens == 0
     }
 
-    #[cfg(test)]
     fn apply_turn_started_context_window(&mut self, model_context_window: Option<i64>) {
         let info = match self.token_info.take() {
             Some(mut info) => {
@@ -2877,6 +2881,7 @@ impl ChatWidget {
                     total_token_usage: TokenUsage::default(),
                     last_token_usage: TokenUsage::default(),
                     model_context_window: Some(model_context_window),
+                    full_model_context_window: None,
                 }
             }
         };
@@ -2894,7 +2899,11 @@ impl ChatWidget {
             self.clear_context_estimate_details_if_visible();
         }
 
-        if is_estimate && self.bottom_pane.is_task_running() && self.footer_token_info.is_some() {
+        if is_estimate
+            && self.bottom_pane.is_task_running()
+            && !self.is_review_mode
+            && self.footer_token_info.is_some()
+        {
             // Avoid jarring swings (especially to 0%) while a turn is in progress.
             // Keep showing the last known stable value until we receive real API usage.
             self.pending_footer_token_info = Some(info);
@@ -2938,7 +2947,11 @@ impl ChatWidget {
     fn restore_pre_review_token_info(&mut self) {
         if let Some(saved) = self.pre_review_token_info.take() {
             match saved {
-                Some(info) => self.apply_token_info(info),
+                Some(info) => {
+                    self.pending_footer_token_info = None;
+                    self.token_info = Some(info.clone());
+                    self.apply_footer_token_info(Some(info));
+                }
                 None => {
                     self.bottom_pane
                         .set_context_window(/*percent*/ None, /*used_tokens*/ None);
@@ -3213,7 +3226,8 @@ impl ChatWidget {
             }
         }
 
-        self.mcp_startup_state.set_status(startup_status.clone());
+        self.mcp_startup_state
+            .set_status_for_replay(startup_status.clone());
         self.mcp_startup_status = Some(startup_status);
         self.update_task_running_state();
 
@@ -3330,13 +3344,6 @@ impl ChatWidget {
                 cancelled.join(", ")
             ));
         }
-        let mut parts = Vec::new();
-        if !failed.is_empty() {
-            parts.push(format!("failed: {}", failed.join(", ")));
-        }
-        if !parts.is_empty() {
-            self.on_warning(format!("MCP startup incomplete ({})", parts.join("; ")));
-        }
 
         self.mcp_startup_status = None;
         self.mcp_startup_ignore_updates_until_next_start = true;
@@ -3398,7 +3405,6 @@ impl ChatWidget {
         self.apply_mcp_startup_completion_state(ready, failed, cancelled);
     }
 
-    #[cfg(test)]
     fn on_mcp_startup_complete(&mut self, ev: McpStartupCompleteEvent) {
         let failed = ev.failed.into_iter().map(|f| f.server).collect();
         self.apply_mcp_startup_completion_state(ev.ready, failed, ev.cancelled);
@@ -3735,12 +3741,12 @@ impl ChatWidget {
                     status.details_max_lines,
                 );
             } else if self.current_status.is_guardian_review() {
-                self.set_status_header(String::from("Working"));
+                self.set_status_header(self.running_status_header());
             }
         } else if self.pending_guardian_review_status.is_empty()
             && self.current_status.is_guardian_review()
         {
-            self.set_status_header(String::from("Working"));
+            self.set_status_header(self.running_status_header());
         }
 
         if ev.status == GuardianAssessmentStatus::Approved {
@@ -3833,6 +3839,12 @@ impl ChatWidget {
             }
             // Unified exec may be parsed as Unknown; keep the working indicator visible regardless.
             self.bottom_pane.ensure_status_indicator();
+            self.set_status(
+                self.current_status.header.clone(),
+                self.current_status.details.clone(),
+                StatusDetailsCapitalization::Preserve,
+                self.current_status.details_max_lines,
+            );
             if !is_standard_tool_call(&ev.parsed_cmd) {
                 return;
             }
@@ -4368,7 +4380,6 @@ impl ChatWidget {
         self.request_redraw();
     }
 
-    #[cfg(test)]
     fn on_background_event(&mut self, message: String) {
         debug!("BackgroundEvent: {message}");
         self.bottom_pane.ensure_status_indicator();
@@ -4376,7 +4387,7 @@ impl ChatWidget {
         if let Some(header) = xcodex_plugins::ramps::apply_status_header(
             &mut self.ramp_status,
             self.bottom_pane.is_task_running(),
-            xcodex_plugins::ramps::RampStatusUpdate::Context(message),
+            xcodex_plugins::ramps::RampStatusUpdate::Context(message.clone()),
         ) {
             self.set_status_header(header);
         } else {
@@ -4507,7 +4518,6 @@ impl ChatWidget {
         self.frame_requester.schedule_frame_in(delay);
     }
 
-    #[cfg(test)]
     fn on_undo_started(&mut self, event: UndoStartedEvent) {
         self.bottom_pane.ensure_status_indicator();
         self.bottom_pane
@@ -4519,7 +4529,6 @@ impl ChatWidget {
         self.set_status_header(message);
     }
 
-    #[cfg(test)]
     fn on_undo_completed(&mut self, event: UndoCompletedEvent) {
         let UndoCompletedEvent { success, message } = event;
         self.bottom_pane.hide_status_indicator();
@@ -5075,7 +5084,7 @@ impl ChatWidget {
             id: ev.call_id,
             reason: ev.reason,
             changes: ev.changes.clone(),
-            cwd: self.config.cwd.clone(),
+            cwd: self.config.cwd.to_path_buf(),
             diff_highlight: self.config.tui_transcript_diff_highlight,
             side_by_side: self.config.tui_transcript_side_by_side,
         };
@@ -5205,7 +5214,7 @@ impl ChatWidget {
         ) {
             self.set_status_header(header);
         } else if crate::xtreme::xtreme_ui_enabled(&self.config)
-            && self.current_status_header == "Charging"
+            && self.current_status.header == "Charging"
         {
             self.set_status_header("Overclocking".to_string());
         }
@@ -5254,7 +5263,7 @@ impl ChatWidget {
         ) {
             self.set_status_header(header);
         } else if crate::xtreme::xtreme_ui_enabled(&self.config)
-            && self.current_status_header == "Charging"
+            && self.current_status.header == "Charging"
         {
             self.set_status_header("Overclocking".to_string());
         }
@@ -5379,7 +5388,7 @@ impl ChatWidget {
             app_event_tx: app_event_tx.clone(),
             codex_op_target,
             bottom_pane: BottomPane::new(BottomPaneParams {
-                frame_requester,
+                frame_requester: frame_requester.clone(),
                 app_event_tx,
                 has_input_focus: true,
                 enhanced_keys_supported,
@@ -5543,7 +5552,7 @@ impl ChatWidget {
             .set_audio_device_selection_enabled(widget.realtime_audio_device_selection_enabled());
         widget
             .bottom_pane
-            .set_steer_enabled(widget.config.features.enabled(Feature::Steer));
+            .set_xtreme_ui_enabled(widget.config.features.enabled(Feature::Steer));
         widget
             .bottom_pane
             .set_status_line_enabled(!widget.configured_status_line_items().is_empty());
@@ -5746,7 +5755,7 @@ impl ChatWidget {
                         // Reset any reasoning header only when we are actually submitting a turn.
                         self.reasoning_buffer.clear();
                         self.full_reasoning_buffer.clear();
-                        self.set_status_header(String::from("Working"));
+                        self.set_status_header(self.running_status_header());
                         self.submit_user_message(user_message);
                     } else {
                         self.queue_user_message(user_message);
@@ -5988,18 +5997,18 @@ impl ChatWidget {
         }
 
         parse_slash_name(user_message.text.as_str()).is_some_and(|(name, _, _)| {
-            matches!(
-                name,
-                "autocompact"
-                    | "help"
-                    | "hooks"
-                    | "mcp"
-                    | "plan"
-                    | "settings"
-                    | "thoughts"
-                    | "verbose"
-                    | "worktree"
-            )
+            xcodex_plugins::is_plugin_slash_command(name)
+                || matches!(
+                    name,
+                    "autocompact"
+                        | "help"
+                        | "hooks"
+                        | "mcp"
+                        | "plan"
+                        | "settings"
+                        | "verbose"
+                        | "worktree"
+                )
         })
     }
 
@@ -6127,45 +6136,7 @@ impl ChatWidget {
             && let Some((name, rest, _rest_offset)) = parse_slash_name(text.as_str())
             && name == "autocompact"
         {
-            let args: Vec<&str> = rest.split_whitespace().collect();
-            let next = match args.as_slice() {
-                [] => Some(!self.auto_compact_enabled),
-                [arg] => match arg.to_ascii_lowercase().as_str() {
-                    "on" | "enable" | "true" => Some(true),
-                    "off" | "disable" | "false" => Some(false),
-                    "toggle" => Some(!self.auto_compact_enabled),
-                    "status" | "show" => None,
-                    _ => {
-                        self.add_info_message(
-                            "Usage: /autocompact [on|off|toggle|status]".to_string(),
-                            None,
-                        );
-                        return;
-                    }
-                },
-                _ => {
-                    self.add_info_message(
-                        "Usage: /autocompact [on|off|toggle|status]".to_string(),
-                        None,
-                    );
-                    return;
-                }
-            };
-
-            if let Some(enabled) = next {
-                self.auto_compact_enabled = enabled;
-                let status = if enabled { "enabled" } else { "disabled" };
-                self.add_info_message(format!("Auto-compact {status}."), None);
-                self.app_event_tx
-                    .send(AppEvent::CodexOp(Op::SetAutoCompact { enabled }));
-            } else {
-                let status = if self.auto_compact_enabled {
-                    "enabled"
-                } else {
-                    "disabled"
-                };
-                self.add_info_message(format!("Auto-compact is currently {status}."), None);
-            }
+            self.handle_autocompact_command(rest);
             return;
         }
 
@@ -6355,8 +6326,12 @@ impl ChatWidget {
             personality,
         );
 
+        let starts_new_turn = !self.agent_turn_running;
         if !self.submit_op(op) {
             return;
+        }
+        if starts_new_turn {
+            self.on_task_started();
         }
 
         // Persist the text to cross-session message history. Mentions are
@@ -7377,7 +7352,6 @@ impl ChatWidget {
         }
     }
 
-    #[cfg(test)]
     pub(crate) fn handle_codex_event(&mut self, event: Event) {
         let Event { id, msg } = event;
         self.dispatch_event_msg(Some(id), msg, /*replay_kind*/ None);
@@ -7397,7 +7371,6 @@ impl ChatWidget {
     /// `id` is `Some` for live events and `None` for replayed events from
     /// `replay_initial_messages()`. Callers should treat `None` as a "fake" id
     /// that must not be used to correlate follow-up actions.
-    #[cfg(test)]
     fn dispatch_event_msg(
         &mut self,
         id: Option<String>,
@@ -7450,9 +7423,15 @@ impl ChatWidget {
                 self.on_agent_message(message)
             }
             EventMsg::AgentMessage(AgentMessageEvent { message, .. }) => {
+                let already_rendered_completed_item = self.stream_controller.is_none()
+                    && self.last_agent_markdown.as_deref() == Some(message.as_str());
+                if already_rendered_completed_item {
+                    return;
+                }
                 if !message.is_empty() {
                     self.record_agent_markdown(&message);
                 }
+                self.on_agent_message(message);
             }
             EventMsg::AgentMessageDelta(AgentMessageDeltaEvent { delta }) => {
                 self.on_agent_message_delta(delta)
@@ -7765,7 +7744,6 @@ impl ChatWidget {
         self.request_redraw();
     }
 
-    #[cfg(test)]
     fn on_entered_review_mode(&mut self, review: ReviewRequest, from_replay: bool) {
         let hint = review.user_facing_hint.unwrap_or_else(|| {
             crate::legacy_core::review_prompts::user_facing_hint(&review.target)
@@ -7773,7 +7751,6 @@ impl ChatWidget {
         self.enter_review_mode_with_hint(hint, from_replay);
     }
 
-    #[cfg(test)]
     fn on_exited_review_mode(&mut self, review: ExitedReviewModeEvent) {
         if let Some(output) = review.review_output {
             let review_markdown =
@@ -7849,11 +7826,6 @@ impl ChatWidget {
 
     pub(crate) fn request_redraw(&mut self) {
         self.frame_requester.schedule_frame();
-    }
-
-    pub(crate) fn show_selection_view(&mut self, params: SelectionViewParams) {
-        self.bottom_pane.show_selection_view(params);
-        self.request_redraw();
     }
 
     pub(crate) fn show_or_replace_selection_view(&mut self, params: SelectionViewParams) {
@@ -7955,7 +7927,18 @@ impl ChatWidget {
         self.request_redraw();
     }
     pub(crate) fn status_menu_status_cell(&self) -> Box<dyn HistoryCell> {
-        xcodex_plugins::status::status_menu_status_cell(self)
+        let rate_limit_snapshots: Vec<RateLimitSnapshotDisplay> = self
+            .rate_limit_snapshots_by_limit_id
+            .values()
+            .cloned()
+            .collect();
+        let agents_summary =
+            crate::status::compose_agents_summary(&self.config, &self.instruction_source_paths);
+        xcodex_plugins::status::status_menu_status_cell(
+            self,
+            rate_limit_snapshots.as_slice(),
+            agents_summary,
+        )
     }
 
     pub(crate) fn open_status_menu_view(&mut self, tab: crate::bottom_pane::StatusMenuTab) {
@@ -8446,10 +8429,6 @@ impl ChatWidget {
         &mut self.worktree_state
     }
 
-    pub(crate) fn auth_manager(&self) -> &AuthManager {
-        self.auth_manager.as_ref()
-    }
-
     pub(crate) fn token_info(&self) -> Option<&TokenUsageInfo> {
         self.token_info.as_ref()
     }
@@ -8483,11 +8462,13 @@ impl ChatWidget {
             .send(AppEvent::CodexOp(Op::OverrideTurnContext {
                 cwd: Some(path.clone()),
                 approval_policy: None,
+                approvals_reviewer: None,
                 sandbox_policy: None,
                 windows_sandbox_level: None,
                 model: None,
                 effort: None,
                 summary: None,
+                service_tier: None,
                 collaboration_mode: None,
                 personality: None,
             }));
@@ -8498,7 +8479,9 @@ impl ChatWidget {
     }
 
     pub(crate) fn set_session_cwd(&mut self, cwd: PathBuf) {
-        self.config.cwd = cwd.clone();
+        if let Ok(abs_cwd) = AbsolutePathBuf::try_from(cwd.as_path()) {
+            self.config.cwd = abs_cwd;
+        }
         self.refresh_status_bar_git_poller();
         xcodex_plugins::worktree::spawn_worktree_detection(self, false);
 
@@ -9103,6 +9086,18 @@ impl ChatWidget {
     /// Set Fast mode in the widget's config copy.
     pub(crate) fn set_service_tier(&mut self, service_tier: Option<ServiceTier>) {
         self.config.service_tier = service_tier;
+    }
+
+    /// Set the approval policy in the widget's config copy.
+    pub(crate) fn set_approval_policy(&mut self, policy: AskForApproval) {
+        if let Err(err) = self.config.permissions.approval_policy.set(policy) {
+            tracing::warn!(%err, "failed to set approval_policy on chat config");
+        }
+    }
+
+    /// Set the sandbox policy in the widget's config copy.
+    pub(crate) fn set_sandbox_policy(&mut self, policy: SandboxPolicy) -> ConstraintResult<()> {
+        self.config.permissions.sandbox_policy.set(policy)
     }
 
     pub(crate) fn current_service_tier(&self) -> Option<ServiceTier> {
@@ -9933,6 +9928,55 @@ impl ChatWidget {
             self.submit_op(AppCommand::interrupt());
         }
     }
+
+    fn on_ctrl_d(&mut self) -> bool {
+        let key = key_hint::ctrl(KeyCode::Char('d'));
+        if !self.bottom_pane.composer_is_empty() || !self.bottom_pane.no_modal_or_popup_active() {
+            return false;
+        }
+
+        if !DOUBLE_PRESS_QUIT_SHORTCUT_ENABLED {
+            if let Some(action) = hook_quit_action(
+                self.config.xcodex.tui_confirm_exit_with_running_hooks,
+                &self.hook_processes,
+                self.quit_shortcut_active_for(key),
+            ) {
+                match action {
+                    HookQuitAction::Confirmed => {
+                        self.quit_shortcut_expires_at = None;
+                        self.quit_shortcut_key = None;
+                        self.bottom_pane.clear_quit_shortcut_hint();
+                        self.submit_op(Op::Shutdown);
+                    }
+                    HookQuitAction::ArmShortcut => self.arm_quit_shortcut(key),
+                }
+                return true;
+            }
+            self.request_quit_without_confirmation();
+            return true;
+        }
+
+        if self.quit_shortcut_active_for(key) {
+            self.quit_shortcut_expires_at = None;
+            self.quit_shortcut_key = None;
+            if let Some(action) = hook_quit_action(
+                self.config.xcodex.tui_confirm_exit_with_running_hooks,
+                &self.hook_processes,
+                true,
+            ) && matches!(action, HookQuitAction::Confirmed)
+            {
+                self.bottom_pane.clear_quit_shortcut_hint();
+                self.submit_op(Op::Shutdown);
+                return true;
+            }
+            self.request_quit_without_confirmation();
+            return true;
+        }
+
+        self.arm_quit_shortcut(key);
+        true
+    }
+
     pub(crate) fn open_realtime_audio_popup(&mut self) {
         let items = [
             RealtimeAudioDeviceKind::Microphone,
@@ -11446,405 +11490,6 @@ impl ChatWidget {
     #[cfg(not(target_os = "windows"))]
     pub(crate) fn clear_windows_sandbox_setup_status(&mut self) {}
 
-    /// Set the approval policy in the widget's config copy.
-    pub(crate) fn set_approval_policy(&mut self, policy: AskForApproval) {
-        if let Err(err) = self.config.permissions.approval_policy.set(policy) {
-            tracing::warn!(%err, "failed to set approval_policy on chat config");
-        }
-    }
-
-    /// Set the sandbox policy in the widget's config copy.
-    #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
-    pub(crate) fn set_sandbox_policy(&mut self, policy: SandboxPolicy) -> ConstraintResult<()> {
-        self.config.permissions.sandbox_policy.set(policy)?;
-        Ok(())
-    }
-
-    #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
-    pub(crate) fn set_windows_sandbox_mode(&mut self, mode: Option<WindowsSandboxModeToml>) {
-        self.config.permissions.windows_sandbox_mode = mode;
-        #[cfg(target_os = "windows")]
-        self.bottom_pane.set_windows_degraded_sandbox_active(
-            crate::legacy_core::windows_sandbox::ELEVATED_SANDBOX_NUX_ENABLED
-                && matches!(
-                    WindowsSandboxLevel::from_config(&self.config),
-                    WindowsSandboxLevel::RestrictedToken
-                ),
-        );
-    }
-
-    #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
-    pub(crate) fn set_feature_enabled(&mut self, feature: Feature, enabled: bool) -> bool {
-        if let Err(err) = self.config.features.set_enabled(feature, enabled) {
-            tracing::warn!(
-                error = %err,
-                feature = feature.key(),
-                "failed to update constrained chat widget feature state"
-            );
-        }
-        let enabled = self.config.features.enabled(feature);
-        if feature == Feature::RealtimeConversation {
-            let realtime_conversation_enabled = self.realtime_conversation_enabled();
-            self.bottom_pane
-                .set_realtime_conversation_enabled(realtime_conversation_enabled);
-            self.bottom_pane
-                .set_audio_device_selection_enabled(self.realtime_audio_device_selection_enabled());
-            if !realtime_conversation_enabled && self.realtime_conversation.is_live() {
-                self.request_realtime_conversation_close(Some(
-                    "Realtime voice mode was closed because the feature was disabled.".to_string(),
-                ));
-            }
-        }
-        if feature == Feature::CollaborationModes {
-            self.bottom_pane.set_collaboration_modes_enabled(enabled);
-            let settings = self.stored_collaboration_mode.settings.clone();
-            self.stored_collaboration_mode = CollaborationMode {
-                mode: ModeKind::Default,
-                settings,
-            };
-            self.active_collaboration_mask = if enabled {
-                collaboration_modes::default_mask(self.model_catalog.as_ref())
-            } else {
-                None
-            };
-            self.update_collaboration_mode_indicator();
-            self.refresh_model_display();
-            self.request_redraw();
-        }
-        if feature == Feature::FastMode {
-            self.sync_fast_command_enabled();
-        }
-        if feature == Feature::Personality {
-            self.sync_personality_command_enabled();
-        }
-        if feature == Feature::Plugins {
-            self.sync_plugins_command_enabled();
-            self.refresh_plugin_mentions();
-        }
-        if feature == Feature::PreventIdleSleep {
-            self.turn_sleep_inhibitor = SleepInhibitor::new(enabled);
-            self.turn_sleep_inhibitor
-                .set_turn_running(self.agent_turn_running);
-        }
-        #[cfg(target_os = "windows")]
-        if matches!(
-            feature,
-            Feature::WindowsSandbox | Feature::WindowsSandboxElevated
-        ) {
-            self.bottom_pane.set_windows_degraded_sandbox_active(
-                crate::legacy_core::windows_sandbox::ELEVATED_SANDBOX_NUX_ENABLED
-                    && matches!(
-                        WindowsSandboxLevel::from_config(&self.config),
-                        WindowsSandboxLevel::RestrictedToken
-                    ),
-            );
-        }
-        enabled
-    }
-
-    pub(crate) fn set_approvals_reviewer(&mut self, policy: ApprovalsReviewer) {
-        self.config.approvals_reviewer = policy;
-    }
-
-    pub(crate) fn set_full_access_warning_acknowledged(&mut self, acknowledged: bool) {
-        self.config.notices.hide_full_access_warning = Some(acknowledged);
-    }
-
-    pub(crate) fn set_world_writable_warning_acknowledged(&mut self, acknowledged: bool) {
-        self.config.notices.hide_world_writable_warning = Some(acknowledged);
-    }
-
-    pub(crate) fn set_rate_limit_switch_prompt_hidden(&mut self, hidden: bool) {
-        self.config.notices.hide_rate_limit_model_nudge = Some(hidden);
-        if hidden {
-            self.rate_limit_switch_prompt = RateLimitSwitchPromptState::Idle;
-        }
-    }
-
-    #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
-    pub(crate) fn world_writable_warning_hidden(&self) -> bool {
-        self.config
-            .notices
-            .hide_world_writable_warning
-            .unwrap_or(false)
-    }
-
-    /// Override the reasoning effort used when Plan mode is active.
-    ///
-    /// When the active mask is already Plan, the override is applied immediately
-    /// so the footer reflects it without waiting for the next mode switch.
-    /// Passing `None` resets to the Plan-mode preset default.
-    pub(crate) fn set_plan_mode_reasoning_effort(&mut self, effort: Option<ReasoningEffortConfig>) {
-        self.config.plan_mode_reasoning_effort = effort;
-        if self.collaboration_modes_enabled()
-            && let Some(mask) = self.active_collaboration_mask.as_mut()
-            && mask.mode == Some(ModeKind::Plan)
-        {
-            if let Some(effort) = effort {
-                mask.reasoning_effort = Some(Some(effort));
-            } else if let Some(plan_mask) =
-                collaboration_modes::plan_mask(self.model_catalog.as_ref())
-            {
-                mask.reasoning_effort = plan_mask.reasoning_effort;
-            }
-        }
-        self.refresh_model_dependent_surfaces();
-    }
-
-    /// Set the reasoning effort for the non-Plan collaboration mode.
-    ///
-    /// Does not touch the active Plan mask — Plan reasoning is controlled
-    /// exclusively by the Plan preset and `set_plan_mode_reasoning_effort`.
-    pub(crate) fn set_reasoning_effort(&mut self, effort: Option<ReasoningEffortConfig>) {
-        self.stored_collaboration_mode = self.stored_collaboration_mode.with_updates(
-            /*model*/ None,
-            Some(effort),
-            /*developer_instructions*/ None,
-        );
-        if self.collaboration_modes_enabled()
-            && let Some(mask) = self.active_collaboration_mask.as_mut()
-            && mask.mode != Some(ModeKind::Plan)
-        {
-            // Generic "global default" updates should not mutate the active Plan mask.
-            // Plan reasoning is controlled by the Plan preset and Plan-only override updates.
-            mask.reasoning_effort = Some(effort);
-        }
-        self.refresh_model_dependent_surfaces();
-    }
-
-    /// Set the personality in the widget's config copy.
-    pub(crate) fn set_personality(&mut self, personality: Personality) {
-        self.config.personality = Some(personality);
-    }
-
-    pub(crate) fn set_verbose_tool_output(&mut self, verbose: bool) {
-        self.config.tui_verbose_tool_output = verbose;
-        self.request_redraw();
-    }
-
-    pub(crate) fn set_transcript_syntax_highlight(&mut self, enabled: bool) {
-        self.config.tui_transcript_syntax_highlight = enabled;
-        self.request_redraw();
-    }
-
-    pub(crate) fn set_transcript_diff_highlight(&mut self, enabled: bool) {
-        self.config.tui_transcript_diff_highlight = enabled;
-        self.request_redraw();
-    }
-
-    pub(crate) fn set_transcript_side_by_side(&mut self, enabled: bool) {
-        self.config.tui_transcript_side_by_side = enabled;
-        self.request_redraw();
-    }
-
-    pub(crate) fn set_minimal_composer(&mut self, enabled: bool) {
-        self.config.tui_minimal_composer = enabled;
-        self.bottom_pane.set_minimal_composer_borders(enabled);
-        self.request_redraw();
-    }
-
-    pub(crate) fn set_transcript_user_prompt_highlight(&mut self, enabled: bool) {
-        self.config.tui_transcript_user_prompt_highlight = enabled;
-        self.request_redraw();
-    }
-
-    pub(crate) fn set_exclusion_settings(
-        &mut self,
-        exclusion: codex_core::config::types::ExclusionConfig,
-        hooks_sanitize_payloads: bool,
-    ) {
-        self.config.exclusion = exclusion;
-        self.config.exclusion.layer_hook_sanitization = Some(hooks_sanitize_payloads);
-        self.request_redraw();
-    }
-
-    pub(crate) fn set_xtreme_mode(&mut self, mode: codex_core::config::types::XtremeMode) {
-        self.config.xcodex.tui_xtreme_mode = mode;
-        self.bottom_pane
-            .set_xtreme_ui_enabled(crate::xtreme::xtreme_ui_enabled(&self.config));
-        self.request_redraw();
-    }
-
-    pub(crate) fn set_themes_config(&mut self, themes: codex_core::config::types::Themes) {
-        self.config.xcodex.themes = themes;
-        self.request_redraw();
-    }
-
-    pub(crate) fn set_ramps_config(&mut self, rotate: bool, build: bool, devops: bool) {
-        self.config.xcodex.tui_ramps_rotate = rotate;
-        self.config.xcodex.tui_ramps_build = build;
-        self.config.xcodex.tui_ramps_devops = devops;
-        self.request_redraw();
-    }
-
-    pub(crate) fn ramps_config(&self) -> (bool, bool, bool) {
-        (
-            self.config.xcodex.tui_ramps_rotate,
-            self.config.xcodex.tui_ramps_build,
-            self.config.xcodex.tui_ramps_devops,
-        )
-    }
-
-    pub(crate) fn ramp_status_enabled(&self) -> bool {
-        xcodex_plugins::ramps::status_enabled(&self.ramp_status)
-    }
-
-    pub(crate) fn open_ramps_settings_view(&mut self) {
-        xcodex_plugins::ramps::open_settings_view(self);
-    }
-
-    pub(crate) fn set_hide_agent_reasoning(&mut self, hide: bool) {
-        self.config.hide_agent_reasoning = hide;
-    }
-
-    pub(crate) fn hide_agent_reasoning(&self) -> bool {
-        self.config.hide_agent_reasoning
-    }
-
-    pub(crate) fn send_app_event(&self, event: AppEvent) {
-        self.app_event_tx.send(event);
-    }
-
-    pub(crate) fn codex_home(&self) -> &Path {
-        &self.config.codex_home
-    }
-
-    pub(crate) fn configured_plan_base_dir(&self) -> Option<&Path> {
-        self.config.xcodex.plan_base_dir.as_deref()
-    }
-
-    pub(crate) fn configured_plan_mode(&self) -> Option<&'static str> {
-        self.config
-            .xcodex
-            .plan_mode
-            .map(codex_core::xcodex::config::PlanWorkflowMode::as_str)
-    }
-
-    pub(crate) fn configured_plan_custom_template(&self) -> Option<&Path> {
-        self.config.xcodex.plan_custom_template.as_deref()
-    }
-
-    pub(crate) fn configured_plan_custom_seed_mode(&self) -> Option<&'static str> {
-        self.config
-            .xcodex
-            .plan_custom_seed_mode
-            .map(codex_core::xcodex::config::PlanTemplateSeedMode::as_str)
-    }
-
-    pub(crate) fn configured_plan_track_worktree(&self) -> Option<bool> {
-        self.config.xcodex.plan_track_worktree
-    }
-
-    pub(crate) fn configured_plan_track_branch(&self) -> Option<bool> {
-        self.config.xcodex.plan_track_branch
-    }
-
-    pub(crate) fn configured_plan_mismatch_action(&self) -> Option<&'static str> {
-        self.config
-            .xcodex
-            .plan_mismatch_action
-            .map(codex_core::xcodex::config::PlanContextMismatchAction::as_str)
-    }
-
-    pub(crate) fn configured_plan_naming_strategy(&self) -> Option<&'static str> {
-        self.config
-            .xcodex
-            .plan_naming_strategy
-            .map(codex_core::xcodex::config::PlanNamingStrategy::as_str)
-    }
-
-    pub(crate) fn xtreme_ui_enabled(&self) -> bool {
-        crate::xtreme::xtreme_ui_enabled(&self.config)
-    }
-
-    pub(crate) fn themes_dir(&self) -> PathBuf {
-        codex_core::themes::themes_dir(&self.config.codex_home, &self.config.xcodex.themes)
-    }
-
-    /// Set Fast mode in the widget's config copy.
-    pub(crate) fn set_service_tier(&mut self, service_tier: Option<ServiceTier>) {
-        self.config.service_tier = service_tier;
-    }
-
-    pub(crate) fn current_service_tier(&self) -> Option<ServiceTier> {
-        self.config.service_tier
-    }
-
-    pub(crate) fn status_account_display(&self) -> Option<&StatusAccountDisplay> {
-        self.status_account_display.as_ref()
-    }
-
-    #[cfg_attr(not(test), allow(dead_code))]
-    pub(crate) fn model_catalog(&self) -> Arc<ModelCatalog> {
-        self.model_catalog.clone()
-    }
-
-    pub(crate) fn current_plan_type(&self) -> Option<PlanType> {
-        self.plan_type
-    }
-
-    pub(crate) fn has_chatgpt_account(&self) -> bool {
-        self.has_chatgpt_account
-    }
-
-    pub(crate) fn update_account_state(
-        &mut self,
-        status_account_display: Option<StatusAccountDisplay>,
-        plan_type: Option<PlanType>,
-        has_chatgpt_account: bool,
-    ) {
-        self.status_account_display = status_account_display;
-        self.plan_type = plan_type;
-        self.has_chatgpt_account = has_chatgpt_account;
-        self.bottom_pane
-            .set_connectors_enabled(self.connectors_enabled());
-    }
-
-    pub(crate) fn should_show_fast_status(
-        &self,
-        model: &str,
-        service_tier: Option<ServiceTier>,
-    ) -> bool {
-        self.model_supports_fast_mode(model)
-            && matches!(service_tier, Some(ServiceTier::Fast))
-            && self.has_chatgpt_account
-    }
-
-    fn fast_mode_enabled(&self) -> bool {
-        self.config.features.enabled(Feature::FastMode)
-    }
-
-    pub(crate) fn set_realtime_audio_device(
-        &mut self,
-        kind: RealtimeAudioDeviceKind,
-        name: Option<String>,
-    ) {
-        match kind {
-            RealtimeAudioDeviceKind::Microphone => self.config.realtime_audio.microphone = name,
-            RealtimeAudioDeviceKind::Speaker => self.config.realtime_audio.speaker = name,
-        }
-    }
-
-    /// Set the syntax theme override in the widget's config copy.
-    pub(crate) fn set_tui_theme(&mut self, theme: Option<String>) {
-        self.config.tui_theme = theme;
-    }
-
-    /// Set the model in the widget's config copy and stored collaboration mode.
-    pub(crate) fn set_model(&mut self, model: &str) {
-        self.stored_collaboration_mode = self.stored_collaboration_mode.with_updates(
-            Some(model.to_string()),
-            /*effort*/ None,
-            /*developer_instructions*/ None,
-        );
-        if self.collaboration_modes_enabled()
-            && let Some(mask) = self.active_collaboration_mask.as_mut()
-        {
-            mask.model = Some(model.to_string());
-        }
-        self.refresh_model_dependent_surfaces();
-    }
-
     fn set_service_tier_selection(&mut self, service_tier: Option<ServiceTier>) {
         self.set_service_tier(service_tier);
         self.app_event_tx.send(AppEvent::CodexOp(
@@ -11866,106 +11511,6 @@ impl ChatWidget {
         self.app_event_tx
             .send(AppEvent::PersistServiceTierSelection { service_tier });
     }
-
-    pub(crate) fn current_model(&self) -> &str {
-        if !self.collaboration_modes_enabled() {
-            return self.stored_collaboration_mode.model();
-        }
-        self.active_collaboration_mask
-            .as_ref()
-            .and_then(|mask| mask.model.as_deref())
-            .unwrap_or_else(|| self.stored_collaboration_mode.model())
-    }
-
-    pub(crate) fn realtime_conversation_is_live(&self) -> bool {
-        self.realtime_conversation.is_live()
-    }
-
-    fn current_realtime_audio_device_name(&self, kind: RealtimeAudioDeviceKind) -> Option<String> {
-        match kind {
-            RealtimeAudioDeviceKind::Microphone => self.config.realtime_audio.microphone.clone(),
-            RealtimeAudioDeviceKind::Speaker => self.config.realtime_audio.speaker.clone(),
-        }
-    }
-
-    fn current_realtime_audio_selection_label(&self, kind: RealtimeAudioDeviceKind) -> String {
-        self.current_realtime_audio_device_name(kind)
-            .unwrap_or_else(|| "System default".to_string())
-    }
-
-    fn sync_fast_command_enabled(&mut self) {
-        self.bottom_pane
-            .set_fast_command_enabled(self.fast_mode_enabled());
-    }
-
-    fn sync_personality_command_enabled(&mut self) {
-        self.bottom_pane
-            .set_personality_command_enabled(self.config.features.enabled(Feature::Personality));
-    }
-
-    fn sync_plugins_command_enabled(&mut self) {
-        self.bottom_pane
-            .set_plugins_command_enabled(self.config.features.enabled(Feature::Plugins));
-    }
-
-    fn current_model_supports_personality(&self) -> bool {
-        let model = self.current_model();
-        self.model_catalog
-            .try_list_models()
-            .ok()
-            .and_then(|models| {
-                models
-                    .into_iter()
-                    .find(|preset| preset.model == model)
-                    .map(|preset| preset.supports_personality)
-            })
-            .unwrap_or(false)
-    }
-
-    fn model_supports_fast_mode(&self, model: &str) -> bool {
-        self.model_catalog
-            .try_list_models()
-            .ok()
-            .and_then(|models| {
-                models
-                    .into_iter()
-                    .find(|preset| preset.model == model)
-                    .map(|preset| preset.supports_fast_mode())
-            })
-            .unwrap_or(false)
-    }
-
-    /// Return whether the effective model currently advertises image-input support.
-    ///
-    /// We intentionally default to `true` when model metadata cannot be read so transient catalog
-    /// failures do not hard-block user input in the UI.
-    fn current_model_supports_images(&self) -> bool {
-        let model = self.current_model();
-        self.model_catalog
-            .try_list_models()
-            .ok()
-            .and_then(|models| {
-                models
-                    .into_iter()
-                    .find(|preset| preset.model == model)
-                    .map(|preset| preset.input_modalities.contains(&InputModality::Image))
-            })
-            .unwrap_or(true)
-    }
-
-    fn sync_image_paste_enabled(&mut self) {
-        let enabled = self.current_model_supports_images();
-        self.bottom_pane.set_image_paste_enabled(enabled);
-    }
-
-    fn image_inputs_not_supported_message(&self) -> String {
-        format!(
-            "Model {} does not support image inputs. Remove images or switch models.",
-            self.current_model()
-        )
-    }
-
-    #[allow(dead_code)] // Used in tests
 
     /// True if `key` matches the armed quit shortcut and the window has not expired.
     fn quit_shortcut_active_for(&self, key: KeyBinding) -> bool {
@@ -12114,22 +11659,24 @@ impl ChatWidget {
         if op.is_review() && !self.bottom_pane.is_task_running() {
             self.bottom_pane.set_task_running(/*running*/ true);
         }
+        let op_kind = op.kind();
         match &self.codex_op_target {
             CodexOpTarget::Direct(codex_op_tx) => {
                 crate::session_log::log_outbound_op(&op);
+                tracing::debug!(codex_op = op_kind, "chatwidget submitting direct codex op");
                 if let Err(e) = codex_op_tx.send(op.into_core()) {
                     tracing::error!("failed to submit op: {e}");
                     return false;
                 }
             }
             CodexOpTarget::AppEvent => {
+                tracing::debug!(codex_op = op_kind, "chatwidget queueing app-event codex op");
                 self.app_event_tx.send(AppEvent::CodexOp(op.into()));
             }
         }
         true
     }
 
-    #[cfg(test)]
     fn on_list_mcp_tools(&mut self, ev: McpListToolsResponseEvent) {
         let startup_durations = (!self.mcp_startup_state.startup_durations().is_empty())
             .then_some(self.mcp_startup_state.startup_durations());

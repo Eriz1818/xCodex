@@ -79,7 +79,6 @@ use crate::oauth::StoredOAuthTokens;
 use crate::program_resolver;
 use crate::utils::apply_default_headers;
 use crate::utils::build_default_headers;
-use crate::utils::build_reqwest_client;
 use crate::utils::create_env_for_mcp_server;
 use codex_config::types::OAuthCredentialsStoreMode;
 

@@ -1156,7 +1156,7 @@ async fn collab_slash_command_opens_picker_and_updates_mode() {
 }
 
 #[tokio::test]
-async fn plan_slash_command_switches_to_plan_mode() {
+async fn plan_slash_command_opens_xcodex_plan_menu() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.set_feature_enabled(Feature::CollaborationModes, /*enabled*/ true);
     let initial = chat.current_collaboration_mode().clone();
@@ -1169,13 +1169,18 @@ async fn plan_slash_command_switches_to_plan_mode() {
             "plan should not emit a non-history app event: {event:?}"
         );
     }
-    assert_eq!(chat.active_collaboration_mode_kind(), ModeKind::Plan);
+    assert!(chat.bottom_pane.has_active_view());
+    let popup = render_bottom_popup(&chat, /*width*/ 80);
+    assert!(popup.contains("Plan list"));
+    assert!(popup.contains("Create new plan"));
+    assert!(popup.contains("Plan settings"));
+    assert_eq!(chat.active_collaboration_mode_kind(), ModeKind::Default);
     assert_eq!(chat.current_collaboration_mode(), &initial);
 }
 
 #[tokio::test]
-async fn plan_slash_command_with_args_submits_prompt_in_plan_mode() {
-    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+async fn plan_slash_command_with_args_uses_xcodex_plan_commands() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.set_feature_enabled(Feature::CollaborationModes, /*enabled*/ true);
 
     let configured = codex_protocol::protocol::SessionConfiguredEvent {
@@ -1200,24 +1205,24 @@ async fn plan_slash_command_with_args_submits_prompt_in_plan_mode() {
         id: "configured".into(),
         msg: EventMsg::SessionConfigured(configured),
     });
+    while op_rx.try_recv().is_ok() {}
 
     chat.bottom_pane
-        .set_composer_text("/plan build the plan".to_string(), Vec::new(), Vec::new());
+        .set_composer_text("/plan settings".to_string(), Vec::new(), Vec::new());
     chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
 
-    let items = match next_submit_op(&mut op_rx) {
-        Op::UserTurn { items, .. } => items,
-        other => panic!("expected Op::UserTurn, got {other:?}"),
-    };
-    assert_eq!(items.len(), 1);
-    assert_eq!(
-        items[0],
-        UserInput::Text {
-            text: "build the plan".to_string(),
-            text_elements: Vec::new(),
-        }
-    );
-    assert_eq!(chat.active_collaboration_mode_kind(), ModeKind::Plan);
+    assert_matches!(op_rx.try_recv(), Err(TryRecvError::Empty));
+    while let Ok(event) = rx.try_recv() {
+        assert!(
+            matches!(event, AppEvent::InsertHistoryCell(_)),
+            "plan settings should not emit a non-history app event: {event:?}"
+        );
+    }
+    assert!(chat.bottom_pane.has_active_view());
+    let popup = render_bottom_popup(&chat, /*width*/ 80);
+    assert!(popup.contains("Plan settings"));
+    assert!(popup.contains("Brainstorm-first"));
+    assert_eq!(chat.active_collaboration_mode_kind(), ModeKind::Default);
 }
 
 #[tokio::test]

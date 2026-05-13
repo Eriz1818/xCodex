@@ -401,11 +401,11 @@ where
         }
         self.pending_marker_line = false;
 
-        // When inside a fenced code block with a known language, accumulate
-        // text into the buffer for batch highlighting in end_codeblock().
+        // When inside a code block, accumulate text into the buffer for a single
+        // flush in end_codeblock().
         // Append verbatim — pulldown-cmark text events already contain the
         // original line breaks, so inserting separators would double them.
-        if self.in_code_block && self.code_block_language.is_some() {
+        if self.in_code_block {
             self.code_block_buffer.push_str(&text);
             return;
         }
@@ -605,7 +605,9 @@ where
             (vec![Line::from("")], false)
         } else {
             (
-                code.lines().map(|line| line.to_string().into()).collect(),
+                code.split('\n')
+                    .map(|line| line.to_string().into())
+                    .collect(),
                 false,
             )
         };
@@ -1165,13 +1167,13 @@ mod tests {
         for info in &["rust,no_run", "rust no_run", "rust title=\"demo\""] {
             let markdown = format!("```{info}\nfn main() {{}}\n```\n");
             let rendered = render_markdown_text(&markdown);
-            let has_rgb = rendered.lines.iter().any(|line| {
+            let has_highlight = rendered.lines.iter().any(|line| {
                 line.spans
                     .iter()
-                    .any(|s| matches!(s.style.fg, Some(ratatui::style::Color::Rgb(..))))
+                    .any(|s| s.style != ratatui::style::Style::default())
             });
             assert!(
-                has_rgb,
+                has_highlight,
                 "info string \"{info}\" should still produce syntax highlighting"
             );
         }

@@ -2,12 +2,14 @@ use crate::exec_command::relativize_to_home;
 use crate::text_formatting;
 use chrono::DateTime;
 use chrono::Local;
-use codex_core::AuthManager;
+use codex_core::DEFAULT_PROJECT_DOC_FILENAME;
+use codex_core::LOCAL_PROJECT_DOC_FILENAME;
 use codex_core::auth::AuthMode as CoreAuthMode;
 use codex_core::config::Config;
-use codex_core::project_doc::discover_project_doc_paths;
+use codex_login::AuthManager;
 use codex_protocol::account::PlanType;
 use std::path::Path;
+use std::path::PathBuf;
 use unicode_width::UnicodeWidthStr;
 
 use super::account::StatusAccountDisplay;
@@ -37,51 +39,115 @@ pub(crate) fn compose_model_display(
 }
 
 pub(crate) fn compose_agents_summary(config: &Config) -> String {
-    match discover_project_doc_paths(config) {
-        Ok(paths) => {
-            let mut rels: Vec<String> = Vec::new();
-            for p in paths {
-                let file_name = p
-                    .file_name()
-                    .map(|name| name.to_string_lossy().to_string())
-                    .unwrap_or_else(|| "<unknown>".to_string());
-                let display = if let Some(parent) = p.parent() {
-                    if parent == config.cwd {
-                        file_name.clone()
-                    } else {
-                        let mut cur = config.cwd.as_path();
-                        let mut ups = 0usize;
-                        let mut reached = false;
-                        while let Some(c) = cur.parent() {
-                            if cur == parent {
-                                reached = true;
-                                break;
-                            }
-                            cur = c;
-                            ups += 1;
-                        }
-                        if reached {
-                            let up = format!("..{}", std::path::MAIN_SEPARATOR);
-                            format!("{}{}", up.repeat(ups), file_name)
-                        } else if let Ok(stripped) = p.strip_prefix(&config.cwd) {
-                            normalize_agents_display_path(stripped)
-                        } else {
-                            normalize_agents_display_path(&p)
-                        }
-                    }
-                } else {
-                    normalize_agents_display_path(&p)
-                };
-                rels.push(display);
-            }
-            if rels.is_empty() {
-                "<none>".to_string()
-            } else {
-                rels.join(", ")
+    if config.project_doc_max_bytes == 0 {
+        return "<none>".to_string();
+    }
+
+    let candidate_filenames = project_doc_candidate_filenames(config);
+    let mut paths = Vec::new();
+    for candidate in &candidate_filenames {
+        let path = config.codex_home.join(candidate);
+        if path.is_file() {
+            paths.push(path);
+            break;
+        }
+    }
+    for dir in project_doc_search_dirs(config.cwd.as_path()) {
+        for candidate in &candidate_filenames {
+            let path = dir.join(candidate);
+            if path.is_file() {
+                if !paths.iter().any(|existing| existing == &path) {
+                    paths.push(path);
+                }
+                break;
             }
         }
-        Err(_) => "<none>".to_string(),
     }
+
+    if paths.is_empty() {
+        "<none>".to_string()
+    } else {
+        let mut rels: Vec<String> = Vec::new();
+        for p in paths {
+            let file_name = p
+                .file_name()
+                .map(|name| name.to_string_lossy().to_string())
+                .unwrap_or_else(|| "<unknown>".to_string());
+            let display = if let Some(parent) = p.parent() {
+                if parent == config.cwd.as_path() {
+                    file_name.clone()
+                } else {
+                    let mut cur = config.cwd.as_path();
+                    let mut ups = 0usize;
+                    let mut reached = false;
+                    while let Some(c) = cur.parent() {
+                        if cur == parent {
+                            reached = true;
+                            break;
+                        }
+                        cur = c;
+                        ups += 1;
+                    }
+                    if reached {
+                        let up = format!("..{}", std::path::MAIN_SEPARATOR);
+                        format!("{}{}", up.repeat(ups), file_name)
+                    } else if let Ok(stripped) = p.strip_prefix(config.cwd.as_path()) {
+                        normalize_agents_display_path(stripped)
+                    } else {
+                        normalize_agents_display_path(&p)
+                    }
+                }
+            } else {
+                normalize_agents_display_path(&p)
+            };
+            rels.push(display);
+        }
+        rels.join(", ")
+    }
+}
+
+fn project_doc_candidate_filenames(config: &Config) -> Vec<String> {
+    let mut names = vec![
+        LOCAL_PROJECT_DOC_FILENAME.to_string(),
+        DEFAULT_PROJECT_DOC_FILENAME.to_string(),
+    ];
+    for candidate in &config.project_doc_fallback_filenames {
+        if candidate.is_empty() || names.iter().any(|name| name == candidate) {
+            continue;
+        }
+        names.push(candidate.clone());
+    }
+    names
+}
+
+fn project_doc_search_dirs(cwd: &Path) -> Vec<PathBuf> {
+    let Some(project_root) = project_root(cwd) else {
+        return vec![cwd.to_path_buf()];
+    };
+
+    let mut dirs = Vec::new();
+    let mut cursor = cwd.to_path_buf();
+    loop {
+        dirs.push(cursor.clone());
+        if cursor == project_root {
+            break;
+        }
+        let Some(parent) = cursor.parent() else {
+            break;
+        };
+        cursor = parent.to_path_buf();
+    }
+    dirs.reverse();
+    dirs
+}
+
+fn project_root(cwd: &Path) -> Option<PathBuf> {
+    for ancestor in cwd.ancestors() {
+        if ancestor.join(".git").exists() {
+            return Some(ancestor.to_path_buf());
+        }
+    }
+    None
 }
 
 pub(crate) fn compose_account_display(
@@ -92,7 +158,7 @@ pub(crate) fn compose_account_display(
 
     match auth.auth_mode() {
         CoreAuthMode::ApiKey => Some(StatusAccountDisplay::ApiKey),
-        CoreAuthMode::Chatgpt => {
+        CoreAuthMode::Chatgpt | CoreAuthMode::ChatgptAuthTokens => {
             let email = auth.get_account_email();
             let plan = plan
                 .map(|plan_type| title_case(format!("{plan_type:?}").as_str()))

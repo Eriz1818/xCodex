@@ -7,11 +7,11 @@ use anyhow::Context;
 use anyhow::Result;
 use clap::Parser;
 use codex_common::CliConfigOverrides;
+use codex_config::schema::config_schema_json;
 use codex_core::config::CONFIG_TOML_FILE;
 use codex_core::config::ConfigToml;
 use codex_core::config::find_codex_home;
 use codex_core::config::is_xcodex_invocation;
-use codex_core::config::schema::config_schema_json;
 use codex_core::config_loader::CloudRequirementsLoader;
 use codex_core::config_loader::ConfigLayerEntry;
 use codex_core::config_loader::ConfigLayerStackOrdering;
@@ -470,12 +470,10 @@ fn collect_schema_paths(
 
     if let Some(additional) = schema.get("additionalProperties") {
         match additional {
-            Value::Bool(true) => {
-                if !prefix.is_empty() {
-                    let mut path = prefix.clone();
-                    path.push("*".to_string());
-                    out.insert(path.join("."));
-                }
+            Value::Bool(true) if !prefix.is_empty() => {
+                let mut path = prefix.clone();
+                path.push("*".to_string());
+                out.insert(path.join("."));
             }
             Value::Object(_) | Value::Array(_) | Value::String(_) => {
                 prefix.push("*".to_string());

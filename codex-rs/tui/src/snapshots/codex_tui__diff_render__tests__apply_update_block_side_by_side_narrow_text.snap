@@ -1,13 +1,14 @@
 ---
 source: tui/src/diff_render.rs
+assertion_line: 2200
 expression: text
 ---
 • Edited narrow.txt (+1 -1)
     1   1  │ 1   1
-    2 - 2  │ 2 + 2 c
-           │    hang
-           │    ed a
-           │    nd w
-           │    rapp
-           │    ed
+    2 - 2  │ 2 + 2
+           │    chan
+           │    ged
+           │    and
+           │    wrap
+           │    ped
     3   3  │ 3   3

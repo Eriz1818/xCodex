@@ -1,5 +1,6 @@
 ---
 source: tui/src/chatwidget/tests/mcp_startup.rs
+assertion_line: 23
 expression: normalized_backend_snapshot(terminal.backend())
 ---
 "                                                                                "
@@ -8,4 +9,4 @@ expression: normalized_backend_snapshot(terminal.backend())
 "                                                                                "
 "› Ask xcodex to do anything                                                     "
 "                                                                                "
-"  gpt-5.3-codex default · /tmp/project                                          "
+"  ? for shortcuts · gpt-5.3-codex                            100% context left  "

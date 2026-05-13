@@ -1,7 +1,7 @@
 use super::*;
 use crate::config::Config;
 use crate::config::ConfigOverrides;
-use codex_config::config_toml::ConfigToml;
+use crate::config::ConfigToml;
 use codex_config::permissions_toml::FilesystemPermissionsToml;
 use codex_config::permissions_toml::NetworkDomainPermissionToml;
 use codex_config::permissions_toml::NetworkDomainPermissionsToml;
